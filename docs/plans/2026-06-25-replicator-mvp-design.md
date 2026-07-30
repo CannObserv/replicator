@@ -11,7 +11,10 @@ contract questions the previous revision flagged are now **settled** in
 cannobserv#266 → **co-core v0.7.0** (see **Contracts**): `content.fetch` is
 URL-addressed (Replicator is the sole fingerprinter), and `blob_available` gained
 `size_bytes` / `media_type` / `url` / optional `command_id`.
-**Status:** Handoff draft for a new `CannObserv/replicator` repo
+**Status:** Adopted as the founding plan of `CannObserv/replicator`. Repo bootstrapped
+2026-07-30 (issue #1) — build-sequence step 1 (scaffold + co-core wheelhouse wiring) is
+done and the contracts below were verified against the installed co-core v0.7.0; steps
+2–6 remain. One API-table correction from that verification is marked inline.
 **Parent strategy:** `archiver/docs/plans/2026-06-25-observer-cluster-integration-strategy-design.md`
 **Audience:** the team/agent standing up Replicator. Copy this doc into the new repo as its founding plan.
 
@@ -54,7 +57,7 @@ Depend on co-core from the **GCS wheelhouse** exactly as archiver/watcher do: `s
 
 Required **extras**:
 
-- **`co-core[extract]`** — fingerprint (`sha256`, + `simhash` for near-dup) and, if needed, the html/csv/pdf extractors. Fingerprint is the canonical impl, the parity anchor. Import parsers from submodules (`co_core.pure.extract.html`, …); they are not re-exported from `__init__`.
+- **`co-core[extract]`** — fingerprint (`sha256`, + `simhash` for near-dup) and, if needed, the html/csv/pdf extractors. Fingerprint is the canonical impl, the parity anchor. Import parsers from submodules (`co_core.pure.extract.html`, …); they are not re-exported from `__init__`. **Note the split, verified against co-core v0.7.0:** `sha256` lives at `co_core.pure.util.hashing`, *not* under `extract`; `co_core.pure.extract` exports `simhash`, `Chunk`, `Extractor`, `hamming_distance`, and `similarity`.
 - **`co-core-aio[bus]`** — the Redis Streams driver (`co_core_aio.bus`, consumer group + producer).
 
 Concrete APIs the MVP wires:
@@ -62,7 +65,8 @@ Concrete APIs the MVP wires:
 | Concern | co-core API |
 |---|---|
 | Fetch | `co_core_aio.fetch.AsyncFetchDriver.execute(co_core.effects.fetch.FetchContent(url)) -> FetchResult`; `FetchResult.is_2xx` for body-presence; `.aclose()` at shutdown |
-| Fingerprint / extract | `co_core.pure.extract.*` — `sha256` (+ `simhash`) per `Chunk`; synchronous |
+| Fingerprint | `co_core.pure.util.hashing.sha256(data: bytes) -> str`; synchronous |
+| Extract / near-dup | `co_core.pure.extract` — `simhash(text, hashbits=64)`, `hamming_distance`, `similarity`, `Chunk`; parsers in `co_core.pure.extract.{html,csv_excel,pdf}` |
 | Consume | `co_core_aio.bus.AsyncBusConsumer(client, topic=, group=, consumer=)` — `ensure_group` / `read` / `ack` / `claim_stale` / `dead_letter` |
 | Publish | `co_core_aio.bus.AsyncBusPublisher(client).execute(co_core.effects.bus.BusPublish(topic, fields))` |
 | Wire envelope | `co_core.pure.adapters.bus.envelope.to_wire(payload, key=None)` / `from_wire(fields, topic, message_id)` / `idempotency_key(payload)` |
