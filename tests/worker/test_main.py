@@ -5,6 +5,11 @@ attributes — co-core keeps those private, and the observable Redis state is th
 contract that actually matters for competing consumers and crash recovery.
 """
 
+import errno
+import json
+import logging
+
+import pytest
 from co_core.pure.adapters.bus import streams
 
 from src.core.config import get_settings
@@ -81,10 +86,34 @@ async def test_run_tolerates_an_existing_blob_dir(monkeypatch, fake_redis, tmp_p
     assert (blob_dir / "keep-me").read_bytes() == b"prior content"
 
 
+async def test_unusable_blob_dir_is_logged_then_raised(monkeypatch, fake_redis, tmp_path, capsys):
+    """An unusable path must fail on boot, structurally — not as a bare traceback."""
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_bytes(b"")
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(blocker / "blobs"))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    try:
+        with pytest.raises(OSError):
+            await run()
+        record = json.loads(
+            next(
+                ln
+                for ln in capsys.readouterr().out.splitlines()
+                if "blob directory is not usable" in ln
+            )
+        )
+        assert record["level"] == "ERROR"
+        assert record["blob_dir"] == str(blocker / "blobs")
+        assert record["errno"] == errno.ENOTDIR
+    finally:
+        root.handlers, root.level = saved_handlers, saved_level
+
+
 async def test_run_applies_the_configured_log_level(monkeypatch, fake_redis, tmp_path):
     """REPLICATOR_LOG_LEVEL reaches the root logger via run() (CR #1)."""
-    import logging
-
     monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
     monkeypatch.setenv("REPLICATOR_LOG_LEVEL", "DEBUG")
     monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)

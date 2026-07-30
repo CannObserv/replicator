@@ -47,8 +47,19 @@ async def run() -> None:
 
     # systemd's StateDirectory= creates the parent only, so the leaf is ours to
     # make. Doing it at startup rather than at first write means a
-    # misconfigured path fails loudly on boot, not mid-fetch.
-    settings.blob_dir.mkdir(parents=True, exist_ok=True)
+    # misconfigured path fails loudly on boot, not mid-fetch. The failure is
+    # logged structurally before re-raising: an uncaught OSError would put the
+    # one line that matters into the journal as a bare traceback, unparseable by
+    # a pipeline expecting JSON, right before the unit flaps to its restart
+    # limit.
+    try:
+        settings.blob_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.error(
+            "blob directory is not usable",
+            extra={"blob_dir": str(settings.blob_dir), "errno": exc.errno},
+        )
+        raise
 
     client = Redis.from_url(settings.redis_url)
     try:

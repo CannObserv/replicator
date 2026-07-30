@@ -5,6 +5,7 @@ entries list plus content-addressed blobs on disk, so there is no engine,
 session, or savepoint machinery here.
 """
 
+import logging
 from collections.abc import AsyncGenerator
 
 import pytest
@@ -28,11 +29,28 @@ def _clear_settings_cache():
 
 @pytest.fixture
 async def client() -> AsyncGenerator[AsyncClient]:
-    from src.api.main import app
+    """AsyncClient wired to the app, with its lifespan actually run.
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as c:
-        yield c
+    `ASGITransport` does not drive startup/shutdown, so wrapping the client in
+    `lifespan(app)` is what keeps API tests honest — otherwise every route is
+    exercised against an app that never started, and a lifespan that raises on
+    every real boot leaves the suite green (CR #13).
+
+    Root logging is saved and restored because startup installs a handler
+    globally; without this, the first API test would reconfigure logging for
+    everything that follows it.
+    """
+    from src.api.main import app, lifespan
+
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    try:
+        async with lifespan(app):
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as c:
+                yield c
+    finally:
+        root.handlers, root.level = saved_handlers, saved_level
 
 
 @pytest.fixture

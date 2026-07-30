@@ -49,7 +49,10 @@ For local work, load both:
 set -a; . /etc/replicator/.env 2>/dev/null; . .env 2>/dev/null; set +a
 ```
 
-Variables the service uses (all in `/etc/replicator/.env`):
+Variables the service uses (all in `/etc/replicator/.env`). The **Default** column is the
+value baked into `src/core/config.py` — several are overridden on the VM, so check
+`/etc/replicator/.env` before assuming a default applies. On this deployment
+`REPLICATOR_BLOB_DIR` is `/var/lib/replicator/blobs`, not the `blobs` shown below.
 
 | Variable | Default | Purpose |
 |---|---|---|

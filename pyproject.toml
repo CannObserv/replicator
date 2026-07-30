@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "retrieval, fingerprinting, and temporary storage layer for the Cannabis Observer cluster"
 readme = "README.md"
 license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "co-core[extract]>=0.7,<0.8",
