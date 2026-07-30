@@ -14,6 +14,7 @@ from collections.abc import Awaitable, Callable
 from enum import StrEnum
 
 from co_core.effects.bus import BusMessage
+from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
 from co_core.pure.models.changes import ContentFetchCommand
 from co_core_aio.bus import AsyncBusConsumer
 from redis.asyncio import Redis
@@ -22,6 +23,11 @@ from src.core.config import Settings
 from src.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+# The only command schema this worker understands. co-core's model validates
+# any integer here (schema_version is a plain int, not a Literal), so an
+# unrecognized version is ours to catch — branch before destructuring.
+SUPPORTED_SCHEMA_VERSION = 1
 
 # The consume-path handler seam. Raising signals failure; the loop — not the
 # handler — decides whether that means retry or dead-letter.
@@ -38,6 +44,7 @@ class Outcome(StrEnum):
     """What ``process_message`` did with one message."""
 
     ACKED = "acked"
+    DEAD_LETTERED = "dead_lettered"
     RETRY = "retry"
 
 
@@ -63,9 +70,82 @@ async def process_message(
     comes back via ``claim_stale``, which is what makes delivery at-least-once.
     """
     command = message.payload
+    # from_wire's event_type -> model table is global, so a fact XADDed to the
+    # command stream decodes cleanly into the wrong type rather than raising.
+    if not isinstance(command, ContentFetchCommand):
+        return await _dead_letter(
+            consumer,
+            message.message_id,
+            dict(message.fields),
+            reason="payload is not a content.fetch command",
+            detail={"event_type": command.event_type},
+        )
+    if command.schema_version != SUPPORTED_SCHEMA_VERSION:
+        return await _dead_letter(
+            consumer,
+            message.message_id,
+            dict(message.fields),
+            reason="unsupported schema_version",
+            detail={"command_id": command.command_id, "schema_version": command.schema_version},
+        )
+
     await handler(command)
     await consumer.ack(message.message_id)
     return Outcome.ACKED
+
+
+async def _dead_letter(
+    consumer: AsyncBusConsumer,
+    message_id: str,
+    fields: dict[str, str],
+    *,
+    reason: str,
+    detail: dict[str, object] | None = None,
+) -> Outcome:
+    """Copy a frame to ``<topic>.dlq``, ack the original, and say why."""
+    dlq_id = await consumer.dead_letter(message_id, fields)
+    logger.warning(
+        "dead-lettered a content.fetch frame",
+        extra={"reason": reason, "message_id": message_id, "dlq_id": dlq_id, **(detail or {})},
+    )
+    return Outcome.DEAD_LETTERED
+
+
+async def dead_letter_anomaly(
+    client: Redis,
+    consumer: AsyncBusConsumer,
+    exc: BusMessageAnomaly,
+) -> Outcome:
+    """Route a frame that failed to decode at all.
+
+    ``from_wire`` raises from inside ``read``/``claim_stale``, so there is no
+    ``BusMessage`` and no field map — the anomaly carries only ``topic`` and
+    ``message_id``. ``dead_letter`` XADDs the fields it is given and ``XADD``
+    rejects an empty map, so the raw frame is re-read by id; a trimmed or
+    ``XDEL``-ed entry (still pending, no longer in the stream) falls back to a
+    synthesized record so the message can never get stuck in the PEL.
+    """
+    raw = await client.xrange(exc.topic, min=exc.message_id, max=exc.message_id)
+    if raw:
+        fields = {_as_str(k): _as_str(v) for k, v in raw[0][1].items()}
+    else:
+        fields = {
+            "error": str(exc),
+            "original_message_id": exc.message_id,
+            "original_topic": exc.topic,
+        }
+    return await _dead_letter(
+        consumer,
+        exc.message_id,
+        fields,
+        reason="frame failed to decode",
+        detail={"anomaly": type(exc).__name__, "recovered_fields": bool(raw)},
+    )
+
+
+def _as_str(value: bytes | str) -> str:
+    """Decode a raw Redis field (the client is not in decode_responses mode)."""
+    return value.decode() if isinstance(value, bytes) else value
 
 
 async def poll_once(
@@ -73,14 +153,19 @@ async def poll_once(
     consumer: AsyncBusConsumer,
     settings: Settings,
 ) -> list[BusMessage]:
-    """Source the next message.
+    """Source the next message, dead-lettering anything that will not decode.
 
     ``count=1`` throughout: ``read`` decodes with the fail-loud ``from_wire``, so
     a poison frame in a ``count>1`` batch raises before the well-formed messages
     in that batch are returned — reading one at a time keeps a single bad frame
-    from swallowing good ones.
+    from swallowing good ones. An empty list means "nothing to do this tick",
+    whether the stream was idle or a poison frame was just routed away.
     """
-    return await consumer.read(count=1, block_ms=settings.read_block_ms)
+    try:
+        return await consumer.read(count=1, block_ms=settings.read_block_ms)
+    except BusMessageAnomaly as exc:
+        await dead_letter_anomaly(client, consumer, exc)
+        return []
 
 
 async def run_loop(
