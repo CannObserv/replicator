@@ -32,6 +32,10 @@ htmlcov/
 .coverage
 coverage.xml
 
+# Machine-specific Claude Code settings — SOCRATICODE_LINKED_PROJECTS holds
+# absolute paths to sibling checkouts that only exist on this VM.
+.claude/settings.local.json
+
 # IDE
 .idea/
 .vscode/

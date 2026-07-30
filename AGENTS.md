@@ -32,9 +32,10 @@ uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_whee
 
 Auth is ADC: on the VM the SA key at `GOOGLE_APPLICATION_CREDENTIALS` (`/etc/replicator/co-pypi-reader.json`), in CI a keyless WIF token. Pin the current minor — `>=0.7,<0.8`.
 
+<!-- BEGIN socraticode-policy -->
 ## Code Exploration Policy
 
-SocratiCode is the preferred semantic-search tool for this repo (once indexed; the index lives in `.socraticodecontextartifacts.json` once `codebase_index` has run). Its MCP tools are **deferred** — schemas load only after a `ToolSearch` prefetch.
+SocratiCode is the preferred semantic-search tool for this repo. Code is indexed into the local Qdrant store + on-disk graph by `codebase_index`; the project's non-code knowledge (design plans, the systemd unit, the command reference) is registered in `.socraticodecontextartifacts.json` and embedded by `codebase_context_index`. Its MCP tools are **deferred** — schemas load only after a `ToolSearch` prefetch.
 
 **Negative rule.** For broad semantic questions ("where is X", "how does Y work", "what depends on Z"), use SocratiCode MCP tools first. Reach for `grep`/`ripgrep` only on exact strings (error messages, log lines, known symbols). Reserve the Explore subagent for path-pattern walks (e.g. "all `*.py` under `src/worker/`"), not semantic search.
 
@@ -46,11 +47,14 @@ SocratiCode is the preferred semantic-search tool for this repo (once indexed; t
 | What does an entry point actually do? | `codebase_flow` |
 | Callers and callees of a function | `codebase_symbol` |
 | Imports/dependents of a file | `codebase_graph_query` |
-| Deployment topology, runbook context | `codebase_context` / `codebase_context_search` |
+| Bus contracts, deploy topology, MVP design rationale, env vars | `codebase_context` / `codebase_context_search` |
+
+**Cross-repo search.** `SOCRATICODE_LINKED_PROJECTS` (in `.claude/settings.local.json`, gitignored) links the archiver, watcher, and notifier checkouts, so `codebase_search` spans the cluster. Use it for the co-core contracts, the parent integration strategy, and the producer-side outbox precedent — all of which live in archiver, not here. Linked projects contribute results only once they are themselves indexed.
 
 Prefetch query — run via `ToolSearch` at session start:
 
 `select:mcp__plugin_socraticode_socraticode__codebase_search,mcp__plugin_socraticode_socraticode__codebase_symbol,mcp__plugin_socraticode_socraticode__codebase_symbols,mcp__plugin_socraticode_socraticode__codebase_flow,mcp__plugin_socraticode_socraticode__codebase_impact,mcp__plugin_socraticode_socraticode__codebase_graph_query,mcp__plugin_socraticode_socraticode__codebase_status,mcp__plugin_socraticode_socraticode__codebase_context,mcp__plugin_socraticode_socraticode__codebase_context_search`
+<!-- END socraticode-policy -->
 
 ## Project Layout
 
