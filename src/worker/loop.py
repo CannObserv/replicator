@@ -66,11 +66,23 @@ MAX_POISON_SKIPS = 10
 # handler — decides whether that means retry or dead-letter.
 Handler = Callable[[ContentFetchCommand], Awaitable[None]]
 
-# How long an idle poll parks before looking again. The blocking XREADGROUP is
-# the real wait on a live broker; this exists because fakeredis returns from a
-# blocking read immediately, which would otherwise busy-spin the loop in tests.
-# Waiting on the stop event rather than sleeping keeps shutdown prompt.
+# How long an idle poll parks before looking again. On a live broker the
+# blocking XREADGROUP is the real wait and this adds ~50ms per idle tick; it is
+# kept as insurance against a client that does not honour `block` — fakeredis
+# returns from a blocking read immediately, which would otherwise busy-spin the
+# loop in tests. Waiting on the stop event rather than sleeping keeps shutdown
+# prompt.
 IDLE_SLEEP_SECONDS = 0.05
+
+# Backoff for a poll cycle that raised — a broker outage, not a bad message.
+# Escalates base * 2**(n-1) to a cap so a down Redis is not hammered, and logs
+# only every Nth consecutive failure so a long outage cannot flood the journal.
+# Mirrors archiver's drain-loop backoff (archiver#107, CR #13); the worker must
+# ride out a broker restart, not die and lean on systemd's restart limiter.
+ERROR_BACKOFF_BASE_SECONDS = 1.0
+ERROR_BACKOFF_MAX_SECONDS = 30.0
+ERROR_BACKOFF_MAX_SHIFT = 5  # cap the exponent so 2**shift cannot overflow the max
+ERROR_LOG_EVERY = 15
 
 
 class Outcome(StrEnum):
@@ -95,6 +107,7 @@ async def process_message(
     *,
     client: Redis,
     consumer: AsyncBusConsumer,
+    group: str,
     handler: Handler,
     settings: Settings,
 ) -> Outcome:
@@ -102,6 +115,12 @@ async def process_message(
 
     Acks only after the handler returns — an unacked message stays in the PEL and
     comes back via ``claim_stale``, which is what makes delivery at-least-once.
+
+    ``group`` is passed rather than re-read from ``settings`` so the PEL this
+    consults is provably the one ``consumer`` acks against: co-core keeps the
+    consumer's group private, and two independent reads of the same setting can
+    drift, in which case the ceiling would query an unrelated PEL and silently
+    never trip.
     """
     command = message.payload
     # from_wire's event_type -> model table is global, so a fact XADDed to the
@@ -156,7 +175,13 @@ async def process_message(
         return Outcome.RETRY
     except Exception as exc:
         return await _handle_unclassified(
-            message, client=client, consumer=consumer, settings=settings, command=command, exc=exc
+            message,
+            client=client,
+            consumer=consumer,
+            group=group,
+            settings=settings,
+            command=command,
+            exc=exc,
         )
 
     # Written *after* the handler, deliberately. Marking first would turn a crash
@@ -175,6 +200,7 @@ async def _handle_unclassified(
     *,
     client: Redis,
     consumer: AsyncBusConsumer,
+    group: str,
     settings: Settings,
     command: ContentFetchCommand,
     exc: Exception,
@@ -184,7 +210,7 @@ async def _handle_unclassified(
     Defense in depth, not the primary DLQ route: a handler bug must not discard
     a valid command on its first failure, but it must not spin forever either.
     """
-    attempts = await _delivery_count(client, message, group=settings.consumer_group)
+    attempts = await _delivery_count(client, message, group=group)
     error = f"{type(exc).__name__}: {exc}"
     if attempts >= settings.max_delivery_attempts:
         return await _dead_letter(
@@ -217,7 +243,17 @@ async def _delivery_count(client: Redis, message: BusMessage, *, group: str) -> 
     entries = await client.xpending_range(
         message.topic, group, min=message.message_id, max=message.message_id, count=1
     )
-    return int(entries[0]["times_delivered"]) if entries else 1
+    if not entries:
+        # Nothing to count against: the entry left the PEL underneath us, or the
+        # group is not the one it was delivered to. Treat it as a first attempt
+        # (retry rather than discard) but say so — a silent 1 here would mean a
+        # ceiling that can never trip.
+        logger.warning(
+            "no pending entry for this message — cannot read its delivery count",
+            extra={"message_id": message.message_id, "topic": message.topic, "group": group},
+        )
+        return 1
+    return int(entries[0]["times_delivered"])
 
 
 async def _dead_letter(
@@ -228,8 +264,18 @@ async def _dead_letter(
     reason: str,
     detail: dict[str, object] | None = None,
 ) -> Outcome:
-    """Copy a frame to ``<topic>.dlq``, ack the original, and say why."""
-    dlq_id = await consumer.dead_letter(message_id, fields)
+    """Copy a frame to ``<topic>.dlq``, ack the original, and say why.
+
+    The reason travels *in the entry*, not only in the log line: the DLQ is the
+    operator's triage surface, and correlating a stream entry back to a journal
+    timestamp to learn which of the five routes sent it there is avoidable work.
+    Consumers use ``extra="ignore"`` models, so the added envelope keys cannot
+    break a replay tool that re-reads the original ``payload``.
+    """
+    dlq_id = await consumer.dead_letter(
+        message_id,
+        {**fields, "dlq_reason": reason, "dlq_original_id": message_id},
+    )
     logger.warning(
         "dead-lettered a content.fetch frame",
         extra={"reason": reason, "message_id": message_id, "dlq_id": dlq_id, **(detail or {})},
@@ -278,6 +324,8 @@ async def claim_once(
     client: Redis,
     consumer: AsyncBusConsumer,
     settings: Settings,
+    *,
+    group: str,
 ) -> list[BusMessage]:
     """Reclaim one message abandoned by a crashed (or transiently failing) worker.
 
@@ -300,7 +348,7 @@ async def claim_once(
             await dead_letter_anomaly(client, consumer, exc)
     logger.warning(
         "recovery pass hit the poison-skip bound",
-        extra={"skipped": MAX_POISON_SKIPS, "group": settings.consumer_group},
+        extra={"skipped": MAX_POISON_SKIPS, "group": group},
     )
     return []
 
@@ -309,6 +357,8 @@ async def poll_once(
     client: Redis,
     consumer: AsyncBusConsumer,
     settings: Settings,
+    *,
+    group: str,
 ) -> list[BusMessage]:
     """Source the next message, dead-lettering anything that will not decode.
 
@@ -322,7 +372,7 @@ async def poll_once(
     failed transiently here) is older than anything unread, and leaving it while
     new messages flow would let it age indefinitely.
     """
-    reclaimed = await claim_once(client, consumer, settings)
+    reclaimed = await claim_once(client, consumer, settings, group=group)
     if reclaimed:
         return reclaimed
     try:
@@ -332,33 +382,102 @@ async def poll_once(
         return []
 
 
+async def process_batch(
+    messages: list[BusMessage],
+    *,
+    client: Redis,
+    consumer: AsyncBusConsumer,
+    group: str,
+    settings: Settings,
+    handler: Handler,
+    stop: asyncio.Event,
+) -> None:
+    """Dispatch a polled batch, stopping between messages once asked to.
+
+    The stop check is between messages, never inside one: a SIGTERM arriving
+    mid-handler finishes that message and acks it, so ``systemctl restart`` does
+    not strand work in the pending entries list. Polling is ``count=1`` today, so
+    the loop body runs once — the check is here so that raising the count later
+    cannot silently extend shutdown latency.
+    """
+    for message in messages:
+        await process_message(
+            message,
+            client=client,
+            consumer=consumer,
+            group=group,
+            handler=handler,
+            settings=settings,
+        )
+        if stop.is_set():
+            break
+
+
 async def run_loop(
     *,
     client: Redis,
     consumer: AsyncBusConsumer,
+    group: str,
     settings: Settings,
     handler: Handler,
     stop: asyncio.Event,
 ) -> None:
     """Poll and dispatch until ``stop`` is set.
 
-    The stop check is between messages, never inside one: a SIGTERM arriving
-    mid-handler finishes that message and acks it, so ``systemctl restart`` does
-    not strand work in the pending entries list.
+    A failing *message* is decided by ``process_message``; a failing *cycle* —
+    the broker refusing a read, an ack, or a DLQ write — is this loop's problem.
+    It backs off and retries rather than propagating, because the alternative is
+    the process dying on every Redis restart and leaning on systemd to bring it
+    back through the full ExecStartPre chain. ``asyncio.CancelledError`` is a
+    ``BaseException`` and still propagates: shutdown is not a cycle failure.
     """
+    consecutive_failures = 0
     while not stop.is_set():
-        messages = await poll_once(client, consumer, settings)
-        if not messages:
-            await _park(stop, IDLE_SLEEP_SECONDS)
-            continue
-        for message in messages:
-            await process_message(
-                message,
+        try:
+            messages = await poll_once(client, consumer, settings, group=group)
+            await process_batch(
+                messages,
                 client=client,
                 consumer=consumer,
-                handler=handler,
+                group=group,
                 settings=settings,
+                handler=handler,
+                stop=stop,
             )
+        except Exception as exc:
+            consecutive_failures += 1
+            if consecutive_failures == 1 or consecutive_failures % ERROR_LOG_EVERY == 0:
+                logger.error(
+                    "poll cycle failed — backing off",
+                    extra={
+                        "consecutive_failures": consecutive_failures,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                    exc_info=exc,
+                )
+            await _park(
+                stop, _error_backoff_seconds(consecutive_failures, ERROR_BACKOFF_BASE_SECONDS)
+            )
+            continue
+
+        if consecutive_failures:
+            logger.info("poll cycle recovered", extra={"after_failures": consecutive_failures})
+            consecutive_failures = 0
+        if not messages:
+            await _park(stop, IDLE_SLEEP_SECONDS)
+
+
+def _error_backoff_seconds(consecutive_failures: int, base: float) -> float:
+    """Exponential backoff (``base * 2**(n-1)``) capped at the ceiling.
+
+    The exponent is clamped so the intermediate cannot overflow before the cap
+    is applied — a loop that has been failing for hours must not compute
+    ``2**10000``.
+    """
+    if consecutive_failures <= 1:
+        return base
+    shift = min(consecutive_failures - 1, ERROR_BACKOFF_MAX_SHIFT)
+    return min(base * 2**shift, ERROR_BACKOFF_MAX_SECONDS)
 
 
 async def _park(stop: asyncio.Event, seconds: float) -> None:

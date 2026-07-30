@@ -155,21 +155,30 @@ async def test_sigterm_sets_the_stop_event():
 async def test_run_exits_cleanly_on_sigterm(monkeypatch, fake_redis, tmp_path):
     """End to end: an unstopped run() installs the handler and returns on SIGTERM.
 
-    A safety no-op disposition is installed first so that a signal arriving in
-    the window before run() wires its own handler fails the test rather than
-    killing the test process.
+    Exactly one signal is sent, and only after run() is observed to have taken
+    over the disposition. Polling for that is what makes this deterministic:
+    asyncio's ``remove_signal_handler`` restores ``SIG_DFL`` on the way out, so a
+    signal sent speculatively — before the handler is installed or after it is
+    torn down — would terminate the whole test process rather than fail one test.
     """
     monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
     monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
-    previous = signal.signal(signal.SIGTERM, lambda *_: None)
+
+    def _guard(*_):
+        raise AssertionError("SIGTERM arrived outside run()'s handler window")
+
+    previous = signal.signal(signal.SIGTERM, _guard)
 
     task = asyncio.create_task(run())
     try:
-        for _ in range(50):
-            await asyncio.sleep(0.05)
-            if task.done():
-                break
-            os.kill(os.getpid(), signal.SIGTERM)
+        for _ in range(500):
+            if signal.getsignal(signal.SIGTERM) is not _guard:
+                break  # run() has installed its own handler
+            await asyncio.sleep(0.01)
+        else:
+            raise AssertionError("run() never installed a SIGTERM handler")
+
+        os.kill(os.getpid(), signal.SIGTERM)
         await asyncio.wait_for(task, timeout=5)
     finally:
         task.cancel()

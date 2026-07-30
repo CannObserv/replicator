@@ -18,10 +18,17 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from src.core.errors import PermanentFetchError, TransientFetchError
 from src.worker.loop import (
     DEDUPE_KEY_PREFIX,
+    ERROR_BACKOFF_BASE_SECONDS,
+    ERROR_BACKOFF_MAX_SECONDS,
+    MAX_POISON_SKIPS,
     Outcome,
+    _delivery_count,
+    _error_backoff_seconds,
+    claim_once,
     dead_letter_anomaly,
     log_only_handler,
     poll_once,
+    process_batch,
     process_message,
     run_loop,
 )
@@ -35,11 +42,12 @@ async def test_a_well_formed_command_is_dispatched_and_acked(fake_redis, consume
     async def handler(command: ContentFetchCommand) -> None:
         seen.append(command)
 
-    messages = await poll_once(fake_redis, consumer, settings)
+    messages = await poll_once(fake_redis, consumer, settings, group=GROUP)
     outcome = await process_message(
         messages[0],
         client=fake_redis,
         consumer=consumer,
+        group=GROUP,
         handler=handler,
         settings=settings,
     )
@@ -61,7 +69,12 @@ async def test_run_loop_drains_then_exits_when_stopped(fake_redis, consumer, set
 
     await asyncio.wait_for(
         run_loop(
-            client=fake_redis, consumer=consumer, settings=settings, handler=handler, stop=stop
+            client=fake_redis,
+            consumer=consumer,
+            group=GROUP,
+            settings=settings,
+            handler=handler,
+            stop=stop,
         ),
         timeout=5,
     )
@@ -84,7 +97,12 @@ async def test_run_loop_finishes_the_in_flight_message_after_stop(fake_redis, co
 
     await asyncio.wait_for(
         run_loop(
-            client=fake_redis, consumer=consumer, settings=settings, handler=handler, stop=stop
+            client=fake_redis,
+            consumer=consumer,
+            group=GROUP,
+            settings=settings,
+            handler=handler,
+            stop=stop,
         ),
         timeout=5,
     )
@@ -103,6 +121,7 @@ async def test_run_loop_returns_promptly_when_idle_and_stopped(fake_redis, consu
         run_loop(
             client=fake_redis,
             consumer=consumer,
+            group=GROUP,
             settings=settings,
             handler=_unreachable_handler,
             stop=stop,
@@ -119,7 +138,7 @@ async def test_a_malformed_frame_is_dead_lettered_and_acked(fake_redis, consumer
     """AC: poison goes to content.fetch.dlq, the original is acked, the loop lives."""
     await fake_redis.xadd(TOPIC, {"event_type": "content_fetch", "payload": "not json"})
 
-    messages = await poll_once(fake_redis, consumer, settings)
+    messages = await poll_once(fake_redis, consumer, settings, group=GROUP)
 
     assert messages == []
     dlq = await fake_redis.xrange(dlq_name(TOPIC))
@@ -132,7 +151,7 @@ async def test_a_malformed_frame_is_dead_lettered_and_acked(fake_redis, consumer
 async def test_an_unknown_event_type_is_dead_lettered(fake_redis, consumer, settings):
     await fake_redis.xadd(TOPIC, {"event_type": "who_knows", "payload": "{}"})
 
-    assert await poll_once(fake_redis, consumer, settings) == []
+    assert await poll_once(fake_redis, consumer, settings, group=GROUP) == []
     assert await fake_redis.xlen(dlq_name(TOPIC)) == 1
 
 
@@ -171,11 +190,12 @@ async def test_a_foreign_payload_type_is_dead_lettered(fake_redis, consumer, set
         ),
     )
 
-    messages = await poll_once(fake_redis, consumer, settings)
+    messages = await poll_once(fake_redis, consumer, settings, group=GROUP)
     outcome = await process_message(
         messages[0],
         client=fake_redis,
         consumer=consumer,
+        group=GROUP,
         handler=_unreachable_handler,
         settings=settings,
     )
@@ -195,11 +215,12 @@ async def test_an_unknown_schema_version_is_dead_lettered(fake_redis, consumer, 
     fields["schema_version"] = "2"
     await fake_redis.xadd(TOPIC, fields)
 
-    messages = await poll_once(fake_redis, consumer, settings)
+    messages = await poll_once(fake_redis, consumer, settings, group=GROUP)
     outcome = await process_message(
         messages[0],
         client=fake_redis,
         consumer=consumer,
+        group=GROUP,
         handler=_unreachable_handler,
         settings=settings,
     )
@@ -220,7 +241,12 @@ async def test_the_loop_keeps_running_past_a_poison_frame(fake_redis, consumer, 
 
     await asyncio.wait_for(
         run_loop(
-            client=fake_redis, consumer=consumer, settings=settings, handler=handler, stop=stop
+            client=fake_redis,
+            consumer=consumer,
+            group=GROUP,
+            settings=settings,
+            handler=handler,
+            stop=stop,
         ),
         timeout=5,
     )
@@ -234,6 +260,7 @@ async def _process(fake_redis, consumer, settings, message, handler):
         message,
         client=fake_redis,
         consumer=consumer,
+        group=GROUP,
         handler=handler,
         settings=settings,
     )
@@ -250,10 +277,10 @@ async def test_a_redelivered_command_is_acked_without_rerunning_the_handler(
     async def handler(command: ContentFetchCommand) -> None:
         calls.append(command.command_id)
 
-    first = (await poll_once(fake_redis, consumer, settings))[0]
+    first = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
     assert await _process(fake_redis, consumer, settings, first, handler) is Outcome.ACKED
 
-    second = (await poll_once(fake_redis, consumer, settings))[0]
+    second = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
     assert await _process(fake_redis, consumer, settings, second, _unreachable_handler) is (
         Outcome.DEDUPED
     )
@@ -266,7 +293,7 @@ async def test_a_redelivered_command_is_acked_without_rerunning_the_handler(
 async def test_the_dedupe_key_carries_the_configured_ttl(fake_redis, consumer, settings):
     await fake_redis.xadd(TOPIC, make_command(command_id="cmd-ttl"))
 
-    message = (await poll_once(fake_redis, consumer, settings))[0]
+    message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
     await _process(fake_redis, consumer, settings, message, log_only_handler)
 
     ttl = await fake_redis.ttl(f"{DEDUPE_KEY_PREFIX}cmd-ttl")
@@ -280,7 +307,7 @@ async def test_a_failed_handler_leaves_no_dedupe_key(fake_redis, consumer, setti
     async def handler(command: ContentFetchCommand) -> None:
         raise RuntimeError("handler exploded")
 
-    message = (await poll_once(fake_redis, consumer, settings))[0]
+    message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
     outcome = await _process(fake_redis, consumer, settings, message, handler)
 
     assert outcome is Outcome.RETRY
@@ -295,7 +322,7 @@ async def test_a_dead_lettered_command_leaves_no_dedupe_key(fake_redis, consumer
     fields["payload"] = json.dumps(payload)
     await fake_redis.xadd(TOPIC, fields)
 
-    message = (await poll_once(fake_redis, consumer, settings))[0]
+    message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
     await _process(fake_redis, consumer, settings, message, _unreachable_handler)
 
     assert not await fake_redis.exists(f"{DEDUPE_KEY_PREFIX}cmd-future-2")
@@ -313,7 +340,7 @@ async def test_a_message_from_a_dead_consumer_is_reclaimed_and_processed(
     async def handler(command: ContentFetchCommand) -> None:
         seen.append(command.command_id)
 
-    messages = await poll_once(fake_redis, consumer, eager)
+    messages = await poll_once(fake_redis, consumer, eager, group=GROUP)
     assert await _process(fake_redis, consumer, eager, messages[0], handler) is Outcome.ACKED
 
     assert seen == ["cmd-orphan"]
@@ -328,7 +355,7 @@ async def test_a_poison_pel_entry_does_not_jam_recovery(fake_redis, consumer, se
     await fake_redis.xreadgroup(GROUP, "replicator@dead-worker", {TOPIC: ">"}, count=2)
     eager = settings.model_copy(update={"claim_min_idle_ms": 0})
 
-    messages = await poll_once(fake_redis, consumer, eager)
+    messages = await poll_once(fake_redis, consumer, eager, group=GROUP)
 
     assert len(messages) == 1
     command = messages[0].payload
@@ -344,7 +371,7 @@ async def test_a_transient_failure_leaves_the_message_pending(fake_redis, consum
     async def handler(command: ContentFetchCommand) -> None:
         raise TransientFetchError("broker or origin is having a moment")
 
-    message = (await poll_once(fake_redis, consumer, settings))[0]
+    message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
     outcome = await _process(fake_redis, consumer, settings, message, handler)
 
     assert outcome is Outcome.RETRY
@@ -361,7 +388,7 @@ async def test_a_redis_connection_error_counts_as_transient(fake_redis, consumer
     async def handler(command: ContentFetchCommand) -> None:
         raise RedisConnectionError("connection refused")
 
-    message = (await poll_once(fake_redis, consumer, settings))[0]
+    message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
 
     assert await _process(fake_redis, consumer, settings, message, handler) is Outcome.RETRY
 
@@ -372,7 +399,7 @@ async def test_a_permanent_failure_is_dead_lettered(fake_redis, consumer, settin
     async def handler(command: ContentFetchCommand) -> None:
         raise PermanentFetchError("this url will never be fetchable")
 
-    message = (await poll_once(fake_redis, consumer, settings))[0]
+    message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
     outcome = await _process(fake_redis, consumer, settings, message, handler)
 
     assert outcome is Outcome.DEAD_LETTERED
@@ -388,7 +415,7 @@ async def test_an_unclassified_failure_retries_below_the_ceiling(fake_redis, con
     async def handler(command: ContentFetchCommand) -> None:
         raise AttributeError("NoneType has no attribute 'content'")
 
-    message = (await poll_once(fake_redis, consumer, settings))[0]
+    message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
     outcome = await _process(fake_redis, consumer, settings, message, handler)
 
     assert outcome is Outcome.RETRY
@@ -405,7 +432,7 @@ async def test_an_unclassified_failure_dead_letters_at_the_ceiling(fake_redis, c
     async def handler(command: ContentFetchCommand) -> None:
         raise AttributeError("still broken")
 
-    message = (await poll_once(fake_redis, consumer, strict))[0]
+    message = (await poll_once(fake_redis, consumer, strict, group=GROUP))[0]
     outcome = await _process(fake_redis, consumer, strict, message, handler)
 
     assert outcome is Outcome.DEAD_LETTERED
@@ -420,7 +447,7 @@ async def test_transient_failures_are_exempt_from_the_ceiling(fake_redis, consum
     async def handler(command: ContentFetchCommand) -> None:
         raise TransientFetchError("still down")
 
-    message = (await poll_once(fake_redis, consumer, strict))[0]
+    message = (await poll_once(fake_redis, consumer, strict, group=GROUP))[0]
 
     assert await _process(fake_redis, consumer, strict, message, handler) is Outcome.RETRY
     assert await fake_redis.xlen(dlq_name(TOPIC)) == 0
@@ -433,10 +460,144 @@ async def test_cancellation_is_never_classified(fake_redis, consumer, settings):
     async def handler(command: ContentFetchCommand) -> None:
         raise asyncio.CancelledError
 
-    message = (await poll_once(fake_redis, consumer, settings))[0]
+    message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
     with pytest.raises(asyncio.CancelledError):
         await _process(fake_redis, consumer, settings, message, handler)
 
     assert await fake_redis.xlen(dlq_name(TOPIC)) == 0
     pending = await fake_redis.xpending(TOPIC, GROUP)
     assert pending["pending"] == 1
+
+
+async def test_a_broker_failure_does_not_kill_the_loop(fake_redis, consumer, settings, monkeypatch):
+    """CR #1: a Redis blip must back off and retry, not terminate the worker."""
+    monkeypatch.setattr("src.worker.loop.ERROR_BACKOFF_BASE_SECONDS", 0.01)
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-after-outage"))
+    stop = asyncio.Event()
+    seen: list[str] = []
+    failures = {"left": 2}
+
+    real_read = consumer.read
+
+    async def flaky_read(**kwargs):
+        if failures["left"]:
+            failures["left"] -= 1
+            raise RedisConnectionError("broker went away")
+        return await real_read(**kwargs)
+
+    monkeypatch.setattr(consumer, "read", flaky_read)
+
+    async def handler(command: ContentFetchCommand) -> None:
+        seen.append(command.command_id)
+        stop.set()
+
+    await asyncio.wait_for(
+        run_loop(
+            client=fake_redis,
+            consumer=consumer,
+            group=GROUP,
+            settings=settings,
+            handler=handler,
+            stop=stop,
+        ),
+        timeout=5,
+    )
+
+    assert failures["left"] == 0
+    assert seen == ["cmd-after-outage"]
+
+
+async def test_a_broker_failure_backs_off_before_retrying(fake_redis, consumer, settings):
+    """Consecutive failures must escalate, capped — not hammer a down broker."""
+    first = _error_backoff_seconds(1, ERROR_BACKOFF_BASE_SECONDS)
+    second = _error_backoff_seconds(2, ERROR_BACKOFF_BASE_SECONDS)
+    huge = _error_backoff_seconds(10_000, ERROR_BACKOFF_BASE_SECONDS)
+
+    assert first == ERROR_BACKOFF_BASE_SECONDS
+    assert second > first
+    assert huge == ERROR_BACKOFF_MAX_SECONDS
+
+
+async def test_the_loop_stops_between_messages_in_one_batch(fake_redis, consumer, settings):
+    """CR #7: the stop check must not depend on count=1 staying true."""
+    stop = asyncio.Event()
+    stop.set()
+    handled: list[str] = []
+
+    async def handler(command: ContentFetchCommand) -> None:
+        handled.append(command.command_id)
+
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-batch-1"))
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-batch-2"))
+    messages = await consumer.read(count=2, block_ms=1)
+    assert len(messages) == 2
+
+    await process_batch(
+        messages,
+        client=fake_redis,
+        consumer=consumer,
+        group=GROUP,
+        settings=settings,
+        handler=handler,
+        stop=stop,
+    )
+
+    assert handled == ["cmd-batch-1"]
+
+
+async def test_recovery_gives_up_after_the_poison_skip_bound(fake_redis, consumer, settings):
+    """CR #3: a pathological PEL must not starve the read path within one tick."""
+    for _ in range(MAX_POISON_SKIPS + 2):
+        await fake_redis.xadd(TOPIC, {"event_type": "content_fetch", "payload": "not json"})
+    await fake_redis.xreadgroup(GROUP, "replicator@dead-worker", {TOPIC: ">"}, count=100)
+    eager = settings.model_copy(update={"claim_min_idle_ms": 0})
+
+    reclaimed = await claim_once(fake_redis, consumer, eager, group=GROUP)
+
+    assert reclaimed == []
+    assert await fake_redis.xlen(dlq_name(TOPIC)) == MAX_POISON_SKIPS
+    pending = await fake_redis.xpending(TOPIC, GROUP)
+    assert pending["pending"] == 2  # the bound stopped the pass; the rest wait for the next
+
+
+async def test_dead_lettered_frames_carry_their_reason(fake_redis, consumer, settings):
+    """CR #4: the DLQ is the triage surface — the reason belongs in the entry."""
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-doomed"))
+
+    async def handler(command: ContentFetchCommand) -> None:
+        raise PermanentFetchError("this url will never be fetchable")
+
+    message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
+    await process_message(
+        message,
+        client=fake_redis,
+        consumer=consumer,
+        group=GROUP,
+        settings=settings,
+        handler=handler,
+    )
+
+    entry = (await fake_redis.xrange(dlq_name(TOPIC)))[0][1]
+    assert entry[b"dlq_reason"] == b"handler reported a permanent failure"
+    assert entry[b"dlq_original_id"] == message.message_id.encode()
+    assert entry[b"payload"]  # the original frame is preserved alongside
+
+
+async def test_a_missing_pending_row_is_logged_not_silently_retried(
+    fake_redis, consumer, settings, caplog
+):
+    """CR #5: no PEL row means the ceiling cannot be read — say so.
+
+    The entry leaving the PEL underneath us is the reachable case; a *wrong*
+    group is not, since Redis answers XPENDING for an unknown group with NOGROUP
+    rather than an empty result.
+    """
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-no-row"))
+    message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
+    await consumer.ack(message.message_id)  # gone from the PEL
+
+    with caplog.at_level("WARNING"):
+        attempts = await _delivery_count(fake_redis, message, group=GROUP)
+
+    assert attempts == 1
+    assert "no pending entry" in caplog.text

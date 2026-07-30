@@ -91,12 +91,15 @@ async def run(stop: asyncio.Event | None = None) -> None:
         raise
 
     owns_signals = stop is None
-    if stop is None:
-        stop = asyncio.Event()
-        install_signal_handlers(stop)
-
     client = Redis.from_url(settings.redis_url)
     try:
+        # Installed inside the try so the handlers are always removed again —
+        # outside it, a failure between install and the try would leak global
+        # signal state (harmless for a dying process, not for an in-process test).
+        if stop is None:
+            stop = asyncio.Event()
+            install_signal_handlers(stop)
+
         consumer = build_consumer(client, settings)
         # Default start_id="$" reads only messages added after group creation.
         # The MVP seed harness controls when commands appear, so a backlog drain
@@ -114,6 +117,9 @@ async def run(stop: asyncio.Event | None = None) -> None:
         await run_loop(
             client=client,
             consumer=consumer,
+            # The same value build_consumer used — threaded explicitly so the
+            # PEL the ceiling reads is provably the one the consumer acks against.
+            group=settings.consumer_group,
             settings=settings,
             handler=log_only_handler,
             stop=stop,

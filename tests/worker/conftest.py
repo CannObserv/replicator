@@ -31,17 +31,22 @@ def make_command(command_id: str = "cmd-1", url: str = "https://example.test/a")
 
 
 @pytest.fixture
-async def consumer(fake_redis, monkeypatch):
-    """An ``AsyncBusConsumer`` on ``content.fetch`` with its group created."""
+def worker_env(monkeypatch):
+    """Pin the group and consumer name so assertions can name them literally."""
     monkeypatch.setenv("REPLICATOR_CONSUMER_GROUP", GROUP)
     monkeypatch.setenv("REPLICATOR_CONSUMER_NAME", "replicator@test")
     get_settings.cache_clear()
+
+
+@pytest.fixture
+async def consumer(fake_redis, worker_env):
+    """An ``AsyncBusConsumer`` on ``content.fetch`` with its group created."""
     consumer = build_consumer(fake_redis, get_settings())
     await consumer.ensure_group(start_id="0")
     return consumer
 
 
 @pytest.fixture
-def settings(consumer):
-    """Settings matching the ``consumer`` fixture (env already monkeypatched)."""
+def settings(worker_env):
+    """Settings built from the same env the ``consumer`` fixture reads."""
     return get_settings()

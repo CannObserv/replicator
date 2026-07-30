@@ -36,11 +36,10 @@ REPLICATOR_CONSUMER_NAME="replicator@$(whoami)-dev" uv run python -m src.worker.
 ### Inspecting the consume path
 
 ```bash
-# Pending entries: who holds what, and how long it has been idle.
+# Pending entries: id, holder, idle ms, and delivery count — the last field is
+# the times_delivered the DLQ ceiling reads. Add `IDLE <ms>` before the range to
+# filter to entries idle at least that long (what claim_stale would reclaim).
 redis-cli XPENDING content.fetch replicator.fetch - + 10
-
-# Delivery counts (the DLQ ceiling reads times_delivered from here).
-redis-cli XPENDING content.fetch replicator.fetch IDLE 0 - + 10
 
 # Dead-lettered frames.
 redis-cli XLEN content.fetch.dlq
