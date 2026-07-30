@@ -8,14 +8,17 @@ import asyncio
 import json
 from datetime import UTC, datetime
 
+import pytest
 from co_core.pure.adapters.bus.envelope import to_wire
 from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
 from co_core.pure.adapters.bus.streams import dlq_name
 from co_core.pure.models.changes import BlobAvailableEvent, ContentFetchCommand
 
 from src.worker.loop import (
+    DEDUPE_KEY_PREFIX,
     Outcome,
     dead_letter_anomaly,
+    log_only_handler,
     poll_once,
     process_message,
     run_loop,
@@ -222,3 +225,75 @@ async def test_the_loop_keeps_running_past_a_poison_frame(fake_redis, consumer, 
 
     assert seen == ["cmd-after-poison"]
     assert await fake_redis.xlen(dlq_name(TOPIC)) == 1
+
+
+async def _process(fake_redis, consumer, settings, message, handler):
+    return await process_message(
+        message,
+        client=fake_redis,
+        consumer=consumer,
+        handler=handler,
+        settings=settings,
+    )
+
+
+async def test_a_redelivered_command_is_acked_without_rerunning_the_handler(
+    fake_redis, consumer, settings
+):
+    """AC: dedupe on command_id, durable in Redis so it survives a restart."""
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-dup"))
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-dup"))
+    calls: list[str] = []
+
+    async def handler(command: ContentFetchCommand) -> None:
+        calls.append(command.command_id)
+
+    first = (await poll_once(fake_redis, consumer, settings))[0]
+    assert await _process(fake_redis, consumer, settings, first, handler) is Outcome.ACKED
+
+    second = (await poll_once(fake_redis, consumer, settings))[0]
+    assert await _process(fake_redis, consumer, settings, second, _unreachable_handler) is (
+        Outcome.DEDUPED
+    )
+
+    assert calls == ["cmd-dup"]
+    pending = await fake_redis.xpending(TOPIC, GROUP)
+    assert pending["pending"] == 0
+
+
+async def test_the_dedupe_key_carries_the_configured_ttl(fake_redis, consumer, settings):
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-ttl"))
+
+    message = (await poll_once(fake_redis, consumer, settings))[0]
+    await _process(fake_redis, consumer, settings, message, log_only_handler)
+
+    ttl = await fake_redis.ttl(f"{DEDUPE_KEY_PREFIX}cmd-ttl")
+    assert 0 < ttl <= settings.dedupe_ttl_seconds
+
+
+async def test_a_failed_handler_leaves_no_dedupe_key(fake_redis, consumer, settings):
+    """Set-after-success: a crash between handler and key must re-run, not skip."""
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-boom"))
+
+    async def handler(command: ContentFetchCommand) -> None:
+        raise RuntimeError("handler exploded")
+
+    message = (await poll_once(fake_redis, consumer, settings))[0]
+    with pytest.raises(RuntimeError):
+        await _process(fake_redis, consumer, settings, message, handler)
+
+    assert not await fake_redis.exists(f"{DEDUPE_KEY_PREFIX}cmd-boom")
+
+
+async def test_a_dead_lettered_command_leaves_no_dedupe_key(fake_redis, consumer, settings):
+    """A DLQ'd command was never handled — replay must not be short-circuited."""
+    fields = make_command(command_id="cmd-future-2")
+    payload = json.loads(fields["payload"])
+    payload["schema_version"] = 99
+    fields["payload"] = json.dumps(payload)
+    await fake_redis.xadd(TOPIC, fields)
+
+    message = (await poll_once(fake_redis, consumer, settings))[0]
+    await _process(fake_redis, consumer, settings, message, _unreachable_handler)
+
+    assert not await fake_redis.exists(f"{DEDUPE_KEY_PREFIX}cmd-future-2")

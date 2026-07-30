@@ -70,6 +70,14 @@ class Settings(BaseSettings):
     # config edit rather than a code change.
     consumer_start_id: str = Field(default="$", validation_alias="REPLICATOR_CONSUMER_START_ID")
 
+    # Lifetime of the per-command_id dedupe key. Redelivery is bounded by the
+    # PEL, which is unbounded in principle, so no TTL is provably sufficient:
+    # a day covers any realistic outage, costs one small key per command, and
+    # expiry degrades to a re-run that content-addressed storage absorbs.
+    dedupe_ttl_seconds: int = Field(
+        default=86_400, validation_alias="REPLICATOR_DEDUPE_TTL_SECONDS"
+    )
+
     log_level: str = Field(default="INFO", validation_alias="REPLICATOR_LOG_LEVEL")
 
     # Stamped by the systemd unit's ExecStartPre; "dev" outside systemd.

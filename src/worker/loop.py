@@ -29,6 +29,10 @@ logger = get_logger(__name__)
 # unrecognized version is ours to catch — branch before destructuring.
 SUPPORTED_SCHEMA_VERSION = 1
 
+# Namespace for the command dedupe keys. Redis, not an in-memory set: the point
+# is to survive the restart that redelivery follows.
+DEDUPE_KEY_PREFIX = "replicator:cmd:"
+
 # The consume-path handler seam. Raising signals failure; the loop — not the
 # handler — decides whether that means retry or dead-letter.
 Handler = Callable[[ContentFetchCommand], Awaitable[None]]
@@ -44,6 +48,7 @@ class Outcome(StrEnum):
     """What ``process_message`` did with one message."""
 
     ACKED = "acked"
+    DEDUPED = "deduped"
     DEAD_LETTERED = "dead_lettered"
     RETRY = "retry"
 
@@ -89,7 +94,24 @@ async def process_message(
             detail={"command_id": command.command_id, "schema_version": command.schema_version},
         )
 
+    dedupe_key = f"{DEDUPE_KEY_PREFIX}{command.command_id}"
+    if await client.exists(dedupe_key):
+        await consumer.ack(message.message_id)
+        logger.info(
+            "skipped an already-handled command",
+            extra={"command_id": command.command_id, "message_id": message.message_id},
+        )
+        return Outcome.DEDUPED
+
     await handler(command)
+
+    # Written *after* the handler, deliberately. Marking first would turn a crash
+    # between the mark and a completed handle into permanent loss: redelivery
+    # would short-circuit to ack having never done the work. This ordering can
+    # only re-run a handler that already succeeded, which content-addressed
+    # storage absorbs — the key is a cheap short-circuit, not the correctness
+    # mechanism.
+    await client.set(dedupe_key, message.message_id, nx=True, ex=settings.dedupe_ttl_seconds)
     await consumer.ack(message.message_id)
     return Outcome.ACKED
 
