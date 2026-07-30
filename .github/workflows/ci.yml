@@ -40,6 +40,22 @@ jobs:
       # private GCS index. Authenticate keyless via Workload Identity Federation
       # — the read-scoped provider impersonating the objectViewer-only
       # co-pypi-reader SA — then sync before `uv sync`.
+      # Fail fast and legibly when the org variable is not visible to this repo.
+      # google-github-actions/auth validates its own inputs before contacting
+      # Google, so an empty provider surfaces as "must specify exactly one of
+      # workload_identity_provider or credentials_json" — which reads like a
+      # workflow-authoring bug and sends you looking at GCP IAM, where the
+      # problem is not. Assert the precondition here instead.
+      - name: Assert wheelhouse auth is configured
+        env:
+          WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+        run: |
+          if [ -z "$WIF_PROVIDER" ]; then
+            echo "::error::vars.GCP_WIF_PROVIDER is empty for this repo. GCP is not the problem — the org variable is not visible here. Fix under Org Settings > Secrets and variables > Actions > Variables > GCP_WIF_PROVIDER > Repository access."
+            exit 1
+          fi
+          echo "WIF provider: $WIF_PROVIDER"
+
       - name: Authenticate to Google Cloud (WIF, read-only)
         uses: google-github-actions/auth@v2
         with:
@@ -75,6 +91,22 @@ jobs:
 
       - name: Install Python
         run: uv python install 3.12
+
+      # Fail fast and legibly when the org variable is not visible to this repo.
+      # google-github-actions/auth validates its own inputs before contacting
+      # Google, so an empty provider surfaces as "must specify exactly one of
+      # workload_identity_provider or credentials_json" — which reads like a
+      # workflow-authoring bug and sends you looking at GCP IAM, where the
+      # problem is not. Assert the precondition here instead.
+      - name: Assert wheelhouse auth is configured
+        env:
+          WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+        run: |
+          if [ -z "$WIF_PROVIDER" ]; then
+            echo "::error::vars.GCP_WIF_PROVIDER is empty for this repo. GCP is not the problem — the org variable is not visible here. Fix under Org Settings > Secrets and variables > Actions > Variables > GCP_WIF_PROVIDER > Repository access."
+            exit 1
+          fi
+          echo "WIF provider: $WIF_PROVIDER"
 
       - name: Authenticate to Google Cloud (WIF, read-only)
         uses: google-github-actions/auth@v2
