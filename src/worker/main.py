@@ -43,7 +43,12 @@ def build_consumer(client: Redis, settings: Settings) -> AsyncBusConsumer:
 async def run() -> None:
     """Connect to the bus and ensure the consumer group exists."""
     settings = get_settings()
-    configure_logging()
+    configure_logging(settings.log_level)
+
+    # systemd's StateDirectory= creates the parent only, so the leaf is ours to
+    # make. Doing it at startup rather than at first write means a
+    # misconfigured path fails loudly on boot, not mid-fetch.
+    settings.blob_dir.mkdir(parents=True, exist_ok=True)
 
     client = Redis.from_url(settings.redis_url)
     try:

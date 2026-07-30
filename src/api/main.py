@@ -19,7 +19,7 @@ logger = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """One-time setup on startup, teardown on shutdown."""
-    configure_logging()
+    configure_logging(get_settings().log_level)
     logger.info("application starting")
     yield
     logger.info("application stopping")

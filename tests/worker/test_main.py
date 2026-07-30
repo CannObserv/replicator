@@ -45,11 +45,54 @@ async def test_ensure_group_is_idempotent(fake_redis):
     assert [g["name"] for g in groups] == [b"replicator.fetch"]
 
 
-async def test_run_creates_the_group_and_closes_its_client(monkeypatch, fake_redis):
+async def test_run_creates_the_group_and_closes_its_client(monkeypatch, fake_redis, tmp_path):
     """run() owns the client lifetime — the co-core driver never closes it."""
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
     monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
 
     await run()
 
     groups = await fake_redis.xinfo_groups(streams.CONTENT_FETCH)
     assert [g["name"] for g in groups] == [b"replicator.fetch"]
+
+
+async def test_run_creates_the_blob_dir(monkeypatch, fake_redis, tmp_path):
+    """systemd's StateDirectory makes the parent only — the leaf is ours (CR #3)."""
+    blob_dir = tmp_path / "state" / "blobs"
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(blob_dir))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    assert not blob_dir.exists()
+
+    await run()
+
+    assert blob_dir.is_dir()
+
+
+async def test_run_tolerates_an_existing_blob_dir(monkeypatch, fake_redis, tmp_path):
+    """Restarts must not fail on a directory the previous run created."""
+    blob_dir = tmp_path / "blobs"
+    blob_dir.mkdir()
+    (blob_dir / "keep-me").write_bytes(b"prior content")
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(blob_dir))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+
+    await run()
+
+    assert (blob_dir / "keep-me").read_bytes() == b"prior content"
+
+
+async def test_run_applies_the_configured_log_level(monkeypatch, fake_redis, tmp_path):
+    """REPLICATOR_LOG_LEVEL reaches the root logger via run() (CR #1)."""
+    import logging
+
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setenv("REPLICATOR_LOG_LEVEL", "DEBUG")
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    try:
+        await run()
+        assert root.level == logging.DEBUG
+    finally:
+        root.handlers, root.level = saved_handlers, saved_level

@@ -3,6 +3,7 @@ name = "replicator"
 version = "0.1.0"
 description = "retrieval, fingerprinting, and temporary storage layer for the Cannabis Observer cluster"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
     "co-core[extract]>=0.7,<0.8",
@@ -14,6 +15,12 @@ dependencies = [
     "python-ulid>=3.1.0,<4",
     "uvicorn[standard]>=0.34.0,<1",
 ]
+
+[project.scripts]
+# Canonical launch name. deploy/replicator.service and docs invoke the module
+# form (python -m src.worker.main); this gives the entry point a stable name if
+# the module ever moves.
+replicator-worker = "src.worker.main:main"
 
 [dependency-groups]
 dev = [
@@ -79,3 +86,9 @@ select = ["E", "F", "I", "W", "UP", "B904", "PLC0415", "FAST", "ASYNC"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["src"]
+
+# ty walks the whole tree by default. skills-vendor/ is read-only third-party
+# skill content — 9 of 10 diagnostics came from there, drowning the one real
+# signal. Mirrors ruff's extend-exclude.
+[tool.ty.src]
+exclude = ["skills-vendor/"]

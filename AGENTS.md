@@ -111,12 +111,14 @@ uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8041 --reload
 
 ## Environment Variables
 
-Two env files, loaded in order (later values override):
+Two env files, with a hard boundary between them:
 
-1. **`/etc/replicator/.env`** — production secrets. Survives repo resets and worktree switches. Managed manually on the VM.
-2. **`.env`** (repo root, git-ignored) — dev/agent secrets (`GH_TOKEN`). Never commit.
+1. **`/etc/replicator/.env`** — production configuration. Survives repo resets and worktree switches. Managed manually on the VM. **The only file `replicator.service` reads.**
+2. **`.env`** (repo root, git-ignored) — dev/agent secrets: `GH_TOKEN` plus the per-repo PATs (`GH_TOKEN_ARCHIVER`, `GH_TOKEN_WATCHER`, `GH_TOKEN_CANNOBSERV`, `GH_TOKEN_SKILLS`). Never commit.
 
-The systemd service loads both automatically. For shell commands:
+**The service must never load the repo `.env`.** Those PATs carry org-wide write access the worker has no use for; handing them to a process whose job is fetching public URLs widens the blast radius of any crash dump or subprocess for no benefit. Anything the service genuinely needs belongs in `/etc/replicator/.env`.
+
+For shell commands (dev only), load both:
 
 ```bash
 set -a; . /etc/replicator/.env 2>/dev/null; . .env 2>/dev/null; set +a
@@ -124,8 +126,11 @@ set -a; . /etc/replicator/.env 2>/dev/null; . .env 2>/dev/null; set +a
 
 Replicator-owned settings carry the `REPLICATOR_` prefix so they never collide with a sibling service on the shared VM. `BUILD_ID` is deliberately unprefixed — the systemd unit stamps it generically.
 
-Currently defined:
-- `GH_TOKEN` — GitHub personal access token (used by `gh` CLI)
+In `.env` (dev/agent only — never read by the service):
+- `GH_TOKEN` — GitHub PAT for this repo (used by `gh` CLI)
+- `GH_TOKEN_ARCHIVER` / `GH_TOKEN_WATCHER` / `GH_TOKEN_CANNOBSERV` / `GH_TOKEN_SKILLS` — per-repo PATs. Cross-repo work is **filed as an issue**, never edited directly: each repo owns its own review, CI, and deploy cycle, and `main` is the deployed code. Pass the right one as `GH_TOKEN` for a given `gh` call.
+
+In `/etc/replicator/.env` (read by the service):
 - `GOOGLE_APPLICATION_CREDENTIALS` — SA key for the wheelhouse mirror (`/etc/replicator/co-pypi-reader.json`)
 - `REPLICATOR_REDIS_URL` — change-bus client URL; default `redis://localhost:6379/0`
 - `REPLICATOR_BLOB_DIR` — temp-storage root for fetched bytes; default `blobs`
@@ -145,6 +150,8 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
 - **DLQ is a shipped seam, not a TODO:** `dead_letter(message_id, fields)` copies the frame to `<topic>.dlq` and acks the original. Deterministic failure ⇒ DLQ; transient failure ⇒ retry.
 - **Bus clients are injection-only** — the co-core driver never opens or closes the `redis.asyncio.Redis` client. The worker owns one for its lifetime.
 - `sha256` lives at `co_core.pure.util.hashing`, not `co_core.pure.extract` (which carries `simhash`, `Chunk`, and the parsers). Import parsers from submodules — they are not re-exported from `__init__`.
+
+**Testing the bus.** `tests/conftest.py` ships a `fake_redis` fixture (fakeredis, Streams-capable) — consumer-group behaviour is testable without a broker, and assertions should read the broker's own view (`xinfo_groups` / `xinfo_consumers`) rather than co-core's private attributes, which are not a stable contract. Anything that genuinely needs the live Archiver-operated Redis goes behind `@pytest.mark.integration` and is excluded by default.
 
 ## Common Commands
 

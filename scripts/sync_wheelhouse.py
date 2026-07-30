@@ -31,7 +31,11 @@ import sys
 import tempfile
 from pathlib import Path
 
-from google.cloud import storage
+# google-cloud-storage is deliberately NOT a project dependency: this script runs
+# standalone before `uv sync`, so it must not import anything the wheelhouse is
+# what provides. It is supplied at invocation via `uv run --with`. Static
+# analysis cannot resolve it — that is expected, not a missing dependency.
+from google.cloud import storage  # ty: ignore[unresolved-import]
 
 BUCKET = os.environ.get("REPLICATOR_WHEELHOUSE_BUCKET", "co-gcs-pypi")
 PREFIX = os.environ.get("REPLICATOR_WHEELHOUSE_PREFIX", "wheels/")

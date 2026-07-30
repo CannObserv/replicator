@@ -23,11 +23,16 @@ ExecStartPre=+/bin/bash -c 'mkdir -p /run/replicator && chown exedev:exedev /run
 # Write current git SHA to a runtime env file before starting
 ExecStartPre=/bin/bash -c 'echo BUILD_ID=$(git rev-parse --short HEAD) > /run/replicator/build-id'
 
-# Load BUILD_ID, then system secrets, then optional repo-local overrides.
-# Order matters: later EnvironmentFiles override earlier ones.
+# Load BUILD_ID, then system secrets. Order matters: later EnvironmentFiles
+# override earlier ones, so BUILD_ID (read-only state from ExecStartPre) is the
+# lowest-precedence layer.
+#
+# The repo-local .env is deliberately NOT loaded. It holds dev/agent secrets —
+# GitHub PATs with org-wide write access that this worker never needs — and
+# sourcing it would hand every one of them to a process whose job is fetching
+# public URLs. Production configuration belongs in /etc/replicator/.env.
 EnvironmentFile=-/run/replicator/build-id
 EnvironmentFile=/etc/replicator/.env
-EnvironmentFile=-/home/exedev/replicator/.env
 
 # Hard guard: Replicator is the cluster's first user of claim_stale, which needs
 # XAUTOCLAIM's three-element reply (Redis server >= 7.0). Soft on an unreachable

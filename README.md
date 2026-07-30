@@ -36,14 +36,30 @@ uv run pre-commit install
 
 ## Environment
 
-Two env files, loaded in order (later values override):
+Two env files, with a deliberate boundary between them:
 
-1. `/etc/replicator/.env` — production secrets, managed manually on the VM.
-2. `.env` (repo root, git-ignored) — dev/agent secrets.
+1. **`/etc/replicator/.env`** — production configuration, managed manually on the VM.
+   **This is the only file the systemd service reads.**
+2. **`.env`** (repo root, git-ignored) — dev/agent secrets, e.g. GitHub PATs. Loaded by
+   developers and agents in a shell; **never** by the service, which has no use for them.
+
+For local work, load both:
 
 ```bash
 set -a; . /etc/replicator/.env 2>/dev/null; . .env 2>/dev/null; set +a
 ```
+
+Variables the service uses (all in `/etc/replicator/.env`):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GOOGLE_APPLICATION_CREDENTIALS` | — | SA key for the wheelhouse mirror (`/etc/replicator/co-pypi-reader.json`) |
+| `REPLICATOR_REDIS_URL` | `redis://localhost:6379/0` | Change-bus client URL |
+| `REPLICATOR_BLOB_DIR` | `blobs` | Temp-storage root for fetched bytes |
+| `REPLICATOR_CONSUMER_GROUP` | `replicator.fetch` | Consumer group on `content.fetch` |
+| `REPLICATOR_CONSUMER_NAME` | `replicator@<hostname>` | This worker's identity in the group — never share one |
+| `REPLICATOR_LOG_LEVEL` | `INFO` | Root log level |
+| `BUILD_ID` | `dev` | Git SHA, stamped by the unit's `ExecStartPre` |
 
 ## Test & lint
 
