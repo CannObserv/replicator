@@ -1,0 +1,50 @@
+[Unit]
+Description=replicator — retrieval, fingerprinting, and temporary storage layer for the Cannabis Observer cluster
+# The Redis change bus is Archiver-operated cluster infrastructure. Wants=/After=
+# (not Requires=) orders the worker behind the broker without hard-failing when
+# it is absent — the floor check below is the guard that actually blocks.
+After=network.target redis-server.service
+Wants=redis-server.service
+# Bound crash-restart loops: at most 10 restarts per 5 minutes, then stay
+# failed (visible in systemctl status + OnFailure=) instead of flapping forever.
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=exedev
+WorkingDirectory=/home/exedev/replicator
+# Creates /var/lib/replicator (REPLICATOR_BLOB_DIR's parent) owned by User=.
+StateDirectory=replicator
+
+# Create runtime dir (runs as root before User= takes effect with + prefix)
+ExecStartPre=+/bin/bash -c 'mkdir -p /run/replicator && chown exedev:exedev /run/replicator'
+
+# Write current git SHA to a runtime env file before starting
+ExecStartPre=/bin/bash -c 'echo BUILD_ID=$(git rev-parse --short HEAD) > /run/replicator/build-id'
+
+# Load BUILD_ID, then system secrets, then optional repo-local overrides.
+# Order matters: later EnvironmentFiles override earlier ones.
+EnvironmentFile=-/run/replicator/build-id
+EnvironmentFile=/etc/replicator/.env
+EnvironmentFile=-/home/exedev/replicator/.env
+
+# Hard guard: Replicator is the cluster's first user of claim_stale, which needs
+# XAUTOCLAIM's three-element reply (Redis server >= 7.0). Soft on an unreachable
+# broker, fatal on a genuine downgrade. Not '-' prefixed — that exit 1 must stop
+# the start.
+ExecStartPre=/bin/bash /home/exedev/replicator/scripts/check_redis_floor.sh
+
+# Refresh the cannobserv wheelhouse. Non-fatal ('-' prefix): a transient GCS
+# failure is surfaced to the journal, and an already-populated wheelhouse still
+# starts. Only a genuinely missing wheel surfaces as a hard uv resolution error.
+ExecStartPre=-/usr/local/bin/uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
+
+# --frozen --no-sync: run exactly the committed lockfile; dependency sync is a
+# deploy step, not a service-start side effect.
+ExecStart=/usr/local/bin/uv run --frozen --no-sync python -m src.worker.main
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

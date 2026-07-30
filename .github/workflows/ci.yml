@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same PR; never cancel runs on main (keep
+# CI signal for every commit that lands on the protected branch).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    # WIF: mint an OIDC token for google-github-actions/auth to impersonate the
+    # read-only co-pypi-reader SA and pull the cannobserv wheelhouse.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      # co-core / co-core-aio resolve from a wheelhouse mirrored from the
+      # private GCS index. Authenticate keyless via Workload Identity Federation
+      # — the read-scoped provider impersonating the objectViewer-only
+      # co-pypi-reader SA — then sync before `uv sync`.
+      - name: Authenticate to Google Cloud (WIF, read-only)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: co-pypi-reader@co-gcs.iam.gserviceaccount.com
+
+      - name: Sync cannobserv wheelhouse
+        run: uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
+
+      - name: uv sync
+        run: uv sync --frozen --group dev
+
+      - name: ruff check
+        run: uv run ruff check .
+
+      - name: ruff format --check
+        run: uv run ruff format --check .
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    # WIF: mint an OIDC token for google-github-actions/auth (see the lint job).
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Authenticate to Google Cloud (WIF, read-only)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: co-pypi-reader@co-gcs.iam.gserviceaccount.com
+
+      - name: Sync cannobserv wheelhouse
+        run: uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
+
+      - name: uv sync
+        run: uv sync --frozen --group dev
+
+      # Validates the wheelhouse end to end: the extras the MVP loop depends on
+      # ([extract] for fingerprinting, [bus] for the Redis Streams driver) must
+      # import, not merely resolve.
+      - name: co-core import smoke (extras wired)
+        run: |
+          uv run python -c "
+          from co_core.pure.util.hashing import sha256
+          from co_core.pure.extract import simhash
+          from co_core.pure.adapters.bus import streams
+          from co_core.pure.models.changes import BlobAvailableEvent, ContentFetchCommand
+          from co_core_aio.bus import AsyncBusConsumer, AsyncBusPublisher
+          from co_core_aio.fetch import AsyncFetchDriver
+          assert streams.CONTENT_FETCH == 'content.fetch'
+          assert streams.CONTENT_BLOBS == 'content.blobs'
+          print('co-core extras OK')
+          "
+
+      # No Postgres service and no alembic steps: Replicator is DB-free. Its
+      # durable state is the Redis consumer group's PEL plus content-addressed
+      # blobs on disk. Unit tests use fakeredis; anything needing a real broker
+      # is marked @pytest.mark.integration and excluded by default.
+      - name: pytest (default, excludes integration)
+        run: uv run pytest

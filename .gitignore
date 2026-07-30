@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Environment / secrets
+.env
+env
+
+# cannobserv package index mirror — populated by scripts/sync_wheelhouse.py from
+# the private GCS index (gs://co-gcs-pypi). Wheels are never committed; the
+# directory itself is tracked so `[tool.uv] find-links = ["./.wheelhouse"]`
+# resolves on a fresh clone before the first sync.
+# NB: `.wheelhouse/*`, not `.wheelhouse/` — git cannot re-include a file whose
+# parent directory is excluded, so a directory-level ignore would make the
+# negation below a no-op and leave .gitkeep untracked.
+.wheelhouse/*
+!.wheelhouse/.gitkeep
+
+# Temporary blob storage (REPLICATOR_BLOB_DIR default) — content-addressed
+# fetched bytes awaiting durable replication. Never committed.
+blobs/
+
+# Coverage
+htmlcov/
+.coverage
+coverage.xml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Git worktrees
+.worktrees/
+
+# Runtime (BUILD_ID stamp target — the systemd unit writes /run/replicator/build-id)
+/run/
