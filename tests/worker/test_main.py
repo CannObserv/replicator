@@ -5,15 +5,29 @@ attributes — co-core keeps those private, and the observable Redis state is th
 contract that actually matters for competing consumers and crash recovery.
 """
 
+import asyncio
 import errno
 import json
 import logging
+import os
+import signal
 
 import pytest
 from co_core.pure.adapters.bus import streams
 
 from src.core.config import get_settings
-from src.worker.main import build_consumer, run
+from src.worker.main import build_consumer, install_signal_handlers, remove_signal_handlers, run
+
+
+def _stopped() -> asyncio.Event:
+    """A pre-set stop event: run() does its startup work, then returns.
+
+    Scaffold assertions (group, blob dir, log level) are about what happens
+    before the loop, so they must not depend on a message ever arriving.
+    """
+    stop = asyncio.Event()
+    stop.set()
+    return stop
 
 
 async def test_ensure_group_targets_the_command_stream(fake_redis):
@@ -55,7 +69,7 @@ async def test_run_creates_the_group_and_closes_its_client(monkeypatch, fake_red
     monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
     monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
 
-    await run()
+    await run(_stopped())
 
     groups = await fake_redis.xinfo_groups(streams.CONTENT_FETCH)
     assert [g["name"] for g in groups] == [b"replicator.fetch"]
@@ -68,7 +82,7 @@ async def test_run_creates_the_blob_dir(monkeypatch, fake_redis, tmp_path):
     monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
     assert not blob_dir.exists()
 
-    await run()
+    await run(_stopped())
 
     assert blob_dir.is_dir()
 
@@ -81,7 +95,7 @@ async def test_run_tolerates_an_existing_blob_dir(monkeypatch, fake_redis, tmp_p
     monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(blob_dir))
     monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
 
-    await run()
+    await run(_stopped())
 
     assert (blob_dir / "keep-me").read_bytes() == b"prior content"
 
@@ -97,7 +111,7 @@ async def test_unusable_blob_dir_is_logged_then_raised(monkeypatch, fake_redis, 
     saved_handlers, saved_level = root.handlers[:], root.level
     try:
         with pytest.raises(OSError):
-            await run()
+            await run(_stopped())
         record = json.loads(
             next(
                 ln
@@ -121,7 +135,42 @@ async def test_run_applies_the_configured_log_level(monkeypatch, fake_redis, tmp
     root = logging.getLogger()
     saved_handlers, saved_level = root.handlers[:], root.level
     try:
-        await run()
+        await run(_stopped())
         assert root.level == logging.DEBUG
     finally:
         root.handlers, root.level = saved_handlers, saved_level
+
+
+async def test_sigterm_sets_the_stop_event():
+    """SIGTERM must reach the loop as a stop request, not a mid-message kill."""
+    stop = asyncio.Event()
+    install_signal_handlers(stop)
+    try:
+        os.kill(os.getpid(), signal.SIGTERM)
+        await asyncio.wait_for(stop.wait(), timeout=5)
+    finally:
+        remove_signal_handlers()
+
+
+async def test_run_exits_cleanly_on_sigterm(monkeypatch, fake_redis, tmp_path):
+    """End to end: an unstopped run() installs the handler and returns on SIGTERM.
+
+    A safety no-op disposition is installed first so that a signal arriving in
+    the window before run() wires its own handler fails the test rather than
+    killing the test process.
+    """
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    previous = signal.signal(signal.SIGTERM, lambda *_: None)
+
+    task = asyncio.create_task(run())
+    try:
+        for _ in range(50):
+            await asyncio.sleep(0.05)
+            if task.done():
+                break
+            os.kill(os.getpid(), signal.SIGTERM)
+        await asyncio.wait_for(task, timeout=5)
+    finally:
+        task.cancel()
+        signal.signal(signal.SIGTERM, previous)

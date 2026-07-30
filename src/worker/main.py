@@ -14,6 +14,7 @@ and closes it on the way out.
 """
 
 import asyncio
+import signal
 
 from co_core.pure.adapters.bus import streams
 from co_core_aio.bus import AsyncBusConsumer
@@ -21,8 +22,13 @@ from redis.asyncio import Redis
 
 from src.core.config import Settings, get_settings
 from src.core.logging import configure_logging, get_logger
+from src.worker.loop import log_only_handler, run_loop
 
 logger = get_logger(__name__)
+
+# Signals that mean "stop taking new work". SIGINT is included so an interactive
+# Ctrl-C drains the same way systemd's SIGTERM does.
+_STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 
 
 def build_consumer(client: Redis, settings: Settings) -> AsyncBusConsumer:
@@ -40,8 +46,31 @@ def build_consumer(client: Redis, settings: Settings) -> AsyncBusConsumer:
     )
 
 
-async def run() -> None:
-    """Connect to the bus and ensure the consumer group exists."""
+def install_signal_handlers(stop: asyncio.Event) -> None:
+    """Route SIGTERM/SIGINT to ``stop`` instead of killing the loop mid-message.
+
+    Setting an event rather than cancelling means the in-flight message finishes
+    and acks; a cancelled handler would leave it in the PEL for a stale-claim
+    round-trip that a clean restart has no reason to need.
+    """
+    loop = asyncio.get_running_loop()
+    for sig in _STOP_SIGNALS:
+        loop.add_signal_handler(sig, stop.set)
+
+
+def remove_signal_handlers() -> None:
+    """Restore default signal disposition (mirrors ``install_signal_handlers``)."""
+    loop = asyncio.get_running_loop()
+    for sig in _STOP_SIGNALS:
+        loop.remove_signal_handler(sig)
+
+
+async def run(stop: asyncio.Event | None = None) -> None:
+    """Connect to the bus, ensure the consumer group, and consume until stopped.
+
+    ``stop`` is injectable so tests drive the loop without signals; left unset,
+    the process owns its own event and wires SIGTERM/SIGINT to it.
+    """
     settings = get_settings()
     configure_logging(settings.log_level)
 
@@ -61,13 +90,19 @@ async def run() -> None:
         )
         raise
 
+    owns_signals = stop is None
+    if stop is None:
+        stop = asyncio.Event()
+        install_signal_handlers(stop)
+
     client = Redis.from_url(settings.redis_url)
     try:
         consumer = build_consumer(client, settings)
-        # start_id="$" reads only messages added after group creation. The MVP
-        # seed harness controls when commands appear, so a backlog drain ("0")
-        # is not needed; revisit when a live issuer exists.
-        await consumer.ensure_group(start_id="$")
+        # Default start_id="$" reads only messages added after group creation.
+        # The MVP seed harness controls when commands appear, so a backlog drain
+        # ("0") is not needed; REPLICATOR_CONSUMER_START_ID flips it once a live
+        # issuer exists — see the setting for the XGROUP SETID caveat.
+        await consumer.ensure_group(start_id=settings.consumer_start_id)
         logger.info(
             "worker ready",
             extra={
@@ -76,8 +111,17 @@ async def run() -> None:
                 "build": settings.build_id,
             },
         )
-        logger.info("message loop not yet implemented — exiting cleanly")
+        await run_loop(
+            client=client,
+            consumer=consumer,
+            settings=settings,
+            handler=log_only_handler,
+            stop=stop,
+        )
+        logger.info("worker stopped", extra={"consumer": settings.consumer_name})
     finally:
+        if owns_signals:
+            remove_signal_handlers()
         await client.aclose()
 
 

@@ -58,6 +58,18 @@ class Settings(BaseSettings):
         default_factory=_default_consumer_name, validation_alias="REPLICATOR_CONSUMER_NAME"
     )
 
+    # How long a poll blocks waiting for a new message. Bounds worst-case
+    # shutdown latency: SIGTERM is checked between polls, and a blocking
+    # XREADGROUP is left to expire rather than cancelled mid-flight, so
+    # systemd's TimeoutStopSec must exceed this plus the handler's budget.
+    read_block_ms: int = Field(default=5_000, validation_alias="REPLICATOR_READ_BLOCK_MS")
+
+    # start_id applies only at group *creation* — once replicator.fetch exists
+    # this value is inert, and switching to "0" (drain the backlog) additionally
+    # needs a manual XGROUP SETID. Kept configurable so the eventual change is a
+    # config edit rather than a code change.
+    consumer_start_id: str = Field(default="$", validation_alias="REPLICATOR_CONSUMER_START_ID")
+
     log_level: str = Field(default="INFO", validation_alias="REPLICATOR_LOG_LEVEL")
 
     # Stamped by the systemd unit's ExecStartPre; "dev" outside systemd.
