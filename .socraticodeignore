@@ -1,0 +1,22 @@
+# Indexer-specific exclusions (gitignore syntax), layered on top of SocratiCode's
+# built-in defaults and .gitignore.
+#
+# Vendored agent skills are read-only third-party content, not this project's
+# code: ~247 of the ~282 indexable files on disk, i.e. ~87% of embedding time,
+# for material no one asks semantic questions about. They also pollute results —
+# a query about the worker's command handling should not surface obra-superpowers
+# markdown. ruff (extend-exclude) and ty ([tool.ty.src] exclude) already skip
+# this tree; this keeps the indexer consistent with them.
+#
+# The skills themselves stay readable — they are plain files a few directories
+# away, and docs/SKILLS.md is registered as a context artifact.
+skills-vendor/
+skills/
+.claude/skills/
+
+# Local mirror of the private cannobserv package index. Already covered by
+# .gitignore, listed here so the exclusion survives RESPECT_GITIGNORE=false.
+.wheelhouse/
+
+# Content-addressed fetched bytes — opaque blobs, never source.
+blobs/

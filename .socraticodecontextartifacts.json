@@ -2,48 +2,53 @@
   "artifacts": [
     {
       "name": "agent-guidelines",
-      "description": "Authoritative project guide for agents and contributors. Worker-first shape (bus consumer is the primary process; FastAPI /health is dev-only), the co-core wheelhouse mechanism (gs://co-gcs-pypi via [tool.uv] find-links, not PyPI), src/ layout, the REPLICATOR_-prefixed env contract and the hard boundary between /etc/replicator/.env and the repo .env, the Redis >=7.0 floor and Archiver's ownership of the broker, bus consumer conventions (idempotency, schema_version branching, batch-poison caveat, DLQ seam), commit conventions.",
-      "paths": ["AGENTS.md"]
+      "path": "./AGENTS.md",
+      "description": "Authoritative project guide for agents and contributors. Worker-first shape (the bus consumer is the primary process; FastAPI /health is dev-only), the co-core wheelhouse mechanism (gs://co-gcs-pypi via [tool.uv] find-links, not PyPI), src/ layout, the REPLICATOR_-prefixed env contract and the hard boundary between /etc/replicator/.env and the repo .env, the Redis >=7.0 floor and Archiver's ownership of the broker, bus consumer conventions (at-least-once idempotency, schema_version branching, the read(count>1) batch-poison caveat, the DLQ seam), the fake_redis test fixture, and commit conventions."
     },
     {
       "name": "architecture",
-      "description": "Top-level README. What Replicator is within the Cannabis Observer cluster: the command -> fetch -> fingerprint -> temp-store -> fact loop, why the worker rather than the API is the deployed process, setup via the wheelhouse sync, the service-visible environment variable table, and the systemd deploy recipe.",
-      "paths": ["README.md"]
+      "path": "./README.md",
+      "description": "Top-level README. What Replicator is within the Cannabis Observer cluster: the command -> fetch -> fingerprint -> temp-store -> fact loop, why the worker rather than the API is the deployed process, setup via the wheelhouse sync, the service-visible environment variable table, and the systemd deploy recipe."
     },
     {
       "name": "design-plans",
-      "description": "Founding MVP design (2026-06-25, adopted). The command/fact contracts as shipped in co-core v0.7.0 — ContentFetchCommand (URL-addressed, command_id as the idempotency key) and BlobAvailableEvent (content_fingerprint, blob_uri, size_bytes, media_type, url, optional command_id) — the stream taxonomy, the temp-storage interface, the two-level idempotency argument, why fingerprint parity dissolves, explicit MVP scope cuts, the build sequence, and the three still-open questions (blob_uri scheme, MVP command issuer, stop-at-fact vs archiver-writeback).",
-      "paths": ["docs/plans/*.md"]
+      "path": "./docs/plans/",
+      "description": "Founding MVP design (2026-06-25, adopted). The command/fact contracts as shipped in co-core v0.7.0 — ContentFetchCommand (URL-addressed, command_id as the wire idempotency key) and BlobAvailableEvent (content_fingerprint, blob_uri, size_bytes, media_type, url, optional command_id) — the stream taxonomy and DLQ naming, the temp-storage interface, the two-level idempotency argument, why fingerprint parity dissolves when Replicator is the sole fetcher, explicit MVP scope cuts, the build sequence, and the three still-open questions (blob_uri scheme, MVP command issuer, stop-at-fact vs archiver-writeback)."
     },
     {
       "name": "commands",
-      "description": "Canonical command reference: wheelhouse sync before uv sync, env loading, running the worker locally with a distinct consumer name, the dev /health server on port 8041, test and lint invocations, Redis bus inspection (XINFO STREAM/GROUPS/CONSUMERS, DLQ length), submodule and doctor repair, and the systemd install/restart recipe.",
-      "paths": ["docs/COMMANDS.md"]
+      "path": "./docs/COMMANDS.md",
+      "description": "Canonical command reference: the wheelhouse sync that must precede uv sync, env loading, running the worker locally with a distinct consumer name, the dev /health server on port 8041, test and lint invocations, Redis bus inspection (XINFO STREAM/GROUPS/CONSUMERS and DLQ length), submodule and doctor repair, and the systemd install/restart recipe."
     },
     {
       "name": "skills-doc",
-      "description": "Agent skills index. The two-level symlink chain (.claude/skills -> skills/ -> skills-vendor/) and why it lets a local override shadow a vendor skill in both discovery systems, the vendor submodules, the local brainstorming override and its required override frontmatter, and the once-per-day SessionStart refresh hook.",
-      "paths": ["docs/SKILLS.md"]
+      "path": "./docs/SKILLS.md",
+      "description": "Agent skills index. The two-level symlink chain (.claude/skills -> skills/ -> skills-vendor/) and why it lets a local override shadow a vendor skill in both discovery systems, the vendor submodules, the local brainstorming override and its required override frontmatter, and the once-per-day SessionStart submodule refresh hook."
     },
     {
       "name": "deployment-topology",
-      "description": "systemd unit for the worker (not the API). Unit ordering behind the Archiver-operated redis-server.service via Wants=/After=, the BUILD_ID stamp written by ExecStartPre, the deliberate absence of the repo .env from the EnvironmentFile chain, the hard Redis >=7.0 floor guard, the non-fatal wheelhouse sync, StateDirectory, and bounded restarts.",
-      "paths": ["deploy/*.service"]
+      "path": "./deploy/replicator.service",
+      "description": "systemd unit running the worker (not the API). Ordering behind the Archiver-operated redis-server.service via Wants=/After= rather than Requires=, the BUILD_ID stamp written by ExecStartPre, the deliberate absence of the repo .env from the EnvironmentFile chain (it holds GitHub PATs the worker never needs), the hard Redis >=7.0 floor guard, the non-fatal wheelhouse sync, StateDirectory, and bounded restarts."
     },
     {
-      "name": "operational-scripts",
-      "description": "Operational shell/Python entry points. sync_wheelhouse.py mirrors the private cannobserv package index from GCS into ./.wheelhouse and must run before uv sync (ADC auth: SA key on the VM, keyless WIF in CI). check_redis_floor.sh asserts the >=7.0 change-bus server floor that AsyncBusConsumer.claim_stale requires — soft on an unreachable broker, fatal on a genuine downgrade.",
-      "paths": ["scripts/*"]
+      "name": "wheelhouse-sync",
+      "path": "./scripts/sync_wheelhouse.py",
+      "description": "Mirrors the private cannobserv package index (gs://co-gcs-pypi/wheels/) into ./.wheelhouse, from which uv resolves co-core and co-core-aio via find-links. Must run before uv sync and must not import the project, since the project's deps are what it provides — hence the isolated `uv run --no-project --with google-cloud-storage` invocation. ADC auth: the SA key on the VM, keyless WIF in CI."
+    },
+    {
+      "name": "redis-floor-guard",
+      "path": "./scripts/check_redis_floor.sh",
+      "description": "ExecStartPre guard asserting the Redis >=7.0 change-bus server floor. Replicator is the cluster's first user of AsyncBusConsumer.claim_stale, which reads XAUTOCLAIM's three-element reply — the deleted-ids element added in Redis server 7.0 — so a lower version breaks crash recovery. Soft on an unreachable broker (it may still be starting), fatal on a genuine downgrade."
     },
     {
       "name": "ci-pipeline",
-      "description": "GitHub Actions CI. Keyless Workload Identity Federation auth to GCP for the wheelhouse mirror, a fail-fast guard asserting the GCP_WIF_PROVIDER org variable is visible to this repo, ruff check and format gates, a co-core extras import smoke proving [extract] and [bus] wire up in a clean environment, and pytest with the coverage gate. Deliberately no Postgres service and no alembic steps — Replicator is DB-free.",
-      "paths": [".github/workflows/*.yml"]
+      "path": "./.github/workflows/ci.yml",
+      "description": "GitHub Actions CI. Keyless Workload Identity Federation auth to GCP for the wheelhouse mirror, a fail-fast guard asserting the GCP_WIF_PROVIDER org variable is visible to this repo, ruff check and format gates, a co-core extras import smoke proving [extract] and [bus] wire up in a clean environment, and pytest with the coverage gate. Deliberately no Postgres service and no alembic steps — Replicator is DB-free."
     },
     {
       "name": "dependency-contract",
-      "description": "Project and tooling contract. The co-core / co-core-aio pins (>=0.7,<0.8) with their [extract] and [bus] extras, the [tool.uv] find-links wheelhouse resolution, the ruff rule set and its skills-vendor exclusion, the ty exclusion, pytest configuration (asyncio auto mode, integration marker, timeout) and the 80% coverage gate.",
-      "paths": ["pyproject.toml"]
+      "path": "./pyproject.toml",
+      "description": "Project and tooling contract. The co-core / co-core-aio pins (>=0.7,<0.8) with their [extract] and [bus] extras, the [tool.uv] find-links wheelhouse resolution, the ruff rule set and its skills-vendor exclusion, the ty exclusion, the replicator-worker console script, pytest configuration (asyncio auto mode, integration marker, timeout) and the 80% coverage gate."
     }
   ]
 }
