@@ -13,7 +13,9 @@ from co_core.pure.adapters.bus.envelope import to_wire
 from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
 from co_core.pure.adapters.bus.streams import dlq_name
 from co_core.pure.models.changes import BlobAvailableEvent, ContentFetchCommand
+from redis.exceptions import ConnectionError as RedisConnectionError
 
+from src.core.errors import PermanentFetchError, TransientFetchError
 from src.worker.loop import (
     DEDUPE_KEY_PREFIX,
     Outcome,
@@ -279,9 +281,9 @@ async def test_a_failed_handler_leaves_no_dedupe_key(fake_redis, consumer, setti
         raise RuntimeError("handler exploded")
 
     message = (await poll_once(fake_redis, consumer, settings))[0]
-    with pytest.raises(RuntimeError):
-        await _process(fake_redis, consumer, settings, message, handler)
+    outcome = await _process(fake_redis, consumer, settings, message, handler)
 
+    assert outcome is Outcome.RETRY
     assert not await fake_redis.exists(f"{DEDUPE_KEY_PREFIX}cmd-boom")
 
 
@@ -297,3 +299,144 @@ async def test_a_dead_lettered_command_leaves_no_dedupe_key(fake_redis, consumer
     await _process(fake_redis, consumer, settings, message, _unreachable_handler)
 
     assert not await fake_redis.exists(f"{DEDUPE_KEY_PREFIX}cmd-future-2")
+
+
+async def test_a_message_from_a_dead_consumer_is_reclaimed_and_processed(
+    fake_redis, consumer, settings
+):
+    """AC: crash recovery — an abandoned PEL entry comes back via claim_stale."""
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-orphan"))
+    await fake_redis.xreadgroup(GROUP, "replicator@dead-worker", {TOPIC: ">"}, count=1)
+    eager = settings.model_copy(update={"claim_min_idle_ms": 0})
+    seen: list[str] = []
+
+    async def handler(command: ContentFetchCommand) -> None:
+        seen.append(command.command_id)
+
+    messages = await poll_once(fake_redis, consumer, eager)
+    assert await _process(fake_redis, consumer, eager, messages[0], handler) is Outcome.ACKED
+
+    assert seen == ["cmd-orphan"]
+    pending = await fake_redis.xpending(TOPIC, GROUP)
+    assert pending["pending"] == 0
+
+
+async def test_a_poison_pel_entry_does_not_jam_recovery(fake_redis, consumer, settings):
+    """claim_stale restarts at 0-0 every call, so a poison entry would block it."""
+    await fake_redis.xadd(TOPIC, {"event_type": "content_fetch", "payload": "not json"})
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-behind-poison"))
+    await fake_redis.xreadgroup(GROUP, "replicator@dead-worker", {TOPIC: ">"}, count=2)
+    eager = settings.model_copy(update={"claim_min_idle_ms": 0})
+
+    messages = await poll_once(fake_redis, consumer, eager)
+
+    assert len(messages) == 1
+    command = messages[0].payload
+    assert isinstance(command, ContentFetchCommand)
+    assert command.command_id == "cmd-behind-poison"
+    assert await fake_redis.xlen(dlq_name(TOPIC)) == 1
+
+
+async def test_a_transient_failure_leaves_the_message_pending(fake_redis, consumer, settings):
+    """AC: transient => retry. Redelivery is claim_stale's job, so do not ack."""
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-transient"))
+
+    async def handler(command: ContentFetchCommand) -> None:
+        raise TransientFetchError("broker or origin is having a moment")
+
+    message = (await poll_once(fake_redis, consumer, settings))[0]
+    outcome = await _process(fake_redis, consumer, settings, message, handler)
+
+    assert outcome is Outcome.RETRY
+    pending = await fake_redis.xpending(TOPIC, GROUP)
+    assert pending["pending"] == 1
+    assert await fake_redis.xlen(dlq_name(TOPIC)) == 0
+    assert not await fake_redis.exists(f"{DEDUPE_KEY_PREFIX}cmd-transient")
+
+
+async def test_a_redis_connection_error_counts_as_transient(fake_redis, consumer, settings):
+    """redis-py's error types are disjoint from the builtins — both are listed."""
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-redis-down"))
+
+    async def handler(command: ContentFetchCommand) -> None:
+        raise RedisConnectionError("connection refused")
+
+    message = (await poll_once(fake_redis, consumer, settings))[0]
+
+    assert await _process(fake_redis, consumer, settings, message, handler) is Outcome.RETRY
+
+
+async def test_a_permanent_failure_is_dead_lettered(fake_redis, consumer, settings):
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-permanent"))
+
+    async def handler(command: ContentFetchCommand) -> None:
+        raise PermanentFetchError("this url will never be fetchable")
+
+    message = (await poll_once(fake_redis, consumer, settings))[0]
+    outcome = await _process(fake_redis, consumer, settings, message, handler)
+
+    assert outcome is Outcome.DEAD_LETTERED
+    assert await fake_redis.xlen(dlq_name(TOPIC)) == 1
+    pending = await fake_redis.xpending(TOPIC, GROUP)
+    assert pending["pending"] == 0
+
+
+async def test_an_unclassified_failure_retries_below_the_ceiling(fake_redis, consumer, settings):
+    """A handler bug must not discard a valid command on its first failure."""
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-bug"))
+
+    async def handler(command: ContentFetchCommand) -> None:
+        raise AttributeError("NoneType has no attribute 'content'")
+
+    message = (await poll_once(fake_redis, consumer, settings))[0]
+    outcome = await _process(fake_redis, consumer, settings, message, handler)
+
+    assert outcome is Outcome.RETRY
+    pending = await fake_redis.xpending(TOPIC, GROUP)
+    assert pending["pending"] == 1
+    assert await fake_redis.xlen(dlq_name(TOPIC)) == 0
+
+
+async def test_an_unclassified_failure_dead_letters_at_the_ceiling(fake_redis, consumer, settings):
+    """The ceiling is read from XPENDING's delivery counter, not a side counter."""
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-persistent-bug"))
+    strict = settings.model_copy(update={"max_delivery_attempts": 1})
+
+    async def handler(command: ContentFetchCommand) -> None:
+        raise AttributeError("still broken")
+
+    message = (await poll_once(fake_redis, consumer, strict))[0]
+    outcome = await _process(fake_redis, consumer, strict, message, handler)
+
+    assert outcome is Outcome.DEAD_LETTERED
+    assert await fake_redis.xlen(dlq_name(TOPIC)) == 1
+
+
+async def test_transient_failures_are_exempt_from_the_ceiling(fake_redis, consumer, settings):
+    """A long outage must never drop a valid command (archiver#107, CR #2)."""
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-outage"))
+    strict = settings.model_copy(update={"max_delivery_attempts": 1})
+
+    async def handler(command: ContentFetchCommand) -> None:
+        raise TransientFetchError("still down")
+
+    message = (await poll_once(fake_redis, consumer, strict))[0]
+
+    assert await _process(fake_redis, consumer, strict, message, handler) is Outcome.RETRY
+    assert await fake_redis.xlen(dlq_name(TOPIC)) == 0
+
+
+async def test_cancellation_is_never_classified(fake_redis, consumer, settings):
+    """Shutdown is not a message failure — CancelledError must propagate."""
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-cancelled"))
+
+    async def handler(command: ContentFetchCommand) -> None:
+        raise asyncio.CancelledError
+
+    message = (await poll_once(fake_redis, consumer, settings))[0]
+    with pytest.raises(asyncio.CancelledError):
+        await _process(fake_redis, consumer, settings, message, handler)
+
+    assert await fake_redis.xlen(dlq_name(TOPIC)) == 0
+    pending = await fake_redis.xpending(TOPIC, GROUP)
+    assert pending["pending"] == 1

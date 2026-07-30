@@ -18,8 +18,12 @@ from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
 from co_core.pure.models.changes import ContentFetchCommand
 from co_core_aio.bus import AsyncBusConsumer
 from redis.asyncio import Redis
+from redis.exceptions import BusyLoadingError
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from src.core.config import Settings
+from src.core.errors import PermanentFetchError, TransientFetchError
 from src.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -32,6 +36,31 @@ SUPPORTED_SCHEMA_VERSION = 1
 # Namespace for the command dedupe keys. Redis, not an in-memory set: the point
 # is to survive the restart that redelivery follows.
 DEDUPE_KEY_PREFIX = "replicator:cmd:"
+
+# Handler failures that are *transient* (broker or origin down / slow / loading)
+# and must retry indefinitely — EXEMPT from the delivery ceiling, so a long-but-
+# genuine outage can never silently drop a valid command. Mirrors archiver's
+# publisher tuple; redis-py's error types are disjoint from the builtins, so
+# both are listed.
+#
+# NOTE (co-core coupling): this gate assumes co-core-aio propagates the
+# underlying redis exception types *unwrapped* (its current behavior). If it
+# ever wraps them in its own error type, a real outage would fall through to the
+# ceiling and the cliff reopens — this tuple must then track that wrapper.
+_TRANSIENT_ERRORS: tuple[type[Exception], ...] = (
+    TransientFetchError,
+    ConnectionError,  # builtin
+    TimeoutError,  # builtin (asyncio.TimeoutError since 3.11)
+    RedisConnectionError,
+    RedisTimeoutError,
+    BusyLoadingError,
+)
+
+# Bound on consecutive poison frames skipped in one recovery pass. claim_stale
+# restarts at 0-0 on every call, so each poison entry must be routed away before
+# the next claim can reach a good message; the bound keeps a pathological PEL
+# from starving the read path within a single tick.
+MAX_POISON_SKIPS = 10
 
 # The consume-path handler seam. Raising signals failure; the loop — not the
 # handler — decides whether that means retry or dead-letter.
@@ -103,7 +132,32 @@ async def process_message(
         )
         return Outcome.DEDUPED
 
-    await handler(command)
+    # asyncio.CancelledError is a BaseException, so shutdown propagates through
+    # these handlers untouched — it is not a message failure.
+    try:
+        await handler(command)
+    except PermanentFetchError as exc:
+        return await _dead_letter(
+            consumer,
+            message.message_id,
+            dict(message.fields),
+            reason="handler reported a permanent failure",
+            detail={"command_id": command.command_id, "error": str(exc)},
+        )
+    except _TRANSIENT_ERRORS as exc:
+        logger.warning(
+            "transient failure — leaving the message pending for redelivery",
+            extra={
+                "command_id": command.command_id,
+                "message_id": message.message_id,
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+        )
+        return Outcome.RETRY
+    except Exception as exc:
+        return await _handle_unclassified(
+            message, client=client, consumer=consumer, settings=settings, command=command, exc=exc
+        )
 
     # Written *after* the handler, deliberately. Marking first would turn a crash
     # between the mark and a completed handle into permanent loss: redelivery
@@ -114,6 +168,56 @@ async def process_message(
     await client.set(dedupe_key, message.message_id, nx=True, ex=settings.dedupe_ttl_seconds)
     await consumer.ack(message.message_id)
     return Outcome.ACKED
+
+
+async def _handle_unclassified(
+    message: BusMessage,
+    *,
+    client: Redis,
+    consumer: AsyncBusConsumer,
+    settings: Settings,
+    command: ContentFetchCommand,
+    exc: Exception,
+) -> Outcome:
+    """Retry a failure the loop could not classify, up to the delivery ceiling.
+
+    Defense in depth, not the primary DLQ route: a handler bug must not discard
+    a valid command on its first failure, but it must not spin forever either.
+    """
+    attempts = await _delivery_count(client, message, group=settings.consumer_group)
+    error = f"{type(exc).__name__}: {exc}"
+    if attempts >= settings.max_delivery_attempts:
+        return await _dead_letter(
+            consumer,
+            message.message_id,
+            dict(message.fields),
+            reason="unclassified failure hit the delivery ceiling",
+            detail={"command_id": command.command_id, "attempts": attempts, "error": error},
+        )
+    logger.warning(
+        "unclassified failure — leaving the message pending for redelivery",
+        extra={
+            "command_id": command.command_id,
+            "message_id": message.message_id,
+            "attempts": attempts,
+            "error": error,
+        },
+        exc_info=exc,
+    )
+    return Outcome.RETRY
+
+
+async def _delivery_count(client: Redis, message: BusMessage, *, group: str) -> int:
+    """How many times this entry has been delivered, per the broker's own PEL.
+
+    XPENDING is the source of truth — no side counter to keep, expire, or
+    reconcile. Note it only advances on a claim_stale reclaim (a ``>`` read never
+    redelivers), which is what makes the ceiling a bound in time.
+    """
+    entries = await client.xpending_range(
+        message.topic, group, min=message.message_id, max=message.message_id, count=1
+    )
+    return int(entries[0]["times_delivered"]) if entries else 1
 
 
 async def _dead_letter(
@@ -170,6 +274,37 @@ def _as_str(value: bytes | str) -> str:
     return value.decode() if isinstance(value, bytes) else value
 
 
+async def claim_once(
+    client: Redis,
+    consumer: AsyncBusConsumer,
+    settings: Settings,
+) -> list[BusMessage]:
+    """Reclaim one message abandoned by a crashed (or transiently failing) worker.
+
+    ``count=1`` for the batch-poison reason plus a sharper one: XAUTOCLAIM
+    transfers ownership and resets the idle clock on every entry it returns
+    *before* co-core decodes them, so one poison frame in a batch of ten would
+    strand nine good messages with their timers restarted.
+
+    A poison entry would otherwise jam recovery permanently — ``claim_stale``
+    restarts at ``0-0`` on every call, so the same bad frame is re-claimed and
+    re-raised forever. Routing it to the DLQ and re-claiming is what lets the
+    entries behind it through.
+    """
+    for _ in range(MAX_POISON_SKIPS):
+        try:
+            return await consumer.claim_stale(
+                min_idle_ms=settings.claim_min_idle_ms, count=1, start_id="0-0"
+            )
+        except BusMessageAnomaly as exc:
+            await dead_letter_anomaly(client, consumer, exc)
+    logger.warning(
+        "recovery pass hit the poison-skip bound",
+        extra={"skipped": MAX_POISON_SKIPS, "group": settings.consumer_group},
+    )
+    return []
+
+
 async def poll_once(
     client: Redis,
     consumer: AsyncBusConsumer,
@@ -182,7 +317,14 @@ async def poll_once(
     in that batch are returned — reading one at a time keeps a single bad frame
     from swallowing good ones. An empty list means "nothing to do this tick",
     whether the stream was idle or a poison frame was just routed away.
+
+    Recovery comes first: work already delivered to a worker that died (or that
+    failed transiently here) is older than anything unread, and leaving it while
+    new messages flow would let it age indefinitely.
     """
+    reclaimed = await claim_once(client, consumer, settings)
+    if reclaimed:
+        return reclaimed
     try:
         return await consumer.read(count=1, block_ms=settings.read_block_ms)
     except BusMessageAnomaly as exc:

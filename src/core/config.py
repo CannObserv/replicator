@@ -70,6 +70,22 @@ class Settings(BaseSettings):
     # config edit rather than a code change.
     consumer_start_id: str = Field(default="$", validation_alias="REPLICATOR_CONSUMER_START_ID")
 
+    # How long a pending entry must sit untouched before another worker may
+    # reclaim it. This is also the retry cadence: a transiently-failed message
+    # is left unacked and comes back through the same claim_stale path, so
+    # crash recovery and retry are one mechanism, not two.
+    claim_min_idle_ms: int = Field(default=60_000, validation_alias="REPLICATOR_CLAIM_MIN_IDLE_MS")
+
+    # Delivery ceiling for failures the loop could not classify (a handler bug,
+    # say) before they are dead-lettered. Read from XPENDING's delivery counter,
+    # which only advances on a claim_stale reclaim — so this is a ceiling in
+    # *time* (attempts x claim_min_idle_ms), not in retries. Transient failures
+    # are exempt; deterministic ones dead-letter on the first failure without
+    # ever reaching it.
+    max_delivery_attempts: int = Field(
+        default=5, validation_alias="REPLICATOR_MAX_DELIVERY_ATTEMPTS"
+    )
+
     # Lifetime of the per-command_id dedupe key. Redelivery is bounded by the
     # PEL, which is unbounded in principle, so no TTL is provably sufficient:
     # a day covers any realistic outage, costs one small key per command, and
