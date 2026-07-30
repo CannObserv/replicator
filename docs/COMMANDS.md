@@ -29,6 +29,25 @@ set -a; . /etc/replicator/.env 2>/dev/null; . .env 2>/dev/null; set +a
 # Run the bus consumer locally. Use a distinct consumer name when the live
 # service is also running — a shared name means a shared pending-entries list.
 REPLICATOR_CONSUMER_NAME="replicator@$(whoami)-dev" uv run python -m src.worker.main
+
+# Ctrl-C (or SIGTERM) finishes the in-flight message, acks it, and exits 0.
+```
+
+### Inspecting the consume path
+
+```bash
+# Pending entries: who holds what, and how long it has been idle.
+redis-cli XPENDING content.fetch replicator.fetch - + 10
+
+# Delivery counts (the DLQ ceiling reads times_delivered from here).
+redis-cli XPENDING content.fetch replicator.fetch IDLE 0 - + 10
+
+# Dead-lettered frames.
+redis-cli XLEN content.fetch.dlq
+redis-cli XRANGE content.fetch.dlq - + COUNT 5
+
+# Dedupe keys (one per handled command, TTL REPLICATOR_DEDUPE_TTL_SECONDS).
+redis-cli --scan --pattern 'replicator:cmd:*' | head
 ```
 
 ## API (dev only)

@@ -1,12 +1,12 @@
 """Bus consumer entry point — the primary Replicator process.
 
-Consumes ``content.fetch`` commands from the Redis change bus and (once the
-message loop lands) fetches, fingerprints, temp-stores, and emits a
-``blob_available`` fact. See ``docs/plans/2026-06-25-replicator-mvp-design.md``.
+Consumes ``content.fetch`` commands from the Redis change bus. See
+``docs/plans/2026-06-25-replicator-mvp-design.md``.
 
-Scaffold status: this module establishes the bus connection and the consumer
-group. The read -> fetch -> fingerprint -> store -> publish handler is the first
-feature increment and is built test-first; nothing here pre-empts it.
+This module is wiring: client lifetime, consumer group, signal handling. The
+consume path itself lives in ``src.worker.loop``, and the fetch → fingerprint →
+temp-store → ``blob_available`` work sits behind that module's handler seam,
+arriving in the next feature increment.
 
 Bus clients are **injection-only** — the co-core driver never opens or closes the
 ``redis.asyncio.Redis`` client, so this module owns one for the worker lifetime
