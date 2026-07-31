@@ -5,8 +5,8 @@ Consumes ``content.fetch`` commands from the Redis change bus. See
 
 This module is wiring: client lifetime, consumer group, signal handling. The
 consume path itself lives in ``src.worker.loop``, and the fetch → fingerprint →
-temp-store → ``blob_available`` work sits behind that module's handler seam,
-arriving in the next feature increment.
+temp-store → ``blob_available`` work behind that module's handler seam lives in
+``src.worker.handler``.
 
 Bus clients are **injection-only** — the co-core driver never opens or closes the
 ``redis.asyncio.Redis`` client, so this module owns one for the worker lifetime
@@ -15,20 +15,78 @@ and closes it on the way out.
 
 import asyncio
 import signal
+import stat
+from pathlib import Path
 
 from co_core.pure.adapters.bus import streams
 from co_core_aio.bus import AsyncBusConsumer
+from co_core_aio.fetch import AsyncFetchDriver
 from redis.asyncio import Redis
 
 from src.core.config import Settings, get_settings
 from src.core.logging import configure_logging, get_logger
-from src.worker.loop import log_only_handler, run_loop
+from src.storage.local import LocalBlobStore, ensure_directory
+from src.worker.handler import build_handler
+from src.worker.loop import run_loop
 
 logger = get_logger(__name__)
 
 # Signals that mean "stop taking new work". SIGINT is included so an interactive
 # Ctrl-C drains the same way systemd's SIGTERM does.
 _STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
+
+
+def warn_if_unreachable(blob_dir: Path) -> None:
+    """Say so when the blob root cannot be traversed by another service.
+
+    A pre-existing directory keeps whatever mode its operator gave it — the
+    store deliberately does not widen what it did not create. The cost of that
+    choice is a misconfiguration with no local symptom: blobs store fine, the
+    fact publishes fine, and the failure appears in *another repo* as a
+    ``blob_uri`` nothing can open. This is the one place it can be noticed.
+
+    Every level is checked, not just the leaf. Traversal needs ``+x`` on the
+    whole chain, and the likeliest shape of the mistake is precisely a split
+    one: an operator pre-creates ``/var/lib/replicator`` restrictively and lets
+    the worker create ``blobs/`` underneath, giving 0700 over 0755 and a leaf
+    whose own mode looks fine.
+
+    A warning rather than a failure: a single-user deployment where nothing else
+    reads the blobs is legitimate, and the operator may mean it. For the same
+    reason the check is total — a diagnostic that cannot complete must never be
+    the thing that stops the boot, so an unstatable ancestor is reported and
+    swallowed rather than raised.
+    """
+    try:
+        blocked = _unreachable_levels(blob_dir)
+    except OSError as exc:
+        logger.warning(
+            "could not check whether the blob directory is reachable",
+            extra={"blob_dir": str(blob_dir), "errno": exc.errno},
+        )
+        return
+    if not blocked:
+        return
+    logger.warning(
+        "blob directory is not traversable by other services",
+        extra={
+            "blob_dir": str(blob_dir),
+            # Every blocking level, because fixing only the innermost leaves the
+            # blob just as unreachable as before.
+            "blocked_at": {str(level): oct(mode) for level, mode in blocked},
+            "detail": "blob_uri will be announced on content.blobs but cannot be opened",
+        },
+    )
+
+
+def _unreachable_levels(blob_dir: Path) -> list[tuple[Path, int]]:
+    """Every level from ``blob_dir`` up that denies traversal, with its mode."""
+    resolved = blob_dir.resolve()
+    chain = (resolved, *resolved.parents)
+    levels = [(level, stat.S_IMODE(level.stat().st_mode)) for level in chain]
+    # Group- or other-executable is what lets a reader traverse; without either,
+    # only this process's own user can reach anything below.
+    return [(level, mode) for level, mode in levels if not mode & 0o011]
 
 
 def build_consumer(client: Redis, settings: Settings) -> AsyncBusConsumer:
@@ -81,18 +139,31 @@ async def run(stop: asyncio.Event | None = None) -> None:
     # one line that matters into the journal as a bare traceback, unparseable by
     # a pipeline expecting JSON, right before the unit flaps to its restart
     # limit.
+    #
+    # ensure_directory rather than a bare mkdir so a directory this process
+    # creates is left readable by the service that reads the blobs, while one
+    # that already exists keeps whatever mode its operator gave it.
     try:
-        settings.blob_dir.mkdir(parents=True, exist_ok=True)
+        ensure_directory(settings.blob_dir)
     except OSError as exc:
         logger.error(
             "blob directory is not usable",
             extra={"blob_dir": str(settings.blob_dir), "errno": exc.errno},
         )
         raise
+    warn_if_unreachable(settings.blob_dir)
 
     owns_signals = stop is None
     client = Redis.from_url(settings.redis_url)
+    # Constructed inside the try, like the signal handlers: anything opened
+    # between here and the try would leak the Redis client if it raised.
+    fetcher: AsyncFetchDriver | None = None
     try:
+        # One driver for the worker's lifetime, not one per message: it wraps an
+        # httpx.AsyncClient whose connection pool is the point, and a per-message
+        # driver would open and discard a pool per fetch. Closed in the same
+        # finally as the Redis client — both are ours because we opened them.
+        fetcher = AsyncFetchDriver()
         # Installed inside the try so the handlers are always removed again —
         # outside it, a failure between install and the try would leak global
         # signal state (harmless for a dying process, not for an in-process test).
@@ -126,13 +197,20 @@ async def run(stop: asyncio.Event | None = None) -> None:
             # PEL the ceiling reads is provably the one the consumer acks against.
             group=settings.consumer_group,
             settings=settings,
-            handler=log_only_handler,
+            handler=build_handler(
+                fetcher=fetcher,
+                store=LocalBlobStore(settings.blob_dir),
+                client=client,
+                settings=settings,
+            ),
             stop=stop,
         )
         logger.info("worker stopped", extra={"consumer": settings.consumer_name})
     finally:
         if owns_signals:
             remove_signal_handlers()
+        if fetcher is not None:
+            await fetcher.aclose()
         await client.aclose()
 
 

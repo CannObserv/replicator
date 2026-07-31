@@ -5,8 +5,8 @@ Split from ``main`` so each outcome is unit-testable without driving the loop:
 and ``run_loop`` owns only cadence and shutdown.
 
 The byte path (fetch, fingerprint, temp-store, ``blob_available``) lives behind
-the ``Handler`` seam and arrives in the next issue; this module ships a logging
-handler so the loop is exercisable end to end without it.
+the ``Handler`` seam in ``src.worker.handler`` — this module stays ignorant of
+what a handler does, and decides only what its success or failure means.
 """
 
 import asyncio
@@ -91,14 +91,6 @@ class Outcome(StrEnum):
     DEDUPED = "deduped"
     DEAD_LETTERED = "dead_lettered"
     RETRY = "retry"
-
-
-async def log_only_handler(command: ContentFetchCommand) -> None:
-    """Placeholder for the fetch/fingerprint/store path (next issue)."""
-    logger.info(
-        "content.fetch received",
-        extra={"command_id": command.command_id, "url": command.url},
-    )
 
 
 async def process_message(

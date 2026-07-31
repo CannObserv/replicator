@@ -12,9 +12,13 @@ cannobserv#266 → **co-core v0.7.0** (see **Contracts**): `content.fetch` is
 URL-addressed (Replicator is the sole fingerprinter), and `blob_available` gained
 `size_bytes` / `media_type` / `url` / optional `command_id`.
 **Status:** Adopted as the founding plan of `CannObserv/replicator`. Repo bootstrapped
-2026-07-30 (issue #1) — build-sequence step 1 (scaffold + co-core wheelhouse wiring) is
-done and the contracts below were verified against the installed co-core v0.7.0; steps
-2–6 remain. One API-table correction from that verification is marked inline.
+2026-07-30 (issue #1). Build-sequence steps 1–5 are done — scaffold + wheelhouse (#1),
+the consume loop (#2, #3), and the byte path (#4). Step 6 (seed harness + live
+end-to-end test) remains. The three open questions were settled 2026-07-31 in
+`docs/plans/2026-07-31-replicator-mvp-open-questions-design.md`; **archiver-writeback
+moved from "MVP+" to won't-do** — archiver consumes `blob_available` and writes the
+SourceRevision itself (archiver#118). API-table corrections from implementation are
+marked inline.
 **Parent strategy:** `archiver/docs/plans/2026-06-25-observer-cluster-integration-strategy-design.md`
 **Audience:** the team/agent standing up Replicator. Copy this doc into the new repo as its founding plan.
 
@@ -69,7 +73,7 @@ Concrete APIs the MVP wires:
 | Extract / near-dup | `co_core.pure.extract` — `simhash(text, hashbits=64)`, `hamming_distance`, `similarity`, `Chunk`; parsers in `co_core.pure.extract.{html,csv_excel,pdf}` |
 | Consume | `co_core_aio.bus.AsyncBusConsumer(client, topic=, group=, consumer=)` — `ensure_group` / `read` / `ack` / `claim_stale` / `dead_letter` |
 | Publish | `co_core_aio.bus.AsyncBusPublisher(client).execute(co_core.effects.bus.BusPublish(topic, fields))` |
-| Wire envelope | `co_core.pure.adapters.bus.envelope.to_wire(payload, key=None)` / `from_wire(fields, topic, message_id)` / `idempotency_key(payload)` |
+| Wire envelope | `co_core.pure.adapters.bus.envelope.to_wire(payload, key=None)` / `from_wire(fields, *, topic, message_id)` — **corrected:** topic and message_id are keyword-only / `idempotency_key(payload)` |
 | Payloads | `co_core.pure.models.changes` (see **Contracts**) |
 | Stream names / DLQ | `co_core.pure.adapters.bus.streams` — `CONTENT_FETCH` / `CONTENT_BLOBS` / `INFO_CHANGES`; `dlq_name(topic)` → `<topic>.dlq` |
 | Storage backends (durable phase, not MVP) | `co_core.effects.{gcs,gdrive,http}` (+ `co_core.pure.adapters.gdrive`). **No `ext/` package and no `local`/`http_io` backend exist today** — the MVP defines its own storage interface (below) with a local-FS first impl; wire co-core's GCS/GDrive effects only when durable replication lands (add Internet Archive then). |
@@ -151,7 +155,7 @@ These are the real models (stable v0.5.1 → v0.6.0), both `extra="ignore"` (con
 
 Replicator is a **consumer** — follow the conventions the archiver producer + co-core established:
 
-- **At-least-once ⇒ idempotent.** Dedupe on `content_fingerprint` (the storage key already makes re-processing a no-op — see below).
+- **At-least-once ⇒ idempotent.** Two keys, two levels — see *Idempotency & fidelity* below: the **command** dedupes on `command_id`, the **fact** on `content_fingerprint`. Content-addressed storage makes re-processing a no-op regardless.
 - **Validation posture:** use the canonical `extra="ignore"` models; **branch on `schema_version` before destructuring**; tolerate additive producer fields. Do not use the strict `*Emit` classes on the consume path.
 - **Batch-poison caveat:** `AsyncBusConsumer.read(count>1)` raises `BusMessageAnomaly` on a malformed frame *before* returning the well-formed ones in the batch. Read `count=1`, or catch the anomaly and route via `dead_letter`. `from_wire` is deliberately fail-loud.
 - **DLQ is a shipped seam, not a TODO:** `AsyncBusConsumer.dead_letter(message_id, fields)` copies the frame to `dlq_name(topic)` (`<topic>.dlq`) and acks the original. archiver#107 (dead-lettering poison outbox rows) is the working precedent for the "deterministic failure ⇒ DLQ, transient failure ⇒ retry" split.
@@ -173,7 +177,7 @@ Replicator is a **consumer** — follow the conventions the archiver producer + 
 ## MVP scope cuts (explicitly OUT)
 
 - **Permanent/durable replication** per RepSpec provider (gcs/gdrive/ia), `path_template`, `credentials_alias`. MVP uses the local temp backend only.
-- **Writeback to archiver** (recording a SourceRevision, `content_cache_uri`/`public_url`). The `blob_available` fact is sufficient to prove the loop; archiver-writeback is MVP+ (archiver exposes `POST /source-revisions` + `PATCH /source-revisions/{id}` for the cache fields when that phase arrives).
+- **Writeback to archiver** (recording a SourceRevision, `content_cache_uri`/`public_url`). **Won't-do, not deferred** (2026-07-31): Replicator stops at the `blob_available` fact and never calls archiver's HTTP API — archiver consumes the fact and writes the SourceRevision itself. Filed as archiver#118, which also carries the `info_source_id` contract gap that decision exposes.
 - **RepSpec resolution / reads from archiver.** Not needed for the loop.
 - **Watcher cutover** (issuing `content.fetch`, consuming `blob_available`) — parent strategy Phase 4.
 - Re-replication policy, blob GC/retention, cross-source dedup, robots/rate-limit/auth niceties.
@@ -183,11 +187,17 @@ Replicator is a **consumer** — follow the conventions the archiver producer + 
 1. Repo scaffold (A/W/N pattern) + co-core wiring via the **wheelhouse** mechanism (`sync_wheelhouse.py` + find-links; WIF in CI); validate `import co_core` / `co_core_aio` + the `[extract]`/`[bus]` extras in CI.
 2. Wire the **shipped, settled** `content.fetch` / `blob_available` co-core models (co-core v0.7.0, cannobserv#266 — no stubbing, no open contract seams needed).
 3. Bus consumer loop (`AsyncBusConsumer`, group `replicator.fetch`) with `read` (count=1) / `ack` / `claim_stale` / `dead_letter`; TDD against a fake/in-memory redis.
-4. Fetch (`AsyncFetchDriver`) → temp-store (local backend) → fingerprint (verify vs command); TDD each step.
+4. Fetch (`AsyncFetchDriver`) → fingerprint → temp-store (local backend); TDD each step. There is nothing to verify the fingerprint *against* — the command carries no expected value (cannobserv#266), which is exactly why parity dissolves.
 5. Emit `blob_available` via `AsyncBusPublisher` + `to_wire`.
 6. Seed/test harness that issues a `content.fetch`; integration test the full loop end-to-end against the live VM Redis (Archiver-operated).
 
 ## Open questions for the Replicator team
+
+**All three were settled 2026-07-31** — see
+`docs/plans/2026-07-31-replicator-mvp-open-questions-design.md`. Retained below for the
+record; the answers are: (1) `file://` over a two-level sharded, content-addressed path;
+(2) an in-repo `scripts/seed_fetch.py`; (3) stop at the fact, writeback won't-do. Blob
+retention is decided out of MVP scope and tracked in #5.
 
 Most of the original open questions are now settled (content contracts fixed in cannobserv#266 → co-core v0.7.0; stream taxonomy fixed in `streams.py`; distribution = wheelhouse; DLQ/retry have co-core seams + the archiver#107 precedent; Redis ownership resolved in archiver#109). Genuinely open:
 
