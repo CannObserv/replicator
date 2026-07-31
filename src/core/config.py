@@ -117,6 +117,18 @@ class Settings(BaseSettings):
         default=86_400, validation_alias="REPLICATOR_DEDUPE_TTL_SECONDS"
     )
 
+    # Ceiling on a single fetched body. A storage guard, not a memory one: the
+    # co-core fetch driver reads the whole response into memory before returning
+    # it (httpx `response.content`), so by the time this is checked the bytes are
+    # already resident. Enforcing it would need a streaming fetch co-core does
+    # not expose today. What it does buy is a bound on what reaches the blob
+    # directory on a shared VM, where filling the disk is a cluster-wide outage
+    # rather than a Replicator one. 64 MiB is far above any observed page and
+    # far below the VM's headroom.
+    max_blob_bytes: int = Field(
+        default=64 * 1024 * 1024, validation_alias="REPLICATOR_MAX_BLOB_BYTES"
+    )
+
     log_level: str = Field(default="INFO", validation_alias="REPLICATOR_LOG_LEVEL")
 
     # Stamped by the systemd unit's ExecStartPre; "dev" outside systemd.

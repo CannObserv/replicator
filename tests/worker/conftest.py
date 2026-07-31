@@ -87,3 +87,11 @@ async def drive_loop(fake_redis, consumer, settings, handler, stop, deadline: fl
             handler=handler,
             stop=stop,
         )
+
+
+async def noop_handler(command: ContentFetchCommand) -> None:
+    """A handler that succeeds without doing anything.
+
+    Loop tests are about what the loop does with a handler's outcome, not about
+    the byte path — that has its own tests in ``test_handler.py``.
+    """

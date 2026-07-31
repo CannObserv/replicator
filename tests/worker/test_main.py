@@ -13,9 +13,12 @@ import os
 import signal
 
 import pytest
+from co_core.effects.fetch import FetchResult
 from co_core.pure.adapters.bus import streams
+from co_core.pure.util.hashing import sha256
 
 from src.core.config import get_settings
+from src.storage.local import LocalBlobStore
 from src.worker.main import build_consumer, install_signal_handlers, remove_signal_handlers, run
 from tests.worker.conftest import make_command
 
@@ -209,3 +212,72 @@ async def test_worker_ready_reports_the_outage_window(monkeypatch, fake_redis, t
         root.handlers, root.level = saved_handlers, saved_level
 
     assert record["worst_case_outage_seconds"] == get_settings().worst_case_outage_seconds
+
+
+async def test_run_closes_the_fetch_driver(monkeypatch, fake_redis, tmp_path):
+    """The driver owns an httpx client; leaking it leaks sockets across restarts.
+
+    Symmetric with the Redis client: ``run()`` owns both for the worker's
+    lifetime and releases both on the way out, including when the loop raised.
+    """
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+
+    closed = []
+
+    class RecordingDriver:
+        async def execute(self, effect):
+            raise AssertionError("no fetch expected in this test")
+
+        async def aclose(self):
+            closed.append(True)
+
+    monkeypatch.setattr("src.worker.main.AsyncFetchDriver", RecordingDriver)
+
+    await run(_stopped())
+
+    assert closed == [True]
+
+
+async def test_run_dispatches_to_the_byte_path(monkeypatch, fake_redis, tmp_path):
+    """The loop must be wired to the real handler, not the placeholder logger.
+
+    Asserted end to end: a command on the stream produces a blob on disk and a
+    fact on ``content.blobs``. Without this, every piece could pass its own unit
+    tests while ``run()`` still dispatched to ``log_only_handler``.
+    """
+    blob_dir = tmp_path / "blobs"
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(blob_dir))
+    monkeypatch.setenv("REPLICATOR_CONSUMER_START_ID", "0")
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+
+    class StubDriver:
+        async def execute(self, effect):
+            return FetchResult(
+                content=b"page bytes",
+                status_code=200,
+                headers={"content-type": "text/plain"},
+                duration_ms=3,
+                fetcher_used="http",
+            )
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr("src.worker.main.AsyncFetchDriver", StubDriver)
+    await fake_redis.xadd(streams.CONTENT_FETCH, make_command("cmd-wired"))
+
+    stop = asyncio.Event()
+
+    async def stop_once_published():
+        for _ in range(500):
+            if await fake_redis.exists(streams.CONTENT_BLOBS):
+                break
+            await asyncio.sleep(0.01)
+        stop.set()
+
+    await asyncio.gather(run(stop), stop_once_published())
+
+    fingerprint = sha256(b"page bytes")
+    assert LocalBlobStore(blob_dir).open(fingerprint) == b"page bytes"
+    assert await fake_redis.xlen(streams.CONTENT_BLOBS) == 1

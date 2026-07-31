@@ -62,6 +62,10 @@ Prefetch query — run via `ToolSearch` at session start:
 src/worker/     — Bus consumer; the primary process
 src/worker/main.py   — Entry point: client lifetime, consumer group, signals
 src/worker/loop.py   — The consume path: poll → dispatch → ack, DLQ, dedupe, recovery
+src/worker/handler.py — The byte path behind the Handler seam: fetch → fingerprint → store → publish
+src/storage/    — Temp storage; BlobStore protocol + the local-FS backend
+src/storage/base.py  — BlobStore protocol (store / exists / open)
+src/storage/local.py — Content-addressed local backend; file:// URIs, sharded paths
 src/api/        — FastAPI app (/health only; not part of the MVP loop)
 src/api/main.py — App factory, lifespan, router registration
 src/core/       — Shared domain logic, logging, config
@@ -142,7 +146,8 @@ Read by neither env file — test-only, defined in `tests/conftest.py`:
 In `/etc/replicator/.env` (read by the service):
 - `GOOGLE_APPLICATION_CREDENTIALS` — SA key for the wheelhouse mirror (`/etc/replicator/co-pypi-reader.json`)
 - `REPLICATOR_REDIS_URL` — change-bus client URL; default `redis://localhost:6379/0`
-- `REPLICATOR_BLOB_DIR` — temp-storage root for fetched bytes; default `blobs`
+- `REPLICATOR_BLOB_DIR` — temp-storage root for fetched bytes; default `blobs`. Resolved to an absolute path at store construction — `file://` URIs require it
+- `REPLICATOR_MAX_BLOB_BYTES` — ceiling on one fetched body; default `67108864` (64 MiB). A **storage** guard, not a memory one: co-core's fetch driver buffers the whole response before returning it, so the bytes are already resident when this is checked. Over the ceiling ⇒ `PermanentFetchError` ⇒ DLQ
 - `REPLICATOR_CONSUMER_GROUP` — consumer group on `content.fetch`; default `replicator.fetch`
 - `REPLICATOR_CONSUMER_NAME` — this worker's identity within the group; defaults to `replicator@<hostname>`. Two workers must never share one — Redis tracks pending entries per consumer name, and a shared name makes independent `claim_stale` recovery impossible
 - `REPLICATOR_CONSUMER_START_ID` — group start position; default `"$"` (new messages only), `"0"` drains the backlog. Applies **only at group creation** — once `replicator.fetch` exists, changing this also needs a manual `XGROUP SETID`
@@ -171,6 +176,10 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
 - **A consumer appears in `XINFO CONSUMERS` only after its first *delivered* message.** An empty poll registers nothing, so an absent consumer entry is not evidence a worker is down — a liveness check built on it reports every idle worker as dead. Recovery is unaffected: `claim_stale` reclaims by group and idle time, not by a pre-existing consumer entry.
 - **A failing *message* and a failing *cycle* are different.** `process_message` decides a message's fate; a broker refusing reads/acks/DLQ writes is `run_loop`'s problem — it backs off (`REPLICATOR_ERROR_BACKOFF_BASE_SECONDS` → `_MAX_SECONDS`) and retries, then re-raises after `REPLICATOR_MAX_CONSECUTIVE_CYCLE_FAILURES` so a permanently wrong `REPLICATOR_REDIS_URL` surfaces as a restart instead of a worker that looks alive while doing nothing. The unit's `StartLimitIntervalSec` is sized against that ceiling — change one, revisit the other.
 - **Bus clients are injection-only** — the co-core driver never opens or closes the `redis.asyncio.Redis` client. The worker owns one for its lifetime.
+- **Store, then publish — never the reverse.** A crash between the two must not leave a `blob_available` pointing at bytes that are not there: a consumer would read the fact, fail to open the blob, and have no way to ask again. The opposite gap (stored bytes, no fact) repairs itself — the message stays unacked and the reclaim re-runs a handler that content-addressed storage makes a no-op.
+- **A blob is `file://<blob_dir>/<ab>/<cd>/<sha256>.bin`.** Sharded two levels to bound directory fan-out; the extension is a constant `.bin`, **never** derived from `media_type` — identical octets can arrive under different Content-Types, and two paths for one fingerprint would defeat `exists()` as a short-circuit. Writes go through a temp file + `os.replace`: presence at a content-addressed path is what readers take as proof the bytes are complete. Design: `docs/plans/2026-07-31-replicator-mvp-open-questions-design.md`.
+- **Fetch outcomes carry the loop's vocabulary, not HTTP's.** 5xx / 408 / 429 ⇒ `TransientFetchError`; every other non-2xx (including a body-less 304, which passes `is_success`) ⇒ `PermanentFetchError`. httpx's exception hierarchy is **disjoint from the builtin `ConnectionError`/`TimeoutError`** the loop already treats as transient, so `src/worker/handler.py` maps it explicitly — leaving it unmapped would burn the delivery ceiling on an origin outage.
+- **`from_wire`'s topic and message_id are keyword-only** — `from_wire(fields, topic=..., message_id=...)`. The founding plan's API table showed them positionally.
 - `sha256` lives at `co_core.pure.util.hashing`, not `co_core.pure.extract` (which carries `simhash`, `Chunk`, and the parsers). Import parsers from submodules — they are not re-exported from `__init__`.
 
 **Testing the bus.** `tests/conftest.py` ships a `fake_redis` fixture (fakeredis, Streams-capable) — consumer-group behaviour is testable without a broker, and assertions should read the broker's own view (`xinfo_groups` / `xinfo_consumers`) rather than co-core's private attributes, which are not a stable contract. Anything that genuinely needs the live Archiver-operated Redis goes behind `@pytest.mark.integration` and is excluded by default.

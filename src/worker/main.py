@@ -18,11 +18,14 @@ import signal
 
 from co_core.pure.adapters.bus import streams
 from co_core_aio.bus import AsyncBusConsumer
+from co_core_aio.fetch import AsyncFetchDriver
 from redis.asyncio import Redis
 
 from src.core.config import Settings, get_settings
 from src.core.logging import configure_logging, get_logger
-from src.worker.loop import log_only_handler, run_loop
+from src.storage.local import LocalBlobStore
+from src.worker.handler import build_handler
+from src.worker.loop import run_loop
 
 logger = get_logger(__name__)
 
@@ -92,6 +95,11 @@ async def run(stop: asyncio.Event | None = None) -> None:
 
     owns_signals = stop is None
     client = Redis.from_url(settings.redis_url)
+    # One driver for the worker's lifetime, not one per message: it wraps an
+    # httpx.AsyncClient whose connection pool is the point, and a per-message
+    # driver would open and discard a pool per fetch. Closed in the same finally
+    # as the Redis client — both are ours because we opened them.
+    fetcher = AsyncFetchDriver()
     try:
         # Installed inside the try so the handlers are always removed again —
         # outside it, a failure between install and the try would leak global
@@ -126,13 +134,19 @@ async def run(stop: asyncio.Event | None = None) -> None:
             # PEL the ceiling reads is provably the one the consumer acks against.
             group=settings.consumer_group,
             settings=settings,
-            handler=log_only_handler,
+            handler=build_handler(
+                fetcher=fetcher,
+                store=LocalBlobStore(settings.blob_dir),
+                client=client,
+                settings=settings,
+            ),
             stop=stop,
         )
         logger.info("worker stopped", extra={"consumer": settings.consumer_name})
     finally:
         if owns_signals:
             remove_signal_handlers()
+        await fetcher.aclose()
         await client.aclose()
 
 

@@ -8,8 +8,15 @@ import json
 
 from co_core.pure.models.changes import ContentFetchCommand
 
-from src.worker.loop import DEDUPE_KEY_PREFIX, Outcome, log_only_handler, poll_once
-from tests.worker.conftest import GROUP, TOPIC, make_command, process_one, unreachable_handler
+from src.worker.loop import DEDUPE_KEY_PREFIX, Outcome, poll_once
+from tests.worker.conftest import (
+    GROUP,
+    TOPIC,
+    make_command,
+    noop_handler,
+    process_one,
+    unreachable_handler,
+)
 
 
 async def test_a_redelivered_command_is_acked_without_rerunning_the_handler(
@@ -40,7 +47,7 @@ async def test_the_dedupe_key_carries_the_configured_ttl(fake_redis, consumer, s
     await fake_redis.xadd(TOPIC, make_command(command_id="cmd-ttl"))
 
     message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
-    await process_one(fake_redis, consumer, settings, message, log_only_handler)
+    await process_one(fake_redis, consumer, settings, message, noop_handler)
 
     ttl = await fake_redis.ttl(f"{DEDUPE_KEY_PREFIX}cmd-ttl")
     assert 0 < ttl <= settings.dedupe_ttl_seconds
