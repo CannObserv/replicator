@@ -99,7 +99,9 @@ async def real_redis() -> AsyncGenerator:
 
     client = Redis.from_url(TEST_REDIS_URL)
     try:
-        await client.ping()
+        # execute_command rather than ping(): redis-py types ping()'s return as
+        # the sync/async union, which `ty` reports as a non-awaitable.
+        await client.execute_command("PING")
     except (RedisError, OSError) as exc:
         await client.aclose()
         pytest.skip(f"live Redis unavailable at {TEST_REDIS_URL}: {exc}")
