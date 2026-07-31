@@ -1,4 +1,7 @@
-"""Shared test fixtures — HTTP client and a fake Redis broker (no database).
+"""Shared test fixtures — HTTP client, a fake Redis broker, and a live one.
+
+The fake serves the default suite; ``real_redis`` serves ``@pytest.mark.integration``,
+where the assertion is about *when* Redis acts rather than what state results.
 
 Replicator is DB-free: its durable state is the Redis consumer group's pending
 entries list plus content-addressed blobs on disk, so there is no engine,
@@ -12,7 +15,9 @@ from collections.abc import AsyncGenerator
 import pytest
 from httpx import ASGITransport, AsyncClient
 from redis.asyncio import Redis
-from redis.exceptions import RedisError
+from redis.exceptions import AuthenticationError, AuthorizationError
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from src.core.config import get_settings
 
@@ -20,8 +25,10 @@ from src.core.config import get_settings
 DEFAULT_TEST_REDIS_URL = "redis://localhost:6379/15"
 
 # Keys a crashed run left behind get a TTL rather than an immediate delete: long
-# enough that a concurrent run's stream is never pulled out from under it.
-LEFTOVER_TTL_SECONDS = 300
+# enough that a concurrent run's stream is never pulled out from under it. Sized
+# above pytest's `timeout = 300` (pyproject.toml), which is how long a
+# concurrent test is permitted to run — change one, revisit the other.
+LEFTOVER_TTL_SECONDS = 900
 
 
 @pytest.fixture(scope="session")
@@ -80,7 +87,7 @@ async def fake_redis() -> AsyncGenerator:
         await client.aclose()
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 async def real_redis() -> AsyncGenerator:
     """A live Redis client on a scratch database — ``@pytest.mark.integration`` only.
 
@@ -100,7 +107,13 @@ async def real_redis() -> AsyncGenerator:
     default.
 
     Skips rather than fails when no broker answers, so ``-m integration`` stays
-    runnable off the VM.
+    runnable off the VM — but an *authentication* failure is a misconfiguration,
+    not an absent broker, and is re-raised so it can never masquerade as a clean
+    skip (CR #9).
+
+    Session-scoped: the connection and the leftover sweep are per-run work, not
+    per-test (CR #12). It is still lazy — the default suite never requests it,
+    so no connection is opened when the marker is deselected.
     """
     url = os.environ.get("REPLICATOR_TEST_REDIS_URL", DEFAULT_TEST_REDIS_URL)
     client = Redis.from_url(url)
@@ -114,7 +127,12 @@ async def real_redis() -> AsyncGenerator:
         # execute_command rather than ping(): redis-py types ping()'s return as
         # the sync/async union, which `ty` reports as a non-awaitable.
         await client.execute_command("PING")
-    except (RedisError, OSError) as exc:
+    except (AuthenticationError, AuthorizationError):
+        # Both subclass redis's ConnectionError, so they must be caught first —
+        # a narrowed `except` alone would still swallow them into a skip.
+        await client.aclose()
+        raise
+    except (RedisConnectionError, RedisTimeoutError, OSError) as exc:
         await client.aclose()
         pytest.skip(f"live Redis unavailable at {url}: {exc}")
 
