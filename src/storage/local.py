@@ -4,11 +4,17 @@ import os
 import tempfile
 from pathlib import Path
 
-# Blobs are world-readable: a sibling service reads them by the ``file://`` URI
-# announced on ``blob_available``, and mkstemp's 0600 default would make that
-# work only while every cluster unit runs as the same user. Fetched public bytes
-# — nothing here is secret.
+# A sibling service reads these bytes by the ``file://`` URI announced on
+# ``blob_available``, so both the file and every directory above it have to be
+# reachable by a reader that is not this process. Two defaults work against that
+# and neither is visible at the call site: ``mkstemp`` creates at 0600, and
+# ``mkdir``'s mode argument is masked by the umask. Both are therefore set with
+# an explicit ``chmod``, which the umask does not touch.
+#
+# Widened deliberately: these are fetched public bytes. Nothing secret is ever
+# stored here.
 BLOB_MODE = 0o644
+DIR_MODE = 0o755
 
 
 class LocalBlobStore:
@@ -29,10 +35,29 @@ class LocalBlobStore:
         # the handler returns, making a re-run of an already-successful handler
         # an expected outcome rather than an error.
         if path.is_file():
-            return f"file://{path}"
-        path.parent.mkdir(parents=True, exist_ok=True)
+            return path.as_uri()
+        self._ensure_shard(path.parent)
         self._write_atomically(path, data)
-        return f"file://{path}"
+        # as_uri() rather than an f-string: it percent-encodes, so a blob dir
+        # containing a space yields a URI a consumer can actually parse. It also
+        # raises on a relative path, which makes __init__'s resolve() enforced
+        # rather than merely conventional.
+        return path.as_uri()
+
+    def _ensure_shard(self, leaf: Path) -> None:
+        """Create the shard directories, readable by whoever reads the blobs.
+
+        The mode is applied with ``chmod`` rather than ``mkdir(mode=...)``
+        because the umask masks the latter: under ``umask 0077`` the shards come
+        out 0700, and a 0644 blob inside a 0700 directory is unreachable —
+        traversal needs ``+x`` on every parent. Re-applied on each store, so a
+        directory someone tightened by hand heals on the next write.
+        """
+        leaf.mkdir(parents=True, exist_ok=True)
+        # The layout is exactly two levels deep (see _path_for), so this is the
+        # full chain from the root down.
+        for directory in (self._root, leaf.parent, leaf):
+            os.chmod(directory, DIR_MODE)
 
     @staticmethod
     def _write_atomically(path: Path, data: bytes) -> None:
@@ -51,6 +76,12 @@ class LocalBlobStore:
         zero-length file whose name asserts the sha256 of real bytes. A consumer
         trusting the path over re-hashing would read silent corruption.
 
+        The parent directory is deliberately **not** synced, so power loss can
+        still lose the rename itself. That failure is the safe one: the blob is
+        absent rather than wrong, the short-circuit misses, and the reclaim
+        re-runs a handler that content-addressed storage makes a no-op. Only
+        losing the *contents* behind a name that claims them was worth the sync.
+
         The temp is removed on any failure, otherwise a command retried against a
         full disk would leave one behind per attempt.
         """
@@ -60,12 +91,7 @@ class LocalBlobStore:
                 handle.write(data)
                 handle.flush()
                 os.fsync(handle.fileno())
-            # mkstemp creates at 0600. Blobs are read by *another service* — the
-            # blob_uri on the fact is the whole point — so the private default
-            # would make the contract depend on every cluster unit happening to
-            # run as the same user. Widened deliberately: these are fetched
-            # public bytes, and nothing secret is ever stored here.
-            os.chmod(temp_name, BLOB_MODE)
+            os.chmod(temp_name, BLOB_MODE)  # see BLOB_MODE — mkstemp creates at 0600
             os.replace(temp_name, path)
         except BaseException:
             Path(temp_name).unlink(missing_ok=True)

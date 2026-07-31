@@ -1,7 +1,9 @@
 """The local-filesystem blob backend."""
 
+import os
 import stat
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 import pytest
 
@@ -121,3 +123,35 @@ def test_a_stored_blob_is_readable_by_another_service(store, tmp_path):
 
     blob = tmp_path / "9f" / "2a" / f"{FINGERPRINT}.bin"
     assert stat.S_IMODE(blob.stat().st_mode) == 0o644
+
+
+def test_the_shard_directories_are_traversable_under_a_restrictive_umask(tmp_path):
+    """A 0644 blob inside a 0700 directory is unreachable — traversal needs +x.
+
+    ``mkdir``'s mode is masked by the umask, so a readable file alone does not
+    make the cross-service read work. Run under ``umask 0077`` because the
+    permissive default hides exactly this.
+    """
+    previous = os.umask(0o077)
+    try:
+        root = tmp_path / "blobs"
+        LocalBlobStore(root).store(b"hello", FINGERPRINT, "text/plain")
+
+        for directory in (root, root / "9f", root / "9f" / "2a"):
+            assert stat.S_IMODE(directory.stat().st_mode) == 0o755, directory
+    finally:
+        os.umask(previous)
+
+
+def test_a_root_needing_encoding_yields_a_parseable_uri(tmp_path):
+    """``blob_uri`` crosses a service boundary as a URI, not as a path.
+
+    An f-string emits the space verbatim, so a consumer parsing the value gets a
+    different path than the one written — or nothing.
+    """
+    root = tmp_path / "my blobs"
+
+    uri = LocalBlobStore(root).store(b"hello", FINGERPRINT, "text/plain")
+
+    assert uri == f"file://{tmp_path}/my%20blobs/9f/2a/{FINGERPRINT}.bin"
+    assert Path(urlparse(unquote(uri)).path).read_bytes() == b"hello"
