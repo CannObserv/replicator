@@ -7,7 +7,7 @@ from urllib.parse import unquote, urlparse
 
 import pytest
 
-from src.storage.local import LocalBlobStore
+from src.storage.local import LocalBlobStore, ensure_directory
 
 # A stand-in fingerprint: the real one is a 64-char sha256, and the shard split
 # takes the first four characters, so the literal has to be long enough to slice.
@@ -154,4 +154,33 @@ def test_a_root_needing_encoding_yields_a_parseable_uri(tmp_path):
     uri = LocalBlobStore(root).store(b"hello", FINGERPRINT, "text/plain")
 
     assert uri == f"file://{tmp_path}/my%20blobs/9f/2a/{FINGERPRINT}.bin"
-    assert Path(urlparse(unquote(uri)).path).read_bytes() == b"hello"
+    assert Path(unquote(urlparse(uri).path)).read_bytes() == b"hello"
+
+
+def test_a_preexisting_root_keeps_the_mode_its_operator_gave_it(tmp_path):
+    """Only directories the store creates are the store's to set modes on.
+
+    A root that already exists belongs to whoever provisioned it — and may be a
+    shared mount this process can write into but does not own, where ``chmod``
+    raises ``EPERM`` even though the write itself would have worked.
+    """
+    root = tmp_path / "blobs"
+    root.mkdir(mode=0o700)
+
+    LocalBlobStore(root).store(b"hello", FINGERPRINT, "text/plain")
+
+    assert stat.S_IMODE(root.stat().st_mode) == 0o700
+    assert stat.S_IMODE((root / "9f").stat().st_mode) == 0o755
+
+
+def test_a_root_that_is_a_regular_file_is_rejected(tmp_path):
+    """``mkdir`` raises FileExistsError for a file as well as a directory.
+
+    Swallowing that would let REPLICATOR_BLOB_DIR point at a regular file, pass
+    the worker's startup check, and fail at the first fetch instead of on boot.
+    """
+    blocker = tmp_path / "blobs"
+    blocker.write_bytes(b"")
+
+    with pytest.raises(FileExistsError):
+        ensure_directory(blocker)

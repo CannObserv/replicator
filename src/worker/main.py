@@ -23,7 +23,7 @@ from redis.asyncio import Redis
 
 from src.core.config import Settings, get_settings
 from src.core.logging import configure_logging, get_logger
-from src.storage.local import LocalBlobStore
+from src.storage.local import LocalBlobStore, ensure_directory
 from src.worker.handler import build_handler
 from src.worker.loop import run_loop
 
@@ -84,8 +84,12 @@ async def run(stop: asyncio.Event | None = None) -> None:
     # one line that matters into the journal as a bare traceback, unparseable by
     # a pipeline expecting JSON, right before the unit flaps to its restart
     # limit.
+    #
+    # ensure_directory rather than a bare mkdir so a directory this process
+    # creates is left readable by the service that reads the blobs, while one
+    # that already exists keeps whatever mode its operator gave it.
     try:
-        settings.blob_dir.mkdir(parents=True, exist_ok=True)
+        ensure_directory(settings.blob_dir)
     except OSError as exc:
         logger.error(
             "blob directory is not usable",

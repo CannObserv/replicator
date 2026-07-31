@@ -17,6 +17,32 @@ BLOB_MODE = 0o644
 DIR_MODE = 0o755
 
 
+def ensure_directory(path: Path) -> None:
+    """Create ``path``, taking ownership of its mode only if we created it.
+
+    The mode is set with ``chmod`` rather than ``mkdir(mode=...)`` because the
+    umask masks the latter: under ``umask 0077`` a fresh directory comes out
+    0700, and a 0644 blob inside a 0700 directory is unreachable — traversal
+    needs ``+x`` on every parent.
+
+    A directory that **already exists** is left exactly as it is. It belongs to
+    whoever provisioned it — an operator's deliberate 0750, or a shared mount
+    this process can write into but does not own, where ``chmod`` raises
+    ``EPERM`` even though the write would have succeeded.
+    """
+    try:
+        path.mkdir(parents=True)
+    except FileExistsError:
+        # mkdir raises this for an existing *file* too, so the guard is not
+        # decoration: swallowing it blindly would let REPLICATOR_BLOB_DIR point
+        # at a regular file, pass the startup check, and fail at the first fetch
+        # instead of on boot.
+        if not path.is_dir():
+            raise
+        return
+    os.chmod(path, DIR_MODE)
+
+
 class LocalBlobStore:
     """Content-addressed blob storage under a filesystem root."""
 
@@ -45,19 +71,16 @@ class LocalBlobStore:
         return path.as_uri()
 
     def _ensure_shard(self, leaf: Path) -> None:
-        """Create the shard directories, readable by whoever reads the blobs.
+        """Create the shard directories a blob is about to land in.
 
-        The mode is applied with ``chmod`` rather than ``mkdir(mode=...)``
-        because the umask masks the latter: under ``umask 0077`` the shards come
-        out 0700, and a 0644 blob inside a 0700 directory is unreachable —
-        traversal needs ``+x`` on every parent. Re-applied on each store, so a
-        directory someone tightened by hand heals on the next write.
+        Level by level rather than one ``mkdir(parents=True)``, because the mode
+        is only ours to set on the levels we actually create — see
+        ``ensure_directory``. The root is included since a store may be the first
+        thing to touch it, but it is skipped when it already exists.
         """
-        leaf.mkdir(parents=True, exist_ok=True)
-        # The layout is exactly two levels deep (see _path_for), so this is the
-        # full chain from the root down.
-        for directory in (self._root, leaf.parent, leaf):
-            os.chmod(directory, DIR_MODE)
+        ensure_directory(self._root)
+        ensure_directory(leaf.parent)
+        ensure_directory(leaf)
 
     @staticmethod
     def _write_atomically(path: Path, data: bytes) -> None:
