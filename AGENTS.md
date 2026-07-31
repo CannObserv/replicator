@@ -163,6 +163,7 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
 - **`from_wire`'s dispatch table is global.** A `blob_available` frame XADDed to `content.fetch` decodes cleanly into the wrong model rather than raising — `isinstance`-check the payload before destructuring.
 - **`claim_stale` is the retry path, not just crash recovery.** A transiently-failed message is left unacked and comes back through the same reclaim, so retry cadence = `REPLICATOR_CLAIM_MIN_IDLE_MS`. Call it with `count=1`: XAUTOCLAIM transfers ownership and resets the idle clock on every entry it returns *before* co-core decodes them, and it restarts at `0-0` each call, so a poison entry jams recovery permanently unless it is DLQ'd first.
 - **Retry accounting is XPENDING's `times_delivered`**, not a side counter. It only advances on a reclaim.
+- **A failing *message* and a failing *cycle* are different.** `process_message` decides a message's fate; a broker refusing reads/acks/DLQ writes is `run_loop`'s problem — it backs off (1s → 30s) and retries, then re-raises after `MAX_CONSECUTIVE_CYCLE_FAILURES` (~8 min) so a permanently wrong `REPLICATOR_REDIS_URL` surfaces as a restart instead of a worker that looks alive while doing nothing.
 - **Bus clients are injection-only** — the co-core driver never opens or closes the `redis.asyncio.Redis` client. The worker owns one for its lifetime.
 - `sha256` lives at `co_core.pure.util.hashing`, not `co_core.pure.extract` (which carries `simhash`, `Chunk`, and the parsers). Import parsers from submodules — they are not re-exported from `__init__`.
 
@@ -227,6 +228,6 @@ Entry points only: `configure_logging()` is called once inside the FastAPI `life
 **General:**
 - No inline module imports; all at file top
 - Docstrings for public modules, classes, functions
-- Test structure mirrors source (`src/foo.py` → `tests/test_foo.py`)
+- Test structure mirrors source (`src/foo.py` → `tests/test_foo.py`). A module whose tests outgrow one file splits by concern, not by helper: `tests/worker/test_loop_dlq.py`, `test_loop_recovery.py`, … with the shared wiring in that package's `conftest.py`
 - Explicit imports only
 - Small, focused functions

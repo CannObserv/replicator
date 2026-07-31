@@ -84,6 +84,16 @@ ERROR_BACKOFF_MAX_SECONDS = 30.0
 ERROR_BACKOFF_MAX_SHIFT = 5  # cap the exponent so 2**shift cannot overflow the max
 ERROR_LOG_EVERY = 15
 
+# Consecutive failed cycles before the loop stops absorbing and re-raises. The
+# backoff above must not turn "dies on every blip" into "never dies at all": a
+# worker that cannot reach Redis looks alive to systemd (nothing exits, so
+# Restart=on-failure never fires) while doing no work, and a permanently wrong
+# REPLICATOR_REDIS_URL would fail silently forever. At the escalating cadence
+# this is ~8 minutes of continuous failure — long enough to ride out a broker
+# restart, short enough that a misconfiguration surfaces via a real restart,
+# which also re-runs the Redis floor check in ExecStartPre.
+MAX_CONSECUTIVE_CYCLE_FAILURES = 20
+
 
 class Outcome(StrEnum):
     """What ``process_message`` did with one message."""
@@ -433,6 +443,10 @@ async def run_loop(
     """
     consecutive_failures = 0
     while not stop.is_set():
+        # Bound before the try: the read below is only valid by the except
+        # branch always continuing, and a future branch that falls through
+        # would hit UnboundLocalError on a path that runs only during an outage.
+        messages: list[BusMessage] = []
         try:
             messages = await poll_once(client, consumer, settings, group=group)
             await process_batch(
@@ -446,6 +460,16 @@ async def run_loop(
             )
         except Exception as exc:
             consecutive_failures += 1
+            if consecutive_failures >= MAX_CONSECUTIVE_CYCLE_FAILURES:
+                logger.error(
+                    "poll cycle has failed continuously — exiting so the unit restarts",
+                    extra={
+                        "consecutive_failures": consecutive_failures,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                    exc_info=exc,
+                )
+                raise
             if consecutive_failures == 1 or consecutive_failures % ERROR_LOG_EVERY == 0:
                 logger.error(
                     "poll cycle failed — backing off",
