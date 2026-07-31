@@ -6,12 +6,19 @@ session, or savepoint machinery here.
 """
 
 import logging
+import os
 from collections.abc import AsyncGenerator
+from urllib.parse import urlparse
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from redis.asyncio import Redis
+from redis.exceptions import RedisError
 
 from src.core.config import get_settings
+
+# Scratch database for live-broker tests. Deliberately not db 0 — see real_redis.
+TEST_REDIS_URL = os.environ.get("REPLICATOR_TEST_REDIS_URL", "redis://localhost:6379/15")
 
 
 @pytest.fixture(scope="session")
@@ -64,6 +71,39 @@ async def fake_redis() -> AsyncGenerator:
     from fakeredis.aioredis import FakeRedis
 
     client = FakeRedis(decode_responses=False)
+    try:
+        yield client
+    finally:
+        await client.aclose()
+
+
+@pytest.fixture
+async def real_redis() -> AsyncGenerator:
+    """A live Redis client on a scratch database — ``@pytest.mark.integration`` only.
+
+    Some properties are about *when* Redis acts, not what state results, and
+    fakeredis diverges on exactly those (GH #3). Those assertions need the real
+    server, which on this VM is the Archiver-operated broker.
+
+    **Never db 0.** That database carries the live ``content.fetch`` stream the
+    running ``replicator.service`` is consuming, so a test frame written there
+    would be fetched for real. Tests using this fixture confine themselves to
+    scratch stream keys as well — the database guard is the backstop, not the
+    plan. Point ``REPLICATOR_TEST_REDIS_URL`` elsewhere to use another server.
+
+    Skips rather than fails when no broker answers, so ``-m integration`` stays
+    runnable off the VM.
+    """
+    if urlparse(TEST_REDIS_URL).path in ("", "/", "/0"):
+        pytest.fail(f"REPLICATOR_TEST_REDIS_URL must not target db 0 (got {TEST_REDIS_URL})")
+
+    client = Redis.from_url(TEST_REDIS_URL)
+    try:
+        await client.ping()
+    except (RedisError, OSError) as exc:
+        await client.aclose()
+        pytest.skip(f"live Redis unavailable at {TEST_REDIS_URL}: {exc}")
+
     try:
         yield client
     finally:

@@ -17,6 +17,7 @@ from co_core.pure.adapters.bus import streams
 
 from src.core.config import get_settings
 from src.worker.main import build_consumer, install_signal_handlers, remove_signal_handlers, run
+from tests.worker.conftest import make_command
 
 
 def _stopped() -> asyncio.Event:
@@ -39,12 +40,19 @@ async def test_ensure_group_targets_the_command_stream(fake_redis):
 
 
 async def test_consumer_registers_under_the_configured_group(fake_redis, monkeypatch):
+    """The configured name is the identity Redis records — asserted on delivery.
+
+    A *delivered* message is what registers a consumer; an empty poll does not
+    (GH #3). fakeredis registers on either, so triggering it with real bytes is
+    what keeps this assertion true of the broker Replicator actually runs
+    against. The negative half lives in ``tests/worker/test_main_integration.py``.
+    """
     monkeypatch.setenv("REPLICATOR_CONSUMER_GROUP", "replicator.fetch")
     monkeypatch.setenv("REPLICATOR_CONSUMER_NAME", "replicator@test")
 
     consumer = build_consumer(fake_redis, get_settings())
     await consumer.ensure_group(start_id="$")
-    # A read registers this consumer within the group, even with nothing pending.
+    await fake_redis.xadd(streams.CONTENT_FETCH, make_command())
     await consumer.read(count=1, block_ms=1)
 
     groups = await fake_redis.xinfo_groups(streams.CONTENT_FETCH)
