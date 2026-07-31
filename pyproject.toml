@@ -50,6 +50,9 @@ addopts = "-v --tb=short -m 'not integration' --cov=src --cov-report=term-missin
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
+# LEFTOVER_TTL_SECONDS in tests/conftest.py is sized above this — raising the
+# timeout past that TTL weakens the scratch-key guarantee. Change one, revisit
+# the other.
 timeout = 300
 timeout_method = "thread"
 markers = [
