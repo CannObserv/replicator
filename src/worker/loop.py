@@ -74,25 +74,14 @@ Handler = Callable[[ContentFetchCommand], Awaitable[None]]
 # prompt.
 IDLE_SLEEP_SECONDS = 0.05
 
-# Backoff for a poll cycle that raised — a broker outage, not a bad message.
-# Escalates base * 2**(n-1) to a cap so a down Redis is not hammered, and logs
-# only every Nth consecutive failure so a long outage cannot flood the journal.
-# Mirrors archiver's drain-loop backoff (archiver#107, CR #13); the worker must
-# ride out a broker restart, not die and lean on systemd's restart limiter.
-ERROR_BACKOFF_BASE_SECONDS = 1.0
-ERROR_BACKOFF_MAX_SECONDS = 30.0
-ERROR_BACKOFF_MAX_SHIFT = 5  # cap the exponent so 2**shift cannot overflow the max
+# Outage handling is operator-tunable and lives in Settings
+# (REPLICATOR_ERROR_BACKOFF_BASE_SECONDS / _MAX_SECONDS,
+# REPLICATOR_MAX_CONSECUTIVE_CYCLE_FAILURES) — these two are shape, not policy:
+# the exponent cap keeps 2**shift from overflowing before the max is applied,
+# and the log interval keeps a long outage from flooding the journal at one
+# line per retry. Mirrors archiver's drain-loop backoff (archiver#107, CR #13).
+ERROR_BACKOFF_MAX_SHIFT = 5
 ERROR_LOG_EVERY = 15
-
-# Consecutive failed cycles before the loop stops absorbing and re-raises. The
-# backoff above must not turn "dies on every blip" into "never dies at all": a
-# worker that cannot reach Redis looks alive to systemd (nothing exits, so
-# Restart=on-failure never fires) while doing no work, and a permanently wrong
-# REPLICATOR_REDIS_URL would fail silently forever. At the escalating cadence
-# this is ~8 minutes of continuous failure — long enough to ride out a broker
-# restart, short enough that a misconfiguration surfaces via a real restart,
-# which also re-runs the Redis floor check in ExecStartPre.
-MAX_CONSECUTIVE_CYCLE_FAILURES = 20
 
 
 class Outcome(StrEnum):
@@ -460,7 +449,7 @@ async def run_loop(
             )
         except Exception as exc:
             consecutive_failures += 1
-            if consecutive_failures >= MAX_CONSECUTIVE_CYCLE_FAILURES:
+            if consecutive_failures >= settings.max_consecutive_cycle_failures:
                 logger.error(
                     "poll cycle has failed continuously — exiting so the unit restarts",
                     extra={
@@ -480,7 +469,12 @@ async def run_loop(
                     exc_info=exc,
                 )
             await _park(
-                stop, _error_backoff_seconds(consecutive_failures, ERROR_BACKOFF_BASE_SECONDS)
+                stop,
+                _error_backoff_seconds(
+                    consecutive_failures,
+                    base=settings.error_backoff_base_seconds,
+                    maximum=settings.error_backoff_max_seconds,
+                ),
             )
             continue
 
@@ -491,8 +485,8 @@ async def run_loop(
             await _park(stop, IDLE_SLEEP_SECONDS)
 
 
-def _error_backoff_seconds(consecutive_failures: int, base: float) -> float:
-    """Exponential backoff (``base * 2**(n-1)``) capped at the ceiling.
+def _error_backoff_seconds(consecutive_failures: int, *, base: float, maximum: float) -> float:
+    """Exponential backoff (``base * 2**(n-1)``) capped at ``maximum``.
 
     The exponent is clamped so the intermediate cannot overflow before the cap
     is applied — a loop that has been failing for hours must not compute
@@ -501,7 +495,7 @@ def _error_backoff_seconds(consecutive_failures: int, base: float) -> float:
     if consecutive_failures <= 1:
         return base
     shift = min(consecutive_failures - 1, ERROR_BACKOFF_MAX_SHIFT)
-    return min(base * 2**shift, ERROR_BACKOFF_MAX_SECONDS)
+    return min(base * 2**shift, maximum)
 
 
 async def _park(stop: asyncio.Event, seconds: float) -> None:

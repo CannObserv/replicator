@@ -5,10 +5,18 @@ Description=replicator — retrieval, fingerprinting, and temporary storage laye
 # it is absent — the floor check below is the guard that actually blocks.
 After=network.target redis-server.service
 Wants=redis-server.service
-# Bound crash-restart loops: at most 10 restarts per 5 minutes, then stay
-# failed (visible in systemctl status + OnFailure=) instead of flapping forever.
-StartLimitIntervalSec=300
-StartLimitBurst=10
+# Bound restart loops at BOTH timescales, then stay failed (visible in
+# systemctl status + OnFailure=) instead of restarting forever.
+#
+# The window is an hour, not five minutes, because the worker's slowest failure
+# mode is deliberately slow: it absorbs broker failures for
+# REPLICATOR_MAX_CONSECUTIVE_CYCLE_FAILURES cycles (~8 min) before exiting, so a
+# permanently unreachable Redis produces one exit every ~8 minutes. A 5-minute
+# window never sees two of those and the unit would read as active (running)
+# forever, with the failure buried in the journal. Three strikes an hour catches
+# that case and still catches a fast crash loop within seconds.
+StartLimitIntervalSec=3600
+StartLimitBurst=3
 
 [Service]
 Type=simple

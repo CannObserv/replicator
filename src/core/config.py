@@ -86,6 +86,29 @@ class Settings(BaseSettings):
         default=5, validation_alias="REPLICATOR_MAX_DELIVERY_ATTEMPTS"
     )
 
+    # Backoff for a poll cycle that raised — a broker outage, not a bad message.
+    # Escalates base * 2**(n-1) to the cap so a down Redis is not hammered.
+    error_backoff_base_seconds: float = Field(
+        default=1.0, validation_alias="REPLICATOR_ERROR_BACKOFF_BASE_SECONDS"
+    )
+    error_backoff_max_seconds: float = Field(
+        default=30.0, validation_alias="REPLICATOR_ERROR_BACKOFF_MAX_SECONDS"
+    )
+
+    # Consecutive failed cycles before the loop stops absorbing and re-raises.
+    # The backoff must not turn "dies on every blip" into "never dies at all": a
+    # worker that cannot reach Redis looks alive to systemd (nothing exits, so
+    # Restart=on-failure never fires) while doing no work, and a permanently
+    # wrong REPLICATOR_REDIS_URL would fail silently forever. At the escalating
+    # cadence the default is ~8 minutes of continuous failure — long enough to
+    # ride out a broker restart, short enough that a misconfiguration surfaces
+    # via a real restart, which also re-runs the Redis floor check. The unit's
+    # StartLimitIntervalSec is sized against this; changing one means revisiting
+    # the other.
+    max_consecutive_cycle_failures: int = Field(
+        default=20, validation_alias="REPLICATOR_MAX_CONSECUTIVE_CYCLE_FAILURES"
+    )
+
     # Lifetime of the per-command_id dedupe key. Redelivery is bounded by the
     # PEL, which is unbounded in principle, so no TTL is provably sufficient:
     # a day covers any realistic outage, costs one small key per command, and

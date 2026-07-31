@@ -146,6 +146,8 @@ In `/etc/replicator/.env` (read by the service):
 - `REPLICATOR_READ_BLOCK_MS` — blocking-read window; default `5000`. Bounds worst-case shutdown latency, so the unit's `TimeoutStopSec` must exceed it plus the handler budget
 - `REPLICATOR_CLAIM_MIN_IDLE_MS` — idle time before a pending entry may be reclaimed; default `60000`. Doubles as the retry cadence
 - `REPLICATOR_MAX_DELIVERY_ATTEMPTS` — delivery ceiling for *unclassified* failures before DLQ; default `5`. Counted from XPENDING's delivery counter, which only advances on a reclaim ⇒ a bound in time, not retries
+- `REPLICATOR_ERROR_BACKOFF_BASE_SECONDS` / `REPLICATOR_ERROR_BACKOFF_MAX_SECONDS` — backoff for a poll *cycle* that raised (broker outage); defaults `1.0` / `30.0`, escalating `base * 2**(n-1)`
+- `REPLICATOR_MAX_CONSECUTIVE_CYCLE_FAILURES` — consecutive failed cycles before the worker exits so the unit restarts; default `20` (~8 min at the default backoff). Paired with the unit's `StartLimitIntervalSec=3600` / `StartLimitBurst=3`
 - `REPLICATOR_DEDUPE_TTL_SECONDS` — lifetime of the `replicator:cmd:<command_id>` dedupe key; default `86400`
 - `REPLICATOR_LOG_LEVEL` — default `INFO`
 - `BUILD_ID` — git SHA stamped by the systemd unit's `ExecStartPre`; defaults to `"dev"` outside systemd
@@ -163,7 +165,7 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
 - **`from_wire`'s dispatch table is global.** A `blob_available` frame XADDed to `content.fetch` decodes cleanly into the wrong model rather than raising — `isinstance`-check the payload before destructuring.
 - **`claim_stale` is the retry path, not just crash recovery.** A transiently-failed message is left unacked and comes back through the same reclaim, so retry cadence = `REPLICATOR_CLAIM_MIN_IDLE_MS`. Call it with `count=1`: XAUTOCLAIM transfers ownership and resets the idle clock on every entry it returns *before* co-core decodes them, and it restarts at `0-0` each call, so a poison entry jams recovery permanently unless it is DLQ'd first.
 - **Retry accounting is XPENDING's `times_delivered`**, not a side counter. It only advances on a reclaim.
-- **A failing *message* and a failing *cycle* are different.** `process_message` decides a message's fate; a broker refusing reads/acks/DLQ writes is `run_loop`'s problem — it backs off (1s → 30s) and retries, then re-raises after `MAX_CONSECUTIVE_CYCLE_FAILURES` (~8 min) so a permanently wrong `REPLICATOR_REDIS_URL` surfaces as a restart instead of a worker that looks alive while doing nothing.
+- **A failing *message* and a failing *cycle* are different.** `process_message` decides a message's fate; a broker refusing reads/acks/DLQ writes is `run_loop`'s problem — it backs off (`REPLICATOR_ERROR_BACKOFF_BASE_SECONDS` → `_MAX_SECONDS`) and retries, then re-raises after `REPLICATOR_MAX_CONSECUTIVE_CYCLE_FAILURES` so a permanently wrong `REPLICATOR_REDIS_URL` surfaces as a restart instead of a worker that looks alive while doing nothing. The unit's `StartLimitIntervalSec` is sized against that ceiling — change one, revisit the other.
 - **Bus clients are injection-only** — the co-core driver never opens or closes the `redis.asyncio.Redis` client. The worker owns one for its lifetime.
 - `sha256` lives at `co_core.pure.util.hashing`, not `co_core.pure.extract` (which carries `simhash`, `Chunk`, and the parsers). Import parsers from submodules — they are not re-exported from `__init__`.
 
