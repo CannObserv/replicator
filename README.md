@@ -61,6 +61,14 @@ value baked into `src/core/config.py` — several are overridden on the VM, so c
 | `REPLICATOR_BLOB_DIR` | `blobs` | Temp-storage root for fetched bytes |
 | `REPLICATOR_CONSUMER_GROUP` | `replicator.fetch` | Consumer group on `content.fetch` |
 | `REPLICATOR_CONSUMER_NAME` | `replicator@<hostname>` | This worker's identity in the group — never share one |
+| `REPLICATOR_CONSUMER_START_ID` | `$` | Group start position. Applies only at group *creation*; changing it later also needs `XGROUP SETID` |
+| `REPLICATOR_READ_BLOCK_MS` | `5000` | Blocking-read window. Bounds shutdown latency, so the unit's `TimeoutStopSec` must exceed it |
+| `REPLICATOR_CLAIM_MIN_IDLE_MS` | `60000` | Idle time before a pending entry may be reclaimed — also the retry cadence |
+| `REPLICATOR_MAX_DELIVERY_ATTEMPTS` | `5` | Deliveries of an *unclassified* failure before the DLQ |
+| `REPLICATOR_DEDUPE_TTL_SECONDS` | `86400` | Lifetime of the `replicator:cmd:<command_id>` dedupe key |
+| `REPLICATOR_ERROR_BACKOFF_BASE_SECONDS` | `1.0` | Backoff after a failed poll cycle (broker outage), escalating `base * 2**(n-1)` |
+| `REPLICATOR_ERROR_BACKOFF_MAX_SECONDS` | `30.0` | Cap on that backoff |
+| `REPLICATOR_MAX_CONSECUTIVE_CYCLE_FAILURES` | `20` | Failed cycles before the worker exits so the unit restarts (~8 min). Paired with the unit's `StartLimitIntervalSec` |
 | `REPLICATOR_LOG_LEVEL` | `INFO` | Root log level |
 | `BUILD_ID` | `dev` | Git SHA, stamped by the unit's `ExecStartPre` |
 
