@@ -4,6 +4,12 @@ import os
 import tempfile
 from pathlib import Path
 
+# Blobs are world-readable: a sibling service reads them by the ``file://`` URI
+# announced on ``blob_available``, and mkstemp's 0600 default would make that
+# work only while every cluster unit runs as the same user. Fetched public bytes
+# — nothing here is secret.
+BLOB_MODE = 0o644
+
 
 class LocalBlobStore:
     """Content-addressed blob storage under a filesystem root."""
@@ -39,6 +45,12 @@ class LocalBlobStore:
         same directory so the rename stays within one filesystem, which is what
         ``os.replace`` needs to be atomic at all.
 
+        The ``fsync`` before the rename is what extends that guarantee past a
+        crashed *process* to a crashed *machine*: without it ext4 can expose the
+        renamed name with unflushed contents after power loss, leaving a
+        zero-length file whose name asserts the sha256 of real bytes. A consumer
+        trusting the path over re-hashing would read silent corruption.
+
         The temp is removed on any failure, otherwise a command retried against a
         full disk would leave one behind per attempt.
         """
@@ -46,6 +58,14 @@ class LocalBlobStore:
         try:
             with os.fdopen(fd, "wb") as handle:
                 handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            # mkstemp creates at 0600. Blobs are read by *another service* — the
+            # blob_uri on the fact is the whole point — so the private default
+            # would make the contract depend on every cluster unit happening to
+            # run as the same user. Widened deliberately: these are fetched
+            # public bytes, and nothing secret is ever stored here.
+            os.chmod(temp_name, BLOB_MODE)
             os.replace(temp_name, path)
         except BaseException:
             Path(temp_name).unlink(missing_ok=True)

@@ -87,6 +87,19 @@ def handler(fake_redis, tmp_path):
     return build
 
 
+async def test_the_command_url_is_the_url_fetched(handler):
+    """The service's defining contract: fetch what you were told to fetch.
+
+    Deliberately not the module default — asserting against ``URL`` would pass
+    for a handler that ignored the command and fetched a constant.
+    """
+    fetcher = FakeFetcher()
+
+    await handler(fetcher)(command(url="https://elsewhere.test/z"))
+
+    assert fetcher.urls == ["https://elsewhere.test/z"]
+
+
 async def test_a_successful_fetch_stores_the_bytes_under_their_fingerprint(handler, tmp_path):
     await handler()(command())
 
@@ -142,6 +155,7 @@ async def test_a_failed_fetch_stores_nothing_and_publishes_nothing(handler, fake
     [
         ("text/html; charset=utf-8", "text/html"),
         ("TEXT/HTML", "text/html"),
+        ("text/html;charset=utf-8", "text/html"),
         ("  application/pdf  ", "application/pdf"),
         ("", "application/octet-stream"),
         ("   ", "application/octet-stream"),
@@ -166,6 +180,19 @@ async def test_a_response_without_a_content_type_falls_back(handler, fake_redis)
 
     (fact,) = await published_facts(fake_redis)
     assert fact.media_type == "application/octet-stream"
+
+
+async def test_a_canonically_cased_content_type_header_is_still_found(handler, fake_redis):
+    """Lowercase keys are httpx's habit, not a contract.
+
+    ``FetchResult.headers`` is typed as a plain ``Mapping[str, str]``.
+    """
+    fetcher = FakeFetcher(fetch_result(headers={"Content-Type": "application/pdf"}))
+
+    await handler(fetcher)(command())
+
+    (fact,) = await published_facts(fake_redis)
+    assert fact.media_type == "application/pdf"
 
 
 @pytest.mark.parametrize(

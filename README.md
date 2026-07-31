@@ -58,7 +58,8 @@ value baked into `src/core/config.py` — several are overridden on the VM, so c
 |---|---|---|
 | `GOOGLE_APPLICATION_CREDENTIALS` | — | SA key for the wheelhouse mirror (`/etc/replicator/co-pypi-reader.json`) |
 | `REPLICATOR_REDIS_URL` | `redis://localhost:6379/0` | Change-bus client URL |
-| `REPLICATOR_BLOB_DIR` | `blobs` | Temp-storage root for fetched bytes |
+| `REPLICATOR_BLOB_DIR` | `blobs` | Temp-storage root for fetched bytes. Resolved to an absolute path — `file://` URIs require it |
+| `REPLICATOR_MAX_BLOB_BYTES` | `67108864` | Ceiling on one fetched body (64 MiB). A *storage* guard, not a memory one — co-core's fetch driver buffers the whole response first. Over it ⇒ DLQ |
 | `REPLICATOR_CONSUMER_GROUP` | `replicator.fetch` | Consumer group on `content.fetch` |
 | `REPLICATOR_CONSUMER_NAME` | `replicator@<hostname>` | This worker's identity in the group — never share one |
 | `REPLICATOR_CONSUMER_START_ID` | `$` | Group start position. Applies only at group *creation*; changing it later also needs `XGROUP SETID` |

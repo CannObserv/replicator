@@ -1,5 +1,6 @@
 """The local-filesystem blob backend."""
 
+import stat
 from pathlib import Path
 
 import pytest
@@ -70,15 +71,13 @@ def test_storing_an_already_stored_fingerprint_does_not_rewrite_it(store, tmp_pa
     assert blob.read_bytes() == b"sentinel"
 
 
-def test_storing_an_already_stored_fingerprint_still_returns_its_uri(store, tmp_path):
+def test_storing_an_already_stored_fingerprint_still_returns_its_uri(store):
     first = store.store(b"hello", FINGERPRINT, "text/plain")
 
     assert store.store(b"hello", FINGERPRINT, "text/plain") == first
 
 
-def test_a_write_that_fails_to_publish_leaves_nothing_at_the_addressed_path(
-    store, tmp_path, monkeypatch
-):
+def test_a_write_that_fails_to_publish_leaves_nothing_at_the_addressed_path(store, monkeypatch):
     """Presence at a content-addressed path has to mean "complete".
 
     Readers — and ``store``'s own short-circuit — treat the file existing as
@@ -109,3 +108,16 @@ def test_a_failed_write_leaves_no_temporary_file_behind(store, tmp_path, monkeyp
         store.store(b"hello", FINGERPRINT, "text/plain")
 
     assert list((tmp_path / "9f" / "2a").iterdir()) == []
+
+
+def test_a_stored_blob_is_readable_by_another_service(store, tmp_path):
+    """The ``file://`` URI is only useful if the reader can open it.
+
+    ``mkstemp`` creates at 0600, so without an explicit widening the cross-service
+    contract would hold only while every cluster unit runs as the same user —
+    true today, and nothing in the code would say so.
+    """
+    store.store(b"hello", FINGERPRINT, "text/plain")
+
+    blob = tmp_path / "9f" / "2a" / f"{FINGERPRINT}.bin"
+    assert stat.S_IMODE(blob.stat().st_mode) == 0o644

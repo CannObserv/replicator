@@ -95,12 +95,15 @@ async def run(stop: asyncio.Event | None = None) -> None:
 
     owns_signals = stop is None
     client = Redis.from_url(settings.redis_url)
-    # One driver for the worker's lifetime, not one per message: it wraps an
-    # httpx.AsyncClient whose connection pool is the point, and a per-message
-    # driver would open and discard a pool per fetch. Closed in the same finally
-    # as the Redis client — both are ours because we opened them.
-    fetcher = AsyncFetchDriver()
+    # Constructed inside the try, like the signal handlers: anything opened
+    # between here and the try would leak the Redis client if it raised.
+    fetcher: AsyncFetchDriver | None = None
     try:
+        # One driver for the worker's lifetime, not one per message: it wraps an
+        # httpx.AsyncClient whose connection pool is the point, and a per-message
+        # driver would open and discard a pool per fetch. Closed in the same
+        # finally as the Redis client — both are ours because we opened them.
+        fetcher = AsyncFetchDriver()
         # Installed inside the try so the handlers are always removed again —
         # outside it, a failure between install and the try would leak global
         # signal state (harmless for a dying process, not for an in-process test).
@@ -146,7 +149,8 @@ async def run(stop: asyncio.Event | None = None) -> None:
     finally:
         if owns_signals:
             remove_signal_handlers()
-        await fetcher.aclose()
+        if fetcher is not None:
+            await fetcher.aclose()
         await client.aclose()
 
 

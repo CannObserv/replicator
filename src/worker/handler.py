@@ -155,6 +155,13 @@ def _media_type(result: FetchResult) -> str:
 
     An absent, blank, or parameter-only header falls back rather than
     propagating an empty ``media_type`` onto the fact.
+
+    The lookup is case-folded rather than trusting ``content-type`` to arrive
+    lowercased. httpx does normalize, but ``FetchResult.headers`` is typed as a
+    plain ``Mapping[str, str]`` with no such guarantee, and the failure mode of
+    assuming it — every response silently typed ``application/octet-stream`` —
+    is quiet enough to survive a long time.
     """
-    header = result.headers.get("content-type", "")
+    headers = {name.lower(): value for name, value in result.headers.items()}
+    header = headers.get("content-type", "")
     return header.split(";")[0].strip().lower() or DEFAULT_MEDIA_TYPE
