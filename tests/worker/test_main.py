@@ -183,3 +183,21 @@ async def test_run_exits_cleanly_on_sigterm(monkeypatch, fake_redis, tmp_path):
     finally:
         task.cancel()
         signal.signal(signal.SIGTERM, previous)
+
+
+async def test_worker_ready_reports_the_outage_window(monkeypatch, fake_redis, tmp_path, capsys):
+    """CR #22: the number the unit is sized against belongs in the journal."""
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    try:
+        await run(_stopped())
+        record = json.loads(
+            next(ln for ln in capsys.readouterr().out.splitlines() if "worker ready" in ln)
+        )
+    finally:
+        root.handlers, root.level = saved_handlers, saved_level
+
+    assert record["worst_case_outage_seconds"] == get_settings().worst_case_outage_seconds

@@ -112,6 +112,11 @@ async def run(stop: asyncio.Event | None = None) -> None:
                 "group": settings.consumer_group,
                 "consumer": settings.consumer_name,
                 "build": settings.build_id,
+                # How long this worker will absorb a broker outage before
+                # exiting. In the journal at every boot because the unit's
+                # StartLimitIntervalSec is sized against it, and a config change
+                # that widens it would otherwise be invisible.
+                "worst_case_outage_seconds": settings.worst_case_outage_seconds,
             },
         )
         await run_loop(

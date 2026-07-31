@@ -42,3 +42,11 @@ def test_consumer_names_are_host_distinct(monkeypatch):
     monkeypatch.delenv("REPLICATOR_CONSUMER_NAME", raising=False)
     monkeypatch.setattr("socket.gethostname", lambda: "vm-1")
     assert get_settings().consumer_name == "replicator@vm-1"
+
+
+def test_worst_case_outage_bounds_the_absorb_window(monkeypatch):
+    """The figure the unit's StartLimitIntervalSec is sized against (CR #22)."""
+    monkeypatch.setenv("REPLICATOR_MAX_CONSECUTIVE_CYCLE_FAILURES", "20")
+    monkeypatch.setenv("REPLICATOR_ERROR_BACKOFF_MAX_SECONDS", "30")
+
+    assert get_settings().worst_case_outage_seconds == 600

@@ -122,6 +122,21 @@ class Settings(BaseSettings):
     # Stamped by the systemd unit's ExecStartPre; "dev" outside systemd.
     build_id: str = Field(default="dev", validation_alias="BUILD_ID")
 
+    @property
+    def worst_case_outage_seconds(self) -> float:
+        """Upper bound on how long the worker absorbs a broker outage before exiting.
+
+        The number ``deploy/replicator.service``'s ``StartLimitIntervalSec`` is
+        sized against: the window must fit ``StartLimitBurst`` of these, or a
+        permanently unreachable Redis produces exits too far apart to trip the
+        limiter and the unit reads as ``active (running)`` forever. Logged at
+        startup so the value is in the journal rather than only in two comments.
+
+        An upper bound, not the exact figure — the first few cycles back off
+        less than the cap.
+        """
+        return self.max_consecutive_cycle_failures * self.error_backoff_max_seconds
+
 
 @lru_cache
 def get_settings() -> Settings:
