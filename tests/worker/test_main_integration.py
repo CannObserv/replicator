@@ -17,6 +17,7 @@ from collections.abc import AsyncGenerator
 
 import pytest
 from co_core_aio.bus import AsyncBusConsumer
+from redis.asyncio import Redis
 
 from tests.worker.conftest import make_command
 
@@ -40,7 +41,8 @@ async def scratch_topic(real_redis) -> AsyncGenerator[str]:
         await real_redis.delete(topic)
 
 
-def _consumer(client, topic: str) -> AsyncBusConsumer:
+def _consumer(client: Redis, topic: str) -> AsyncBusConsumer:
+    """An ``AsyncBusConsumer`` on a scratch topic, under the integration group."""
     return AsyncBusConsumer(client, topic=topic, group=GROUP, consumer=CONSUMER)
 
 

@@ -61,7 +61,7 @@ curl -s localhost:8041/health | jq
 ```bash
 uv run pytest                              # full suite, coverage gate active
 uv run pytest --no-cov tests/worker/       # subset; skip the gate (it measures all of src/)
-uv run pytest -m integration               # requires the live VM Redis
+uv run pytest --no-cov -m integration      # requires the live VM Redis; skip the gate
 ```
 
 ## Lint

@@ -136,6 +136,9 @@ In `.env` (dev/agent only — never read by the service):
 - `GH_TOKEN` — GitHub PAT for this repo (used by `gh` CLI)
 - `GH_TOKEN_ARCHIVER` / `GH_TOKEN_WATCHER` / `GH_TOKEN_CANNOBSERV` / `GH_TOKEN_SKILLS` — per-repo PATs. Cross-repo work is **filed as an issue**, never edited directly: each repo owns its own review, CI, and deploy cycle, and `main` is the deployed code. Pass the right one as `GH_TOKEN` for a given `gh` call.
 
+Read by neither env file — test-only, defined in `tests/conftest.py`:
+- `REPLICATOR_TEST_REDIS_URL` — live broker for `@pytest.mark.integration`; default `redis://localhost:6379/15`. Must not resolve to db 0 (the fixture fails outright if it does) — see **Testing the bus**
+
 In `/etc/replicator/.env` (read by the service):
 - `GOOGLE_APPLICATION_CREDENTIALS` — SA key for the wheelhouse mirror (`/etc/replicator/co-pypi-reader.json`)
 - `REPLICATOR_REDIS_URL` — change-bus client URL; default `redis://localhost:6379/0`
@@ -192,8 +195,9 @@ uv run pytest
 # Run a subset of tests (skip the coverage gate, which measures all of src/)
 uv run pytest --no-cov tests/path/to/test.py
 
-# Run integration tests (requires the live VM Redis)
-uv run pytest -m integration
+# Run integration tests (requires the live VM Redis; --no-cov because the
+# coverage gate measures all of src/, which these tests do not exercise)
+uv run pytest --no-cov -m integration
 
 # Run linter
 uv run ruff check .
@@ -235,6 +239,6 @@ Entry points only: `configure_logging()` is called once inside the FastAPI `life
 **General:**
 - No inline module imports; all at file top
 - Docstrings for public modules, classes, functions
-- Test structure mirrors source (`src/foo.py` → `tests/test_foo.py`). A module whose tests outgrow one file splits by concern, not by helper: `tests/worker/test_loop_dlq.py`, `test_loop_recovery.py`, … with the shared wiring in that package's `conftest.py`
+- Test structure mirrors source (`src/foo.py` → `tests/test_foo.py`). A module whose tests outgrow one file splits by concern, not by helper: `tests/worker/test_loop_dlq.py`, `test_loop_recovery.py`, … with the shared wiring in that package's `conftest.py`. Concern is the default axis; **environment** is the one exception — tests needing a live broker split off with an `_integration` suffix (`tests/worker/test_main_integration.py`), so the filename says what the marker enforces
 - Explicit imports only
 - Small, focused functions
