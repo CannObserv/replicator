@@ -1,5 +1,6 @@
 """The local-filesystem blob backend."""
 
+import errno
 import os
 import stat
 from pathlib import Path
@@ -174,13 +175,55 @@ def test_a_preexisting_root_keeps_the_mode_its_operator_gave_it(tmp_path):
 
 
 def test_a_root_that_is_a_regular_file_is_rejected(tmp_path):
-    """``mkdir`` raises FileExistsError for a file as well as a directory.
+    """``mkdir`` reports a plain FileExistsError for a file as well as a directory.
 
     Swallowing that would let REPLICATOR_BLOB_DIR point at a regular file, pass
     the worker's startup check, and fail at the first fetch instead of on boot.
+    ENOTDIR rather than EEXIST because that is what the journal should say.
     """
     blocker = tmp_path / "blobs"
     blocker.write_bytes(b"")
 
-    with pytest.raises(FileExistsError):
+    with pytest.raises(NotADirectoryError) as caught:
         ensure_directory(blocker)
+
+    assert caught.value.errno == errno.ENOTDIR
+
+
+def test_every_level_a_nested_root_creates_is_traversable(tmp_path):
+    """``mkdir(parents=True)`` would create the intermediates and own none of them.
+
+    A leaf at 0755 under parents at 0700 is reachable in principle and blocked
+    in practice — the same unreadable-blob outcome, one level up.
+    """
+    previous = os.umask(0o077)
+    try:
+        root = tmp_path / "state" / "replicator" / "blobs"
+
+        ensure_directory(root)
+
+        for level in (root.parent.parent, root.parent, root):
+            assert stat.S_IMODE(level.stat().st_mode) == 0o755, level
+    finally:
+        os.umask(previous)
+
+
+def test_a_level_another_worker_created_first_keeps_its_mode(tmp_path, monkeypatch):
+    """Two workers can race to create the same shard; the loser must not chmod.
+
+    Whoever won owns that directory's mode, and re-applying ours would be the
+    same overreach as widening a pre-existing root.
+    """
+    root = tmp_path / "blobs"
+    real_mkdir = Path.mkdir
+
+    def racing_mkdir(self, *args, **kwargs):
+        real_mkdir(self, *args, **kwargs)
+        os.chmod(self, 0o700)  # stand in for the other worker's mode
+        raise FileExistsError(errno.EEXIST, "File exists", str(self))
+
+    monkeypatch.setattr(Path, "mkdir", racing_mkdir)
+
+    ensure_directory(root)
+
+    assert stat.S_IMODE(root.stat().st_mode) == 0o700

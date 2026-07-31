@@ -5,8 +5,8 @@ Consumes ``content.fetch`` commands from the Redis change bus. See
 
 This module is wiring: client lifetime, consumer group, signal handling. The
 consume path itself lives in ``src.worker.loop``, and the fetch → fingerprint →
-temp-store → ``blob_available`` work sits behind that module's handler seam,
-arriving in the next feature increment.
+temp-store → ``blob_available`` work behind that module's handler seam lives in
+``src.worker.handler``.
 
 Bus clients are **injection-only** — the co-core driver never opens or closes the
 ``redis.asyncio.Redis`` client, so this module owns one for the worker lifetime
@@ -15,6 +15,8 @@ and closes it on the way out.
 
 import asyncio
 import signal
+import stat
+from pathlib import Path
 
 from co_core.pure.adapters.bus import streams
 from co_core_aio.bus import AsyncBusConsumer
@@ -32,6 +34,31 @@ logger = get_logger(__name__)
 # Signals that mean "stop taking new work". SIGINT is included so an interactive
 # Ctrl-C drains the same way systemd's SIGTERM does.
 _STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
+
+
+def warn_if_unreachable(blob_dir: Path) -> None:
+    """Say so when the blob root cannot be traversed by another service.
+
+    A pre-existing directory keeps whatever mode its operator gave it — the
+    store deliberately does not widen what it did not create. The cost of that
+    choice is a misconfiguration with no local symptom: blobs store fine, the
+    fact publishes fine, and the failure appears in *another repo* as a
+    ``blob_uri`` nothing can open. This is the one place it can be noticed.
+
+    A warning rather than a failure: a single-user deployment where nothing else
+    reads the blobs is legitimate, and the operator may mean it.
+    """
+    mode = stat.S_IMODE(blob_dir.stat().st_mode)
+    if mode & 0o011:  # group- or other-executable ⇒ traversable
+        return
+    logger.warning(
+        "blob directory is not traversable by other services",
+        extra={
+            "blob_dir": str(blob_dir),
+            "mode": oct(mode),
+            "detail": "blob_uri will be announced on content.blobs but cannot be opened",
+        },
+    )
 
 
 def build_consumer(client: Redis, settings: Settings) -> AsyncBusConsumer:
@@ -96,6 +123,7 @@ async def run(stop: asyncio.Event | None = None) -> None:
             extra={"blob_dir": str(settings.blob_dir), "errno": exc.errno},
         )
         raise
+    warn_if_unreachable(settings.blob_dir)
 
     owns_signals = stop is None
     client = Redis.from_url(settings.redis_url)

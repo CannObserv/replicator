@@ -1,5 +1,6 @@
 """Local-filesystem blob backend."""
 
+import errno
 import os
 import tempfile
 from pathlib import Path
@@ -18,29 +19,49 @@ DIR_MODE = 0o755
 
 
 def ensure_directory(path: Path) -> None:
-    """Create ``path``, taking ownership of its mode only if we created it.
+    """Create ``path`` and every missing level above it, owning each one's mode.
 
     The mode is set with ``chmod`` rather than ``mkdir(mode=...)`` because the
     umask masks the latter: under ``umask 0077`` a fresh directory comes out
     0700, and a 0644 blob inside a 0700 directory is unreachable — traversal
-    needs ``+x`` on every parent.
+    needs ``+x`` on every parent. That is why the levels are created one at a
+    time rather than by ``mkdir(parents=True)``: the latter creates the
+    intermediates too but gives no chance to set their modes, so a nested root
+    would end up reachable at the leaf and blocked two levels up.
 
-    A directory that **already exists** is left exactly as it is. It belongs to
-    whoever provisioned it — an operator's deliberate 0750, or a shared mount
-    this process can write into but does not own, where ``chmod`` raises
-    ``EPERM`` even though the write would have succeeded.
+    A directory that **already exists** is left exactly as it is, at any level.
+    It belongs to whoever provisioned it — an operator's deliberate 0750, or a
+    shared mount this process can write into but does not own, where ``chmod``
+    raises ``EPERM`` even though the write would have succeeded.
     """
-    try:
-        path.mkdir(parents=True)
-    except FileExistsError:
-        # mkdir raises this for an existing *file* too, so the guard is not
-        # decoration: swallowing it blindly would let REPLICATOR_BLOB_DIR point
-        # at a regular file, pass the startup check, and fail at the first fetch
-        # instead of on boot.
-        if not path.is_dir():
-            raise
-        return
-    os.chmod(path, DIR_MODE)
+    if path.exists() and not path.is_dir():
+        # Caught here rather than left to mkdir, which reports a plain
+        # FileExistsError for this: the operator debugging a bad
+        # REPLICATOR_BLOB_DIR should see ENOTDIR in the journal, not EEXIST.
+        raise NotADirectoryError(errno.ENOTDIR, os.strerror(errno.ENOTDIR), str(path))
+    for level in _missing_levels(path):
+        try:
+            level.mkdir()
+        except FileExistsError:
+            continue  # a concurrent worker got there first; the mode is theirs
+        os.chmod(level, DIR_MODE)
+
+
+def _missing_levels(path: Path) -> list[Path]:
+    """The directories that have to be created, outermost first.
+
+    The walk terminates on the first ancestor that exists, which is guaranteed
+    to happen — ``/`` (or ``.`` for a relative path) always does. The
+    ``parent != current`` half of the condition is belt-and-braces against a
+    filesystem where that stops being true: an infinite loop here would hang the
+    worker mid-message, which is a far worse failure than one redundant check.
+    """
+    missing: list[Path] = []
+    current = path
+    while not current.exists() and current.parent != current:
+        missing.append(current)
+        current = current.parent
+    return list(reversed(missing))
 
 
 class LocalBlobStore:

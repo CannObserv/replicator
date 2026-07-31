@@ -281,3 +281,47 @@ async def test_run_dispatches_to_the_byte_path(monkeypatch, fake_redis, tmp_path
     fingerprint = sha256(b"page bytes")
     assert LocalBlobStore(blob_dir).open(fingerprint) == b"page bytes"
     assert await fake_redis.xlen(streams.CONTENT_BLOBS) == 1
+
+
+async def test_an_unreachable_blob_dir_is_warned_about(monkeypatch, fake_redis, tmp_path, capsys):
+    """The store leaves a pre-existing directory's mode alone — so say when it blocks readers.
+
+    The failure this catches has no local symptom: blobs store, the fact
+    publishes, and only the consuming service notices that blob_uri cannot be
+    opened. A warning, not an error — a single-user deployment is legitimate.
+    """
+    blob_dir = tmp_path / "blobs"
+    blob_dir.mkdir(mode=0o700)
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(blob_dir))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    try:
+        await run(_stopped())
+        record = json.loads(
+            next(
+                ln
+                for ln in capsys.readouterr().out.splitlines()
+                if "not traversable by other services" in ln
+            )
+        )
+        assert record["level"] == "WARNING"
+        assert record["mode"] == "0o700"
+    finally:
+        root.handlers, root.level = saved_handlers, saved_level
+
+
+async def test_a_traversable_blob_dir_is_not_warned_about(
+    monkeypatch, fake_redis, tmp_path, capsys
+):
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    try:
+        await run(_stopped())
+        assert "not traversable" not in capsys.readouterr().out
+    finally:
+        root.handlers, root.level = saved_handlers, saved_level
