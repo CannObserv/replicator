@@ -11,6 +11,9 @@ import json
 import logging
 import os
 import signal
+import stat
+import tempfile
+from pathlib import Path
 
 import pytest
 from co_core.effects.fetch import FetchResult
@@ -18,8 +21,15 @@ from co_core.pure.adapters.bus import streams
 from co_core.pure.util.hashing import sha256
 
 from src.core.config import get_settings
+from src.core.logging import configure_logging
 from src.storage.local import LocalBlobStore
-from src.worker.main import build_consumer, install_signal_handlers, remove_signal_handlers, run
+from src.worker.main import (
+    build_consumer,
+    install_signal_handlers,
+    remove_signal_handlers,
+    run,
+    warn_if_unreachable,
+)
 from tests.worker.conftest import make_command
 
 
@@ -307,21 +317,121 @@ async def test_an_unreachable_blob_dir_is_warned_about(monkeypatch, fake_redis, 
             )
         )
         assert record["level"] == "WARNING"
-        assert record["mode"] == "0o700"
+        assert record["blocked_at"][str(blob_dir)] == "0o700"
     finally:
         root.handlers, root.level = saved_handlers, saved_level
 
 
-async def test_a_traversable_blob_dir_is_not_warned_about(
+async def test_a_traversable_blob_dir_is_not_among_the_blocked_levels(
     monkeypatch, fake_redis, tmp_path, capsys
 ):
-    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    """Asserted per level, not on the warning's absence.
+
+    Any test tree lives under pytest's own ``tmp_path`` root, which is 0700 by
+    design — so the walk legitimately reports it, and "no warning at all" is not
+    an assertion this environment can make. The deployed chain
+    (``/var``, ``/var/lib``, systemd's ``StateDirectory``) is 0755 throughout.
+    """
+    blob_dir = tmp_path / "blobs"
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(blob_dir))
     monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
 
     root = logging.getLogger()
     saved_handlers, saved_level = root.handlers[:], root.level
     try:
         await run(_stopped())
+        record = json.loads(
+            next(
+                ln
+                for ln in capsys.readouterr().out.splitlines()
+                if "not traversable by other services" in ln
+            )
+        )
+        assert str(blob_dir) not in record["blocked_at"]
+    finally:
+        root.handlers, root.level = saved_handlers, saved_level
+
+
+async def test_a_restrictive_ancestor_is_warned_about(monkeypatch, fake_redis, tmp_path, capsys):
+    """Traversal needs +x on the whole chain, so a fine leaf is not enough.
+
+    The likeliest shape of the mistake: an operator pre-creates the parent
+    restrictively and lets the worker create the leaf underneath, which comes
+    out 0755 over 0700 and looks correct if only the leaf is inspected.
+    """
+    parent = tmp_path / "restricted"
+    parent.mkdir(mode=0o700)
+    blob_dir = parent / "blobs"
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(blob_dir))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    try:
+        await run(_stopped())
+        record = json.loads(
+            next(
+                ln
+                for ln in capsys.readouterr().out.splitlines()
+                if "not traversable by other services" in ln
+            )
+        )
+        assert stat.S_IMODE(blob_dir.stat().st_mode) == 0o755  # the leaf itself is fine
+        assert str(blob_dir) not in record["blocked_at"]  # ...and would pass a leaf-only check
+        assert record["blocked_at"][str(parent)] == "0o700"
+    finally:
+        root.handlers, root.level = saved_handlers, saved_level
+
+
+def test_an_unstatable_path_does_not_raise(monkeypatch, tmp_path, capsys):
+    """A diagnostic that cannot complete must not be what kills startup.
+
+    Exercised against the helper rather than through ``run()``: patching
+    ``Path.stat`` reaches ``ensure_directory`` too, which would fail earlier at
+    its own guard and never reach this one.
+    """
+
+    def denied(self, *args, **kwargs):
+        raise PermissionError(errno.EACCES, "Permission denied", str(self))
+
+    configure_logging("INFO")
+    monkeypatch.setattr(Path, "stat", denied)
+
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    try:
+        warn_if_unreachable(tmp_path / "blobs")  # must return, not raise
+
+        record = json.loads(
+            next(
+                ln
+                for ln in capsys.readouterr().out.splitlines()
+                if "could not check whether the blob directory is reachable" in ln
+            )
+        )
+        assert record["errno"] == errno.EACCES
+    finally:
+        root.handlers, root.level = saved_handlers, saved_level
+
+
+def test_a_fully_traversable_chain_warns_about_nothing(capsys):
+    """The quiet path, which needs a directory chain pytest cannot provide.
+
+    ``tmp_path`` lives under pytest's own 0700 root, so no path it hands out has
+    a clean chain. A directory directly under ``/tmp`` (1777) does, and matches
+    the deployed shape: ``/var/lib/replicator/blobs`` is 0755 the whole way up.
+    """
+    blob_dir = Path(tempfile.mkdtemp(prefix="replicator-reachable-"))
+    os.chmod(blob_dir, 0o755)
+    configure_logging("INFO")
+
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    try:
+        capsys.readouterr()  # discard configure_logging's own output
+        warn_if_unreachable(blob_dir)
+
         assert "not traversable" not in capsys.readouterr().out
     finally:
         root.handlers, root.level = saved_handlers, saved_level
+        blob_dir.rmdir()

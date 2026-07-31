@@ -45,20 +45,48 @@ def warn_if_unreachable(blob_dir: Path) -> None:
     fact publishes fine, and the failure appears in *another repo* as a
     ``blob_uri`` nothing can open. This is the one place it can be noticed.
 
+    Every level is checked, not just the leaf. Traversal needs ``+x`` on the
+    whole chain, and the likeliest shape of the mistake is precisely a split
+    one: an operator pre-creates ``/var/lib/replicator`` restrictively and lets
+    the worker create ``blobs/`` underneath, giving 0700 over 0755 and a leaf
+    whose own mode looks fine.
+
     A warning rather than a failure: a single-user deployment where nothing else
-    reads the blobs is legitimate, and the operator may mean it.
+    reads the blobs is legitimate, and the operator may mean it. For the same
+    reason the check is total — a diagnostic that cannot complete must never be
+    the thing that stops the boot, so an unstatable ancestor is reported and
+    swallowed rather than raised.
     """
-    mode = stat.S_IMODE(blob_dir.stat().st_mode)
-    if mode & 0o011:  # group- or other-executable ⇒ traversable
+    try:
+        blocked = _unreachable_levels(blob_dir)
+    except OSError as exc:
+        logger.warning(
+            "could not check whether the blob directory is reachable",
+            extra={"blob_dir": str(blob_dir), "errno": exc.errno},
+        )
+        return
+    if not blocked:
         return
     logger.warning(
         "blob directory is not traversable by other services",
         extra={
             "blob_dir": str(blob_dir),
-            "mode": oct(mode),
+            # Every blocking level, because fixing only the innermost leaves the
+            # blob just as unreachable as before.
+            "blocked_at": {str(level): oct(mode) for level, mode in blocked},
             "detail": "blob_uri will be announced on content.blobs but cannot be opened",
         },
     )
+
+
+def _unreachable_levels(blob_dir: Path) -> list[tuple[Path, int]]:
+    """Every level from ``blob_dir`` up that denies traversal, with its mode."""
+    resolved = blob_dir.resolve()
+    chain = (resolved, *resolved.parents)
+    levels = [(level, stat.S_IMODE(level.stat().st_mode)) for level in chain]
+    # Group- or other-executable is what lets a reader traverse; without either,
+    # only this process's own user can reach anything below.
+    return [(level, mode) for level, mode in levels if not mode & 0o011]
 
 
 def build_consumer(client: Redis, settings: Settings) -> AsyncBusConsumer:

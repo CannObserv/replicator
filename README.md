@@ -54,11 +54,17 @@ value baked into `src/core/config.py` — several are overridden on the VM, so c
 `/etc/replicator/.env` before assuming a default applies. On this deployment
 `REPLICATOR_BLOB_DIR` is `/var/lib/replicator/blobs`, not the `blobs` shown below.
 
+**If you pre-create the blob directory, make it and every parent traversable** (`0755`).
+The worker sets modes only on directories it creates itself — an existing one keeps
+whatever mode its operator gave it — so a `0700` level anywhere in the chain leaves every
+`blob_uri` unopenable by the service that consumes the fact. Startup logs a warning naming
+each blocking level.
+
 | Variable | Default | Purpose |
 |---|---|---|
 | `GOOGLE_APPLICATION_CREDENTIALS` | — | SA key for the wheelhouse mirror (`/etc/replicator/co-pypi-reader.json`) |
 | `REPLICATOR_REDIS_URL` | `redis://localhost:6379/0` | Change-bus client URL |
-| `REPLICATOR_BLOB_DIR` | `blobs` | Temp-storage root for fetched bytes. Resolved to an absolute path — `file://` URIs require it. **If you pre-create it, make it traversable** (`0755`): the worker sets modes only on directories it creates itself, and a `0700` root leaves every `blob_uri` unopenable by the service that consumes the fact. Startup logs a warning when that is the case |
+| `REPLICATOR_BLOB_DIR` | `blobs` | Temp-storage root for fetched bytes. Resolved to an absolute path — `file://` URIs require it |
 | `REPLICATOR_MAX_BLOB_BYTES` | `67108864` | Ceiling on one fetched body (64 MiB). A *storage* guard, not a memory one — co-core's fetch driver buffers the whole response first. Over it ⇒ DLQ |
 | `REPLICATOR_CONSUMER_GROUP` | `replicator.fetch` | Consumer group on `content.fetch` |
 | `REPLICATOR_CONSUMER_NAME` | `replicator@<hostname>` | This worker's identity in the group — never share one |
