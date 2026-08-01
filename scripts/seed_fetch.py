@@ -1,0 +1,317 @@
+"""Publish ``content.fetch`` commands — the MVP's command issuer.
+
+Replicator's loop is driven by commands, and until Watcher is cut over (parent
+strategy Phase 4) nothing in the cluster issues them. This script is that issuer:
+it mints a ULID ``command_id`` per URL and XADDs a ``ContentFetchCommand`` frame
+built by co-core's own ``to_wire``. It is not scaffolding — it is also what drives
+the live end-to-end test, so it earns a permanent place next to
+``sync_wheelhouse.py`` and ``check_redis_floor.sh``. Design:
+``docs/plans/2026-07-31-replicator-mvp-open-questions-design.md`` §2.
+
+    uv run python -m scripts.seed_fetch \
+        --redis-url redis://localhost:6379/15 \
+        --topic replicator.itest.fetch \
+        https://example.test/a
+
+**The live worker fetches whatever lands on ``content.fetch``.** A frame added to
+that stream on db 0 is picked up by ``replicator.service``, fetched over the
+network, and written to the blob directory. So the target is never defaulted —
+``--redis-url`` and ``--topic`` are both required, and the one combination that
+actually reaches the running service (db 0 *and* ``content.fetch``) additionally
+requires ``--production``. A flag rather than a prompt: the script has to stay
+usable non-interactively.
+
+``--watch`` tails the fact stream so a human can see the loop close without
+hand-writing ``XRANGE``. It reads with a plain ``XREAD`` and never joins a
+consumer group: ``content.blobs`` is Archiver-operated, and a group left behind by
+an operator tool accumulates a pending entries list nothing will ever drain.
+
+Exit codes: ``0`` published (and, under ``--watch``, every fact seen) · ``1``
+watching timed out with facts outstanding · ``2`` the target was refused.
+"""
+
+import argparse
+import asyncio
+import sys
+import time
+from dataclasses import dataclass
+from datetime import UTC, datetime
+
+from co_core.effects.bus import BusPublish
+from co_core.pure.adapters.bus import streams
+from co_core.pure.adapters.bus.envelope import from_wire, to_wire
+from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
+from co_core.pure.models.changes import BlobAvailableEvent, ContentFetchCommand
+from co_core_aio.bus import AsyncBusPublisher
+from redis.asyncio import Redis
+from ulid import ULID
+
+# How long the watch parks when a blocking read comes back empty. Real Redis
+# blocks for the full window and this is never reached; it is insurance against a
+# client that ignores `block` (fakeredis does), which would otherwise busy-spin.
+# Mirrors src/worker/loop.py::IDLE_SLEEP_SECONDS.
+IDLE_SLEEP_SECONDS = 0.05
+
+DEFAULT_WATCH_TIMEOUT_SECONDS = 30.0
+
+
+class ProductionTargetError(RuntimeError):
+    """The requested target is the live command stream and no opt-in was given."""
+
+
+@dataclass(frozen=True)
+class SeedResult:
+    """One published command: what it asked for, and where it landed."""
+
+    command_id: str
+    url: str
+    bus_message_id: str
+
+
+def build_command(url: str) -> ContentFetchCommand:
+    """Mint a command for one URL.
+
+    The ``command_id`` is a ULID — the cluster's identifier convention — and is
+    unique per URL rather than per invocation: the worker's dedupe key is
+    ``replicator:cmd:<command_id>``, so a shared id would make every URL after
+    the first a no-op.
+    """
+    return ContentFetchCommand(
+        occurred_at=datetime.now(UTC),
+        command_id=str(ULID()),
+        url=url,
+    )
+
+
+def resolve_db(client: Redis) -> int:
+    """The database redis-py actually resolved for this client.
+
+    Read from the connection kwargs rather than parsed out of the URL: a ``?db=``
+    query parameter overrides the path, and a unix-socket URL has no path to
+    inspect at all. Missing means 0 — redis-py's own default. Same reasoning as
+    the ``real_redis`` fixture's guard in ``tests/conftest.py``.
+    """
+    return int(client.connection_pool.connection_kwargs.get("db") or 0)
+
+
+def guard_production_target(topic: str, *, db: int, production: bool) -> None:
+    """Refuse the live command stream unless the caller opted in.
+
+    The gate is the *conjunction*, because that is what determines reach:
+    ``content.fetch`` on a scratch database has no consumer, and a scratch topic
+    on db 0 is not polled by anything. Only both together put bytes through the
+    running service.
+    """
+    if not (db == 0 and topic == streams.CONTENT_FETCH) or production:
+        return
+    raise ProductionTargetError(
+        f"{topic} on db {db} is the live command stream — the running worker will fetch "
+        f"these URLs for real. Pass --production to mean it."
+    )
+
+
+async def publish(client: Redis, topic: str, urls: list[str]) -> list[SeedResult]:
+    """XADD one command per URL, in the order given."""
+    publisher = AsyncBusPublisher(client)
+    results = []
+    for url in urls:
+        command = build_command(url)
+        result = await publisher.execute(BusPublish(topic, to_wire(command)))
+        results.append(SeedResult(command.command_id, url, result.bus_message_id))
+    return results
+
+
+async def last_id(client: Redis, topic: str) -> str:
+    """The newest entry id on ``topic``, or ``0-0`` when it is empty or absent.
+
+    Captured *before* publishing. Reading from the beginning instead would report
+    a stale fact as this run's result; capturing afterwards would race a worker
+    fast enough to publish before the watch starts, and the watch would hang.
+    """
+    entries = await client.xrevrange(topic, count=1)
+    if not entries:
+        return "0-0"
+    message_id, _fields = entries[0]
+    return _as_str(message_id)
+
+
+async def watch_for_facts(
+    client: Redis,
+    topic: str,
+    start_id: str,
+    command_ids: set[str],
+    *,
+    timeout_seconds: float,
+) -> list[BlobAvailableEvent]:
+    """Tail ``topic`` until every awaited command has a fact, or time runs out.
+
+    Returns what it saw — an incomplete list is the caller's signal that the loop
+    did not close, not an error here. Frames for other issuers' commands are
+    skipped, and one that will not decode is skipped rather than fatal: this is a
+    shared stream, and an operator watching their own seed should not be stopped
+    by somebody else's malformed entry.
+
+    The deadline is tracked here rather than delegated to ``asyncio.timeout``
+    because the remaining budget is also the ``XREAD`` block window, and because
+    cancelling mid-read would discard the partial results this returns.
+    """
+    outstanding = set(command_ids)
+    found: list[BlobAvailableEvent] = []
+    cursor = start_id
+    deadline = time.monotonic() + timeout_seconds
+    while outstanding:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        response = await client.xread({topic: cursor}, block=max(1, int(remaining * 1000)))
+        if not response:
+            await asyncio.sleep(min(IDLE_SLEEP_SECONDS, remaining))
+            continue
+        for _stream, entries in response:
+            for message_id, fields in entries:
+                cursor = _as_str(message_id)
+                fact = _decode_fact(topic, cursor, fields)
+                if fact is not None and fact.command_id in outstanding:
+                    outstanding.discard(fact.command_id)
+                    found.append(fact)
+    return found
+
+
+def _decode_fact(topic: str, message_id: str, fields: dict) -> BlobAvailableEvent | None:
+    """Decode one fact frame, or ``None`` if it is not one this run cares about.
+
+    ``from_wire``'s dispatch table is global, so any known event type on this
+    stream decodes cleanly into the wrong model — hence the ``isinstance`` check
+    rather than trusting the topic.
+    """
+    try:
+        payload = from_wire(
+            {_as_str(k): _as_str(v) for k, v in fields.items()},
+            topic=topic,
+            message_id=message_id,
+        ).payload
+    except BusMessageAnomaly as exc:
+        print(f"warning: skipping undecodable frame {message_id}: {exc}", file=sys.stderr)
+        return None
+    return payload if isinstance(payload, BlobAvailableEvent) else None
+
+
+def _as_str(value: bytes | str) -> str:
+    """Decode a raw Redis reply (the client is not in ``decode_responses`` mode)."""
+    return value.decode() if isinstance(value, bytes) else value
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """The CLI. ``--redis-url`` and ``--topic`` are required, deliberately."""
+    parser = argparse.ArgumentParser(
+        prog="seed_fetch",
+        description="Publish content.fetch commands for one or more URLs.",
+    )
+    parser.add_argument("urls", nargs="+", help="URLs to issue a fetch command for")
+    parser.add_argument(
+        "--redis-url",
+        required=True,
+        help="broker to publish to, e.g. redis://localhost:6379/15 (no default, by design)",
+    )
+    parser.add_argument(
+        "--topic",
+        required=True,
+        help=f"stream to publish to, e.g. {streams.CONTENT_FETCH} (no default, by design)",
+    )
+    parser.add_argument(
+        "--production",
+        action="store_true",
+        help=f"allow publishing to {streams.CONTENT_FETCH} on db 0, which the live worker consumes",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the frames that would be published and exit without connecting",
+    )
+    parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="tail the fact stream until every command's blob_available arrives",
+    )
+    parser.add_argument(
+        "--blobs-topic",
+        default=streams.CONTENT_BLOBS,
+        help=f"fact stream --watch reads (default: {streams.CONTENT_BLOBS})",
+    )
+    parser.add_argument(
+        "--watch-timeout",
+        type=float,
+        default=DEFAULT_WATCH_TIMEOUT_SECONDS,
+        help=f"seconds to wait for facts under --watch (default: {DEFAULT_WATCH_TIMEOUT_SECONDS})",
+    )
+    return parser
+
+
+def _print_dry_run(topic: str, urls: list[str]) -> None:
+    """Show the wire frames without publishing them."""
+    for url in urls:
+        command = build_command(url)
+        print(f"would publish to {topic}: {to_wire(command)}")
+
+
+async def run(args: argparse.Namespace) -> int:
+    """Publish, optionally watch, and return the process exit code.
+
+    The client is opened here and closed here — bus clients are injection-only,
+    so the script owns one for its run, the same rule ``src/worker/main.py``
+    follows.
+    """
+    client = Redis.from_url(args.redis_url)
+    try:
+        guard_production_target(args.topic, db=resolve_db(client), production=args.production)
+        start_id = await last_id(client, args.blobs_topic) if args.watch else "0-0"
+        results = await publish(client, args.topic, args.urls)
+        for result in results:
+            print(
+                f"published command_id={result.command_id} "
+                f"entry_id={result.bus_message_id} topic={args.topic} url={result.url}"
+            )
+        if not args.watch:
+            return 0
+        return await _report_facts(client, args, start_id, results)
+    except ProductionTargetError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    finally:
+        await client.aclose()
+
+
+async def _report_facts(
+    client: Redis, args: argparse.Namespace, start_id: str, results: list[SeedResult]
+) -> int:
+    """Wait for each command's fact and print it; non-zero if any never arrived."""
+    awaited = {result.command_id for result in results}
+    facts = await watch_for_facts(
+        client, args.blobs_topic, start_id, awaited, timeout_seconds=args.watch_timeout
+    )
+    for fact in facts:
+        print(
+            f"blob_available command_id={fact.command_id} "
+            f"fingerprint={fact.content_fingerprint} size={fact.size_bytes} uri={fact.blob_uri}"
+        )
+    missing = awaited - {fact.command_id for fact in facts}
+    if not missing:
+        return 0
+    print(
+        f"error: no blob_available after {args.watch_timeout}s for: {', '.join(sorted(missing))}",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Parse arguments and run; the dry run never opens a connection."""
+    args = build_parser().parse_args(argv)
+    if args.dry_run:
+        _print_dry_run(args.topic, args.urls)
+        return 0
+    return asyncio.run(run(args))
+
+
+if __name__ == "__main__":
+    sys.exit(main())
