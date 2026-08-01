@@ -646,6 +646,10 @@ async def test_every_task_failure_is_reported_even_when_they_land_together(
     simultaneous pair leaves nothing pending — and the loser's failure had no
     path to the journal at all. Only one of the two can be raised; the other has
     to be logged or it is gone.
+
+    Which one is raised is decided by argument order, not by timing: the consume
+    loop is passed first and wins the tie. That is why this asserts on the loop's
+    message rather than either — see ``_run_until_first_exit``.
     """
     monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
     monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
@@ -696,7 +700,14 @@ async def test_a_failure_racing_an_external_cancel_is_reported(
 
 
 def test_a_cancelled_task_is_not_reported_as_a_shutdown_failure(caplog):
-    """Cancellation is shutdown working, not failing; only real errors are news."""
+    """Cancellation is shutdown working, not failing; only real errors are news.
+
+    The one test here that calls a private function rather than driving ``run()``.
+    Reaching this branch from outside means getting a task cancelled *and* having
+    its CancelledError survive to the gather, which the wind-down path exists to
+    prevent — so the observable route would be a fixture elaborate enough to test
+    itself rather than the branch.
+    """
     with caplog.at_level("ERROR", logger="src.worker.main"):
         src.worker.main._log_shutdown_failures(
             [None, asyncio.CancelledError(), RuntimeError("a real one")]

@@ -151,10 +151,13 @@ async def _run_until_first_exit(
     walk that ``asyncio.to_thread`` puts beyond cancellation anyway — which is
     what ``TimeoutStopSec`` covers.
 
-    Exactly one failure can be raised, and every other one is logged. The
-    raised one comes from whichever task ended the wait, because that is the
-    failure explaining why the worker is going down; a shutdown-ordering error
-    raised over it would bury the cause. But nothing may be *dropped*:
+    Exactly one failure can be raised, and every other one is logged. The raised
+    one comes from a task that ended the wait, because that is the failure
+    explaining why the worker is going down; a shutdown-ordering error raised
+    over it would bury the cause. When several end it together the **first
+    argument wins**, deliberately — the consume loop is passed first, and its
+    failure is the more explanatory of the two — so reordering the arguments
+    changes which error the unit reports. But nothing may be *dropped*:
     ``asyncio.wait`` returns every task that completed in the same pass, not
     just the first, so a simultaneous pair leaves no survivor to log and the
     loser's traceback would reach the journal only as asyncio's detached
@@ -167,6 +170,11 @@ async def _run_until_first_exit(
         # Shutdown cancelled the wait itself. The tasks are still ours to tidy
         # up: leaving them pending surfaces as "Task was destroyed but it is
         # pending" at interpreter exit, with the real cause already gone.
+        #
+        # A second cancellation arriving during the gather below would propagate
+        # from it and replace the cause being re-raised. Accepted: systemd sends
+        # one SIGTERM and then SIGKILL, and SIGKILL is not deliverable as a
+        # Python exception at all, so there is no second cancel to guard against.
         for task in tasks:
             task.cancel()
         _log_shutdown_failures(await asyncio.gather(*tasks, return_exceptions=True))
@@ -183,9 +191,16 @@ async def _run_until_first_exit(
 
 
 def _exit_failure(
-    tasks: list[asyncio.Task[None]], results: list[BaseException | None], *, among: set
+    tasks: list[asyncio.Task[None]],
+    results: list[BaseException | None],
+    *,
+    among: set[asyncio.Task[None]],
 ) -> BaseException | None:
-    """The failure to raise: the first one from a task that ended the wait."""
+    """The failure to raise: the first one from a task that ended the wait.
+
+    "First" is by argument order, not by completion time — see
+    ``_run_until_first_exit``. Ties are common: both tasks watch one stop event.
+    """
     for task, result in zip(tasks, results, strict=True):
         if task in among and isinstance(result, BaseException):
             return result
