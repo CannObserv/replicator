@@ -31,7 +31,9 @@ stream watches that stream's facts rather than production's.
 Exit codes: ``0`` published (and, under ``--watch``, every fact seen) · ``1`` the
 run did not complete — publishing failed, watching failed, or a fact never
 arrived · ``2`` the target was refused. Commands are reported on stdout as they
-land, so a non-zero exit never hides what is already in flight.
+land, so a non-zero exit never hides a command it saw land — a connection lost
+between the ``XADD`` and its reply is the one gap, and the "N of M" count on
+stderr is what marks that boundary as fuzzy.
 """
 
 import argparse
