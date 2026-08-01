@@ -383,7 +383,29 @@ async def test_a_watch_that_cannot_read_is_an_error_not_a_traceback(
     code = await run(seed_args("--topic", TOPIC, "--watch", "--watch-timeout", "1", URL))
 
     assert code == 1
-    assert f"watching {TOPIC}.blobs failed" in capsys.readouterr().err
+    assert f"watching {resolve_blobs_topic(TOPIC, None)} failed" in capsys.readouterr().err
+
+
+async def test_a_broker_that_fails_before_the_cursor_read_publishes_nothing(
+    fake_redis, owned_client, monkeypatch, capsys
+):
+    """The cursor read is its own step, so its failure says what it cost (CR #15).
+
+    It runs before the first XADD, so nothing went out — which is the operator's
+    actionable fact, and the one a "publishing failed after 0 of 1" would have
+    buried under the wrong cause.
+    """
+
+    async def failing_xrevrange(*args, **kwargs):
+        raise RedisConnectionError("broker went away before the seed")
+
+    monkeypatch.setattr(fake_redis, "xrevrange", failing_xrevrange)
+
+    code = await run(seed_args("--topic", TOPIC, "--watch", URL))
+
+    assert code == 1
+    assert await fake_redis.xlen(TOPIC) == 0
+    assert "nothing was published" in capsys.readouterr().err
 
 
 async def test_a_watched_run_reports_the_fact_for_the_command_it_published(

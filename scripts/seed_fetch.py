@@ -28,9 +28,10 @@ an operator tool accumulates a pending entries list nothing will ever drain. The
 stream it watches follows ``--topic`` unless overridden, so seeding a scratch
 stream watches that stream's facts rather than production's.
 
-Exit codes: ``0`` published (and, under ``--watch``, every fact seen) · ``1``
-publishing failed, or watching timed out with facts outstanding · ``2`` the
-target was refused.
+Exit codes: ``0`` published (and, under ``--watch``, every fact seen) · ``1`` the
+run did not complete — publishing failed, watching failed, or a fact never
+arrived · ``2`` the target was refused. Commands are reported on stdout as they
+land, so a non-zero exit never hides what is already in flight.
 """
 
 import argparse
@@ -322,13 +323,26 @@ async def _seed(client: Redis, args: argparse.Namespace) -> int:
 
     Failures are answered with a line and an exit code rather than a traceback
     (CR #3), matching ``sync_wheelhouse.py``, the other operator-facing script
-    here. The three failure points are reported separately because they mean
-    different things: an unusable broker before anything went out, a loop that
-    published *some* of its commands, and a watch that could not read facts for
-    commands already in flight. Collapsing them into one message told an operator
-    "the broker is not usable" about a broker that had just accepted a command
-    they were never shown (CR #10).
+    here. Each step that can fail is guarded on its own, because the four
+    failures mean four different things to whoever has to act on them: a refused
+    target, a broker that died before anything went out, a loop that published
+    *some* of its commands, and a watch that could not read facts for commands
+    already in flight. One shared handler told an operator "the broker is not
+    usable" about a broker that had just accepted a command they were never
+    shown (CR #10), or named publishing as the culprit when nothing had been
+    published yet (CR #15).
     """
+    try:
+        guard_production_target(args.topic, db=resolve_db(client), production=args.production)
+    except ProductionTargetError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    # Bound before the fallible steps rather than inside them: every name read
+    # after a `try` has to be one that no branch can skip past. Mirrors the
+    # pre-binding in src/worker/loop.py::run_loop (CR #14).
+    blobs_topic = resolve_blobs_topic(args.topic, args.blobs_topic)
+    start_id = "0-0"
     published: list[SeedResult] = []
 
     def report(result: SeedResult) -> None:
@@ -338,17 +352,21 @@ async def _seed(client: Redis, args: argparse.Namespace) -> int:
             f"entry_id={result.bus_message_id} topic={args.topic} url={result.url}"
         )
 
-    try:
-        guard_production_target(args.topic, db=resolve_db(client), production=args.production)
-        blobs_topic = resolve_blobs_topic(args.topic, args.blobs_topic)
+    if args.watch:
         # Before publishing, deliberately: capture it afterwards and a worker
         # fast enough to answer immediately would land its fact behind the
         # cursor, and the watch would time out on a loop that worked.
-        start_id = await last_id(client, blobs_topic) if args.watch else "0-0"
+        try:
+            start_id = await last_id(client, blobs_topic)
+        except (RedisError, OSError) as exc:
+            print(
+                f"error: reading {blobs_topic} failed, so nothing was published: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+
+    try:
         await publish(client, args.topic, args.urls, on_published=report)
-    except ProductionTargetError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
     except (RedisError, OSError) as exc:
         print(
             f"error: publishing to {args.topic} failed after {len(published)} of "
