@@ -12,9 +12,6 @@ and ``build_consumer`` is hard-wired to ``content.fetch`` — the live command
 stream, which an integration test must never write to.
 """
 
-import uuid
-from collections.abc import AsyncGenerator
-
 import pytest
 from co_core_aio.bus import AsyncBusConsumer
 from redis.asyncio import Redis
@@ -25,20 +22,6 @@ pytestmark = pytest.mark.integration
 
 GROUP = "replicator.itest"
 CONSUMER = "replicator@itest"
-
-
-@pytest.fixture
-async def scratch_topic(real_redis) -> AsyncGenerator[str]:
-    """A per-test stream key on the scratch database, deleted afterwards.
-
-    The uuid keeps concurrent runs (and a run that died before teardown) from
-    colliding on a group whose PEL would otherwise leak into the next test.
-    """
-    topic = f"replicator.itest.{uuid.uuid4().hex}"
-    try:
-        yield topic
-    finally:
-        await real_redis.delete(topic)
 
 
 def _consumer(client: Redis, topic: str) -> AsyncBusConsumer:

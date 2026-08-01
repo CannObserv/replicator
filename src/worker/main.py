@@ -89,16 +89,24 @@ def _unreachable_levels(blob_dir: Path) -> list[tuple[Path, int]]:
     return [(level, mode) for level, mode in levels if not mode & 0o011]
 
 
-def build_consumer(client: Redis, settings: Settings) -> AsyncBusConsumer:
+def build_consumer(
+    client: Redis, settings: Settings, *, topic: str = streams.CONTENT_FETCH
+) -> AsyncBusConsumer:
     """Wire an ``AsyncBusConsumer`` for the ``content.fetch`` command stream.
 
     ``content.fetch`` carries command semantics, so there is exactly one group
     cluster-wide (``replicator.fetch``) whose members compete for messages —
     unlike a fact stream, where each consuming service gets its own group.
+
+    ``topic`` is a defaulted argument rather than a setting: the only caller that
+    moves it is a live-broker test, which must consume from a scratch stream
+    because a frame added to the real ``content.fetch`` would be fetched for real
+    by the running service. Configuration would make the production stream an
+    operator's typo away, and there is no deployment that wants a different one.
     """
     return AsyncBusConsumer(
         client,
-        topic=streams.CONTENT_FETCH,
+        topic=topic,
         group=settings.consumer_group,
         consumer=settings.consumer_name,
     )

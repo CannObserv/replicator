@@ -184,12 +184,20 @@ Replicator is a **consumer** — follow the conventions the archiver producer + 
 
 ## Build sequence (within the MVP)
 
+**Complete 2026-08-01** (#1–#4, #6). The loop's core claim is no longer an assertion: the
+seed harness issued a `content.fetch` on the live Archiver-operated broker, `replicator.service`
+fetched it, and the resulting `blob_available` pointed at a blob on disk whose `sha256sum`
+reproduced the fact's `content_fingerprint`. A second command for the same URL produced a
+second fact and the same single file — content-addressed storage absorbing the re-run, as
+designed. What remains is out of MVP scope: blob retention (#5), archiver's consumption of
+the fact (archiver#118), and the Watcher cutover (parent strategy Phase 4).
+
 1. Repo scaffold (A/W/N pattern) + co-core wiring via the **wheelhouse** mechanism (`sync_wheelhouse.py` + find-links; WIF in CI); validate `import co_core` / `co_core_aio` + the `[extract]`/`[bus]` extras in CI.
 2. Wire the **shipped, settled** `content.fetch` / `blob_available` co-core models (co-core v0.7.0, cannobserv#266 — no stubbing, no open contract seams needed).
 3. Bus consumer loop (`AsyncBusConsumer`, group `replicator.fetch`) with `read` (count=1) / `ack` / `claim_stale` / `dead_letter`; TDD against a fake/in-memory redis.
 4. Fetch (`AsyncFetchDriver`) → fingerprint → temp-store (local backend); TDD each step. There is nothing to verify the fingerprint *against* — the command carries no expected value (cannobserv#266), which is exactly why parity dissolves.
 5. Emit `blob_available` via `AsyncBusPublisher` + `to_wire`.
-6. Seed/test harness that issues a `content.fetch`; integration test the full loop end-to-end against the live VM Redis (Archiver-operated).
+6. Seed/test harness that issues a `content.fetch`; integration test the full loop end-to-end against the live VM Redis (Archiver-operated). **Done** — `scripts/seed_fetch.py` plus `tests/worker/test_loop_integration.py`, which also settles what only a live broker can: `claim_stale` against a real PEL (the reason for the Redis ≥7.0 floor), the blocking read, `times_delivered` on a reclaim, and the DLQ round-trip including the trimmed-entry fallback.
 
 ## Open questions for the Replicator team
 

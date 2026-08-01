@@ -72,7 +72,8 @@ src/core/       — Shared domain logic, logging, config
 src/core/errors.py   — TransientFetchError / PermanentFetchError (handler failure vocabulary)
 src/core/logging.py  — configure_logging() + get_logger()
 src/core/config.py   — Settings / env access (see Environment Variables)
-scripts/        — sync_wheelhouse.py, check_redis_floor.sh
+scripts/        — sync_wheelhouse.py, check_redis_floor.sh, seed_fetch.py
+scripts/seed_fetch.py — the MVP command issuer; publishes content.fetch, --watch tails the facts
 tests/          — Mirrors src/ structure; integration tests in `@pytest.mark.integration`
 docs/           — Reference docs (COMMANDS, SKILLS); docs/plans/ holds implementation plans
 deploy/         — Systemd unit + deployment config
@@ -183,11 +184,16 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
 - **`from_wire`'s topic and message_id are keyword-only** — `from_wire(fields, topic=..., message_id=...)`. The founding plan's API table showed them positionally.
 - `sha256` lives at `co_core.pure.util.hashing`, not `co_core.pure.extract` (which carries `simhash`, `Chunk`, and the parsers). Import parsers from submodules — they are not re-exported from `__init__`.
 
+- **Nothing but the seed script writes to `content.fetch`.** `scripts/seed_fetch.py` requires `--redis-url` and `--topic` explicitly and additionally requires `--production` for the one combination the live worker consumes (db 0 **and** `content.fetch`) — a frame there is fetched for real. Its `--watch` reads the fact stream with a plain `XREAD` and never joins a group: a group left by an operator tool accumulates a PEL nothing drains. The stream watched follows `--topic` (`content.blobs` for `content.fetch`, `<topic>.blobs` otherwise), so a scratch seed does not sit watching production's facts.
+- **The command and fact topics are defaulted arguments, not settings.** `build_consumer(..., topic=)` and `build_handler(..., blobs_topic=)` exist so a live-broker test can work on `replicator.itest.*` streams. No deployment wants a different stream, and configuring it would put the production one an operator's typo away.
+
 **Testing the bus.** `tests/conftest.py` ships a `fake_redis` fixture (fakeredis, Streams-capable) — consumer-group behaviour is testable without a broker, and assertions should read the broker's own view (`xinfo_groups` / `xinfo_consumers`) rather than co-core's private attributes, which are not a stable contract. Anything that genuinely needs the live Archiver-operated Redis goes behind `@pytest.mark.integration` and is excluded by default.
 
 **Where fakeredis diverges.** It is sound for consumer-group *mechanics* — what state a command leaves behind — but diverges on *lifecycle* and *blocking* semantics: it registers a consumer on an empty `XREADGROUP` (real Redis waits for a delivery, GH #3) and it ignores `block` (worked around by `IDLE_SLEEP_SECONDS` in `src/worker/loop.py`). Rule of thumb: an assertion about **what state results** is safe against the fake; an assertion about **when Redis does something** needs a live broker. Both divergences were found by running against the real server, not by the suite.
 
-Live-broker tests use the `real_redis` fixture (`tests/conftest.py`), which connects to `REPLICATOR_TEST_REDIS_URL` (default `redis://localhost:6379/15`), skips when nothing answers (an *auth* failure re-raises — a misconfigured broker must not pass as a skip), expires stray `replicator.itest.*` keys from crashed runs once per session, and refuses db 0 outright — db 0 carries the live `content.fetch` stream that the running `replicator.service` consumes, so a test frame written there would be fetched for real. Confine such tests to scratch stream keys (`replicator.itest.<uuid>`); the database guard is the backstop, not the plan.
+Live-broker tests use the `real_redis` fixture (`tests/conftest.py`), which connects to `REPLICATOR_TEST_REDIS_URL` (default `redis://localhost:6379/15`), skips when nothing answers (an *auth* failure re-raises — a misconfigured broker must not pass as a skip), expires stray `replicator.itest.*` keys from crashed runs once per session, and refuses db 0 outright — db 0 carries the live `content.fetch` stream that the running `replicator.service` consumes, so a test frame written there would be fetched for real. Confine such tests to scratch stream keys via the `scratch_topic` fixture (`tests/worker/conftest.py`), whose teardown also removes `<topic>.dlq`; the database guard is the backstop, not the plan.
+
+**One namespace the sweeper cannot reach.** `process_message` writes `replicator:cmd:<command_id>`, a constant prefix outside `replicator.itest.*`, so an end-to-end test deletes its own keys via the `dedupe_keys` fixture and shortens their TTL. `test_an_end_to_end_run_only_creates_predictable_keys` asserts the whole promise: every key a run creates is either an itest stream or a dedupe key.
 
 ## Common Commands
 

@@ -52,6 +52,22 @@ async def test_ensure_group_targets_the_command_stream(fake_redis):
     assert await fake_redis.exists(streams.CONTENT_FETCH)
 
 
+async def test_the_command_stream_is_overridable(fake_redis):
+    """A live-broker test must be able to consume from a scratch stream.
+
+    ``content.fetch`` is the live command stream ``replicator.service`` is
+    polling: a frame an integration run added there would be fetched for real.
+    The default stays production's, so only a caller that asks can move.
+    """
+    topic = "replicator.itest.fetch"
+
+    consumer = build_consumer(fake_redis, get_settings(), topic=topic)
+    await consumer.ensure_group(start_id="$")
+
+    assert await fake_redis.exists(topic)
+    assert not await fake_redis.exists(streams.CONTENT_FETCH)
+
+
 async def test_consumer_registers_under_the_configured_group(fake_redis, monkeypatch):
     """The configured name is the identity Redis records — asserted on delivery.
 

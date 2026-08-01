@@ -53,8 +53,16 @@ def build_handler(
     store: BlobStore,
     client: Redis,
     settings: Settings,
+    blobs_topic: str = streams.CONTENT_BLOBS,
 ) -> Handler:
-    """Wire the byte path into a handler the loop can dispatch to."""
+    """Wire the byte path into a handler the loop can dispatch to.
+
+    ``blobs_topic`` is a defaulted argument rather than a setting, for the same
+    reason ``build_consumer``'s ``topic`` is: the only caller that moves it is a
+    live-broker test, which must keep its facts on a scratch stream. A fact
+    written to the real ``content.blobs`` during a test would be a genuine
+    announcement of a blob under ``tmp_path`` — gone before any consumer reads it.
+    """
     publisher = AsyncBusPublisher(client)
 
     async def handle(command: ContentFetchCommand) -> None:
@@ -66,7 +74,7 @@ def build_handler(
         blob_uri = store.store(result.content, fingerprint, media_type)
         await publisher.execute(
             BusPublish(
-                streams.CONTENT_BLOBS,
+                blobs_topic,
                 to_wire(
                     BlobAvailableEvent(
                         occurred_at=datetime.now(UTC),
