@@ -51,8 +51,8 @@ def command(command_id: str = "cmd-1", url: str = URL) -> ContentFetchCommand:
     return ContentFetchCommand(occurred_at=datetime.now(UTC), command_id=command_id, url=url)
 
 
-async def published_facts(client) -> list[BlobAvailableEvent]:
-    """Decode ``content.blobs`` the way a downstream consumer would.
+async def published_facts(client, topic: str = streams.CONTENT_BLOBS) -> list[BlobAvailableEvent]:
+    """Decode the fact stream the way a downstream consumer would.
 
     The ``isinstance`` check is the assertion, not a type-checker appeasement:
     ``from_wire``'s dispatch table is global, so it happily decodes any known
@@ -60,11 +60,11 @@ async def published_facts(client) -> list[BlobAvailableEvent]:
     ``content.blobs`` would otherwise sail through every assertion below.
     """
     facts = []
-    entries = await client.xrange(streams.CONTENT_BLOBS)
+    entries = await client.xrange(topic)
     for message_id, fields in entries:
         payload = from_wire(
             {k.decode(): v.decode() for k, v in fields.items()},
-            topic=streams.CONTENT_BLOBS,
+            topic=topic,
             message_id=message_id.decode(),
         ).payload
         assert isinstance(payload, BlobAvailableEvent)
@@ -76,12 +76,13 @@ async def published_facts(client) -> list[BlobAvailableEvent]:
 def handler(fake_redis, tmp_path):
     """The real handler over a real store and publisher, with the fetch faked."""
 
-    def build(fetcher=None):
+    def build(fetcher=None, blobs_topic: str | None = None):
         return build_handler(
             fetcher=fetcher or FakeFetcher(),
             store=LocalBlobStore(tmp_path),
             client=fake_redis,
             settings=get_settings(),
+            **({} if blobs_topic is None else {"blobs_topic": blobs_topic}),
         )
 
     return build
@@ -120,6 +121,28 @@ async def test_a_successful_fetch_publishes_blob_available(handler, fake_redis, 
     assert fact.media_type == "text/html"
     assert fact.url == URL
     assert fact.command_id == "cmd-7"
+
+
+async def test_the_fact_stream_defaults_to_content_blobs(handler, fake_redis):
+    """The override below must not be able to move production off the real stream."""
+    await handler()(command())
+
+    assert len(await published_facts(fake_redis)) == 1
+
+
+async def test_the_fact_stream_is_overridable(handler, fake_redis):
+    """A live-broker test must be able to keep its facts on a scratch stream.
+
+    ``content.blobs`` is cluster infrastructure: an integration run that wrote
+    there would leave a real-looking fact on the shared broker, pointing at a
+    blob under ``tmp_path`` that is gone by the time anything reads it.
+    """
+    topic = "replicator.itest.blobs"
+
+    await handler(blobs_topic=topic)(command())
+
+    assert len(await published_facts(fake_redis, topic)) == 1
+    assert await published_facts(fake_redis) == []
 
 
 @pytest.mark.parametrize("status_code", [400, 404, 410, 451])
