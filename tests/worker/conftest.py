@@ -14,6 +14,7 @@ from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 
 import pytest
+from co_core.effects.fetch import FetchResult
 from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.envelope import to_wire
 from co_core.pure.adapters.bus.streams import dlq_name
@@ -25,6 +26,43 @@ from src.worker.main import build_consumer
 
 TOPIC = streams.CONTENT_FETCH
 GROUP = "replicator.fetch"
+
+# The bytes every byte-path test fetches. Shared so the handler's unit tests and
+# the live end-to-end test agree on what a successful fetch returns.
+BODY = b"<html>hello</html>"
+
+
+def fetch_result(
+    content: bytes = BODY, status_code: int = 200, headers: dict[str, str] | None = None
+) -> FetchResult:
+    """A ``FetchResult`` as the co-core driver would return it."""
+    return FetchResult(
+        content=content,
+        status_code=status_code,
+        headers={"content-type": "text/html"} if headers is None else headers,
+        duration_ms=12,
+        fetcher_used="http",
+    )
+
+
+class FakeFetcher:
+    """Stands in for ``AsyncFetchDriver``, recording what it was asked for.
+
+    The fetch stays faked even in the live-broker tests: they exist to prove the
+    bus and storage behaviour against a real Redis, and a network dependency
+    would make them flaky for no added signal.
+    """
+
+    def __init__(self, result: FetchResult | None = None, error: Exception | None = None) -> None:
+        self._result = result if result is not None else fetch_result()
+        self._error = error
+        self.urls: list[str] = []
+
+    async def execute(self, effect) -> FetchResult:
+        self.urls.append(effect.url)
+        if self._error is not None:
+            raise self._error
+        return self._result
 
 
 def make_command(command_id: str = "cmd-1", url: str = "https://example.test/a") -> dict[str, str]:

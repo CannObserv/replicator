@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 
 import httpx
 import pytest
-from co_core.effects.fetch import FetchResult
 from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.envelope import from_wire
 from co_core.pure.models.changes import BlobAvailableEvent, ContentFetchCommand
@@ -14,37 +13,9 @@ from src.core.config import get_settings
 from src.core.errors import PermanentFetchError, TransientFetchError
 from src.storage.local import LocalBlobStore
 from src.worker.handler import build_handler
+from tests.worker.conftest import BODY, FakeFetcher, fetch_result
 
-BODY = b"<html>hello</html>"
 URL = "https://example.test/a"
-
-
-def fetch_result(
-    content: bytes = BODY, status_code: int = 200, headers: dict[str, str] | None = None
-) -> FetchResult:
-    """A ``FetchResult`` as the co-core driver would return it."""
-    return FetchResult(
-        content=content,
-        status_code=status_code,
-        headers={"content-type": "text/html"} if headers is None else headers,
-        duration_ms=12,
-        fetcher_used="http",
-    )
-
-
-class FakeFetcher:
-    """Stands in for ``AsyncFetchDriver``, recording what it was asked for."""
-
-    def __init__(self, result: FetchResult | None = None, error: Exception | None = None) -> None:
-        self._result = result if result is not None else fetch_result()
-        self._error = error
-        self.urls: list[str] = []
-
-    async def execute(self, effect) -> FetchResult:
-        self.urls.append(effect.url)
-        if self._error is not None:
-            raise self._error
-        return self._result
 
 
 def command(command_id: str = "cmd-1", url: str = URL) -> ContentFetchCommand:

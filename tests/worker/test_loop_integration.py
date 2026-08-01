@@ -28,15 +28,27 @@ not the plan.
 
 import asyncio
 import time
+from collections.abc import AsyncGenerator
 
 import pytest
 from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
 from co_core.pure.adapters.bus.streams import dlq_name
+from co_core.pure.util.hashing import sha256
 
+from scripts.seed_fetch import last_id, publish, watch_for_facts
 from src.core.config import get_settings
-from src.worker.loop import Outcome, claim_once, dead_letter_anomaly, poll_once
+from src.storage.local import LocalBlobStore
+from src.worker.handler import build_handler
+from src.worker.loop import (
+    DEDUPE_KEY_PREFIX,
+    Outcome,
+    claim_once,
+    dead_letter_anomaly,
+    poll_once,
+    run_loop,
+)
 from src.worker.main import build_consumer
-from tests.worker.conftest import make_command
+from tests.worker.conftest import BODY, FakeFetcher, make_command
 
 pytestmark = pytest.mark.integration
 
@@ -50,8 +62,18 @@ CONSUMER = "replicator@itest"
 CLAIM_MIN_IDLE_MS = 100
 
 # The window a read waits when nothing arrives. Deliberately small: the point is
-# that it blocks at all, and every assertion below is a lower bound.
+# that it blocks at all, and every assertion below is a lower bound. It also
+# bounds how long the end-to-end loop takes to notice its stop event.
 READ_BLOCK_MS = 300
+
+# The end-to-end run writes a real replicator:cmd:* dedupe key. Teardown deletes
+# it; this is the backstop for a run that dies before teardown, and it is short
+# because nothing on the scratch database has any reason to be deduped later.
+DEDUPE_TTL_SECONDS = 60
+
+# How long the end-to-end test waits for its fact. Generous against a busy shared
+# VM; the loop normally closes in well under a second.
+FACT_TIMEOUT_SECONDS = 15
 
 
 @pytest.fixture
@@ -85,10 +107,97 @@ async def itest_consumer(real_redis, scratch_topic, itest_settings):
     return consumer
 
 
+@pytest.fixture
+async def scratch_blobs_topic(real_redis, scratch_topic) -> AsyncGenerator[str]:
+    """Where the end-to-end run's facts land, deleted afterwards.
+
+    Derived from ``scratch_topic`` so one uuid identifies the whole run, and kept
+    off the real ``content.blobs``: a fact written there would announce a blob
+    under ``tmp_path`` that is gone before anything could open it.
+    """
+    topic = f"{scratch_topic}.blobs"
+    try:
+        yield topic
+    finally:
+        await real_redis.delete(topic)
+
+
+@pytest.fixture
+async def dedupe_keys(real_redis) -> AsyncGenerator[list[str]]:
+    """Collects the ``replicator:cmd:*`` keys a test creates, and deletes them.
+
+    They are the one thing an integration run leaves outside the
+    ``replicator.itest.*`` namespace — the prefix is a constant in
+    ``src.worker.loop`` — so the session sweeper cannot reach them and the run
+    has to clean up after itself.
+    """
+    keys: list[str] = []
+    try:
+        yield keys
+    finally:
+        if keys:
+            await real_redis.delete(*keys)
+
+
 async def times_delivered(client, topic: str, message_id: str) -> int:
     """The broker's own delivery counter for one pending entry."""
     entries = await client.xpending_range(topic, GROUP, min=message_id, max=message_id, count=1)
     return int(entries[0]["times_delivered"])
+
+
+async def keyspace(client) -> set[str]:
+    """Every key on the scratch database, as an operator would see it."""
+    return {key.decode() for key in await client.keys("*")}
+
+
+async def seed_and_consume(
+    real_redis, scratch_topic, blobs_topic, dedupe_keys, settings, tmp_path, url
+):
+    """Run one command all the way through the loop; return the facts it produced.
+
+    The wiring is ``run()``'s, minus the process-level concerns ``run()`` owns
+    (signals, client lifetime, creating the blob directory): ``ensure_group``,
+    then ``run_loop`` over the real handler. The command comes from the seed
+    harness and the fact is read back by the harness's own ``--watch`` machinery,
+    so a passing run exercises the operator tool as well as the worker.
+    """
+    consumer = build_consumer(real_redis, settings, topic=scratch_topic)
+    await consumer.ensure_group(start_id="0")
+    handler = build_handler(
+        fetcher=FakeFetcher(),
+        store=LocalBlobStore(tmp_path),
+        client=real_redis,
+        settings=settings,
+        blobs_topic=blobs_topic,
+    )
+    stop = asyncio.Event()
+    loop = asyncio.create_task(
+        run_loop(
+            client=real_redis,
+            consumer=consumer,
+            group=GROUP,
+            settings=settings,
+            handler=handler,
+            stop=stop,
+        )
+    )
+
+    start_id = await last_id(real_redis, blobs_topic)
+    (seeded,) = await publish(real_redis, scratch_topic, [url])
+    dedupe_keys.append(f"{DEDUPE_KEY_PREFIX}{seeded.command_id}")
+    try:
+        return await watch_for_facts(
+            real_redis,
+            blobs_topic,
+            start_id,
+            {seeded.command_id},
+            timeout_seconds=FACT_TIMEOUT_SECONDS,
+        )
+    finally:
+        # In a finally, and awaited: a watch that timed out must not leave a loop
+        # task consuming streams the fixtures are about to delete underneath it.
+        stop.set()
+        await asyncio.wait_for(loop, timeout=5)
 
 
 async def test_a_message_left_pending_is_reclaimed(
@@ -221,3 +330,83 @@ async def test_a_poison_entry_whose_frame_is_gone_still_leaves_the_pel(
     ((_id, entry),) = await real_redis.xrange(dlq_name(scratch_topic))
     assert entry[b"original_message_id"] == excinfo.value.message_id.encode()
     assert (await real_redis.xpending(scratch_topic, GROUP))["pending"] == 0
+
+
+async def test_a_seeded_command_stores_a_blob_and_publishes_the_fact(
+    real_redis, scratch_topic, scratch_blobs_topic, dedupe_keys, itest_settings, tmp_path
+):
+    """The MVP's core claim, demonstrated rather than asserted.
+
+    ``content.fetch`` -> fetch -> fingerprint -> temp-store -> ``blob_available``,
+    driven end to end against the Archiver-operated broker. Only the fetch is
+    faked — this exists to prove the bus and storage behaviour, and a live origin
+    would add flakiness rather than signal.
+    """
+    settings = itest_settings.model_copy(
+        update={"blob_dir": tmp_path, "dedupe_ttl_seconds": DEDUPE_TTL_SECONDS}
+    )
+
+    facts = await seed_and_consume(
+        real_redis,
+        scratch_topic,
+        scratch_blobs_topic,
+        dedupe_keys,
+        settings,
+        tmp_path,
+        "https://example.test/e2e",
+    )
+
+    (fact,) = facts
+    assert fact.content_fingerprint == sha256(BODY)
+    assert fact.url == "https://example.test/e2e"
+    assert fact.size_bytes == len(BODY)
+    # The bytes are at the URI the fact announced, not merely somewhere on disk.
+    assert (
+        fact.blob_uri
+        == f"file://{tmp_path}/{sha256(BODY)[:2]}/{sha256(BODY)[2:4]}/{sha256(BODY)}.bin"
+    )
+    assert LocalBlobStore(tmp_path).open(fact.content_fingerprint) == BODY
+    # Exactly one fact, and the command is off the PEL — the loop acked it.
+    assert await real_redis.xlen(scratch_blobs_topic) == 1
+    assert (await real_redis.xpending(scratch_topic, GROUP))["pending"] == 0
+
+
+async def test_an_end_to_end_run_only_creates_predictable_keys(
+    real_redis, scratch_topic, scratch_blobs_topic, dedupe_keys, itest_settings, tmp_path
+):
+    """The scratch-key promise, asserted rather than eyeballed.
+
+    This suite shares a broker with whatever else uses the scratch database, and
+    what makes it safe to run is that everything it creates is named predictably
+    and cleaned up. Two namespaces, and only two: the ``replicator.itest.*``
+    streams the fixtures own, and the ``replicator:cmd:*`` dedupe keys the loop
+    itself writes — those carry a constant prefix from ``src.worker.loop``, out
+    of the stream sweeper's reach, so ``dedupe_keys`` deletes them instead.
+
+    A key outside both namespaces is a housekeeping bug: it outlives the run, and
+    on a shared database nobody can tell whose it was.
+    """
+    settings = itest_settings.model_copy(
+        update={"blob_dir": tmp_path, "dedupe_ttl_seconds": DEDUPE_TTL_SECONDS}
+    )
+    before = await keyspace(real_redis)
+
+    await seed_and_consume(
+        real_redis,
+        scratch_topic,
+        scratch_blobs_topic,
+        dedupe_keys,
+        settings,
+        tmp_path,
+        "https://example.test/keyspace",
+    )
+
+    created = await keyspace(real_redis) - before
+    # Not merely "nothing unexpected": a run that created nothing at all would
+    # satisfy a subset check while proving the loop never ran.
+    assert created
+    assert not [
+        key
+        for key in created
+        if not (key.startswith("replicator.itest.") or key.startswith(DEDUPE_KEY_PREFIX))
+    ]
