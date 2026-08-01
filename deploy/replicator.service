@@ -64,6 +64,11 @@ RestartSec=5
 # grace period must exceed the blocking read window (REPLICATOR_READ_BLOCK_MS,
 # 5s by default) plus the handler's own budget, or systemd SIGKILLs mid-message
 # and forces a stale-claim round-trip that a clean restart has no reason to need.
+#
+# The retention sweep is a third term: it runs in asyncio.to_thread, which cannot
+# be cancelled, so shutdown waits out whatever walk is in flight. Fast at the
+# volumes the ceiling permits (REPLICATOR_BLOB_MAX_TOTAL_BYTES), but revisit this
+# alongside any change that lets the tree hold far more files.
 TimeoutStopSec=60
 
 [Install]

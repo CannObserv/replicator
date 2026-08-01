@@ -85,8 +85,22 @@ async def _sweep_once(root: Path, *, settings: Settings, usage: BlobUsage) -> No
                 "temps_reaped": result.temps_reaped,
                 "shards_removed": result.shards_removed,
                 "blobs_remaining": result.blobs_remaining,
+                # Split out because bytes_remaining spans both populations: the
+                # ceiling wants one number, an operator reading this wants to
+                # know which population is growing.
+                "temps_remaining": result.temps_remaining,
+                "temp_bytes_remaining": result.temp_bytes_remaining,
                 "bytes_remaining": result.bytes_remaining,
             },
+        )
+    if result.reap_failures:
+        # Counted by the sweep rather than logged per file — the realistic
+        # trigger is a permissions problem over the whole tree, and a line each
+        # would bury this one. Same damping the consume loop applies to a long
+        # outage, for the same reason.
+        logger.warning(
+            "some blobs could not be reaped — the tree will keep growing",
+            extra={"reap_failures": result.reap_failures, "sample": result.reap_failure_sample},
         )
     if usage.is_over(settings.blob_max_total_bytes):
         # The byte path stops fetching from here until a sweep brings this back

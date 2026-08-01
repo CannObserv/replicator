@@ -477,7 +477,7 @@ async def test_run_sweeps_alongside_the_consume_loop(monkeypatch, fake_redis, tm
     async with asyncio.timeout(5):
         await run(stop)
 
-    assert swept == [blob_dir]
+    assert swept == [blob_dir.resolve()]
 
 
 async def test_the_sweeper_and_the_byte_path_share_one_measurement(
@@ -583,3 +583,166 @@ async def test_cancelling_the_worker_does_not_strand_its_tasks(monkeypatch, fake
     with pytest.raises(asyncio.CancelledError):
         await task
     assert finished == [True]
+
+
+async def test_a_sweeper_failing_during_shutdown_is_still_reported(
+    monkeypatch, fake_redis, tmp_path, capsys
+):
+    """The first exit explains the shutdown; the survivors' failures must not vanish.
+
+    ``test_a_failing_sweeper_does_not_go_unnoticed`` covers the sweeper losing
+    the race to fail. Losing it the other way — SIGTERM arrives, the loop returns
+    cleanly, and the sweeper then raises on its way out — used to be swallowed
+    whole by ``return_exceptions=True``.
+    """
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+
+    async def failing_on_the_way_out(**kwargs):
+        await kwargs["stop"].wait()
+        # Outlives the consume loop's own return, which is what puts this task
+        # in `pending` rather than in the batch `asyncio.wait` returns.
+        await asyncio.sleep(0.01)
+        raise RuntimeError("sweeper bug during shutdown")
+
+    monkeypatch.setattr("src.worker.main.run_sweeper", failing_on_the_way_out)
+    configure_logging(logging.INFO)
+
+    await run(_stopped())
+
+    logged = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
+    errors = [record for record in logged if record["level"] == "ERROR"]
+    assert any("sweeper bug during shutdown" in record["error"] for record in errors)
+
+
+async def test_the_sweeper_is_given_an_absolute_root(monkeypatch, fake_redis, tmp_path):
+    """The store resolves its root at construction; the sweep has no such guard.
+
+    Handed the raw setting — which defaults to the relative ``blobs`` — a chdir
+    would leave the two working on different directories, one writing where the
+    other is not reaping.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", "blobs")
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    roots = []
+
+    async def recording_run_sweeper(**kwargs):
+        roots.append(kwargs["root"])
+
+    monkeypatch.setattr("src.worker.main.run_sweeper", recording_run_sweeper)
+
+    await run(_stopped())
+
+    assert roots == [tmp_path.resolve() / "blobs"]
+
+
+async def test_every_task_failure_is_reported_even_when_they_land_together(
+    monkeypatch, fake_redis, tmp_path, capsys
+):
+    """Both tasks can finish in one pass, and then neither is a "survivor".
+
+    ``asyncio.wait`` returns every task that completed, not just the first, so a
+    simultaneous pair leaves nothing pending — and the loser's failure had no
+    path to the journal at all. Only one of the two can be raised; the other has
+    to be logged or it is gone.
+
+    Which one is raised is decided by argument order, not by timing: the consume
+    loop is passed first and wins the tie. That is why this asserts on the loop's
+    message rather than either — see ``_run_until_first_exit``.
+    """
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+
+    async def failing_run_loop(**kwargs):
+        raise RuntimeError("loop failed")
+
+    async def failing_run_sweeper(**kwargs):
+        raise RuntimeError("sweeper failed")
+
+    monkeypatch.setattr("src.worker.main.run_loop", failing_run_loop)
+    monkeypatch.setattr("src.worker.main.run_sweeper", failing_run_sweeper)
+    configure_logging(logging.INFO)
+
+    with pytest.raises(RuntimeError, match="loop failed"):
+        await run(asyncio.Event())
+
+    logged = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
+    assert any("sweeper failed" in record.get("error", "") for record in logged)
+
+
+async def test_a_failure_racing_an_external_cancel_is_reported(
+    monkeypatch, fake_redis, tmp_path, capsys
+):
+    """The cancel path discarded its gather too — the same silence, another door."""
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    started = asyncio.Event()
+
+    async def failing_when_cancelled(**kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise RuntimeError("sweeper failed on the way down") from None
+
+    monkeypatch.setattr("src.worker.main.run_sweeper", failing_when_cancelled)
+    configure_logging(logging.INFO)
+    task = asyncio.create_task(run(asyncio.Event()))
+    await asyncio.wait_for(started.wait(), 5)
+
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    logged = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
+    assert any("sweeper failed on the way down" in record.get("error", "") for record in logged)
+
+
+def test_a_cancelled_task_is_not_reported_as_a_shutdown_failure(caplog):
+    """Cancellation is shutdown working, not failing; only real errors are news.
+
+    The one test here that calls a private function rather than driving ``run()``.
+    Reaching this branch from outside means getting a task cancelled *and* having
+    its CancelledError survive to the gather, which the wind-down path exists to
+    prevent — so the observable route would be a fixture elaborate enough to test
+    itself rather than the branch.
+    """
+    with caplog.at_level("ERROR", logger="src.worker.main"):
+        src.worker.main._log_shutdown_failures(
+            [None, asyncio.CancelledError(), RuntimeError("a real one")]
+        )
+
+    (record,) = caplog.records
+    assert "a real one" in record.error
+
+
+async def test_an_unusable_relative_blob_dir_is_named_absolutely(
+    monkeypatch, fake_redis, tmp_path, capsys
+):
+    """REPLICATOR_BLOB_DIR defaults to the relative ``blobs``.
+
+    This one line is all an operator gets for a boot-blocking misconfiguration —
+    it exists because an uncaught OSError would reach the journal as an
+    unparseable traceback — so it has to say which directory.
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "blobs").write_bytes(b"")  # a file where the directory belongs
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", "blobs")
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    try:
+        with pytest.raises(OSError):
+            await run(_stopped())
+        record = json.loads(
+            next(
+                ln
+                for ln in capsys.readouterr().out.splitlines()
+                if "blob directory is not usable" in ln
+            )
+        )
+        assert record["blob_dir"] == str(tmp_path.resolve() / "blobs")
+    finally:
+        root.handlers, root.level = saved_handlers, saved_level

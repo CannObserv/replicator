@@ -189,6 +189,30 @@ async def test_a_reap_names_each_population_it_touched(monkeypatch, retention_se
     assert record.bytes_reclaimed == 99
 
 
+async def test_what_survives_is_logged_per_population(monkeypatch, retention_settings, caplog):
+    """``bytes_remaining`` spans blobs and temporaries, so the counts beside it must split.
+
+    Debris accumulating while blob retention looks healthy is the case worth
+    seeing, and a single total is where it would hide.
+    """
+    sweeper = RecordingSweep(
+        SweepResult(
+            blobs_reaped=1,
+            blobs_remaining=4,
+            temps_remaining=2,
+            temp_bytes_remaining=30,
+            bytes_remaining=130,
+        )
+    )
+
+    with caplog.at_level("INFO", logger="src.worker.retention"):
+        await drive(monkeypatch, sweeper, retention_settings)
+
+    record = caplog.records[0]
+    assert (record.blobs_remaining, record.temps_remaining) == (4, 2)
+    assert (record.temp_bytes_remaining, record.bytes_remaining) == (30, 130)
+
+
 async def test_crossing_the_ceiling_is_reported(monkeypatch, retention_settings, caplog):
     """The byte path stops fetching at this point; the journal has to say why."""
     monkeypatch.setenv("REPLICATOR_BLOB_MAX_TOTAL_BYTES", "100")
@@ -222,3 +246,34 @@ async def test_the_walk_does_not_run_on_the_event_loop_thread(monkeypatch, reten
         )
 
     assert swept_on is not threading.current_thread()
+
+
+async def test_files_the_sweep_could_not_reap_are_reported_once(
+    monkeypatch, retention_settings, caplog
+):
+    """A tree that cannot be reaped grows until the ceiling stops the byte path.
+
+    Survivable, but only if the journal says so — otherwise the visible symptom
+    is fetching pausing for no stated reason a week later. One line per cycle
+    carrying the count and one example, not one line per file.
+    """
+    sweeper = RecordingSweep(
+        SweepResult(reap_failures=2, reap_failure_sample="/blobs/9f/2a/x.bin (errno 1)")
+    )
+
+    with caplog.at_level("WARNING", logger="src.worker.retention"):
+        await drive(monkeypatch, sweeper, retention_settings)
+
+    (record,) = caplog.records
+    assert record.reap_failures == 2
+    assert record.sample == "/blobs/9f/2a/x.bin (errno 1)"
+
+
+async def test_a_sweep_with_nothing_to_report_stays_silent(monkeypatch, retention_settings, caplog):
+    """No reaps and no failures is the steady state; it must not log at all."""
+    sweeper = RecordingSweep(SweepResult(blobs_remaining=3, bytes_remaining=99))
+
+    with caplog.at_level("INFO", logger="src.worker.retention"):
+        await drive(monkeypatch, sweeper, retention_settings)
+
+    assert caplog.records == []
