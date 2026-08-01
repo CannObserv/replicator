@@ -78,10 +78,13 @@ class SeedResult:
 def build_command(url: str) -> ContentFetchCommand:
     """Mint a command for one URL.
 
-    The ``command_id`` is a ULID — the cluster's identifier convention — and is
-    unique per URL rather than per invocation: the worker's dedupe key is
-    ``replicator:cmd:<command_id>``, so a shared id would make every URL after
-    the first a no-op.
+    The ``command_id`` is a ULID — the cluster's identifier convention — minted
+    fresh on every call, so it is unique per URL *and* per invocation. The
+    worker's dedupe key is ``replicator:cmd:<command_id>``: an id shared across
+    the URLs of one run would make every URL after the first a no-op, and an id
+    stable across runs would make every run after the first a no-op. Both are
+    silent — the worker acks and fetches nothing. See
+    ``docs/contracts/content-fetch-issuer-contract.md`` MUST-1.
     """
     return ContentFetchCommand(
         occurred_at=datetime.now(UTC),
