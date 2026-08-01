@@ -14,8 +14,11 @@ from co_core.pure.models.changes import ContentFetchCommand
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 from src.core.errors import PermanentFetchError, TransientFetchError
+from src.storage.local import LocalBlobStore
+from src.storage.sweeper import BlobUsage
+from src.worker.handler import build_handler
 from src.worker.loop import DEDUPE_KEY_PREFIX, Outcome, _delivery_count, poll_once
-from tests.worker.conftest import GROUP, TOPIC, make_command, process_one
+from tests.worker.conftest import GROUP, TOPIC, FakeFetcher, make_command, process_one
 
 
 async def test_a_transient_failure_leaves_the_message_pending(fake_redis, consumer, settings):
@@ -161,3 +164,28 @@ async def test_the_missing_pending_row_warning_is_undamped(fake_redis, consumer,
 
     warnings = [r for r in caplog.records if "no pending entry" in r.getMessage()]
     assert len(warnings) == 3
+
+
+async def test_a_command_blocked_by_the_blob_ceiling_stays_pending(fake_redis, consumer, settings):
+    """Backpressure only works if the command survives to be retried.
+
+    The byte path refuses to fetch once the blob tree is over its ceiling. That
+    refusal is transient by design — dead-lettering instead would discard work
+    over a condition a later sweep clears, and the DLQ would fill with perfectly
+    good commands during any period of disk pressure.
+    """
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-over-ceiling"))
+    store = LocalBlobStore(settings.blob_dir)
+    usage = BlobUsage()
+    usage.observe(settings.blob_max_total_bytes)
+    fetcher = FakeFetcher()
+    handler = build_handler(
+        fetcher=fetcher, store=store, client=fake_redis, settings=settings, usage=usage
+    )
+
+    message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
+    outcome = await process_one(fake_redis, consumer, settings, message, handler)
+
+    assert outcome is Outcome.RETRY
+    assert fetcher.urls == []
+    assert await fake_redis.xlen(dlq_name(TOPIC)) == 0

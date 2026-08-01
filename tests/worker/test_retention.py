@@ -222,3 +222,34 @@ async def test_the_walk_does_not_run_on_the_event_loop_thread(monkeypatch, reten
         )
 
     assert swept_on is not threading.current_thread()
+
+
+async def test_files_the_sweep_could_not_reap_are_reported_once(
+    monkeypatch, retention_settings, caplog
+):
+    """A tree that cannot be reaped grows until the ceiling stops the byte path.
+
+    Survivable, but only if the journal says so — otherwise the visible symptom
+    is fetching pausing for no stated reason a week later. One line per cycle
+    carrying the count and one example, not one line per file.
+    """
+    sweeper = RecordingSweep(
+        SweepResult(reap_failures=2, reap_failure_sample="/blobs/9f/2a/x.bin (errno 1)")
+    )
+
+    with caplog.at_level("WARNING", logger="src.worker.retention"):
+        await drive(monkeypatch, sweeper, retention_settings)
+
+    (record,) = caplog.records
+    assert record.reap_failures == 2
+    assert record.sample == "/blobs/9f/2a/x.bin (errno 1)"
+
+
+async def test_a_sweep_with_nothing_to_report_stays_silent(monkeypatch, retention_settings, caplog):
+    """No reaps and no failures is the steady state; it must not log at all."""
+    sweeper = RecordingSweep(SweepResult(blobs_remaining=3, bytes_remaining=99))
+
+    with caplog.at_level("INFO", logger="src.worker.retention"):
+        await drive(monkeypatch, sweeper, retention_settings)
+
+    assert caplog.records == []

@@ -187,6 +187,94 @@ def test_a_blob_that_vanishes_mid_sweep_does_not_fail_the_sweep(store, tmp_path,
     assert result.blobs_reaped == 0
 
 
+def test_a_blob_that_vanishes_before_it_is_measured_does_not_fail_the_sweep(
+    store, tmp_path, monkeypatch
+):
+    """The survivor tally races the same concurrent reap the unlink does.
+
+    A live blob is stat-ed to be counted, and the loser of that race must not
+    take the whole pass down with it — an aborted sweep reaps nothing and leaves
+    the ceiling reading a stale total.
+    """
+    store.store(b"hello", FRESH, "text/plain")
+    real_stat = Path.stat
+
+    def vanishing_stat(self, *args, **kwargs):
+        if self != blob_path(tmp_path, FRESH):
+            return real_stat(self, *args, **kwargs)
+        blob_path(tmp_path, FRESH).unlink(missing_ok=True)
+        raise FileNotFoundError(2, "No such file or directory", str(self))
+
+    monkeypatch.setattr(Path, "stat", vanishing_stat)
+
+    result = run(tmp_path)
+
+    assert (result.blobs_remaining, result.bytes_remaining) == (0, 0)
+
+
+def test_a_file_is_stat_ed_once_per_sweep(store, tmp_path, monkeypatch):
+    """Three stats per surviving blob is three syscalls per blob every cycle.
+
+    The tree is walked on a timer forever, so the per-file cost is the sweep's
+    whole cost — and re-stat-ing is what opened the race above in the first place.
+    """
+    store.store(b"hello", FRESH, "text/plain")
+    real_stat = Path.stat
+    stats = []
+
+    def counting_stat(self, *args, **kwargs):
+        stats.append(self)
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", counting_stat)
+
+    run(tmp_path)
+
+    assert stats.count(blob_path(tmp_path, FRESH)) == 1
+
+
+def test_an_unreapable_blob_still_counts_against_the_ceiling(store, tmp_path, monkeypatch):
+    """It is expired but still on disk, and the ceiling is about disk."""
+    store.store(b"hello", AGED, "text/plain")
+    age(blob_path(tmp_path, AGED), TTL + 1)
+
+    def denied(self, *args, **kwargs):
+        raise PermissionError(1, "Operation not permitted", str(self))
+
+    monkeypatch.setattr(Path, "unlink", denied)
+
+    result = run(tmp_path)
+
+    assert (result.blobs_remaining, result.bytes_remaining) == (1, len(b"hello"))
+
+
+def test_a_live_temporary_counts_against_the_ceiling(tmp_path):
+    """Debris the sweep is waiting out still occupies the disk it is waiting on.
+
+    Measuring only ``*.bin`` would let a crash loop fill the tree with temps
+    while the ceiling reported an empty one.
+    """
+    shard = tmp_path / "9f" / "2a"
+    shard.mkdir(parents=True)
+    (shard / f".{FRESH}.abc123.tmp").write_bytes(b"partial")
+
+    result = run(tmp_path)
+
+    assert result.bytes_remaining == len(b"partial")
+
+
+def test_reaped_temporaries_count_toward_the_space_reclaimed(tmp_path):
+    shard = tmp_path / "9f" / "2a"
+    shard.mkdir(parents=True)
+    temp = shard / f".{FRESH}.abc123.tmp"
+    temp.write_bytes(b"partial")
+    age(temp, TEMP_GRACE + 1)
+
+    result = run(tmp_path)
+
+    assert result.bytes_reclaimed == len(b"partial")
+
+
 def test_usage_is_over_the_ceiling_once_the_sweep_says_so():
     usage = BlobUsage()
 
@@ -220,17 +308,20 @@ def test_a_sweep_re_measures_rather_than_accumulating():
     assert usage.total_bytes == 42
 
 
-def test_a_blob_that_cannot_be_reaped_is_named_rather_than_skipped(
+def test_reap_failures_are_counted_with_one_sample_rather_than_logged_each(
     store, tmp_path, monkeypatch, caplog
 ):
-    """A tree this process cannot reap grows until the ceiling stops the byte path.
+    """The realistic trigger is a permissions problem over the whole tree.
 
-    That is a survivable degradation, but only if the journal says which file
-    and which errno — otherwise the visible symptom is fetching pausing for no
-    stated reason a week later.
+    One line per file would be tens of thousands per cycle, burying the message
+    that explains them — the damping ``src.worker.loop`` already applies to a
+    long outage. The sweep counts instead, and names one example so the errno is
+    still reachable.
     """
     store.store(b"hello", AGED, "text/plain")
-    age(blob_path(tmp_path, AGED), TTL + 1)
+    store.store(b"world!", FRESH, "text/plain")
+    for fingerprint in (AGED, FRESH):
+        age(blob_path(tmp_path, fingerprint), TTL + 1)
 
     def denied(self, *args, **kwargs):
         raise PermissionError(1, "Operation not permitted", str(self))
@@ -241,7 +332,9 @@ def test_a_blob_that_cannot_be_reaped_is_named_rather_than_skipped(
         result = run(tmp_path)
 
     assert result.blobs_reaped == 0
-    assert "could not reap" in caplog.text
+    assert result.reap_failures == 2
+    assert "errno 1" in result.reap_failure_sample
+    assert caplog.records == []  # the sweep reports; retention does the logging
 
 
 def test_a_stray_file_shaped_like_a_shard_is_left_alone(tmp_path):
@@ -253,3 +346,26 @@ def test_a_stray_file_shaped_like_a_shard_is_left_alone(tmp_path):
 
     assert stray.exists()
     assert result.shards_removed == 0
+
+
+def test_a_file_that_cannot_even_be_stat_ed_is_counted_as_a_failure(store, tmp_path, monkeypatch):
+    """A shard the process cannot traverse fails before the age question is reachable.
+
+    It still occupies disk, and the operator still needs to know — so it lands in
+    the same tally as a file that could be read but not unlinked.
+    """
+    store.store(b"hello", AGED, "text/plain")
+    blob = blob_path(tmp_path, AGED)
+    real_stat = Path.stat
+
+    def denied(self, *args, **kwargs):
+        if self != blob:
+            return real_stat(self, *args, **kwargs)
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(Path, "stat", denied)
+
+    result = run(tmp_path)
+
+    assert result.reap_failures == 1
+    assert "errno 13" in result.reap_failure_sample

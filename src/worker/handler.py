@@ -84,6 +84,11 @@ def build_handler(
         # Asked before storing, because store's short-circuit does not report
         # which branch it took and counting a re-store would inflate the tree's
         # measured size on every redelivery.
+        #
+        # Racy either way — two workers can both see a new fingerprint and both
+        # count it, and a sweep reaping between the two calls means a genuinely
+        # new write goes uncounted. Both drifts are bounded by the sweep
+        # interval, after which observe() replaces the estimate outright.
         is_new = not store.exists(fingerprint)
         blob_uri = store.store(result.content, fingerprint, media_type)
         if is_new:

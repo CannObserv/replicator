@@ -18,6 +18,7 @@ import signal
 import stat
 from collections.abc import Coroutine
 from pathlib import Path
+from typing import Any
 
 from co_core.pure.adapters.bus import streams
 from co_core_aio.bus import AsyncBusConsumer
@@ -135,7 +136,7 @@ def remove_signal_handlers() -> None:
 
 
 async def _run_until_first_exit(
-    *coroutines: Coroutine[None, None, None], stop: asyncio.Event
+    *coroutines: Coroutine[Any, Any, None], stop: asyncio.Event
 ) -> None:
     """Run the worker's tasks together; the first to finish winds down the rest.
 
@@ -152,9 +153,11 @@ async def _run_until_first_exit(
     slowest in-flight step — a handler, or a tree walk that ``asyncio.to_thread``
     puts beyond cancellation anyway — which is what ``TimeoutStopSec`` covers.
 
-    Failures from the survivors are collected but not raised: the first exit is
-    the one that explains why the worker is going down, and a shutdown-ordering
-    error on top of it would bury the cause.
+    A survivor that fails on its way out is logged rather than raised: the first
+    exit is the one that explains why the worker is going down, and a
+    shutdown-ordering error raised over it would bury the cause. Logged and not
+    merely swallowed, because the other order — a sweeper bug landing while the
+    loop returns cleanly on SIGTERM — would otherwise leave no trace at all.
     """
     tasks = [asyncio.create_task(coroutine) for coroutine in coroutines]
     try:
@@ -169,9 +172,23 @@ async def _run_until_first_exit(
         raise
     stop.set()
     if pending:
-        await asyncio.gather(*pending, return_exceptions=True)
+        _log_shutdown_failures(await asyncio.gather(*pending, return_exceptions=True))
     for task in done:
         task.result()  # re-raises the first exit's failure, if it had one
+
+
+def _log_shutdown_failures(results: list[None | BaseException]) -> None:
+    """Report anything a survivor raised while winding down.
+
+    ``CancelledError`` is skipped: that is shutdown working, not failing.
+    """
+    for result in results:
+        if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
+            logger.error(
+                "a worker task failed while shutting down",
+                extra={"error": f"{type(result).__name__}: {result}"},
+                exc_info=result,
+            )
 
 
 async def run(stop: asyncio.Event | None = None) -> None:
@@ -202,7 +219,12 @@ async def run(stop: asyncio.Event | None = None) -> None:
             extra={"blob_dir": str(settings.blob_dir), "errno": exc.errno},
         )
         raise
-    warn_if_unreachable(settings.blob_dir)
+    # Resolved once, here, and passed to everything that touches the tree. The
+    # store resolves internally so a later chdir cannot move where blobs land;
+    # the sweep has no such protection of its own, and the two reaping and
+    # writing different directories is the kind of divergence nothing reports.
+    blob_dir = settings.blob_dir.resolve()
+    warn_if_unreachable(blob_dir)
 
     owns_signals = stop is None
     client = Redis.from_url(settings.redis_url)
@@ -256,14 +278,14 @@ async def run(stop: asyncio.Event | None = None) -> None:
                 settings=settings,
                 handler=build_handler(
                     fetcher=fetcher,
-                    store=LocalBlobStore(settings.blob_dir),
+                    store=LocalBlobStore(blob_dir),
                     client=client,
                     settings=settings,
                     usage=usage,
                 ),
                 stop=stop,
             ),
-            run_sweeper(root=settings.blob_dir, settings=settings, usage=usage, stop=stop),
+            run_sweeper(root=blob_dir, settings=settings, usage=usage, stop=stop),
             stop=stop,
         )
         logger.info("worker stopped", extra={"consumer": settings.consumer_name})

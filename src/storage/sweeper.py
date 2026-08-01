@@ -2,8 +2,9 @@
 
 Replicator is the producer in archiver's temp-cache protocol, where the producer
 cleans up. This module is the filesystem half of that: a single synchronous pass
-over the tree, returning what it did. The cadence, the logging, and the decision
-to run at all belong to ``src.worker.retention``.
+over the tree, returning what it did — including its failures, which it counts
+rather than logs. The cadence, the logging, and the decision to run at all
+belong to ``src.worker.retention``.
 
 The tree holds **three** populations, and they are not interchangeable:
 
@@ -33,10 +34,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from src.core.logging import get_logger
-
-logger = get_logger(__name__)
-
 # Finished blobs. Two levels of two characters mirrors LocalBlobStore's sharding,
 # and the `.bin` suffix is what excludes the dot-prefixed temporaries by
 # construction — the reason the temp naming was chosen.
@@ -51,7 +48,18 @@ SHARD_GLOBS = ("??/??", "??")
 
 @dataclass(frozen=True)
 class SweepResult:
-    """What one pass over the tree did, and what it left behind."""
+    """What one pass over the tree did, and what it left behind.
+
+    ``bytes_remaining`` is what the ceiling reads, so it counts **everything the
+    tree is still holding** — surviving blobs and the temporaries the sweep is
+    waiting out alike. Measuring only ``*.bin`` would let a crash loop fill the
+    disk with debris while the ceiling reported an empty tree.
+
+    ``reap_failures`` is counted rather than logged per file: the realistic
+    trigger is a permissions problem across the whole tree, and a line each would
+    be tens of thousands per cycle. ``reap_failure_sample`` keeps one example so
+    the errno is still reachable from the journal.
+    """
 
     blobs_reaped: int = 0
     bytes_reclaimed: int = 0
@@ -59,6 +67,20 @@ class SweepResult:
     shards_removed: int = 0
     blobs_remaining: int = 0
     bytes_remaining: int = 0
+    reap_failures: int = 0
+    reap_failure_sample: str | None = None
+
+
+@dataclass(frozen=True)
+class _PassResult:
+    """One glob pattern's worth of reaping — blobs or temporaries."""
+
+    reaped: int = 0
+    reclaimed: int = 0
+    survivors: int = 0
+    survivor_bytes: int = 0
+    failures: int = 0
+    failure_sample: str | None = None
 
 
 @dataclass
@@ -104,68 +126,68 @@ def sweep(root: Path, *, ttl_seconds: float, temp_grace_seconds: float) -> Sweep
         return SweepResult()
 
     now = time.time()
-    reaped, reclaimed, remaining, held = _reap_blobs(root, cutoff=now - ttl_seconds)
-    temps = _reap_files(root, TEMP_GLOB, cutoff=now - temp_grace_seconds)
+    blobs = _reap_older_than(root, BLOB_GLOB, cutoff=now - ttl_seconds)
+    temps = _reap_older_than(root, TEMP_GLOB, cutoff=now - temp_grace_seconds)
     return SweepResult(
-        blobs_reaped=reaped,
-        bytes_reclaimed=reclaimed,
-        temps_reaped=temps,
+        blobs_reaped=blobs.reaped,
+        # Both passes: "how much did this free" is a question about the disk, and
+        # the disk does not care which population the bytes belonged to.
+        bytes_reclaimed=blobs.reclaimed + temps.reclaimed,
+        temps_reaped=temps.reaped,
         # Last, and only after both file passes: an empty directory is only
         # safely empty once nothing is about to be renamed into it.
         shards_removed=_remove_empty_shards(root),
-        blobs_remaining=remaining,
-        bytes_remaining=held,
+        blobs_remaining=blobs.survivors,
+        bytes_remaining=blobs.survivor_bytes + temps.survivor_bytes,
+        reap_failures=blobs.failures + temps.failures,
+        reap_failure_sample=blobs.failure_sample or temps.failure_sample,
     )
 
 
-def _reap_blobs(root: Path, *, cutoff: float) -> tuple[int, int, int, int]:
-    """Unlink blobs last referenced before ``cutoff``; measure what survives.
+def _reap_older_than(root: Path, pattern: str, *, cutoff: float) -> _PassResult:
+    """Unlink everything matching ``pattern`` last touched before ``cutoff``.
 
-    The survivors are counted in the same walk that reaps, because the ceiling
-    reads that number and a second walk would report a tree the sweep has
-    already changed.
+    Survivors are tallied in the same walk that reaps: the ceiling reads that
+    total, and a second walk would be measuring a tree this one has already
+    changed.
+
+    Exactly one ``stat`` per file. That is the pass's whole per-file cost on a
+    tree walked forever on a timer — and re-stat-ing what was already read is
+    what opens a window for a concurrent reap to raise between the two calls.
+
+    Every step tolerates the file vanishing underneath it. Two workers can share
+    a tree, so losing the race to reap the same expired entry is ordinary, and
+    the loser must not take down a pass that still has thousands of files to go.
     """
-    reaped = reclaimed = remaining = held = 0
-    for path in root.glob(BLOB_GLOB):
-        size = _reap_if_older(path, cutoff=cutoff)
-        if size is None:
-            # Either still live or gone from under us; only the former is worth
-            # counting, and a vanished file weighs nothing either way.
-            if path.exists():
-                remaining += 1
-                held += path.stat().st_size
+    reaped = reclaimed = survivors = survivor_bytes = failures = 0
+    sample: str | None = None
+    for path in root.glob(pattern):
+        try:
+            stat_result = path.stat()
+        except FileNotFoundError:
+            continue  # reaped between the glob and the stat
+        except OSError as exc:
+            failures += 1
+            sample = sample or f"{path} (errno {exc.errno})"
+            continue
+        if stat_result.st_mtime >= cutoff:
+            survivors += 1
+            survivor_bytes += stat_result.st_size
+            continue
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            failures += 1
+            sample = sample or f"{path} (errno {exc.errno})"
+            # Expired but still on disk, so still the ceiling's problem.
+            survivors += 1
+            survivor_bytes += stat_result.st_size
             continue
         reaped += 1
-        reclaimed += size
-    return reaped, reclaimed, remaining, held
-
-
-def _reap_files(root: Path, pattern: str, *, cutoff: float) -> int:
-    """Unlink everything matching ``pattern`` that is older than ``cutoff``."""
-    return sum(1 for path in root.glob(pattern) if _reap_if_older(path, cutoff=cutoff) is not None)
-
-
-def _reap_if_older(path: Path, *, cutoff: float) -> int | None:
-    """Unlink ``path`` if it has not been touched since ``cutoff``; return its size.
-
-    ``None`` means nothing was reaped — the file is still live, or it vanished
-    between the stat and the unlink. The second case is ordinary: another worker
-    on the same tree reaps the same expired blob, and the loser must not fail
-    the sweep over it.
-    """
-    try:
-        stat_result = path.stat()
-        if stat_result.st_mtime >= cutoff:
-            return None
-        path.unlink()
-    except FileNotFoundError:
-        return None
-    except OSError as exc:
-        # Worth a line each: a tree this process cannot reap will keep growing
-        # until the ceiling stops the byte path, and the errno says why.
-        logger.warning("could not reap a blob", extra={"path": str(path), "errno": exc.errno})
-        return None
-    return stat_result.st_size
+        reclaimed += stat_result.st_size
+    return _PassResult(reaped, reclaimed, survivors, survivor_bytes, failures, sample)
 
 
 def _remove_empty_shards(root: Path) -> int:

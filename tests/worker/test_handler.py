@@ -306,7 +306,12 @@ async def test_a_tree_over_its_ceiling_refuses_the_fetch(handler, monkeypatch):
     assert fetcher.urls == []
 
 
-async def test_a_tree_under_its_ceiling_fetches_normally(handler, monkeypatch):
+async def test_a_tree_under_its_ceiling_fetches_normally(handler, fake_redis, monkeypatch):
+    """Asserted on the fact, not on the usage total.
+
+    A handler that stored the bytes and never announced them would leave usage
+    over the ceiling just the same, so counting bytes proves the wrong half.
+    """
     monkeypatch.setenv("REPLICATOR_BLOB_MAX_TOTAL_BYTES", "1000")
     get_settings.cache_clear()
     usage = BlobUsage()
@@ -314,7 +319,8 @@ async def test_a_tree_under_its_ceiling_fetches_normally(handler, monkeypatch):
 
     await handler(usage=usage)(command())
 
-    assert usage.is_over(1_000) is True  # the stored bytes pushed it over
+    (fact,) = await published_facts(fake_redis)
+    assert fact.content_fingerprint == sha256(BODY)
 
 
 async def test_stored_bytes_are_accounted_for_before_the_next_sweep(handler):

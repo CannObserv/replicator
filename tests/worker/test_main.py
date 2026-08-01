@@ -477,7 +477,7 @@ async def test_run_sweeps_alongside_the_consume_loop(monkeypatch, fake_redis, tm
     async with asyncio.timeout(5):
         await run(stop)
 
-    assert swept == [blob_dir]
+    assert swept == [blob_dir.resolve()]
 
 
 async def test_the_sweeper_and_the_byte_path_share_one_measurement(
@@ -583,3 +583,55 @@ async def test_cancelling_the_worker_does_not_strand_its_tasks(monkeypatch, fake
     with pytest.raises(asyncio.CancelledError):
         await task
     assert finished == [True]
+
+
+async def test_a_sweeper_failing_during_shutdown_is_still_reported(
+    monkeypatch, fake_redis, tmp_path, capsys
+):
+    """The first exit explains the shutdown; the survivors' failures must not vanish.
+
+    ``test_a_failing_sweeper_does_not_go_unnoticed`` covers the sweeper losing
+    the race to fail. Losing it the other way — SIGTERM arrives, the loop returns
+    cleanly, and the sweeper then raises on its way out — used to be swallowed
+    whole by ``return_exceptions=True``.
+    """
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+
+    async def failing_on_the_way_out(**kwargs):
+        await kwargs["stop"].wait()
+        # Outlives the consume loop's own return, which is what puts this task
+        # in `pending` rather than in the batch `asyncio.wait` returns.
+        await asyncio.sleep(0.01)
+        raise RuntimeError("sweeper bug during shutdown")
+
+    monkeypatch.setattr("src.worker.main.run_sweeper", failing_on_the_way_out)
+    configure_logging(logging.INFO)
+
+    await run(_stopped())
+
+    logged = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
+    errors = [record for record in logged if record["level"] == "ERROR"]
+    assert any("sweeper bug during shutdown" in record["error"] for record in errors)
+
+
+async def test_the_sweeper_is_given_an_absolute_root(monkeypatch, fake_redis, tmp_path):
+    """The store resolves its root at construction; the sweep has no such guard.
+
+    Handed the raw setting — which defaults to the relative ``blobs`` — a chdir
+    would leave the two working on different directories, one writing where the
+    other is not reaping.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", "blobs")
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    roots = []
+
+    async def recording_run_sweeper(**kwargs):
+        roots.append(kwargs["root"])
+
+    monkeypatch.setattr("src.worker.main.run_sweeper", recording_run_sweeper)
+
+    await run(_stopped())
+
+    assert roots == [tmp_path.resolve() / "blobs"]
