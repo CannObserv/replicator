@@ -3,6 +3,7 @@
 import errno
 import os
 import stat
+import time
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -227,3 +228,42 @@ def test_a_level_another_worker_created_first_keeps_its_mode(tmp_path, monkeypat
     ensure_directory(root)
 
     assert stat.S_IMODE(root.stat().st_mode) == 0o700
+
+
+def test_storing_an_already_stored_fingerprint_refreshes_its_mtime(store, tmp_path):
+    """The short-circuit still announces the blob, so the retention clock restarts.
+
+    ``store`` returns early when the addressed path exists, and the handler
+    publishes ``blob_available`` for it regardless — a fact pointing at a file
+    whose mtime is the *first* store's. A sweeper reaping by mtime would then be
+    free to delete a blob announced moments earlier, so the reference has to
+    move the clock.
+    """
+    store.store(b"hello", FINGERPRINT, "text/plain")
+    blob = tmp_path / "9f" / "2a" / f"{FINGERPRINT}.bin"
+    aged = time.time() - 10_000
+    os.utime(blob, (aged, aged))
+
+    store.store(b"hello", FINGERPRINT, "text/plain")
+
+    assert blob.stat().st_mtime > aged
+
+
+def test_refreshing_the_mtime_of_a_vanished_blob_is_not_an_error(store, tmp_path, monkeypatch):
+    """The sweeper can unlink between the existence check and the touch.
+
+    The window is microseconds and the fallout is a ``blob_uri`` the reader
+    cannot open — which is the failure archiver's read-failure fallback already
+    covers. What must not happen is the store raising and dead-lettering a
+    command whose bytes were fine.
+    """
+    store.store(b"hello", FINGERPRINT, "text/plain")
+    blob = tmp_path / "9f" / "2a" / f"{FINGERPRINT}.bin"
+
+    def sweeping_utime(path, *args, **kwargs):
+        Path(path).unlink()
+        raise FileNotFoundError(errno.ENOENT, "No such file or directory", str(path))
+
+    monkeypatch.setattr("src.storage.local.os.utime", sweeping_utime)
+
+    assert store.store(b"hello", FINGERPRINT, "text/plain") == blob.as_uri()

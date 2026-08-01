@@ -50,3 +50,40 @@ def test_worst_case_outage_bounds_the_absorb_window(monkeypatch):
     monkeypatch.setenv("REPLICATOR_ERROR_BACKOFF_MAX_SECONDS", "30")
 
     assert get_settings().worst_case_outage_seconds == 600
+
+
+def test_retention_defaults_are_the_ones_archiver_was_told(monkeypatch):
+    """The 7-day TTL is a published commitment (archiver#118), not a tunable guess."""
+    for var in (
+        "REPLICATOR_BLOB_TTL_SECONDS",
+        "REPLICATOR_BLOB_TEMP_GRACE_SECONDS",
+        "REPLICATOR_BLOB_MAX_TOTAL_BYTES",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    settings = get_settings()
+    assert settings.blob_ttl_seconds == 604_800
+    assert settings.blob_temp_grace_seconds == 3_600
+    assert settings.blob_max_total_bytes == 2 * 1024**3
+
+
+def test_the_temp_grace_is_far_shorter_than_the_ttl(monkeypatch):
+    """Two clocks over one tree, and confusing them reaps a live write.
+
+    A temporary exists across a single store; a blob has to outlive a consumer's
+    backlog. Defaulting them anywhere near each other would mean either debris
+    lingering for a week or a writer's os.replace racing the sweep.
+    """
+    settings = get_settings()
+    assert settings.blob_temp_grace_seconds < settings.blob_ttl_seconds
+
+
+def test_retention_env_overrides(monkeypatch):
+    monkeypatch.setenv("REPLICATOR_BLOB_TTL_SECONDS", "60")
+    monkeypatch.setenv("REPLICATOR_BLOB_SWEEP_INTERVAL_SECONDS", "5")
+    monkeypatch.setenv("REPLICATOR_BLOB_MAX_TOTAL_BYTES", "1024")
+
+    settings = get_settings()
+    assert settings.blob_ttl_seconds == 60
+    assert settings.blob_sweep_interval_seconds == 5
+    assert settings.blob_max_total_bytes == 1024

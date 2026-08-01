@@ -8,10 +8,12 @@ from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.envelope import from_wire
 from co_core.pure.models.changes import BlobAvailableEvent, ContentFetchCommand
 from co_core.pure.util.hashing import sha256
+from redis.exceptions import ResponseError
 
 from src.core.config import get_settings
 from src.core.errors import PermanentFetchError, TransientFetchError
 from src.storage.local import LocalBlobStore
+from src.storage.sweeper import BlobUsage
 from src.worker.handler import build_handler
 from tests.worker.conftest import BODY, FakeFetcher, fetch_result
 
@@ -47,12 +49,13 @@ async def published_facts(client, topic: str = streams.CONTENT_BLOBS) -> list[Bl
 def handler(fake_redis, tmp_path):
     """The real handler over a real store and publisher, with the fetch faked."""
 
-    def build(fetcher=None, blobs_topic: str | None = None):
+    def build(fetcher=None, blobs_topic: str | None = None, usage: BlobUsage | None = None):
         return build_handler(
             fetcher=fetcher or FakeFetcher(),
             store=LocalBlobStore(tmp_path),
             client=fake_redis,
             settings=get_settings(),
+            usage=usage,
             **({} if blobs_topic is None else {"blobs_topic": blobs_topic}),
         )
 
@@ -283,3 +286,94 @@ async def test_a_successful_fetch_is_logged_with_what_it_cost(handler, caplog):
     assert record.content_fingerprint == sha256(BODY)
     assert record.size_bytes == len(BODY)
     assert record.duration_ms == 12
+
+
+async def test_a_tree_over_its_ceiling_refuses_the_fetch(handler, monkeypatch):
+    """Backpressure, not reaping: the bytes a consumer was promised stay put.
+
+    Transient, so the delivery ceiling is untouched and the command waits on the
+    bus for the reclaim that follows a sweep freeing space.
+    """
+    monkeypatch.setenv("REPLICATOR_BLOB_MAX_TOTAL_BYTES", "1000")
+    get_settings.cache_clear()
+    usage = BlobUsage()
+    usage.observe(1_000)
+    fetcher = FakeFetcher()
+
+    with pytest.raises(TransientFetchError):
+        await handler(fetcher, usage=usage)(command())
+
+    assert fetcher.urls == []
+
+
+async def test_a_tree_under_its_ceiling_fetches_normally(handler, monkeypatch):
+    monkeypatch.setenv("REPLICATOR_BLOB_MAX_TOTAL_BYTES", "1000")
+    get_settings.cache_clear()
+    usage = BlobUsage()
+    usage.observe(999)
+
+    await handler(usage=usage)(command())
+
+    assert usage.is_over(1_000) is True  # the stored bytes pushed it over
+
+
+async def test_stored_bytes_are_accounted_for_before_the_next_sweep(handler):
+    """A burst can cross the ceiling long before the tree is walked again."""
+    usage = BlobUsage()
+
+    await handler(usage=usage)(command())
+
+    assert usage.total_bytes == len(BODY)
+
+
+async def test_re_storing_the_same_bytes_is_not_counted_twice(handler):
+    """Content-addressed storage makes the second store a no-op; usage must agree."""
+    usage = BlobUsage()
+    build = handler(usage=usage)
+
+    await build(command("cmd-1"))
+    await build(command("cmd-2"))
+
+    assert usage.total_bytes == len(BODY)
+
+
+async def test_a_blob_whose_fact_never_published_is_named_in_the_journal(
+    handler, fake_redis, monkeypatch, caplog
+):
+    """The orphan signal, taken where it is exact rather than reconstructed later.
+
+    Store-then-publish means a publish failure leaves bytes on disk with no fact
+    and no command_id pointing at them — invisible to the bus and to any operator
+    query starting from content.blobs. Recording the fingerprint here costs
+    nothing and avoids making a delete decision depend on another service's
+    stream retention.
+    """
+
+    async def failing_xadd(*args, **kwargs):
+        raise ResponseError("WRONGTYPE")
+
+    monkeypatch.setattr(fake_redis, "xadd", failing_xadd)
+
+    with caplog.at_level("ERROR", logger="src.worker.handler"), pytest.raises(ResponseError):
+        await handler()(command("cmd-orphan"))
+
+    (record,) = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert record.content_fingerprint == sha256(BODY)
+    assert record.command_id == "cmd-orphan"
+
+
+async def test_a_failed_publish_still_reaches_the_loop_unchanged(handler, fake_redis, monkeypatch):
+    """The loop classifies failures; the handler only records what it saw.
+
+    Swallowing or re-wrapping this would change the message's fate — a
+    ResponseError walks the delivery ceiling to the DLQ, which is the intended
+    outcome for a publish that is not going to start working.
+    """
+
+    async def failing_xadd(*args, **kwargs):
+        raise ResponseError("WRONGTYPE")
+
+    monkeypatch.setattr(fake_redis, "xadd", failing_xadd)
+
+    with pytest.raises(ResponseError):
+        await handler()(command())
