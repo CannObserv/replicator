@@ -79,10 +79,27 @@ each blocking level.
 | `REPLICATOR_LOG_LEVEL` | `INFO` | Root log level |
 | `BUILD_ID` | `dev` | Git SHA, stamped by the unit's `ExecStartPre` |
 
+## Seeding a fetch
+
+Nothing in the cluster issues `content.fetch` commands until the Watcher cutover, so
+`scripts/seed_fetch.py` is the issuer. The target is never defaulted — `--redis-url` and
+`--topic` are both required, and db 0 + `content.fetch` (the one pair the running worker
+consumes, and therefore actually fetches over the network) additionally needs `--production`:
+
+```bash
+uv run python -m scripts.seed_fetch \
+  --redis-url redis://localhost:6379/0 --topic content.fetch \
+  --production --watch https://example.com/
+```
+
+`--watch` tails `content.blobs` until each command's `blob_available` arrives. Add `--dry-run`
+to print the frames without contacting a broker at all.
+
 ## Test & lint
 
 ```bash
-uv run pytest
+uv run pytest                          # default suite; integration tests deselected
+uv run pytest --no-cov -m integration  # live-broker tests (scratch db, never db 0)
 uv run ruff check .
 ```
 

@@ -33,6 +33,33 @@ REPLICATOR_CONSUMER_NAME="replicator@$(whoami)-dev" uv run python -m src.worker.
 # Ctrl-C (or SIGTERM) finishes the in-flight message, acks it, and exits 0.
 ```
 
+### Seeding commands
+
+`scripts/seed_fetch.py` is the MVP's command issuer — nothing else publishes to
+`content.fetch` until the Watcher cutover (parent strategy Phase 4). The target is
+never defaulted: `--redis-url` and `--topic` are both required.
+
+```bash
+# Safe rehearsal: print the frames, contact nothing.
+uv run python -m scripts.seed_fetch \
+  --redis-url redis://localhost:6379/15 --topic replicator.itest.seed \
+  --dry-run https://example.test/a
+
+# Scratch database — reaches no worker.
+uv run python -m scripts.seed_fetch \
+  --redis-url redis://localhost:6379/15 --topic replicator.itest.seed \
+  https://example.test/a https://example.test/b
+
+# The live loop. --production is required for db 0 + content.fetch, because the
+# running service will fetch these URLs for real. --watch tails content.blobs
+# until each command's blob_available arrives (exit 1 if one never does).
+uv run python -m scripts.seed_fetch \
+  --redis-url redis://localhost:6379/0 --topic content.fetch \
+  --production --watch http://localhost:8041/health
+```
+
+Watch the other side with `sudo journalctl -u replicator -f`.
+
 ### Inspecting the consume path
 
 ```bash
@@ -47,6 +74,11 @@ redis-cli XRANGE content.fetch.dlq - + COUNT 5
 
 # Dedupe keys (one per handled command, TTL REPLICATOR_DEDUPE_TTL_SECONDS).
 redis-cli --scan --pattern 'replicator:cmd:*' | head
+
+# Facts published. blob_uri points at REPLICATOR_BLOB_DIR; the fingerprint is the
+# filename, so `sha256sum` on the blob must reproduce it.
+redis-cli XLEN content.blobs
+redis-cli XRANGE content.blobs - + COUNT 5
 ```
 
 ## API (dev only)
