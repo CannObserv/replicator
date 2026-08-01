@@ -37,6 +37,7 @@ import argparse
 import asyncio
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -127,14 +128,29 @@ def resolve_blobs_topic(topic: str, override: str | None) -> str:
     return streams.CONTENT_BLOBS if topic == streams.CONTENT_FETCH else f"{topic}.blobs"
 
 
-async def publish(client: Redis, topic: str, urls: list[str]) -> list[SeedResult]:
-    """XADD one command per URL, in the order given."""
+async def publish(
+    client: Redis,
+    topic: str,
+    urls: list[str],
+    *,
+    on_published: Callable[[SeedResult], None] | None = None,
+) -> list[SeedResult]:
+    """XADD one command per URL, in the order given.
+
+    ``on_published`` fires per command rather than per run so a caller can report
+    incrementally (CR #10). A command that has landed is in flight whether or not
+    the rest of the loop succeeds — the live worker will fetch it — so a failure
+    on URL two must not swallow the id of URL one.
+    """
     publisher = AsyncBusPublisher(client)
     results = []
     for url in urls:
         command = build_command(url)
         result = await publisher.execute(BusPublish(topic, to_wire(command)))
-        results.append(SeedResult(command.command_id, url, result.bus_message_id))
+        published = SeedResult(command.command_id, url, result.bus_message_id)
+        results.append(published)
+        if on_published is not None:
+            on_published(published)
     return results
 
 
@@ -284,17 +300,11 @@ def _print_dry_run(topic: str, urls: list[str]) -> None:
 
 
 async def run(args: argparse.Namespace) -> int:
-    """Publish, optionally watch, and return the process exit code.
+    """Open the client, seed, and close it again — the process's exit code.
 
-    The client is opened here and closed here — bus clients are injection-only,
-    so the script owns one for its run, the same rule ``src/worker/main.py``
-    follows.
-
-    A bad URL or an unreachable broker is answered with a line and an exit code
-    rather than a traceback (CR #3), matching ``sync_wheelhouse.py``, the other
-    operator-facing script in this repo. It matters most in the multi-URL case:
-    a failure partway through the loop has already published some commands, and
-    a stack trace is a poor way to learn which.
+    Bus clients are injection-only, so the script owns one for its run, the same
+    rule ``src/worker/main.py`` follows. This function is that ownership and
+    nothing else; the policy lives in ``_seed``.
     """
     try:
         client = Redis.from_url(args.redis_url)
@@ -302,33 +312,69 @@ async def run(args: argparse.Namespace) -> int:
         print(f"error: {args.redis_url} is not a usable Redis URL: {exc}", file=sys.stderr)
         return 1
     try:
+        return await _seed(client, args)
+    finally:
+        await client.aclose()
+
+
+async def _seed(client: Redis, args: argparse.Namespace) -> int:
+    """Publish, optionally watch, and say precisely what happened.
+
+    Failures are answered with a line and an exit code rather than a traceback
+    (CR #3), matching ``sync_wheelhouse.py``, the other operator-facing script
+    here. The three failure points are reported separately because they mean
+    different things: an unusable broker before anything went out, a loop that
+    published *some* of its commands, and a watch that could not read facts for
+    commands already in flight. Collapsing them into one message told an operator
+    "the broker is not usable" about a broker that had just accepted a command
+    they were never shown (CR #10).
+    """
+    published: list[SeedResult] = []
+
+    def report(result: SeedResult) -> None:
+        published.append(result)
+        print(
+            f"published command_id={result.command_id} "
+            f"entry_id={result.bus_message_id} topic={args.topic} url={result.url}"
+        )
+
+    try:
         guard_production_target(args.topic, db=resolve_db(client), production=args.production)
         blobs_topic = resolve_blobs_topic(args.topic, args.blobs_topic)
         # Before publishing, deliberately: capture it afterwards and a worker
         # fast enough to answer immediately would land its fact behind the
         # cursor, and the watch would time out on a loop that worked.
         start_id = await last_id(client, blobs_topic) if args.watch else "0-0"
-        results = await publish(client, args.topic, args.urls)
-        for result in results:
-            print(
-                f"published command_id={result.command_id} "
-                f"entry_id={result.bus_message_id} topic={args.topic} url={result.url}"
-            )
-        if not args.watch:
-            return 0
-        return await _report_facts(client, blobs_topic, args.watch_timeout, start_id, results)
+        await publish(client, args.topic, args.urls, on_published=report)
     except ProductionTargetError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     except (RedisError, OSError) as exc:
-        print(f"error: {args.redis_url} is not usable: {exc}", file=sys.stderr)
+        print(
+            f"error: publishing to {args.topic} failed after {len(published)} of "
+            f"{len(args.urls)} commands: {exc}",
+            file=sys.stderr,
+        )
         return 1
-    finally:
-        await client.aclose()
+
+    if not args.watch:
+        return 0
+    try:
+        return await _report_facts(
+            client,
+            blobs_topic=blobs_topic,
+            timeout_seconds=args.watch_timeout,
+            start_id=start_id,
+            results=published,
+        )
+    except (RedisError, OSError) as exc:
+        print(f"error: watching {blobs_topic} failed: {exc}", file=sys.stderr)
+        return 1
 
 
 async def _report_facts(
     client: Redis,
+    *,
     blobs_topic: str,
     timeout_seconds: float,
     start_id: str,

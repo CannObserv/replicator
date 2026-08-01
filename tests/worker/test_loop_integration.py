@@ -35,7 +35,7 @@ from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
 from co_core.pure.adapters.bus.streams import dlq_name
 from co_core.pure.util.hashing import sha256
 
-from scripts.seed_fetch import last_id, publish, watch_for_facts
+from scripts.seed_fetch import last_id, publish, resolve_blobs_topic, watch_for_facts
 from src.core.config import get_settings
 from src.storage.local import LocalBlobStore
 from src.worker.handler import build_handler
@@ -114,8 +114,12 @@ async def scratch_blobs_topic(real_redis, scratch_topic) -> AsyncGenerator[str]:
     Derived from ``scratch_topic`` so one uuid identifies the whole run, and kept
     off the real ``content.blobs``: a fact written there would announce a blob
     under ``tmp_path`` that is gone before anything could open it.
+
+    Named by the seed harness's own rule rather than by a second copy of it
+    (CR #11) — a test watching a stream the tool would not have chosen proves
+    less than it appears to.
     """
-    topic = f"{scratch_topic}.blobs"
+    topic = resolve_blobs_topic(scratch_topic, None)
     try:
         yield topic
     finally:

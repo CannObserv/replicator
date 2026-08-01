@@ -16,6 +16,7 @@ from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.envelope import from_wire, to_wire
 from co_core.pure.models.changes import BlobAvailableEvent, ContentFetchCommand
 from redis.asyncio import Redis
+from redis.exceptions import ConnectionError as RedisConnectionError
 from ulid import ULID
 
 from scripts.seed_fetch import (
@@ -324,6 +325,65 @@ async def test_a_refused_target_publishes_nothing_and_still_closes(fake_redis, o
     assert code == 2
     assert await fake_redis.xlen(streams.CONTENT_FETCH) == 0
     assert owned_client == [True]
+
+
+async def test_a_run_reports_each_command_as_it_is_published(fake_redis, owned_client, capsys):
+    """Reported as they go, not in a batch at the end — see the test below."""
+    urls = [URL, "https://example.test/b", "https://example.test/c"]
+
+    assert await run(seed_args("--topic", TOPIC, *urls)) == 0
+
+    out = capsys.readouterr().out
+    for command in await decoded_commands(fake_redis):
+        assert command.command_id in out
+        assert command.url in out
+
+
+async def test_a_failure_partway_through_still_names_what_went_out(
+    fake_redis, owned_client, monkeypatch, capsys
+):
+    """A published command is in flight whether or not the run finished (CR #10).
+
+    The live worker will fetch it. An operator who cannot see its ``command_id``
+    cannot correlate the journal, cannot dedupe a retry, and has no way to learn
+    which of their URLs is already on the stream. The count on stderr is the
+    summary: how much of the run actually landed.
+    """
+    original = fake_redis.xadd
+    attempts: list[str] = []
+
+    async def failing_xadd(name, fields, **kwargs):
+        attempts.append(name)
+        if len(attempts) == 2:
+            raise RedisConnectionError("broker went away mid-loop")
+        return await original(name, fields, **kwargs)
+
+    monkeypatch.setattr(fake_redis, "xadd", failing_xadd)
+    urls = [URL, "https://example.test/b", "https://example.test/c"]
+
+    code = await run(seed_args("--topic", TOPIC, *urls))
+
+    assert code == 1
+    (survivor,) = await decoded_commands(fake_redis)
+    captured = capsys.readouterr()
+    assert survivor.command_id in captured.out
+    assert "1 of 3" in captured.err
+
+
+async def test_a_watch_that_cannot_read_is_an_error_not_a_traceback(
+    fake_redis, owned_client, monkeypatch, capsys
+):
+    """The commands are already out; only the watching failed, and it says so."""
+
+    async def failing_xread(*args, **kwargs):
+        raise RedisConnectionError("broker went away mid-watch")
+
+    monkeypatch.setattr(fake_redis, "xread", failing_xread)
+
+    code = await run(seed_args("--topic", TOPIC, "--watch", "--watch-timeout", "1", URL))
+
+    assert code == 1
+    assert f"watching {TOPIC}.blobs failed" in capsys.readouterr().err
 
 
 async def test_a_watched_run_reports_the_fact_for_the_command_it_published(
