@@ -20,9 +20,11 @@ from co_core.effects.fetch import FetchResult
 from co_core.pure.adapters.bus import streams
 from co_core.pure.util.hashing import sha256
 
+import src.worker.main
 from src.core.config import get_settings
 from src.core.logging import configure_logging
 from src.storage.local import LocalBlobStore
+from src.storage.sweeper import SweepResult
 from src.worker.main import (
     build_consumer,
     install_signal_handlers,
@@ -451,3 +453,133 @@ def test_a_fully_traversable_chain_warns_about_nothing(capsys):
     finally:
         root.handlers, root.level = saved_handlers, saved_level
         blob_dir.rmdir()
+
+
+async def test_run_sweeps_alongside_the_consume_loop(monkeypatch, fake_redis, tmp_path):
+    """Retention is a second task in the same process, not a separate unit.
+
+    Without this the sweeper could be complete, tested, and never actually run —
+    a blob directory that grows forever while every unit test passes.
+    """
+    blob_dir = tmp_path / "blobs"
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(blob_dir))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    swept = []
+    stop = asyncio.Event()
+
+    def recording_sweep(root, **kwargs):
+        swept.append(root)
+        stop.set()
+        return SweepResult()
+
+    monkeypatch.setattr("src.worker.retention.sweep", recording_sweep)
+
+    async with asyncio.timeout(5):
+        await run(stop)
+
+    assert swept == [blob_dir]
+
+
+async def test_the_sweeper_and_the_byte_path_share_one_measurement(
+    monkeypatch, fake_redis, tmp_path
+):
+    """Two BlobUsage instances would make the ceiling permanently unreachable.
+
+    The sweep measures the tree and the byte path adds to it; wired to separate
+    objects both are individually correct and the guard never fires. Nothing
+    else observes the difference until the disk is full.
+    """
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    seen = {}
+    real_build_handler = src.worker.main.build_handler
+
+    def recording_build_handler(**kwargs):
+        seen["handler"] = kwargs["usage"]
+        return real_build_handler(**kwargs)
+
+    async def recording_run_sweeper(**kwargs):
+        seen["sweeper"] = kwargs["usage"]
+
+    monkeypatch.setattr("src.worker.main.build_handler", recording_build_handler)
+    monkeypatch.setattr("src.worker.main.run_sweeper", recording_run_sweeper)
+
+    await run(_stopped())
+
+    assert seen["handler"] is seen["sweeper"]
+
+
+async def test_a_failing_consume_loop_stops_the_sweeper_and_propagates(
+    monkeypatch, fake_redis, tmp_path
+):
+    """The loop re-raises so the unit restarts; a surviving task would hang that exit."""
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    returned = []
+
+    async def failing_run_loop(**kwargs):
+        raise RuntimeError("broker is gone")
+
+    async def recording_run_sweeper(**kwargs):
+        try:
+            await kwargs["stop"].wait()
+        finally:
+            returned.append(True)
+
+    monkeypatch.setattr("src.worker.main.run_loop", failing_run_loop)
+    monkeypatch.setattr("src.worker.main.run_sweeper", recording_run_sweeper)
+
+    async with asyncio.timeout(5):
+        with pytest.raises(RuntimeError, match="broker is gone"):
+            await run(asyncio.Event())
+
+    assert returned == [True]
+
+
+async def test_a_failing_sweeper_does_not_go_unnoticed(monkeypatch, fake_redis, tmp_path):
+    """``run_sweeper`` absorbs a failed sweep; anything escaping it is a bug.
+
+    Letting that task die quietly would leave the worker consuming normally with
+    retention silently switched off — the exact state this issue exists to end.
+    """
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+
+    async def failing_run_sweeper(**kwargs):
+        raise RuntimeError("sweeper bug")
+
+    monkeypatch.setattr("src.worker.main.run_sweeper", failing_run_sweeper)
+
+    async with asyncio.timeout(5):
+        with pytest.raises(RuntimeError, match="sweeper bug"):
+            await run(asyncio.Event())
+
+
+async def test_cancelling_the_worker_does_not_strand_its_tasks(monkeypatch, fake_redis, tmp_path):
+    """A cancel that skips the wind-down leaves "Task was destroyed" at exit.
+
+    By then the cancellation that caused it is long gone, so the tasks are
+    cancelled and awaited on the way out rather than dropped.
+    """
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    started = asyncio.Event()
+    finished = []
+
+    async def recording_run_sweeper(**kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()  # never set: only cancellation ends this
+        except asyncio.CancelledError:
+            finished.append(True)
+            raise
+
+    monkeypatch.setattr("src.worker.main.run_sweeper", recording_run_sweeper)
+    task = asyncio.create_task(run(asyncio.Event()))
+    await asyncio.wait_for(started.wait(), 5)
+
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert finished == [True]

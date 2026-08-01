@@ -64,6 +64,28 @@ def _missing_levels(path: Path) -> list[Path]:
     return list(reversed(missing))
 
 
+def _touch(path: Path) -> None:
+    """Restart the retention clock on a blob that is about to be announced again.
+
+    The store short-circuits on an existing path, but its caller publishes a
+    fresh ``blob_available`` either way — so without this the fact would point at
+    a file whose mtime is the *first* store's, and the sweeper could reap a blob
+    announced moments ago. Touching here makes the TTL mean "since last
+    referenced", which is the quantity archiver's consumption latency has to fit
+    inside.
+
+    A vanished file is swallowed rather than raised: the sweeper can unlink
+    between the existence check above and this call. The window is microseconds
+    and the fallout is a ``blob_uri`` the reader cannot open — already covered by
+    the read-failure fallback on the consuming side. Failing here instead would
+    dead-letter a command whose bytes were fine.
+    """
+    try:
+        os.utime(path)
+    except FileNotFoundError:
+        pass
+
+
 class LocalBlobStore:
     """Content-addressed blob storage under a filesystem root."""
 
@@ -82,6 +104,7 @@ class LocalBlobStore:
         # the handler returns, making a re-run of an already-successful handler
         # an expected outcome rather than an error.
         if path.is_file():
+            _touch(path)
             return path.as_uri()
         self._ensure_shard(path.parent)
         self._write_atomically(path, data)

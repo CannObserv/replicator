@@ -23,6 +23,7 @@ from src.core.config import Settings
 from src.core.errors import PermanentFetchError, TransientFetchError
 from src.core.logging import get_logger
 from src.storage.base import BlobStore
+from src.storage.sweeper import BlobUsage
 from src.worker.loop import Handler
 
 logger = get_logger(__name__)
@@ -53,9 +54,16 @@ def build_handler(
     store: BlobStore,
     client: Redis,
     settings: Settings,
+    usage: BlobUsage | None = None,
     blobs_topic: str = streams.CONTENT_BLOBS,
 ) -> Handler:
     """Wire the byte path into a handler the loop can dispatch to.
+
+    ``usage`` is the blob tree's measured size, shared with the retention task —
+    the sweep re-measures it, this handler adds to it, and it is the one thing
+    standing between a burst and a full disk on a shared VM. Left unset it is
+    private to this handler, which only makes the ceiling later to notice; the
+    worker passes the shared instance.
 
     ``blobs_topic`` is a defaulted argument rather than a setting, for the same
     reason ``build_consumer``'s ``topic`` is: the only caller that moves it is a
@@ -64,29 +72,35 @@ def build_handler(
     announcement of a blob under ``tmp_path`` — gone before any consumer reads it.
     """
     publisher = AsyncBusPublisher(client)
+    usage = usage if usage is not None else BlobUsage()
 
     async def handle(command: ContentFetchCommand) -> None:
+        _raise_for_ceiling(usage, settings.blob_max_total_bytes)
         result = await _fetch(fetcher, command)
         _raise_for_status(result, command)
         _raise_for_size(result, command, settings.max_blob_bytes)
         fingerprint = sha256(result.content)
         media_type = _media_type(result)
+        # Asked before storing, because store's short-circuit does not report
+        # which branch it took and counting a re-store would inflate the tree's
+        # measured size on every redelivery.
+        is_new = not store.exists(fingerprint)
         blob_uri = store.store(result.content, fingerprint, media_type)
-        await publisher.execute(
-            BusPublish(
-                blobs_topic,
-                to_wire(
-                    BlobAvailableEvent(
-                        occurred_at=datetime.now(UTC),
-                        content_fingerprint=fingerprint,
-                        blob_uri=blob_uri,
-                        size_bytes=len(result.content),
-                        media_type=media_type,
-                        url=command.url,
-                        command_id=command.command_id,
-                    )
-                ),
-            )
+        if is_new:
+            usage.add(len(result.content))
+        await _publish(
+            publisher,
+            blobs_topic,
+            BlobAvailableEvent(
+                occurred_at=datetime.now(UTC),
+                content_fingerprint=fingerprint,
+                blob_uri=blob_uri,
+                size_bytes=len(result.content),
+                media_type=media_type,
+                url=command.url,
+                command_id=command.command_id,
+            ),
+            command=command,
         )
         logger.info(
             "stored a blob and published blob_available",
@@ -102,6 +116,51 @@ def build_handler(
         )
 
     return handle
+
+
+async def _publish(
+    publisher: AsyncBusPublisher,
+    topic: str,
+    event: BlobAvailableEvent,
+    *,
+    command: ContentFetchCommand,
+) -> None:
+    """Announce the blob, naming it in the journal if the announcement fails.
+
+    Store-then-publish is deliberate — a crash between the two must never
+    announce bytes that are not there — but the reverse gap is what leaks. A
+    publish that fails in a way the loop cannot classify as transient walks the
+    delivery ceiling into ``content.fetch.dlq``, leaving bytes on disk with no
+    fact and no ``command_id`` pointing at them: invisible to the bus, and to any
+    operator query that starts from ``content.blobs``.
+
+    This is the one moment the orphan is exactly knowable, so it is recorded
+    here rather than reconstructed later by reconciling the tree against the fact
+    stream — which would make a *delete* decision depend on another service's
+    stream-trimming policy.
+
+    The error is re-raised untouched. The loop, not the handler, decides a
+    message's fate, and a ``ResponseError`` reaching the DLQ is the right outcome
+    for a publish that is not going to start working.
+    """
+    try:
+        await publisher.execute(BusPublish(topic, to_wire(event)))
+    except Exception as exc:
+        logger.error(
+            "stored a blob but failed to publish blob_available — it is now an orphan",
+            extra={
+                "command_id": command.command_id,
+                "content_fingerprint": event.content_fingerprint,
+                "blob_uri": event.blob_uri,
+                "size_bytes": event.size_bytes,
+                "error": f"{type(exc).__name__}: {exc}",
+                # Orphans are reaped as ordinary aged blobs; what matters is that
+                # a rising count of these reads as a publishing failure rather
+                # than as normal expiry.
+                "detail": "no fact references these bytes; they expire on the blob TTL",
+            },
+        )
+        raise
 
 
 async def _fetch(fetcher: Fetcher, command: ContentFetchCommand) -> FetchResult:
@@ -122,6 +181,26 @@ async def _fetch(fetcher: Fetcher, command: ContentFetchCommand) -> FetchResult:
         raise PermanentFetchError(f"{command.url} is not fetchable: {exc}") from exc
     except httpx.HTTPError as exc:
         raise TransientFetchError(f"{command.url} failed to fetch: {exc}") from exc
+
+
+def _raise_for_ceiling(usage: BlobUsage, ceiling_bytes: int) -> None:
+    """Stop fetching once the blob tree has grown past what this deployment holds.
+
+    Backpressure rather than reaping. Freeing space by deleting blobs still
+    inside their TTL would convert a local disk problem into a ``blob_uri`` that
+    cannot be opened in another repo — the one failure mode with no local
+    symptom. Refusing the work instead is visible immediately and loses nothing.
+
+    Transient on purpose: transient failures are exempt from the delivery
+    ceiling, so the command stays in the PEL and returns via ``claim_stale``
+    once a sweep brings the tree back under. Checked before the fetch, since the
+    bytes are resident the moment the driver returns them.
+    """
+    if usage.is_over(ceiling_bytes):
+        raise TransientFetchError(
+            f"blob directory holds {usage.total_bytes} bytes, "
+            f"at or over the {ceiling_bytes}-byte ceiling"
+        )
 
 
 def _raise_for_size(result: FetchResult, command: ContentFetchCommand, maximum: int) -> None:

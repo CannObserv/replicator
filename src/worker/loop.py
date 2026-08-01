@@ -460,7 +460,7 @@ async def run_loop(
                     },
                     exc_info=exc,
                 )
-            await _park(
+            await park(
                 stop,
                 _error_backoff_seconds(
                     consecutive_failures,
@@ -474,7 +474,7 @@ async def run_loop(
             logger.info("poll cycle recovered", extra={"after_failures": consecutive_failures})
             consecutive_failures = 0
         if not messages:
-            await _park(stop, IDLE_SLEEP_SECONDS)
+            await park(stop, IDLE_SLEEP_SECONDS)
 
 
 def _error_backoff_seconds(consecutive_failures: int, *, base: float, maximum: float) -> float:
@@ -490,8 +490,12 @@ def _error_backoff_seconds(consecutive_failures: int, *, base: float, maximum: f
     return min(base * 2**shift, maximum)
 
 
-async def _park(stop: asyncio.Event, seconds: float) -> None:
-    """Wait out an idle poll, returning early once ``stop`` is set."""
+async def park(stop: asyncio.Event, seconds: float) -> None:
+    """Wait ``seconds``, returning early once ``stop`` is set.
+
+    Shared with the retention task, which parks on a cadence measured in minutes
+    and must not hold up a SIGTERM for one.
+    """
     try:
         await asyncio.wait_for(stop.wait(), timeout=seconds)
     except TimeoutError:

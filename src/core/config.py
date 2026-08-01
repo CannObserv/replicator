@@ -45,9 +45,56 @@ class Settings(BaseSettings):
     )
 
     # Temp-storage root for the local-filesystem blob backend. "Temporary" means
-    # the bytes live long enough for durable replication to collect them;
-    # retention policy is out of MVP scope.
+    # the bytes live long enough for durable replication to collect them — see
+    # the retention settings below for how long that is and who decided.
     blob_dir: Path = Field(default=Path("blobs"), validation_alias="REPLICATOR_BLOB_DIR")
+
+    # How long a blob survives after it was last referenced. Measured from mtime,
+    # which the store refreshes on the short-circuit path, so a re-fetch of
+    # unchanged bytes restarts the clock — the fact announcing a blob is never
+    # pointing at one already partway through its TTL.
+    #
+    # The number cannot be derived here: it has to exceed the consumption latency
+    # of whoever reads content.blobs, which is archiver's or watcher's to state
+    # (archiver#118). Seven days is deliberately far above any plausible answer
+    # rather than a measured figure, so the open question is a confirmation
+    # rather than a blocker. Raise it if a consumer says it needs longer.
+    blob_ttl_seconds: float = Field(
+        default=7 * 24 * 60 * 60, validation_alias="REPLICATOR_BLOB_TTL_SECONDS"
+    )
+
+    # How often the sweep walks the tree. Also the staleness bound on the
+    # measured byte total the ceiling reads — between sweeps that number is the
+    # byte path's own running estimate.
+    blob_sweep_interval_seconds: float = Field(
+        default=900.0, validation_alias="REPLICATOR_BLOB_SWEEP_INTERVAL_SECONDS"
+    )
+
+    # How long a `.tmp` in the blob tree may live before the sweep treats it as
+    # debris. Deliberately unrelated to the TTL and far shorter: a temporary
+    # exists only across a single write, so anything older is what a SIGKILL
+    # mid-store left behind. Still an hour rather than seconds, because reaping
+    # a live one makes the writer's os.replace fail with ENOENT and dead-letters
+    # a command whose bytes were fine.
+    blob_temp_grace_seconds: float = Field(
+        default=3_600.0, validation_alias="REPLICATOR_BLOB_TEMP_GRACE_SECONDS"
+    )
+
+    # Ceiling on everything the blob tree holds. A TTL alone does not bound disk
+    # — a burst fills it well inside any retention window — and the VM is shared
+    # with archiver, watcher, and notifier, so filling it is a cluster-wide
+    # outage rather than a Replicator one.
+    #
+    # Crossing it does NOT shorten the TTL. Reaping a blob a consumer has been
+    # promised would convert a local disk problem into a blob_uri that cannot be
+    # opened in another repo, with no local symptom. The byte path stops fetching
+    # instead, transiently, so commands wait on the bus until space frees.
+    #
+    # 2 GiB against the VM's few gigabytes of headroom: room for far more than
+    # the seed harness produces, well short of an outage.
+    blob_max_total_bytes: int = Field(
+        default=2 * 1024 * 1024 * 1024, validation_alias="REPLICATOR_BLOB_MAX_TOTAL_BYTES"
+    )
 
     # content.fetch carries command semantics => exactly one consumer group
     # cluster-wide, with competing consumers inside it.

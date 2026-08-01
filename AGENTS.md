@@ -63,9 +63,11 @@ src/worker/     — Bus consumer; the primary process
 src/worker/main.py   — Entry point: client lifetime, consumer group, signals
 src/worker/loop.py   — The consume path: poll → dispatch → ack, DLQ, dedupe, recovery
 src/worker/handler.py — The byte path behind the Handler seam: fetch → fingerprint → store → publish
+src/worker/retention.py — The sweep task: cadence, usage accounting, ceiling reporting
 src/storage/    — Temp storage; BlobStore protocol + the local-FS backend
 src/storage/base.py  — BlobStore protocol (store / exists / open)
 src/storage/local.py — Content-addressed local backend; file:// URIs, sharded paths
+src/storage/sweeper.py — Retention: TTL reap, stale temps, empty shards; the measured size
 src/api/        — FastAPI app (/health only; not part of the MVP loop)
 src/api/main.py — App factory, lifespan, router registration
 src/core/       — Shared domain logic, logging, config
@@ -148,6 +150,10 @@ In `/etc/replicator/.env` (read by the service):
 - `GOOGLE_APPLICATION_CREDENTIALS` — SA key for the wheelhouse mirror (`/etc/replicator/co-pypi-reader.json`)
 - `REPLICATOR_REDIS_URL` — change-bus client URL; default `redis://localhost:6379/0`
 - `REPLICATOR_BLOB_DIR` — temp-storage root for fetched bytes; default `blobs`. Resolved to an absolute path at store construction — `file://` URIs require it
+- `REPLICATOR_BLOB_TTL_SECONDS` — how long a blob survives after it was **last referenced**; default `604800` (7 days). Measured from mtime, which the store refreshes on its short-circuit. The number is a published commitment to archiver (archiver#118), not a local tuning knob — raise it if a `content.blobs` consumer says it needs longer
+- `REPLICATOR_BLOB_SWEEP_INTERVAL_SECONDS` — how often the tree is walked; default `900`. Also the staleness bound on the measured byte total the ceiling reads
+- `REPLICATOR_BLOB_TEMP_GRACE_SECONDS` — how long a `.tmp` may live before the sweep treats it as debris; default `3600`. Deliberately unrelated to the TTL and far shorter — see **Retention**
+- `REPLICATOR_BLOB_MAX_TOTAL_BYTES` — ceiling on everything the blob tree holds; default `2147483648` (2 GiB). Crossing it pauses fetching (`TransientFetchError`); it never shortens the TTL
 - `REPLICATOR_MAX_BLOB_BYTES` — ceiling on one fetched body; default `67108864` (64 MiB). A **storage** guard, not a memory one: co-core's fetch driver buffers the whole response before returning it, so the bytes are already resident when this is checked. Over the ceiling ⇒ `PermanentFetchError` ⇒ DLQ
 - `REPLICATOR_CONSUMER_GROUP` — consumer group on `content.fetch`; default `replicator.fetch`
 - `REPLICATOR_CONSUMER_NAME` — this worker's identity within the group; defaults to `replicator@<hostname>`. Two workers must never share one — Redis tracks pending entries per consumer name, and a shared name makes independent `claim_stale` recovery impossible
@@ -186,6 +192,17 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
 
 - **Nothing but the seed script writes to `content.fetch`.** `scripts/seed_fetch.py` requires `--redis-url` and `--topic` explicitly and additionally requires `--production` for the one combination the live worker consumes (db 0 **and** `content.fetch`) — a frame there is fetched for real. Its `--watch` reads the fact stream with a plain `XREAD` and never joins a group: a group left by an operator tool accumulates a PEL nothing drains. The stream watched follows `--topic` (`content.blobs` for `content.fetch`, `<topic>.blobs` otherwise), so a scratch seed does not sit watching production's facts.
 - **The command and fact topics are defaulted arguments, not settings.** `build_consumer(..., topic=)` and `build_handler(..., blobs_topic=)` exist so a live-broker test can work on `replicator.itest.*` streams. No deployment wants a different stream, and configuring it would put the production one an operator's typo away.
+
+### Retention
+
+`docs/plans/2026-07-31-replicator-mvp-open-questions-design.md` §4 scope-cut retention; #5 settles it. Replicator is the producer in archiver's temp-cache protocol, where **the producer cleans up**.
+
+- **The TTL runs from last reference, not first store.** `store` short-circuits on an existing content-addressed path but its caller publishes a fresh `blob_available` either way, so a re-fetch of unchanged bytes would otherwise announce a blob already partway through its TTL. `LocalBlobStore` therefore `os.utime`s on the short-circuit branch, swallowing `ENOENT` — the sweep can unlink between the existence check and the touch, and the fallout of that race is a `blob_uri` that fails to open, not a dead-lettered command.
+- **The blob tree holds three populations, and they are not interchangeable.** Finished blobs (`<ab>/<cd>/<sha256>.bin`) reap on the TTL; in-flight temporaries (`.<sha256>.<random>.tmp`) are **not garbage** — reaping one makes the writer's `os.replace` fail with `ENOENT` and dead-letters a good command — so the sweep matches `*.bin`, never `iterdir()`, and ages temps out on their own much longer grace. Empty shard directories go **last**, by `rmdir` only, whose refusal to touch a non-empty directory is the safety property.
+- **The ceiling is backpressure, not a faster clock.** Over `REPLICATOR_BLOB_MAX_TOTAL_BYTES` the byte path raises `TransientFetchError` *before* fetching, so the command stays in the PEL and returns via `claim_stale` once a sweep frees space. Reaping a blob still inside its TTL to make room would convert a local disk problem into a `blob_uri` another repo cannot open — the one failure mode with no local symptom.
+- **One `BlobUsage`, two writers.** The sweep's `observe` is the measured total; the byte path's `add` is the estimate between sweeps, because a burst can cross the ceiling long before the tree is walked again. Wiring the two halves to separate instances leaves both individually correct and the guard permanently unreachable — `tests/worker/test_main.py` pins the identity.
+- **Orphans are recorded where they are exact.** A publish that fails after the store leaves bytes with no fact and no `command_id`, invisible to any query starting from `content.blobs`. `src/worker/handler.py::_publish` logs the fingerprint at that moment and re-raises untouched; the sweep then treats orphans as ordinary aged blobs. Reconciling the tree against `content.blobs` instead would make a *delete* decision depend on another service's stream-trimming policy.
+- **The sweep runs in the worker, not a systemd timer.** A timer survives a crashed worker, but a worker that is not running is not writing blobs either. It rides the same stop event as the consume loop (`src/worker/loop.py::park`) and walks the tree via `asyncio.to_thread`, so retention never becomes a source of consume-path latency. A failed sweep is absorbed and retried next cycle — retention is not load-bearing for correctness, and the ceiling is the guard for a tree that cannot be reaped.
 
 **Testing the bus.** `tests/conftest.py` ships a `fake_redis` fixture (fakeredis, Streams-capable) — consumer-group behaviour is testable without a broker, and assertions should read the broker's own view (`xinfo_groups` / `xinfo_consumers`) rather than co-core's private attributes, which are not a stable contract. Anything that genuinely needs the live Archiver-operated Redis goes behind `@pytest.mark.integration` and is excluded by default.
 

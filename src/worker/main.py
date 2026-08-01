@@ -16,6 +16,7 @@ and closes it on the way out.
 import asyncio
 import signal
 import stat
+from collections.abc import Coroutine
 from pathlib import Path
 
 from co_core.pure.adapters.bus import streams
@@ -26,8 +27,10 @@ from redis.asyncio import Redis
 from src.core.config import Settings, get_settings
 from src.core.logging import configure_logging, get_logger
 from src.storage.local import LocalBlobStore, ensure_directory
+from src.storage.sweeper import BlobUsage
 from src.worker.handler import build_handler
 from src.worker.loop import run_loop
+from src.worker.retention import run_sweeper
 
 logger = get_logger(__name__)
 
@@ -131,6 +134,46 @@ def remove_signal_handlers() -> None:
         loop.remove_signal_handler(sig)
 
 
+async def _run_until_first_exit(
+    *coroutines: Coroutine[None, None, None], stop: asyncio.Event
+) -> None:
+    """Run the worker's tasks together; the first to finish winds down the rest.
+
+    The consume loop and the retention sweep are peers here rather than a task
+    and a background chore. Either finishing means the worker is done: a clean
+    return is SIGTERM having set ``stop``, and a raise is a failure the unit
+    should restart through — the loop re-raises only after
+    ``REPLICATOR_MAX_CONSECUTIVE_CYCLE_FAILURES``, and ``run_sweeper`` absorbs a
+    failed sweep, so anything escaping either is worth an exit.
+
+    The survivors are asked to stop rather than cancelled, then awaited: a
+    cancelled consume loop would abandon a message mid-handler for a stale-claim
+    round-trip a clean restart has no reason to need. The wait is bounded by the
+    slowest in-flight step — a handler, or a tree walk that ``asyncio.to_thread``
+    puts beyond cancellation anyway — which is what ``TimeoutStopSec`` covers.
+
+    Failures from the survivors are collected but not raised: the first exit is
+    the one that explains why the worker is going down, and a shutdown-ordering
+    error on top of it would bury the cause.
+    """
+    tasks = [asyncio.create_task(coroutine) for coroutine in coroutines]
+    try:
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    except BaseException:
+        # Shutdown cancelled the wait itself. The tasks are still ours to tidy
+        # up: leaving them pending surfaces as "Task was destroyed but it is
+        # pending" at interpreter exit, with the real cause already gone.
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+    stop.set()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+    for task in done:
+        task.result()  # re-raises the first exit's failure, if it had one
+
+
 async def run(stop: asyncio.Event | None = None) -> None:
     """Connect to the bus, ensure the consumer group, and consume until stopped.
 
@@ -198,19 +241,29 @@ async def run(stop: asyncio.Event | None = None) -> None:
                 "worst_case_outage_seconds": settings.worst_case_outage_seconds,
             },
         )
-        await run_loop(
-            client=client,
-            consumer=consumer,
-            # The same value build_consumer used — threaded explicitly so the
-            # PEL the ceiling reads is provably the one the consumer acks against.
-            group=settings.consumer_group,
-            settings=settings,
-            handler=build_handler(
-                fetcher=fetcher,
-                store=LocalBlobStore(settings.blob_dir),
+        # One instance, deliberately shared: the sweep measures the tree and the
+        # byte path adds to it between sweeps. Wired to two objects both halves
+        # would be individually correct and the ceiling would never fire, with
+        # nothing observing the difference until the disk was full.
+        usage = BlobUsage()
+        await _run_until_first_exit(
+            run_loop(
                 client=client,
+                consumer=consumer,
+                # The same value build_consumer used — threaded explicitly so the
+                # PEL the ceiling reads is provably the one the consumer acks against.
+                group=settings.consumer_group,
                 settings=settings,
+                handler=build_handler(
+                    fetcher=fetcher,
+                    store=LocalBlobStore(settings.blob_dir),
+                    client=client,
+                    settings=settings,
+                    usage=usage,
+                ),
+                stop=stop,
             ),
+            run_sweeper(root=settings.blob_dir, settings=settings, usage=usage, stop=stop),
             stop=stop,
         )
         logger.info("worker stopped", extra={"consumer": settings.consumer_name})

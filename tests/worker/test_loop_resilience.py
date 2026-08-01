@@ -5,7 +5,7 @@ backoff — and, if it never comes back, must eventually surface as an exit rath
 than a worker that looks alive to systemd while doing nothing.
 
 The backoff and the give-up ceiling are Settings, so these tests configure them
-rather than patching module globals. The one exception is ``_park``, patched
+rather than patching module globals. The one exception is ``park``, patched
 where a test needs to observe the wait it would otherwise sleep through.
 """
 
@@ -18,7 +18,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from src.worker.loop import _error_backoff_seconds
 from tests.worker.conftest import TOPIC, drive_loop, make_command, unreachable_handler
 
-# Resilience tests either patch _park or drive sub-millisecond backoffs, so a
+# Resilience tests either patch park or drive sub-millisecond backoffs, so a
 # hang here is a hang in this file — fail fast rather than inherit the 5s
 # default and point one frame away from the test that caused it.
 DEADLINE = 1.0
@@ -80,7 +80,7 @@ async def test_the_loop_actually_waits_longer_between_repeated_failures(
     Configuring a tiny base (as the other resilience tests must, to stay fast)
     hides whether the loop passes the failure count to the backoff at all —
     parking on the idle interval instead would leave every other test green
-    while the worker hammered a down broker. Patching ``_park`` observes the
+    while the worker hammered a down broker. Patching ``park`` observes the
     requested wait without spending it, so this one runs at the real defaults.
     """
     waits: list[float] = []
@@ -91,7 +91,7 @@ async def test_the_loop_actually_waits_longer_between_repeated_failures(
         if len(waits) == 3:
             event.set()
 
-    monkeypatch.setattr("src.worker.loop._park", recording_park)
+    monkeypatch.setattr("src.worker.loop.park", recording_park)
     _always_failing_read(monkeypatch, consumer)
 
     await drive_loop(fake_redis, consumer, settings, unreachable_handler, stop, deadline=DEADLINE)
