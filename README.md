@@ -13,6 +13,12 @@ content.fetch (command)  →  fetch  →  fingerprint  →  temp-store  →  blo
 The founding design lives in
 [`docs/plans/2026-06-25-replicator-mvp-design.md`](docs/plans/2026-06-25-replicator-mvp-design.md).
 
+**Issuing `content.fetch` commands?** Read
+[`docs/contracts/content-fetch-issuer-contract.md`](docs/contracts/content-fetch-issuer-contract.md)
+first — it is the normative issuer contract and its permanent home. The wire carries no domain
+identity, so correlation is entirely the issuer's job, and most ways of getting it wrong fail
+silently.
+
 ## Shape
 
 **Worker-first.** The primary process is a bus consumer (a `co-core-aio` consumer group on the
