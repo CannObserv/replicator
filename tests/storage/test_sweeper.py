@@ -369,3 +369,21 @@ def test_a_file_that_cannot_even_be_stat_ed_is_counted_as_a_failure(store, tmp_p
 
     assert result.reap_failures == 1
     assert "errno 13" in result.reap_failure_sample
+
+
+def test_surviving_temporaries_are_reported_separately_from_blobs(store, tmp_path):
+    """``bytes_remaining`` spans both populations; the counts beside it must not blur.
+
+    An operator dividing bytes by blobs to get an average size would otherwise
+    get a wrong answer during a crash loop — the exact moment they are looking.
+    """
+    store.store(b"hello", FRESH, "text/plain")
+    shard = tmp_path / "1b" / "3d"
+    shard.mkdir(parents=True)
+    (shard / f".{AGED}.abc123.tmp").write_bytes(b"partial")
+
+    result = run(tmp_path)
+
+    assert (result.blobs_remaining, result.temps_remaining) == (1, 1)
+    assert result.temp_bytes_remaining == len(b"partial")
+    assert result.bytes_remaining == len(b"hello") + len(b"partial")

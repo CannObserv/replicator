@@ -189,6 +189,30 @@ async def test_a_reap_names_each_population_it_touched(monkeypatch, retention_se
     assert record.bytes_reclaimed == 99
 
 
+async def test_what_survives_is_logged_per_population(monkeypatch, retention_settings, caplog):
+    """``bytes_remaining`` spans blobs and temporaries, so the counts beside it must split.
+
+    Debris accumulating while blob retention looks healthy is the case worth
+    seeing, and a single total is where it would hide.
+    """
+    sweeper = RecordingSweep(
+        SweepResult(
+            blobs_reaped=1,
+            blobs_remaining=4,
+            temps_remaining=2,
+            temp_bytes_remaining=30,
+            bytes_remaining=130,
+        )
+    )
+
+    with caplog.at_level("INFO", logger="src.worker.retention"):
+        await drive(monkeypatch, sweeper, retention_settings)
+
+    record = caplog.records[0]
+    assert (record.blobs_remaining, record.temps_remaining) == (4, 2)
+    assert (record.temp_bytes_remaining, record.bytes_remaining) == (30, 130)
+
+
 async def test_crossing_the_ceiling_is_reported(monkeypatch, retention_settings, caplog):
     """The byte path stops fetching at this point; the journal has to say why."""
     monkeypatch.setenv("REPLICATOR_BLOB_MAX_TOTAL_BYTES", "100")

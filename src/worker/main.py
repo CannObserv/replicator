@@ -147,38 +147,53 @@ async def _run_until_first_exit(
     ``REPLICATOR_MAX_CONSECUTIVE_CYCLE_FAILURES``, and ``run_sweeper`` absorbs a
     failed sweep, so anything escaping either is worth an exit.
 
-    The survivors are asked to stop rather than cancelled, then awaited: a
-    cancelled consume loop would abandon a message mid-handler for a stale-claim
-    round-trip a clean restart has no reason to need. The wait is bounded by the
-    slowest in-flight step — a handler, or a tree walk that ``asyncio.to_thread``
-    puts beyond cancellation anyway — which is what ``TimeoutStopSec`` covers.
+    The wind-down is bounded by the slowest in-flight step — a handler, or a tree
+    walk that ``asyncio.to_thread`` puts beyond cancellation anyway — which is
+    what ``TimeoutStopSec`` covers.
 
-    A survivor that fails on its way out is logged rather than raised: the first
-    exit is the one that explains why the worker is going down, and a
-    shutdown-ordering error raised over it would bury the cause. Logged and not
-    merely swallowed, because the other order — a sweeper bug landing while the
-    loop returns cleanly on SIGTERM — would otherwise leave no trace at all.
+    Exactly one failure can be raised, and every other one is logged. The
+    raised one comes from whichever task ended the wait, because that is the
+    failure explaining why the worker is going down; a shutdown-ordering error
+    raised over it would bury the cause. But nothing may be *dropped*:
+    ``asyncio.wait`` returns every task that completed in the same pass, not
+    just the first, so a simultaneous pair leaves no survivor to log and the
+    loser's traceback would reach the journal only as asyncio's detached
+    "Task exception was never retrieved", if at all.
     """
     tasks = [asyncio.create_task(coroutine) for coroutine in coroutines]
     try:
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     except BaseException:
         # Shutdown cancelled the wait itself. The tasks are still ours to tidy
         # up: leaving them pending surfaces as "Task was destroyed but it is
         # pending" at interpreter exit, with the real cause already gone.
         for task in tasks:
             task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        _log_shutdown_failures(await asyncio.gather(*tasks, return_exceptions=True))
         raise
     stop.set()
-    if pending:
-        _log_shutdown_failures(await asyncio.gather(*pending, return_exceptions=True))
-    for task in done:
-        task.result()  # re-raises the first exit's failure, if it had one
+    # Asked to stop rather than cancelled, then awaited: a cancelled consume loop
+    # would abandon a message mid-handler for a stale-claim round-trip a clean
+    # restart has no reason to need.
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    failure = _exit_failure(tasks, results, among=done)
+    _log_shutdown_failures([result for result in results if result is not failure])
+    if failure is not None:
+        raise failure
 
 
-def _log_shutdown_failures(results: list[None | BaseException]) -> None:
-    """Report anything a survivor raised while winding down.
+def _exit_failure(
+    tasks: list[asyncio.Task[None]], results: list[BaseException | None], *, among: set
+) -> BaseException | None:
+    """The failure to raise: the first one from a task that ended the wait."""
+    for task, result in zip(tasks, results, strict=True):
+        if task in among and isinstance(result, BaseException):
+            return result
+    return None
+
+
+def _log_shutdown_failures(results: list[BaseException | None]) -> None:
+    """Report every failure that is not the one being raised.
 
     ``CancelledError`` is skipped: that is shutdown working, not failing.
     """
@@ -211,19 +226,22 @@ async def run(stop: asyncio.Event | None = None) -> None:
     # ensure_directory rather than a bare mkdir so a directory this process
     # creates is left readable by the service that reads the blobs, while one
     # that already exists keeps whatever mode its operator gave it.
+    # Resolved first, and passed to everything that touches the tree. The store
+    # resolves internally so a later chdir cannot move where blobs land; the
+    # sweep has no such protection of its own, and the two reaping and writing
+    # different directories is the kind of divergence nothing reports. Resolving
+    # before the check rather than after also means the failure below names an
+    # absolute path — REPLICATOR_BLOB_DIR defaults to the relative `blobs`, and
+    # "blobs is not usable" is not an actionable line.
+    blob_dir = settings.blob_dir.resolve()
     try:
-        ensure_directory(settings.blob_dir)
+        ensure_directory(blob_dir)
     except OSError as exc:
         logger.error(
             "blob directory is not usable",
-            extra={"blob_dir": str(settings.blob_dir), "errno": exc.errno},
+            extra={"blob_dir": str(blob_dir), "errno": exc.errno},
         )
         raise
-    # Resolved once, here, and passed to everything that touches the tree. The
-    # store resolves internally so a later chdir cannot move where blobs land;
-    # the sweep has no such protection of its own, and the two reaping and
-    # writing different directories is the kind of divergence nothing reports.
-    blob_dir = settings.blob_dir.resolve()
     warn_if_unreachable(blob_dir)
 
     owns_signals = stop is None

@@ -85,6 +85,11 @@ async def _sweep_once(root: Path, *, settings: Settings, usage: BlobUsage) -> No
                 "temps_reaped": result.temps_reaped,
                 "shards_removed": result.shards_removed,
                 "blobs_remaining": result.blobs_remaining,
+                # Split out because bytes_remaining spans both populations: the
+                # ceiling wants one number, an operator reading this wants to
+                # know which population is growing.
+                "temps_remaining": result.temps_remaining,
+                "temp_bytes_remaining": result.temp_bytes_remaining,
                 "bytes_remaining": result.bytes_remaining,
             },
         )

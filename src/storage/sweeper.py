@@ -55,6 +55,11 @@ class SweepResult:
     waiting out alike. Measuring only ``*.bin`` would let a crash loop fill the
     disk with debris while the ceiling reported an empty tree.
 
+    The per-population counts are kept alongside it rather than folded in.
+    ``blobs_remaining`` and ``temps_remaining`` describe different things — one
+    is the tree doing its job, the other is debris from interrupted writes — and
+    a single total would hide a rising second number inside a healthy first.
+
     ``reap_failures`` is counted rather than logged per file: the realistic
     trigger is a permissions problem across the whole tree, and a line each would
     be tens of thousands per cycle. ``reap_failure_sample`` keeps one example so
@@ -66,6 +71,8 @@ class SweepResult:
     temps_reaped: int = 0
     shards_removed: int = 0
     blobs_remaining: int = 0
+    temps_remaining: int = 0
+    temp_bytes_remaining: int = 0
     bytes_remaining: int = 0
     reap_failures: int = 0
     reap_failure_sample: str | None = None
@@ -138,6 +145,8 @@ def sweep(root: Path, *, ttl_seconds: float, temp_grace_seconds: float) -> Sweep
         # safely empty once nothing is about to be renamed into it.
         shards_removed=_remove_empty_shards(root),
         blobs_remaining=blobs.survivors,
+        temps_remaining=temps.survivors,
+        temp_bytes_remaining=temps.survivor_bytes,
         bytes_remaining=blobs.survivor_bytes + temps.survivor_bytes,
         reap_failures=blobs.failures + temps.failures,
         reap_failure_sample=blobs.failure_sample or temps.failure_sample,
@@ -187,7 +196,14 @@ def _reap_older_than(root: Path, pattern: str, *, cutoff: float) -> _PassResult:
             continue
         reaped += 1
         reclaimed += stat_result.st_size
-    return _PassResult(reaped, reclaimed, survivors, survivor_bytes, failures, sample)
+    return _PassResult(
+        reaped=reaped,
+        reclaimed=reclaimed,
+        survivors=survivors,
+        survivor_bytes=survivor_bytes,
+        failures=failures,
+        failure_sample=sample,
+    )
 
 
 def _remove_empty_shards(root: Path) -> int:
