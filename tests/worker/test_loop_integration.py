@@ -146,8 +146,14 @@ async def times_delivered(client, topic: str, message_id: str) -> int:
 
 
 async def keyspace(client) -> set[str]:
-    """Every key on the scratch database, as an operator would see it."""
-    return {key.decode() for key in await client.keys("*")}
+    """Every key on the scratch database, as an operator would see it.
+
+    ``scan_iter``, not ``KEYS``: Redis is single-threaded *across databases*, and
+    this is the Archiver-operated server whose db 0 carries the live cluster bus.
+    A blocking scan of the scratch db would block that one too. Matches
+    ``_expire_leftovers`` in ``tests/conftest.py`` (CR #4).
+    """
+    return {key.decode() async for key in client.scan_iter(match="*")}
 
 
 async def seed_and_consume(
@@ -228,11 +234,19 @@ async def test_a_message_younger_than_the_idle_window_is_left_alone(
     Without it, ``claim_once`` running ahead of every read would pull back
     messages another worker is still handling — at-least-once turned into
     duplicate-always.
+
+    The window here is much wider than the rest of the module's, and that is the
+    point: this is the one assertion whose *failure* direction is "too much time
+    passed". At the module's 100ms a scheduler hiccup between the read and the
+    claim would make the entry genuinely reclaimable, and the test would fail for
+    reasons that have nothing to do with the code. Fifty times the expected gap
+    leaves the property intact and the flakiness behind (CR #1).
     """
+    patient = itest_settings.model_copy(update={"claim_min_idle_ms": 5_000})
     await real_redis.xadd(scratch_topic, make_command("cmd-in-flight"))
     await itest_consumer.read(count=1, block_ms=READ_BLOCK_MS)
 
-    assert await claim_once(real_redis, itest_consumer, itest_settings, group=GROUP) == []
+    assert await claim_once(real_redis, itest_consumer, patient, group=GROUP) == []
 
 
 async def test_a_reclaim_advances_the_delivery_counter(

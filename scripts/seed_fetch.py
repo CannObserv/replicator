@@ -24,10 +24,13 @@ usable non-interactively.
 ``--watch`` tails the fact stream so a human can see the loop close without
 hand-writing ``XRANGE``. It reads with a plain ``XREAD`` and never joins a
 consumer group: ``content.blobs`` is Archiver-operated, and a group left behind by
-an operator tool accumulates a pending entries list nothing will ever drain.
+an operator tool accumulates a pending entries list nothing will ever drain. The
+stream it watches follows ``--topic`` unless overridden, so seeding a scratch
+stream watches that stream's facts rather than production's.
 
 Exit codes: ``0`` published (and, under ``--watch``, every fact seen) · ``1``
-watching timed out with facts outstanding · ``2`` the target was refused.
+publishing failed, or watching timed out with facts outstanding · ``2`` the
+target was refused.
 """
 
 import argparse
@@ -40,10 +43,10 @@ from datetime import UTC, datetime
 from co_core.effects.bus import BusPublish
 from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.envelope import from_wire, to_wire
-from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
 from co_core.pure.models.changes import BlobAvailableEvent, ContentFetchCommand
 from co_core_aio.bus import AsyncBusPublisher
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
 from ulid import ULID
 
 # How long the watch parks when a blocking read comes back empty. Real Redis
@@ -108,6 +111,20 @@ def guard_production_target(topic: str, *, db: int, production: bool) -> None:
         f"{topic} on db {db} is the live command stream — the running worker will fetch "
         f"these URLs for real. Pass --production to mean it."
     )
+
+
+def resolve_blobs_topic(topic: str, override: str | None) -> str:
+    """Which fact stream ``--watch`` reads, given the command stream being seeded.
+
+    A fixed ``content.blobs`` default meant a scratch seed watched production's
+    facts, found nothing, and exited 1 after the full timeout — a working loop
+    reported as a failure (CR #5). Pairing the default with ``--topic`` makes the
+    scratch case work unattended, and ``<topic>.blobs`` is the name the
+    integration fixtures already use.
+    """
+    if override is not None:
+        return override
+    return streams.CONTENT_BLOBS if topic == streams.CONTENT_FETCH else f"{topic}.blobs"
 
 
 async def publish(client: Redis, topic: str, urls: list[str]) -> list[SeedResult]:
@@ -177,12 +194,20 @@ async def watch_for_facts(
     return found
 
 
-def _decode_fact(topic: str, message_id: str, fields: dict) -> BlobAvailableEvent | None:
+def _decode_fact(
+    topic: str, message_id: str, fields: dict[bytes | str, bytes | str]
+) -> BlobAvailableEvent | None:
     """Decode one fact frame, or ``None`` if it is not one this run cares about.
 
     ``from_wire``'s dispatch table is global, so any known event type on this
     stream decodes cleanly into the wrong model — hence the ``isinstance`` check
     rather than trusting the topic.
+
+    The catch is deliberately broad (CR #7). ``from_wire`` documents
+    ``BusMessageAnomaly`` as its failure mode, but the fallback for *any* decode
+    failure is the same — skip the frame — and the commands are already published
+    by the time the watch runs, so an unanticipated exception here would look
+    like a failed seed and invite an operator to re-issue work already in flight.
     """
     try:
         payload = from_wire(
@@ -190,7 +215,7 @@ def _decode_fact(topic: str, message_id: str, fields: dict) -> BlobAvailableEven
             topic=topic,
             message_id=message_id,
         ).payload
-    except BusMessageAnomaly as exc:
+    except Exception as exc:
         print(f"warning: skipping undecodable frame {message_id}: {exc}", file=sys.stderr)
         return None
     return payload if isinstance(payload, BlobAvailableEvent) else None
@@ -235,8 +260,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--blobs-topic",
-        default=streams.CONTENT_BLOBS,
-        help=f"fact stream --watch reads (default: {streams.CONTENT_BLOBS})",
+        default=None,
+        help=(
+            f"fact stream --watch reads "
+            f"(default: {streams.CONTENT_BLOBS} for {streams.CONTENT_FETCH}, "
+            f"otherwise <topic>.blobs)"
+        ),
     )
     parser.add_argument(
         "--watch-timeout",
@@ -260,11 +289,25 @@ async def run(args: argparse.Namespace) -> int:
     The client is opened here and closed here — bus clients are injection-only,
     so the script owns one for its run, the same rule ``src/worker/main.py``
     follows.
+
+    A bad URL or an unreachable broker is answered with a line and an exit code
+    rather than a traceback (CR #3), matching ``sync_wheelhouse.py``, the other
+    operator-facing script in this repo. It matters most in the multi-URL case:
+    a failure partway through the loop has already published some commands, and
+    a stack trace is a poor way to learn which.
     """
-    client = Redis.from_url(args.redis_url)
+    try:
+        client = Redis.from_url(args.redis_url)
+    except (ValueError, RedisError) as exc:
+        print(f"error: {args.redis_url} is not a usable Redis URL: {exc}", file=sys.stderr)
+        return 1
     try:
         guard_production_target(args.topic, db=resolve_db(client), production=args.production)
-        start_id = await last_id(client, args.blobs_topic) if args.watch else "0-0"
+        blobs_topic = resolve_blobs_topic(args.topic, args.blobs_topic)
+        # Before publishing, deliberately: capture it afterwards and a worker
+        # fast enough to answer immediately would land its fact behind the
+        # cursor, and the watch would time out on a loop that worked.
+        start_id = await last_id(client, blobs_topic) if args.watch else "0-0"
         results = await publish(client, args.topic, args.urls)
         for result in results:
             print(
@@ -273,21 +316,28 @@ async def run(args: argparse.Namespace) -> int:
             )
         if not args.watch:
             return 0
-        return await _report_facts(client, args, start_id, results)
+        return await _report_facts(client, blobs_topic, args.watch_timeout, start_id, results)
     except ProductionTargetError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    except (RedisError, OSError) as exc:
+        print(f"error: {args.redis_url} is not usable: {exc}", file=sys.stderr)
+        return 1
     finally:
         await client.aclose()
 
 
 async def _report_facts(
-    client: Redis, args: argparse.Namespace, start_id: str, results: list[SeedResult]
+    client: Redis,
+    blobs_topic: str,
+    timeout_seconds: float,
+    start_id: str,
+    results: list[SeedResult],
 ) -> int:
     """Wait for each command's fact and print it; non-zero if any never arrived."""
     awaited = {result.command_id for result in results}
     facts = await watch_for_facts(
-        client, args.blobs_topic, start_id, awaited, timeout_seconds=args.watch_timeout
+        client, blobs_topic, start_id, awaited, timeout_seconds=timeout_seconds
     )
     for fact in facts:
         print(
@@ -298,7 +348,8 @@ async def _report_facts(
     if not missing:
         return 0
     print(
-        f"error: no blob_available after {args.watch_timeout}s for: {', '.join(sorted(missing))}",
+        f"error: no blob_available on {blobs_topic} after {timeout_seconds}s "
+        f"for: {', '.join(sorted(missing))}",
         file=sys.stderr,
     )
     return 1

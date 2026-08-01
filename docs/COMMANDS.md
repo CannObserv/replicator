@@ -51,12 +51,17 @@ uv run python -m scripts.seed_fetch \
   https://example.test/a https://example.test/b
 
 # The live loop. --production is required for db 0 + content.fetch, because the
-# running service will fetch these URLs for real. --watch tails content.blobs
+# running service will fetch these URLs for real. --watch tails the fact stream
 # until each command's blob_available arrives (exit 1 if one never does).
+# The target below is the local /health app — start it first (see API, below).
 uv run python -m scripts.seed_fetch \
   --redis-url redis://localhost:6379/0 --topic content.fetch \
   --production --watch http://localhost:8041/health
 ```
+
+`--watch` reads `content.blobs` for `content.fetch` and `<topic>.blobs` otherwise, so the
+scratch invocation above watches its own facts rather than production's. `--blobs-topic`
+overrides that.
 
 Watch the other side with `sudo journalctl -u replicator -f`.
 

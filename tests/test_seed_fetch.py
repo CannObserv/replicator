@@ -15,6 +15,7 @@ import pytest
 from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.envelope import from_wire, to_wire
 from co_core.pure.models.changes import BlobAvailableEvent, ContentFetchCommand
+from redis.asyncio import Redis
 from ulid import ULID
 
 from scripts.seed_fetch import (
@@ -24,6 +25,9 @@ from scripts.seed_fetch import (
     last_id,
     main,
     publish,
+    resolve_blobs_topic,
+    resolve_db,
+    run,
     watch_for_facts,
 )
 
@@ -46,22 +50,29 @@ async def decoded_commands(client, topic: str = TOPIC) -> list[ContentFetchComma
     return commands
 
 
+def fact_fields(command_id: str) -> dict[str, str]:
+    """The wire frame the worker's handler publishes for a handled command."""
+    return to_wire(
+        BlobAvailableEvent(
+            occurred_at=datetime.now(UTC),
+            content_fingerprint="f" * 64,
+            blob_uri="file:///tmp/blobs/ff/ff/" + "f" * 64 + ".bin",
+            size_bytes=3,
+            media_type="text/html",
+            url=URL,
+            command_id=command_id,
+        )
+    )
+
+
 async def add_fact(client, command_id: str, topic: str = BLOBS) -> bytes:
     """XADD a ``blob_available`` frame as the worker's handler would."""
-    return await client.xadd(
-        topic,
-        to_wire(
-            BlobAvailableEvent(
-                occurred_at=datetime.now(UTC),
-                content_fingerprint="f" * 64,
-                blob_uri="file:///tmp/blobs/ff/ff/" + "f" * 64 + ".bin",
-                size_bytes=3,
-                media_type="text/html",
-                url=URL,
-                command_id=command_id,
-            )
-        ),
-    )
+    return await client.xadd(topic, fact_fields(command_id))
+
+
+def seed_args(*argv: str):
+    """Parse a seed invocation, with the required target filled in."""
+    return build_parser().parse_args(["--redis-url", "redis://fake/15", *argv])
 
 
 async def test_publishing_lands_a_decodable_command(fake_redis):
@@ -209,6 +220,41 @@ async def test_watching_gives_up_at_the_timeout(fake_redis):
     assert await watch_for_facts(fake_redis, BLOBS, start, {"cmd-1"}, timeout_seconds=0.2) == []
 
 
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("redis://localhost:6379/15", 15),
+        # A ?db= query parameter overrides the path, and a path-less or
+        # unix-socket URL has no database to read at all — redis-py's own
+        # default is 0, which is exactly the one the guard cares about.
+        ("redis://localhost:6379/0?db=7", 7),
+        ("redis://localhost:6379", 0),
+        ("unix:///tmp/redis.sock", 0),
+    ],
+)
+def test_the_database_is_the_one_redis_py_resolved(url, expected):
+    """Read from the client, not parsed out of the URL (CR #2)."""
+    assert resolve_db(Redis.from_url(url)) == expected
+
+
+@pytest.mark.parametrize(
+    ("topic", "override", "expected"),
+    [
+        (streams.CONTENT_FETCH, None, streams.CONTENT_BLOBS),
+        (TOPIC, None, f"{TOPIC}.blobs"),
+        (TOPIC, "somewhere.else", "somewhere.else"),
+        (streams.CONTENT_FETCH, "somewhere.else", "somewhere.else"),
+    ],
+)
+def test_the_fact_stream_default_follows_the_command_stream(topic, override, expected):
+    """A scratch seed watched the production fact stream and found nothing (CR #5).
+
+    Pairing the default with ``--topic`` makes the scratch case work unattended,
+    and matches how the integration fixtures name their streams.
+    """
+    assert resolve_blobs_topic(topic, override) == expected
+
+
 async def test_watching_leaves_no_consumer_group_behind(fake_redis):
     """``content.blobs`` is Archiver-operated: a stray group's PEL grows forever.
 
@@ -221,3 +267,105 @@ async def test_watching_leaves_no_consumer_group_behind(fake_redis):
     await watch_for_facts(fake_redis, BLOBS, start, {"cmd-1"}, timeout_seconds=1)
 
     assert await fake_redis.xinfo_groups(BLOBS) == []
+
+
+@pytest.fixture
+def owned_client(fake_redis, monkeypatch) -> list[bool]:
+    """Hand ``run()`` the fake broker, and record that it closed it.
+
+    ``run()`` opens its own client — bus clients are injection-only, so the
+    script owns one for its run — which is what makes it awkward to test and
+    worth testing (CR #2). The returned list is the close receipt.
+    """
+    closed: list[bool] = []
+
+    async def aclose():
+        closed.append(True)
+
+    monkeypatch.setattr(fake_redis, "aclose", aclose)
+    monkeypatch.setattr(Redis, "from_url", staticmethod(lambda url, **kwargs: fake_redis))
+    return closed
+
+
+@pytest.fixture
+def instant_worker(fake_redis, monkeypatch) -> None:
+    """A worker so fast the fact exists the moment the command is published.
+
+    The worst case for the start-id ordering, made deterministic: no sleeping, no
+    racing a background task.
+    """
+    original = fake_redis.xadd
+
+    async def xadd(name, fields, **kwargs):
+        message_id = await original(name, fields, **kwargs)
+        if name == TOPIC:
+            command = from_wire(fields, topic=name, message_id=message_id.decode()).payload
+            # from_wire's dispatch table is global, so the payload type is a
+            # union until something narrows it — the same check the script makes.
+            assert isinstance(command, ContentFetchCommand)
+            await original(f"{TOPIC}.blobs", fact_fields(command.command_id))
+        return message_id
+
+    monkeypatch.setattr(fake_redis, "xadd", xadd)
+
+
+async def test_a_run_publishes_and_closes_the_client_it_opened(fake_redis, owned_client):
+    code = await run(seed_args("--topic", TOPIC, URL))
+
+    assert code == 0
+    assert [command.url for command in await decoded_commands(fake_redis)] == [URL]
+    assert owned_client == [True]
+
+
+async def test_a_refused_target_publishes_nothing_and_still_closes(fake_redis, owned_client):
+    """The guard fires before the first XADD, not after a partial run."""
+    code = await run(seed_args("--topic", streams.CONTENT_FETCH, URL))
+
+    assert code == 2
+    assert await fake_redis.xlen(streams.CONTENT_FETCH) == 0
+    assert owned_client == [True]
+
+
+async def test_a_watched_run_reports_the_fact_for_the_command_it_published(
+    fake_redis, owned_client, instant_worker, capsys
+):
+    """The start id has to be captured *before* publishing (CR #2).
+
+    The fake worker publishes the fact the instant the command lands. Capture the
+    cursor afterwards and it is already past that fact, so the watch would sit
+    out its whole timeout waiting for something that arrived while it was looking
+    away — and report a working loop as a failure.
+    """
+    code = await run(seed_args("--topic", TOPIC, "--watch", "--watch-timeout", "2", URL))
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "blob_available" in out
+    assert "f" * 64 in out
+
+
+async def test_a_watched_run_that_sees_no_fact_reports_the_command_that_is_missing(
+    fake_redis, owned_client, capsys
+):
+    """Nothing consumes the scratch stream here, so the watch runs out of time."""
+    code = await run(seed_args("--topic", TOPIC, "--watch", "--watch-timeout", "0.2", URL))
+
+    assert code == 1
+    published = (await decoded_commands(fake_redis))[0]
+    assert published.command_id in capsys.readouterr().err
+
+
+def test_an_unusable_redis_url_is_an_error_not_a_traceback(capsys):
+    """An operator tool answers with a line and an exit code, not a stack (CR #3)."""
+    code = main(["--redis-url", "not-a-url", "--topic", TOPIC, URL])
+
+    assert code == 1
+    assert "error:" in capsys.readouterr().err
+
+
+def test_a_broker_that_refuses_the_connection_is_an_error_not_a_traceback(capsys):
+    """Port 1 refuses immediately — the same shape as a wrong --redis-url."""
+    code = main(["--redis-url", "redis://localhost:1/15", "--topic", TOPIC, URL])
+
+    assert code == 1
+    assert "error:" in capsys.readouterr().err

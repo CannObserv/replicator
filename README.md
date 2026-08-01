@@ -87,13 +87,16 @@ Nothing in the cluster issues `content.fetch` commands until the Watcher cutover
 consumes, and therefore actually fetches over the network) additionally needs `--production`:
 
 ```bash
+# Fetches the local /health app — a target we control, so the smoke test costs
+# nobody else a request. Start it first (see Dev server below).
 uv run python -m scripts.seed_fetch \
   --redis-url redis://localhost:6379/0 --topic content.fetch \
-  --production --watch https://example.com/
+  --production --watch http://localhost:8041/health
 ```
 
-`--watch` tails `content.blobs` until each command's `blob_available` arrives. Add `--dry-run`
-to print the frames without contacting a broker at all.
+`--watch` tails the fact stream until each command's `blob_available` arrives — `content.blobs`
+for `content.fetch`, `<topic>.blobs` otherwise, so a scratch seed watches its own facts. Add
+`--dry-run` to print the frames without contacting a broker at all.
 
 ## Test & lint
 
