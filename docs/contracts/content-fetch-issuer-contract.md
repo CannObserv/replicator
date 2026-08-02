@@ -18,7 +18,7 @@ edits this file. Whatever is asserted here is asserted about this repo's code: e
 `{content_fingerprint, blob_uri, size_bytes, media_type, url, command_id?}` — both inside a co-core
 envelope, which is a shape in its own right and the first thing a producer must get right (see **The
 frame**). There is **no
-`info_source_id`, and no other domain identity, anywhere on either frame** — Replicator fetches
+`info_source_id`, and no other domain identity, anywhere in either payload** — Replicator fetches
 bytes and knows nothing about what they mean. That keeps Replicator clean, and it pushes the whole
 of correlation onto the issuer. Most of what follows fails *silently* when it is got wrong: no
 error, no dead letter, no log on Replicator's side — just a fact nobody can match, or a command
