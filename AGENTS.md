@@ -77,7 +77,9 @@ src/core/config.py   — Settings / env access (see Environment Variables)
 scripts/        — sync_wheelhouse.py, check_redis_floor.sh, seed_fetch.py
 scripts/seed_fetch.py — the MVP command issuer; publishes content.fetch, --watch tails the facts
 tests/          — Mirrors src/ structure; integration tests in `@pytest.mark.integration`
-docs/           — Reference docs (COMMANDS, SKILLS); docs/plans/ holds implementation plans
+docs/           — Reference docs (COMMANDS, SKILLS)
+docs/contracts/ — Normative bus contracts; the issuer-facing half of the wire, linked to from sibling repos
+docs/plans/     — Implementation plans
 deploy/         — Systemd unit + deployment config
 .wheelhouse/    — Local mirror of the private cannobserv index (git-ignored except .gitkeep)
 ```
