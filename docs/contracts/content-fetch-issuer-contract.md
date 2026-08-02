@@ -13,9 +13,11 @@ to any MUST, or to the failure taxonomy, is announced on the open issuer-side tr
 [CannObserv/watcher#241](https://github.com/CannObserv/watcher/issues/241) — in the same change that
 edits this file. Whatever is asserted here is asserted about this repo's code: edit one, edit both.
 
-**Why this document exists.** The bus wire shape is deliberately domain-agnostic: `content.fetch`
-carries `{command_id, url}` and `content.blobs` carries
-`{content_fingerprint, blob_uri, size_bytes, media_type, url, command_id?}`. There is **no
+**Why this document exists.** The bus wire shape is deliberately domain-agnostic: a `content.fetch`
+*payload* carries `{command_id, url}` and a `content.blobs` payload carries
+`{content_fingerprint, blob_uri, size_bytes, media_type, url, command_id?}` — both inside a co-core
+envelope, which is a shape in its own right and the first thing a producer must get right (see **The
+frame**). There is **no
 `info_source_id`, and no other domain identity, anywhere on either frame** — Replicator fetches
 bytes and knows nothing about what they mean. That keeps Replicator clean, and it pushes the whole
 of correlation onto the issuer. Most of what follows fails *silently* when it is got wrong: no
@@ -27,15 +29,15 @@ Contracts settled in cannobserv#266 (co-core v0.7.0). Founding rationale:
 
 ---
 
-## The frame
+## The frame (envelope)
 
 **Publish through `to_wire`. Never hand-roll the fields.** What lands on the stream is a co-core
 *envelope*, not the model's fields flattened — `co_core.pure.adapters.bus.envelope.to_wire(event)`
-produces exactly six keys:
+produces exactly six keys, all of them derived from the model. None are caller-supplied:
 
 | Key | Value |
 |---|---|
-| `key` | the envelope's partition key — **the `command_id`** for a command, the `content_fingerprint` for a fact |
+| `key` | the envelope's partition key, derived by `to_wire` — **the `command_id`** for a command, the `content_fingerprint` for a fact |
 | `payload` | the model, JSON-serialized. This is where `command_id`, `url`, and everything in the tables below actually live |
 | `event_type` | `content_fetch` / `blob_available` — how `from_wire` picks a model |
 | `schema_version` | stringified |
@@ -47,9 +49,12 @@ cannot decode. It raises `BusMessageAnomaly` from inside the consumer's `read`, 
 routes it to `content.fetch.dlq` — **silently, by the terms of MUST-6**. This is the single
 likeliest way to get the contract wrong, so it is stated before the field tables rather than after.
 
-`key` being the `command_id` is also what makes a DLQ entry correlatable; see MUST-6.
+`key` is **not** load-bearing on the consume path: Replicator decodes `payload` and dedupes on
+`payload.command_id`, never on the envelope key. Its value is operational — it is what makes a DLQ
+entry correlatable without parsing JSON (see MUST-6), and it is what a future partitioned consumer
+would shard on.
 
-## The payload
+## The payload (inside `payload`)
 
 **Command — `content.fetch`, `ContentFetchCommand`** (`co_core.pure.models.changes`):
 
