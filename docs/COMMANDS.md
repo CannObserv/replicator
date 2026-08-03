@@ -99,7 +99,7 @@ redis-cli XRANGE content.blobs - + COUNT 200 | grep '"event_type":"fetch_failed"
 ## API (dev only)
 
 ```bash
-uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8041 --reload
+uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8041 --reload --log-config src/core/log_config.json
 curl -s localhost:8041/health | jq
 ```
 

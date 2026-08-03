@@ -137,8 +137,13 @@ The FastAPI `/health` app runs on port 8041 (port 8040 belongs to systemd if/whe
 promoted to a deployed surface):
 
 ```bash
-uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8041 --reload
+uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8041 --reload --log-config src/core/log_config.json
 ```
+
+`--log-config` routes uvicorn's own `uvicorn` / `uvicorn.access` / `uvicorn.error` loggers — which
+ship with `propagate=False` and plain-text handlers of their own — through the same JSON formatter
+`configure_logging()` installs on the root logger. Without it the dev server emits mixed-format
+output: plain-text access lines interleaved with JSON app records.
 
 ## Deploy
 

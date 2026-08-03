@@ -74,7 +74,8 @@ src/api/        — FastAPI app (/health only; not part of the MVP loop)
 src/api/main.py — App factory, lifespan, router registration
 src/core/       — Shared domain logic, logging, config
 src/core/errors.py   — TransientFetchError / PermanentFetchError + FailureReason (handler failure vocabulary)
-src/core/logging.py  — configure_logging() + get_logger()
+src/core/logging.py  — build_json_formatter() + configure_logging() + get_logger()
+src/core/log_config.json — uvicorn --log-config; routes uvicorn's own loggers through that formatter
 src/core/config.py   — Settings / env access (see Environment Variables)
 scripts/        — sync_wheelhouse.py, check_redis_floor.sh, seed_fetch.py
 scripts/seed_fetch.py — the MVP command issuer; publishes content.fetch, --watch tails the facts
@@ -123,7 +124,7 @@ The **redis-py client** resolves `>=5,<8` transitively via `co-core-aio[bus]`. D
 
 ```bash
 set -a; . /etc/replicator/.env 2>/dev/null; . .env 2>/dev/null; set +a
-uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8041 --reload
+uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8041 --reload --log-config src/core/log_config.json
 ```
 
 ## Environment Variables
@@ -247,7 +248,7 @@ uv run ruff check .
 uv run python -m src.worker.main
 
 # FastAPI dev server (/health only)
-uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8041 --reload
+uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8041 --reload --log-config src/core/log_config.json
 ```
 
 Full reference: `docs/COMMANDS.md`
@@ -272,6 +273,8 @@ from src.core.logging import get_logger
 logger = get_logger(__name__)
 ```
 Entry points only: `configure_logging()` is called once inside the FastAPI `lifespan` or the worker's `run()`. Never in library modules.
+
+**One formatter, two installers.** `build_json_formatter()` is the single definition of the JSON schema (`timestamp`, `level`, `logger`, `message`). `configure_logging()` installs it on the root logger; `src/core/log_config.json` names the *same factory* through dictConfig's `"()"` key, so there is no second fmt string to drift. The dev server must be launched with `--log-config src/core/log_config.json` — uvicorn's `uvicorn` / `uvicorn.access` / `uvicorn.error` loggers ship with `propagate=False` and their own plain-text handlers, so a root-only config never reaches them and the output is half JSON, half plain text. **The worker runs no uvicorn**, so `replicator.service` needs no `--log-config`; its `ExecStart` is `python -m src.worker.main` and `configure_logging()` is the whole story there (#14).
 
 **Date & Time:**
 - All UTC
