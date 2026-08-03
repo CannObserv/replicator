@@ -176,6 +176,11 @@ Mint a ULID per fetch intent — one per call, not one per URL and not one per r
 Uniqueness is required *for correctness* only within the dedupe TTL, but *for correlation* it must
 be global and permanent — the issuer's own map is keyed on it.
 
+An **empty** `command_id` is not a `command_id`. Replicator dead-letters it before the fetch
+rather than treating `replicator:cmd:` as a dedupe key — under which the second blank-id command
+ever published would be a silent no-op, and the first would produce a `blob_available` nothing
+can be matched against.
+
 ### 2. Persist `command_id → domain` durably, **before** publishing
 
 The bus carries nothing that can reconstruct the mapping. If the issuer crashes between minting the
@@ -266,8 +271,10 @@ produces nothing *yet*:
   names a command that **succeeded**. Announcing a terminal failure against it would contradict a
   fact the issuer has already applied, and MUST-4 covers duplicates, not contradictions. Silent by
   design.
-- **A command whose `command_id` is blank.** A fact with no correlator closes nothing. Replicator
-  logs a warning and dead-letters without announcing.
+- **A command whose `command_id` is blank.** Refused before the fetch and dead-lettered, with no
+  fact — there is no correlator to key one on. Silent to the issuer, but *not* silently
+  processed: an empty id is not a valid `command_id` (MUST-1), and accepting it would take the
+  dedupe key `replicator:cmd:` under which every later blank-id command becomes a no-op.
 - **A command still retrying.** Replicator emits no non-terminal fact today (#9 §3), so a 5xx,
   a 429, a network error, or a blob tree over its ceiling is invisible for as long as it retries —
   and there is no latency bound on that: transient failures retry indefinitely at the
@@ -343,8 +350,10 @@ A consumer on another host cannot open it, and nothing on the wire says so.
 
 - **No *non-terminal* failure fact** — a command that is retrying announces nothing until it
   either succeeds or is closed. See MUST-6 and the `FetchFailedEvent` note above.
-- **No failure fact for a frame that is not a command, or whose `command_id` is blank** — nothing
-  to correlate one on, and for a foreign payload nothing *safe* to correlate one on. MUST-6.
+- **No failure fact for a frame that is not a `content.fetch` command** — any `command_id` it
+  carries is another command's, so there is nothing *safe* to correlate one on. MUST-6.
+- **No failure fact for a command whose `command_id` is blank** — nothing to correlate one on at
+  all. It is dead-lettered before the fetch rather than run. MUST-1, MUST-6.
 - **No latency bound**, and no SLA on turnaround.
 - **No ordering.** Two commands issued in sequence may produce facts in either order.
 - **No cross-command dedupe.** Two `command_id`s for one URL are two fetches and two facts, by
@@ -363,7 +372,7 @@ A consumer on another host cannot open it, and nothing on the wire says so.
 | Duplicate `command_id` inside the dedupe window (default 24 h) | ack, no fetch | **nothing** — silent drop |
 | `schema_version` ≠ 1 | fact, then `content.fetch.dlq` | `fetch_failed` · `unsupported_schema_version` |
 | Frame decodes to a non-`content_fetch` payload | `content.fetch.dlq` | **nothing** — any `command_id` in it is another command's |
-| Command with a blank `command_id` | warning, then `content.fetch.dlq` | **nothing** — no correlator to key a fact on |
+| Command with a blank `command_id` | `content.fetch.dlq`, before the fetch | **nothing** — no correlator to key a fact on |
 | Malformed frame (fails `from_wire`; includes a naive `occurred_at`) | `content.fetch.dlq`, synthesized record | **nothing** — no payload at all |
 | HTTP 4xx, or a body-less 304 | fact, then `content.fetch.dlq` | `fetch_failed` · `http_status` (+ `status_code`) |
 | URL not fetchable (bad scheme / invalid URL) | fact, then `content.fetch.dlq` | `fetch_failed` · `not_fetchable` |

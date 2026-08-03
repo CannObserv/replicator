@@ -192,6 +192,28 @@ async def process_message(
                 detail=f"schema_version={command.schema_version}",
             ),
         )
+    # A command with no correlator is malformed, and is refused before anything
+    # can use it (CR #6). Left to run it would fetch, publish a blob_available no
+    # issuer can match, and take the dedupe key ``replicator:cmd:`` — under which
+    # every *later* blank-id command is a silent no-op, MUST-1's failure mode
+    # reached from a direction MUST-1 does not describe.
+    #
+    # After the schema_version branch, not before: reading command_id is
+    # destructuring, and the contract's rule is to branch on the version first.
+    # That leaves a v2-with-blank-id frame reaching a report site with nothing to
+    # key on, which is what the correlator guard in ``_close`` is the backstop for.
+    #
+    # No fact, for the same reason there is no dedupe key: nothing to name it by.
+    if not command.command_id:
+        return await _close(
+            consumer,
+            message.message_id,
+            dict(message.fields),
+            reason="command_id is blank",
+            detail={"url": command.url},
+            reporter=reporter,
+            report=None,
+        )
 
     dedupe_key = f"{DEDUPE_KEY_PREFIX}{command.command_id}"
     if await client.exists(dedupe_key):
@@ -368,23 +390,24 @@ async def _close(
     well: a reporter that raised would abandon the dead-letter and leave a
     hopeless command in the PEL to be redelivered forever.
     """
-    if report is not None and not report.command_id:
-        logger.warning(
-            "cannot announce this failure — the command carries no command_id",
-            extra={"message_id": message_id, "reason": str(report.reason)},
-        )
-    elif report is not None:
-        try:
-            await reporter(report)
-        except Exception as exc:
-            logger.error(
-                "failure reporter raised — dead-lettering anyway",
-                extra={
-                    "command_id": report.command_id,
-                    "error": f"{type(exc).__name__}: {exc}",
-                },
-                exc_info=exc,
+    if report is not None:
+        if not report.command_id:
+            logger.warning(
+                "cannot announce this failure — the command carries no command_id",
+                extra={"message_id": message_id, "reason": str(report.reason)},
             )
+        else:
+            try:
+                await reporter(report)
+            except Exception as exc:
+                logger.error(
+                    "failure reporter raised — dead-lettering anyway",
+                    extra={
+                        "command_id": report.command_id,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                    exc_info=exc,
+                )
     return await _dead_letter(consumer, message_id, fields, reason=reason, detail=detail)
 
 
