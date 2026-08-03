@@ -170,8 +170,18 @@ async def test_a_deduped_command_announces_nothing(fake_redis, consumer, setting
     assert reports.reports == []
 
 
-async def test_a_foreign_payload_carrying_a_command_id_is_announced(fake_redis, consumer, settings):
-    """Best effort: ``BlobAvailableEvent`` happens to echo one, so it can be closed."""
+async def test_a_foreign_payload_is_never_announced_even_when_it_echoes_a_command_id(
+    fake_redis, consumer, settings
+):
+    """CR #1: a ``command_id`` inside a foreign payload is not *our* command.
+
+    ``BlobAvailableEvent.command_id`` names a command that **succeeded** — that
+    is why a blob exists for it. Announcing ``fetch_failed(terminal=True)``
+    against it would tell the issuer that a command it already closed with good
+    bytes will never produce any: a wrong correlation applied silently, which is
+    the failure class MUST-1 / MUST-3 / MUST-5 all exist to prevent. Emitting
+    nothing costs a reaper timeout; emitting this corrupts issuer state.
+    """
     await fake_redis.xadd(
         TOPIC,
         to_wire(
@@ -182,20 +192,49 @@ async def test_a_foreign_payload_carrying_a_command_id_is_announced(fake_redis, 
                 size_bytes=1,
                 media_type="text/html",
                 url="https://example.test/a",
-                command_id="cmd-misrouted",
+                command_id="cmd-that-actually-succeeded",
             )
         ),
     )
     reports = collected_reports()
 
     message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
-    await process_one(
+    outcome = await process_one(
         fake_redis, consumer, settings, message, unreachable_handler, reporter=reports
     )
 
-    (report,) = reports.reports
-    assert report.command_id == "cmd-misrouted"
-    assert report.reason is FailureReason.WRONG_PAYLOAD_TYPE
+    assert outcome is Outcome.DEAD_LETTERED
+    assert reports.reports == []
+    assert await fake_redis.xlen(dlq_name(TOPIC)) == 1
+
+
+async def test_a_command_with_a_blank_command_id_is_not_announced(
+    fake_redis, consumer, settings, caplog
+):
+    """CR #3: a fact with no correlator closes nothing — and says so in the journal.
+
+    The guard lives at ``_close``, not at one call site, so it holds for every
+    report path there is and every one added later. Silence here would otherwise
+    be indistinguishable from an ordinary dead-letter.
+    """
+    fields = make_command(command_id="cmd-blank")
+    payload = json.loads(fields["payload"])
+    payload["command_id"] = ""
+    payload["schema_version"] = 2  # any closing path will do; this one needs no handler
+    fields["payload"] = json.dumps(payload)
+    await fake_redis.xadd(TOPIC, fields)
+    reports = collected_reports()
+
+    with caplog.at_level("WARNING", logger="src.worker.loop"):
+        message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
+        outcome = await process_one(
+            fake_redis, consumer, settings, message, unreachable_handler, reporter=reports
+        )
+
+    assert outcome is Outcome.DEAD_LETTERED
+    assert reports.reports == []
+    assert any("no command_id" in record.message for record in caplog.records)
+    assert await fake_redis.xlen(dlq_name(TOPIC)) == 1
 
 
 async def test_a_foreign_payload_without_a_command_id_stays_silent(fake_redis, consumer, settings):

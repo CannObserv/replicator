@@ -88,10 +88,12 @@ redis-cli --scan --pattern 'replicator:cmd:*' | head
 redis-cli XLEN content.blobs
 redis-cli XRANGE content.blobs - + COUNT 5
 
-# Just the failures. The envelope hoists event_type, so this needs no JSON parsing.
-# A dead-lettered command should appear here *and* in content.fetch.dlq — the fact
-# is the issuer's surface, the DLQ is the operator's.
-redis-cli XRANGE content.blobs - + COUNT 200 | grep -A2 fetch_failed
+# Just the failures. Matches the payload JSON, which is one line per entry and
+# carries the whole fact — do NOT grep the bare token, which also hits the
+# hoisted event_type field and interleaves half-records. A dead-lettered command
+# should appear here *and* in content.fetch.dlq — the fact is the issuer's
+# surface, the DLQ is the operator's.
+redis-cli XRANGE content.blobs - + COUNT 200 | grep '"event_type":"fetch_failed"'
 ```
 
 ## API (dev only)

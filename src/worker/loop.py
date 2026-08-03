@@ -163,18 +163,13 @@ async def process_message(
             reason="payload is not a content.fetch command",
             detail={"event_type": command.event_type},
             reporter=reporter,
-            # Best effort, and usually nothing: FetchFailedEvent.command_id is
-            # required and most of the payload union has no such field. Where
-            # there is none there is nothing to correlate a fact against, so this
-            # row stays DLQ-only and the issuer's reaper remains the mechanism.
-            # ``url`` is confirmation-only (contract MUST-3), never a key, so an
-            # empty one is a visibly-absent value rather than a misleading one.
-            report=_report_for(
-                command_id=getattr(command, "command_id", None),
-                url=getattr(command, "url", ""),
-                reason=FailureReason.WRONG_PAYLOAD_TYPE,
-                detail=f"frame decoded as {command.event_type}",
-            ),
+            # DLQ-only, never announced (CR #1). Most of the payload union has no
+            # command_id at all, and the members that do carry *somebody else's* —
+            # BlobAvailableEvent's names a command that succeeded, which is why
+            # there is a blob for it. A fact keyed on that id would tell an issuer
+            # its good bytes will never arrive: a wrong correlation applied
+            # silently, strictly worse than the reaper timeout that silence costs.
+            report=None,
         )
     if command.schema_version != SUPPORTED_SCHEMA_VERSION:
         return await _close(
@@ -188,8 +183,9 @@ async def process_message(
             # the destructuring the contract warns issuers about — done knowingly
             # and only here: command_id and url are the v1 baseline, and a fact
             # naming neither could not close anything. If a future version moves
-            # them, this branch is where it breaks.
-            report=_report_for(
+            # them, this branch is where it breaks — and ``_close`` refuses a
+            # report with no correlator rather than publishing an empty one.
+            report=FailureReport(
                 command_id=command.command_id,
                 url=command.url,
                 reason=FailureReason.UNSUPPORTED_SCHEMA_VERSION,
@@ -336,28 +332,6 @@ async def _delivery_count(client: Redis, message: BusMessage, *, group: str) -> 
     return int(entries[0]["times_delivered"])
 
 
-def _report_for(
-    *,
-    command_id: str | None,
-    url: str,
-    reason: FailureReason,
-    detail: str | None = None,
-) -> FailureReport | None:
-    """A report, or ``None`` where there is no ``command_id`` to correlate one on.
-
-    The two silent rows of the failure taxonomy both arrive here: a frame that
-    decoded to a payload carrying no ``command_id``, and (via
-    ``dead_letter_anomaly``, which has no report at all) a frame that did not
-    decode. ``FetchFailedEvent.command_id`` is required and *is* the event — a
-    fact naming no command closes nothing and only adds noise to a broadcast
-    stream. Contract MUST-6 keeps the issuer's reaper as the backstop for exactly
-    these.
-    """
-    if not command_id:
-        return None
-    return FailureReport(command_id=command_id, url=url, reason=reason, detail=detail)
-
-
 async def _close(
     consumer: AsyncBusConsumer,
     message_id: str,
@@ -377,14 +351,29 @@ async def _close(
     already requires issuers to tolerate. Same reasoning as store-then-publish on
     the byte path, one step further along.
 
-    A ``report`` of ``None`` means the row cannot be announced (see
-    ``_report_for``), not that announcing was skipped.
+    A ``report`` of ``None`` means the row has no fact to announce at all — a
+    frame whose payload is not a command, and (via ``dead_letter_anomaly``) one
+    that did not decode. Those stay DLQ-only, and contract MUST-6 keeps the
+    issuer's reaper as the backstop for them.
+
+    **A correlator-less report is refused here rather than at the call sites.**
+    ``FetchFailedEvent.command_id`` is required and *is* the event, so a fact
+    naming no command closes nothing and only adds noise to a broadcast stream.
+    Enforced at this one choke point so the invariant holds for every report path
+    there is and every one added later; it is logged because otherwise a
+    malformed command would be indistinguishable in the journal from an ordinary
+    dead-letter.
 
     The reporter's own failures are swallowed there, but they are caught here as
     well: a reporter that raised would abandon the dead-letter and leave a
     hopeless command in the PEL to be redelivered forever.
     """
-    if report is not None:
+    if report is not None and not report.command_id:
+        logger.warning(
+            "cannot announce this failure — the command carries no command_id",
+            extra={"message_id": message_id, "reason": str(report.reason)},
+        )
+    elif report is not None:
         try:
             await reporter(report)
         except Exception as exc:
