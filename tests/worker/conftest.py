@@ -16,12 +16,12 @@ from datetime import UTC, datetime
 import pytest
 from co_core.effects.fetch import FetchResult
 from co_core.pure.adapters.bus import streams
-from co_core.pure.adapters.bus.envelope import to_wire
+from co_core.pure.adapters.bus.envelope import from_wire, to_wire
 from co_core.pure.adapters.bus.streams import dlq_name
 from co_core.pure.models.changes import ContentFetchCommand
 
 from src.core.config import get_settings
-from src.worker.loop import process_message, run_loop
+from src.worker.loop import FailureReport, process_message, run_loop
 from src.worker.main import build_consumer
 
 TOPIC = streams.CONTENT_FETCH
@@ -63,6 +63,36 @@ class FakeFetcher:
         if self._error is not None:
             raise self._error
         return self._result
+
+
+def now() -> datetime:
+    """A tz-aware UTC stamp — the only kind co-core's payloads accept.
+
+    ``occurred_at`` is an ``AwareDatetime`` on every model since cannobserv#273;
+    a naive value is rejected fail-loud rather than assumed to be UTC.
+    """
+    return datetime.now(UTC)
+
+
+async def decoded_facts(client, topic: str) -> list:
+    """Every payload on a fact stream, decoded the way a consumer would.
+
+    Untyped on purpose: ``content.blobs`` carries **both** outcomes of a command
+    since #9 (``blob_available`` and ``fetch_failed``), so a shared helper cannot
+    assert one model. Callers that expect a single type ``isinstance``-check it
+    themselves — ``from_wire``'s dispatch table is global and will decode any
+    known event type off any topic.
+    """
+    payloads = []
+    for message_id, fields in await client.xrange(topic):
+        payloads.append(
+            from_wire(
+                {k.decode(): v.decode() for k, v in fields.items()},
+                topic=topic,
+                message_id=message_id.decode(),
+            ).payload
+        )
+    return payloads
 
 
 def make_command(command_id: str = "cmd-1", url: str = "https://example.test/a") -> dict[str, str]:
@@ -122,8 +152,27 @@ async def unreachable_handler(command: ContentFetchCommand) -> None:
     raise AssertionError(f"handler must not run (got {command.command_id})")
 
 
-async def process_one(fake_redis, consumer, settings, message, handler):
-    """``process_message`` with the fixture wiring filled in."""
+class collected_reports:
+    """A ``FailureReporter`` that records instead of publishing.
+
+    Lower-case because it reads as a factory at the call site
+    (``reports = collected_reports()``); the reporter seam is a callable, so the
+    spy is one too. ``test_reporter.py`` covers what a real one puts on the wire.
+    """
+
+    def __init__(self) -> None:
+        self.reports: list[FailureReport] = []
+
+    async def __call__(self, report: FailureReport) -> None:
+        self.reports.append(report)
+
+
+async def process_one(fake_redis, consumer, settings, message, handler, reporter=None):
+    """``process_message`` with the fixture wiring filled in.
+
+    ``reporter`` defaults to a discarding one so the loop tests that predate #9
+    stay about what they were about. Tests that assert on the fact pass a spy.
+    """
     return await process_message(
         message,
         client=fake_redis,
@@ -131,10 +180,13 @@ async def process_one(fake_redis, consumer, settings, message, handler):
         group=GROUP,
         handler=handler,
         settings=settings,
+        reporter=reporter if reporter is not None else collected_reports(),
     )
 
 
-async def drive_loop(fake_redis, consumer, settings, handler, stop, deadline: float = 5):
+async def drive_loop(
+    fake_redis, consumer, settings, handler, stop, deadline: float = 5, reporter=None
+):
     """Run the loop to completion under a deadline, with the fixture wiring.
 
     The deadline is a test guard, not a feature of the loop: fakeredis does not
@@ -149,6 +201,7 @@ async def drive_loop(fake_redis, consumer, settings, handler, stop, deadline: fl
             settings=settings,
             handler=handler,
             stop=stop,
+            reporter=reporter if reporter is not None else collected_reports(),
         )
 
 

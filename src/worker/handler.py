@@ -20,7 +20,7 @@ from co_core_aio.bus import AsyncBusPublisher
 from redis.asyncio import Redis
 
 from src.core.config import Settings
-from src.core.errors import PermanentFetchError, TransientFetchError
+from src.core.errors import FailureReason, PermanentFetchError, TransientFetchError
 from src.core.logging import get_logger
 from src.storage.base import BlobStore
 from src.storage.sweeper import BlobUsage
@@ -183,7 +183,9 @@ async def _fetch(fetcher: Fetcher, command: ContentFetchCommand) -> FetchResult:
     try:
         return await fetcher.execute(FetchContent(command.url))
     except (httpx.UnsupportedProtocol, httpx.InvalidURL) as exc:
-        raise PermanentFetchError(f"{command.url} is not fetchable: {exc}") from exc
+        raise PermanentFetchError(
+            f"{command.url} is not fetchable: {exc}", reason=FailureReason.NOT_FETCHABLE
+        ) from exc
     except httpx.HTTPError as exc:
         raise TransientFetchError(f"{command.url} failed to fetch: {exc}") from exc
 
@@ -213,7 +215,8 @@ def _raise_for_size(result: FetchResult, command: ContentFetchCommand, maximum: 
     if len(result.content) <= maximum:
         return
     raise PermanentFetchError(
-        f"{command.url} returned {len(result.content)} bytes, over the {maximum}-byte ceiling"
+        f"{command.url} returned {len(result.content)} bytes, over the {maximum}-byte ceiling",
+        reason=FailureReason.TOO_LARGE,
     )
 
 
@@ -233,7 +236,12 @@ def _raise_for_status(result: FetchResult, command: ContentFetchCommand) -> None
     detail = f"{command.url} returned HTTP {result.status_code}"
     if result.status_code >= 500 or result.status_code in _RETRYABLE_STATUSES:
         raise TransientFetchError(detail)
-    raise PermanentFetchError(detail)
+    # The status rides as a field, not only in the message: it is the one datum a
+    # 4xx fetch_failed carries that the reason token cannot express, and it is
+    # what an issuer's per-domain backoff branches on (#9).
+    raise PermanentFetchError(
+        detail, reason=FailureReason.HTTP_STATUS, status_code=result.status_code
+    )
 
 
 def _media_type(result: FetchResult) -> str:

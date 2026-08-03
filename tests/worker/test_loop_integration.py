@@ -48,6 +48,7 @@ from src.worker.loop import (
     run_loop,
 )
 from src.worker.main import build_consumer
+from src.worker.reporter import build_failure_reporter
 from tests.worker.conftest import BODY, FakeFetcher, make_command
 
 pytestmark = pytest.mark.integration
@@ -188,6 +189,10 @@ async def seed_and_consume(
             group=GROUP,
             settings=settings,
             handler=handler,
+            # Same scratch stream as the handler's facts, for the same reason: a
+            # fetch_failed on the real content.blobs during a test would tell an
+            # issuer that a command it is waiting on has failed.
+            reporter=build_failure_reporter(client=real_redis, blobs_topic=blobs_topic),
             stop=stop,
         )
     )

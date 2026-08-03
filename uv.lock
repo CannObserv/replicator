@@ -78,15 +78,15 @@ wheels = [
 
 [[package]]
 name = "co-core"
-version = "0.7.0"
+version = "0.7.2"
 source = { registry = ".wheelhouse" }
 dependencies = [
     { name = "dateparser" },
     { name = "pydantic" },
 ]
-sdist = { path = "co_core-0.7.0.tar.gz" }
+sdist = { path = "co_core-0.7.2.tar.gz" }
 wheels = [
-    { path = "co_core-0.7.0-py3-none-any.whl" },
+    { path = "co_core-0.7.2-py3-none-any.whl" },
 ]
 
 [package.optional-dependencies]
@@ -100,15 +100,15 @@ extract = [
 
 [[package]]
 name = "co-core-aio"
-version = "0.7.0"
+version = "0.7.2"
 source = { registry = ".wheelhouse" }
 dependencies = [
     { name = "co-core" },
     { name = "httpx" },
 ]
-sdist = { path = "co_core_aio-0.7.0.tar.gz" }
+sdist = { path = "co_core_aio-0.7.2.tar.gz" }
 wheels = [
-    { path = "co_core_aio-0.7.0-py3-none-any.whl" },
+    { path = "co_core_aio-0.7.2-py3-none-any.whl" },
 ]
 
 [package.optional-dependencies]

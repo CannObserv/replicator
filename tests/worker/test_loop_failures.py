@@ -13,7 +13,7 @@ from co_core.pure.adapters.bus.streams import dlq_name
 from co_core.pure.models.changes import ContentFetchCommand
 from redis.exceptions import ConnectionError as RedisConnectionError
 
-from src.core.errors import PermanentFetchError, TransientFetchError
+from src.core.errors import FailureReason, PermanentFetchError, TransientFetchError
 from src.storage.local import LocalBlobStore
 from src.storage.sweeper import BlobUsage
 from src.worker.handler import build_handler
@@ -54,7 +54,9 @@ async def test_a_permanent_failure_is_dead_lettered(fake_redis, consumer, settin
     await fake_redis.xadd(TOPIC, make_command(command_id="cmd-permanent"))
 
     async def handler(command: ContentFetchCommand) -> None:
-        raise PermanentFetchError("this url will never be fetchable")
+        raise PermanentFetchError(
+            "this url will never be fetchable", reason=FailureReason.NOT_FETCHABLE
+        )
 
     message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
     outcome = await process_one(fake_redis, consumer, settings, message, handler)

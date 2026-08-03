@@ -31,6 +31,7 @@ from src.storage.local import LocalBlobStore, ensure_directory
 from src.storage.sweeper import BlobUsage
 from src.worker.handler import build_handler
 from src.worker.loop import run_loop
+from src.worker.reporter import build_failure_reporter
 from src.worker.retention import run_sweeper
 
 logger = get_logger(__name__)
@@ -316,6 +317,10 @@ async def run(stop: asyncio.Event | None = None) -> None:
                     settings=settings,
                     usage=usage,
                 ),
+                # The other outcome of a command, on the same stream: an issuer
+                # closes a pending entry off one consumer group either way (#9,
+                # co-core cannobserv#270).
+                reporter=build_failure_reporter(client=client),
                 stop=stop,
             ),
             run_sweeper(root=blob_dir, settings=settings, usage=usage, stop=stop),
