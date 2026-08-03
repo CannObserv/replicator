@@ -2,9 +2,19 @@
 
 Before this, every row of the contract's failure taxonomy that dead-lettered was
 issuer-visible as **nothing** — the DLQ is a stream no issuer reads. Each test
-here pins one row of that table to a ``fetch_failed`` fact, and the last two pin
-the rows that deliberately stay silent because there is no ``command_id`` to
-correlate on.
+here pins one row of that table: either to a ``fetch_failed`` fact, or to the
+silence the row keeps.
+
+The silent rows are not silent for one reason, and the tests say which:
+
+- **no correlator at all** — a frame that did not decode, and a command whose
+  ``command_id`` is blank;
+- **no *safe* correlator** — a frame that decoded to a foreign payload, whose
+  ``command_id`` (if any) names a different command, usually one that succeeded;
+- **not closed yet** — a transient failure still retrying (#9 §3, deferred).
+
+Every route that reaches the DLQ also pins its ``dlq_reason``: five routes, five
+strings, and it is what an operator greps (CR #11).
 """
 
 import asyncio
@@ -41,6 +51,16 @@ from tests.worker.conftest import (
 )
 
 
+async def dlq_reasons(client) -> list[str]:
+    """The ``dlq_reason`` on every entry in ``<topic>.dlq``, in order.
+
+    CR #11: five routes reach the DLQ with five different reasons, and the
+    string is what an operator triages on — a reword that no test notices is a
+    reword that silently breaks somebody's grep.
+    """
+    return [fields[b"dlq_reason"].decode() for _, fields in await client.xrange(dlq_name(TOPIC))]
+
+
 async def failing_handler(command: ContentFetchCommand) -> None:
     raise PermanentFetchError(
         f"{command.url} returned HTTP 404", reason=FailureReason.HTTP_STATUS, status_code=404
@@ -58,6 +78,7 @@ async def test_a_permanent_handler_failure_is_announced(fake_redis, consumer, se
     )
 
     assert outcome is Outcome.DEAD_LETTERED
+    assert await dlq_reasons(fake_redis) == ["handler reported a permanent failure"]
     (report,) = reports.reports
     assert report.command_id == "cmd-404"
     assert report.url == "https://example.test/x"
@@ -100,6 +121,7 @@ async def test_an_unsupported_schema_version_is_announced(fake_redis, consumer, 
         fake_redis, consumer, settings, message, unreachable_handler, reporter=reports
     )
 
+    assert await dlq_reasons(fake_redis) == ["unsupported schema_version"]
     (report,) = reports.reports
     assert report.command_id == "cmd-future"
     assert report.reason is FailureReason.UNSUPPORTED_SCHEMA_VERSION
@@ -120,6 +142,7 @@ async def test_the_delivery_ceiling_reports_how_many_attempts_it_took(
     outcome = await process_one(fake_redis, consumer, settings, message, buggy, reporter=reports)
 
     assert outcome is Outcome.DEAD_LETTERED
+    assert await dlq_reasons(fake_redis) == ["unclassified failure hit the delivery ceiling"]
     (report,) = reports.reports
     assert report.reason is FailureReason.HANDLER_ERROR
     assert report.attempts == 1
@@ -247,7 +270,7 @@ async def test_a_blank_command_id_is_refused_before_anything_can_use_it(
     # bare prefix is the collision this guard exists to prevent.
     assert reports.reports == []
     assert await fake_redis.exists(f"{DEDUPE_KEY_PREFIX}") == 0
-    assert await fake_redis.xlen(dlq_name(TOPIC)) == 1
+    assert await dlq_reasons(fake_redis) == ["command_id is blank"]
 
 
 async def test_two_blank_command_ids_are_two_dead_letters_not_one_silent_drop(

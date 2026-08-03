@@ -258,7 +258,7 @@ So an issuer's primary mechanism is now the fact: consume `content.blobs`, branc
 type, and on a `fetch_failed` with `terminal=True` close the pending entry **with a reason**. Off
 one consumer group, since both outcomes share the stream.
 
-**Silence has not gone away — it has narrowed.** Two conditions still produce nothing, and one
+**Silence has not gone away — it has narrowed.** Three conditions still produce nothing, and one
 produces nothing *yet*:
 
 - **A frame that fails `from_wire` entirely.** It has no payload, therefore no `command_id`,
@@ -383,12 +383,20 @@ A consumer on another host cannot open it, and nothing on the wire says so.
 | Success | `blob_available` on `content.blobs` | the fact |
 
 Every `fetch_failed` row carries `terminal=True` — the command is closed and no blob will arrive.
-Every remaining "nothing" row is why MUST-6 keeps the reaper.
 
-Note the two shapes of silence are not the same problem. The four rows with no usable
-`command_id` are **permanently** silent, and an issuer's only recourse there is the reaper. The
-two retrying rows are silent **for now** (#9 §3), and an issuer that would use an in-flight
-signal should say so on its tracker rather than lengthening its timeout to compensate.
+The "nothing" rows are not one problem, and the reaper is not the answer to all of them:
+
+- **Three rows have no usable `command_id`** — a non-`content_fetch` payload, a blank
+  `command_id`, and a frame that failed to decode. Permanently silent, and the reaper is the
+  only recourse. This is what MUST-6 keeps it for.
+- **Two rows are silent only while the command is in flight** — a retrying transient failure and
+  a blob tree over its ceiling. Silent **for now** (#9 §3); an issuer that would use an
+  in-flight signal should say so on its tracker rather than lengthening its timeout to
+  compensate.
+- **The duplicate-`command_id` row is neither.** It is silent because the command was *already
+  handled* — the first delivery ran and published its fact, so the issuer's entry is already
+  closed. Reaping and re-issuing there sends the origin a second request for work that
+  succeeded. The fix is MUST-1: mint a fresh id per fetch occasion and the row cannot occur.
 
 ---
 
