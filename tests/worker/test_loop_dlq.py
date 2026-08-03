@@ -14,11 +14,12 @@ from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
 from co_core.pure.adapters.bus.streams import dlq_name
 from co_core.pure.models.changes import BlobAvailableEvent, ContentFetchCommand
 
-from src.core.errors import PermanentFetchError
+from src.core.errors import FailureReason, PermanentFetchError
 from src.worker.loop import Outcome, dead_letter_anomaly, poll_once, process_message
 from tests.worker.conftest import (
     GROUP,
     TOPIC,
+    collected_reports,
     drive_loop,
     make_command,
     process_one,
@@ -112,7 +113,9 @@ async def test_dead_lettered_frames_carry_their_reason(fake_redis, consumer, set
     await fake_redis.xadd(TOPIC, make_command(command_id="cmd-doomed"))
 
     async def handler(command: ContentFetchCommand) -> None:
-        raise PermanentFetchError("this url will never be fetchable")
+        raise PermanentFetchError(
+            "this url will never be fetchable", reason=FailureReason.NOT_FETCHABLE
+        )
 
     message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
     await process_message(
@@ -122,6 +125,7 @@ async def test_dead_lettered_frames_carry_their_reason(fake_redis, consumer, set
         group=GROUP,
         settings=settings,
         handler=handler,
+        reporter=collected_reports(),
     )
 
     entry = (await fake_redis.xrange(dlq_name(TOPIC)))[0][1]

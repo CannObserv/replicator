@@ -8,7 +8,11 @@ Redis change bus and reports outcomes as **facts**:
 
 ```
 content.fetch (command)  →  fetch  →  fingerprint  →  temp-store  →  blob_available (fact)
+                         ↘  closed without bytes  ──────────────→  fetch_failed  (fact)
 ```
+
+Both facts land on `content.blobs`, so an issuer's one consumer group sees either outcome of
+its command.
 
 The founding design lives in
 [`docs/plans/2026-06-25-replicator-mvp-design.md`](docs/plans/2026-06-25-replicator-mvp-design.md).
@@ -112,9 +116,10 @@ uv run python -m scripts.seed_fetch \
   --production --watch http://localhost:8041/health
 ```
 
-`--watch` tails the fact stream until each command's `blob_available` arrives — `content.blobs`
-for `content.fetch`, `<topic>.blobs` otherwise, so a scratch seed watches its own facts. Add
-`--dry-run` to print the frames without contacting a broker at all.
+`--watch` tails the fact stream until each command has an outcome — a `blob_available`, or a
+`fetch_failed` naming the reason it closed. It reads `content.blobs` for `content.fetch` and
+`<topic>.blobs` otherwise, so a scratch seed watches its own facts. Add `--dry-run` to print
+the frames without contacting a broker at all.
 
 ## Test & lint
 

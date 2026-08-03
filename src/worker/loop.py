@@ -11,6 +11,7 @@ what a handler does, and decides only what its success or failure means.
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from enum import StrEnum
 
 from co_core.effects.bus import BusMessage
@@ -23,7 +24,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from src.core.config import Settings
-from src.core.errors import PermanentFetchError, TransientFetchError
+from src.core.errors import FailureReason, PermanentFetchError, TransientFetchError
 from src.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -66,6 +67,39 @@ MAX_POISON_SKIPS = 10
 # handler — decides whether that means retry or dead-letter.
 Handler = Callable[[ContentFetchCommand], Awaitable[None]]
 
+
+@dataclass(frozen=True, slots=True)
+class FailureReport:
+    """What the loop knows about a command it is closing without a blob (#9).
+
+    Built only at the moments ``process_message`` gives up, so a report **is** a
+    closure — which is why there is no ``terminal`` field to set. Replicator
+    emits no non-terminal fact today (#9 §3, deferred: ``content.blobs`` is
+    broadcast and nothing trims it, so a transient fact per reclaim during an
+    origin outage is unbounded growth on a stream nobody prunes). The reporter
+    stamps ``terminal=True`` accordingly.
+
+    ``reason`` comes from the handler where the handler knows it
+    (``PermanentFetchError.reason``) and from the loop where only the loop does —
+    an unrecognized ``schema_version``, a foreign payload, the delivery ceiling.
+    """
+
+    command_id: str
+    url: str
+    reason: FailureReason
+    status_code: int | None = None
+    attempts: int | None = None
+    detail: str | None = None
+
+
+# The failure-fact seam, parallel to ``Handler`` and injected the same way. This
+# module stays ignorant of ``content.blobs`` and of how a fact is published —
+# ``src.worker.reporter`` owns that, exactly as ``src.worker.handler`` owns the
+# byte path. The alternative (publishing inline here) would thread a topic
+# through poll_once / claim_once / dead_letter_anomaly and cost a live-broker
+# test its scratch stream.
+FailureReporter = Callable[[FailureReport], Awaitable[None]]
+
 # How long an idle poll parks before looking again. On a live broker the
 # blocking XREADGROUP is the real wait and this adds ~50ms per idle tick; it is
 # kept as insurance against a client that does not honour `block` — fakeredis
@@ -101,6 +135,7 @@ async def process_message(
     group: str,
     handler: Handler,
     settings: Settings,
+    reporter: FailureReporter,
 ) -> Outcome:
     """Dispatch one decoded message and decide its fate.
 
@@ -112,25 +147,54 @@ async def process_message(
     consumer's group private, and two independent reads of the same setting can
     drift, in which case the ceiling would query an unrelated PEL and silently
     never trip.
+
+    ``reporter`` is required rather than optional: every path that closes a
+    command without a blob must announce it, and a default would make "no fact"
+    the outcome of forgetting to wire one — the exact silence #9 exists to end.
     """
     command = message.payload
     # from_wire's event_type -> model table is global, so a fact XADDed to the
     # command stream decodes cleanly into the wrong type rather than raising.
     if not isinstance(command, ContentFetchCommand):
-        return await _dead_letter(
+        return await _close(
             consumer,
             message.message_id,
             dict(message.fields),
             reason="payload is not a content.fetch command",
             detail={"event_type": command.event_type},
+            reporter=reporter,
+            # Best effort, and usually nothing: FetchFailedEvent.command_id is
+            # required and most of the payload union has no such field. Where
+            # there is none there is nothing to correlate a fact against, so this
+            # row stays DLQ-only and the issuer's reaper remains the mechanism.
+            # ``url`` is confirmation-only (contract MUST-3), never a key, so an
+            # empty one is a visibly-absent value rather than a misleading one.
+            report=_report_for(
+                command_id=getattr(command, "command_id", None),
+                url=getattr(command, "url", ""),
+                reason=FailureReason.WRONG_PAYLOAD_TYPE,
+                detail=f"frame decoded as {command.event_type}",
+            ),
         )
     if command.schema_version != SUPPORTED_SCHEMA_VERSION:
-        return await _dead_letter(
+        return await _close(
             consumer,
             message.message_id,
             dict(message.fields),
             reason="unsupported schema_version",
             detail={"command_id": command.command_id, "schema_version": command.schema_version},
+            reporter=reporter,
+            # Reading two fields off a version this worker does not support is
+            # the destructuring the contract warns issuers about — done knowingly
+            # and only here: command_id and url are the v1 baseline, and a fact
+            # naming neither could not close anything. If a future version moves
+            # them, this branch is where it breaks.
+            report=_report_for(
+                command_id=command.command_id,
+                url=command.url,
+                reason=FailureReason.UNSUPPORTED_SCHEMA_VERSION,
+                detail=f"schema_version={command.schema_version}",
+            ),
         )
 
     dedupe_key = f"{DEDUPE_KEY_PREFIX}{command.command_id}"
@@ -147,12 +211,24 @@ async def process_message(
     try:
         await handler(command)
     except PermanentFetchError as exc:
-        return await _dead_letter(
+        return await _close(
             consumer,
             message.message_id,
             dict(message.fields),
             reason="handler reported a permanent failure",
             detail={"command_id": command.command_id, "error": str(exc)},
+            reporter=reporter,
+            # The handler classified this, not the loop: three unrelated
+            # conditions (a 4xx, an unfetchable scheme, an oversized body) raise
+            # one exception type, and recovering which from str(exc) would be a
+            # wire contract resting on a message format.
+            report=FailureReport(
+                command_id=command.command_id,
+                url=command.url,
+                reason=exc.reason,
+                status_code=exc.status_code,
+                detail=str(exc),
+            ),
         )
     except _TRANSIENT_ERRORS as exc:
         logger.warning(
@@ -173,6 +249,7 @@ async def process_message(
             settings=settings,
             command=command,
             exc=exc,
+            reporter=reporter,
         )
 
     # Written *after* the handler, deliberately. Marking first would turn a crash
@@ -195,21 +272,33 @@ async def _handle_unclassified(
     settings: Settings,
     command: ContentFetchCommand,
     exc: Exception,
+    reporter: FailureReporter,
 ) -> Outcome:
     """Retry a failure the loop could not classify, up to the delivery ceiling.
 
     Defense in depth, not the primary DLQ route: a handler bug must not discard
     a valid command on its first failure, but it must not spin forever either.
+
+    The only path that reports ``attempts``, because it is the only one where the
+    number is *why* the command closed rather than incidental.
     """
     attempts = await _delivery_count(client, message, group=group)
     error = f"{type(exc).__name__}: {exc}"
     if attempts >= settings.max_delivery_attempts:
-        return await _dead_letter(
+        return await _close(
             consumer,
             message.message_id,
             dict(message.fields),
             reason="unclassified failure hit the delivery ceiling",
             detail={"command_id": command.command_id, "attempts": attempts, "error": error},
+            reporter=reporter,
+            report=FailureReport(
+                command_id=command.command_id,
+                url=command.url,
+                reason=FailureReason.HANDLER_ERROR,
+                attempts=attempts,
+                detail=error,
+            ),
         )
     logger.warning(
         "unclassified failure — leaving the message pending for redelivery",
@@ -245,6 +334,69 @@ async def _delivery_count(client: Redis, message: BusMessage, *, group: str) -> 
         )
         return 1
     return int(entries[0]["times_delivered"])
+
+
+def _report_for(
+    *,
+    command_id: str | None,
+    url: str,
+    reason: FailureReason,
+    detail: str | None = None,
+) -> FailureReport | None:
+    """A report, or ``None`` where there is no ``command_id`` to correlate one on.
+
+    The two silent rows of the failure taxonomy both arrive here: a frame that
+    decoded to a payload carrying no ``command_id``, and (via
+    ``dead_letter_anomaly``, which has no report at all) a frame that did not
+    decode. ``FetchFailedEvent.command_id`` is required and *is* the event — a
+    fact naming no command closes nothing and only adds noise to a broadcast
+    stream. Contract MUST-6 keeps the issuer's reaper as the backstop for exactly
+    these.
+    """
+    if not command_id:
+        return None
+    return FailureReport(command_id=command_id, url=url, reason=reason, detail=detail)
+
+
+async def _close(
+    consumer: AsyncBusConsumer,
+    message_id: str,
+    fields: dict[str, str],
+    *,
+    reason: str,
+    detail: dict[str, object] | None = None,
+    reporter: FailureReporter,
+    report: FailureReport | None,
+) -> Outcome:
+    """Announce the failure, then dead-letter it. Fact **before** ack, always.
+
+    Both parameters are required so the ordering cannot be got wrong one call
+    site at a time: ``dead_letter`` acks inside itself, so a fact published after
+    it is lost outright if the process dies in between, while a fact published
+    before it costs at worst a duplicate on redelivery — which contract MUST-4
+    already requires issuers to tolerate. Same reasoning as store-then-publish on
+    the byte path, one step further along.
+
+    A ``report`` of ``None`` means the row cannot be announced (see
+    ``_report_for``), not that announcing was skipped.
+
+    The reporter's own failures are swallowed there, but they are caught here as
+    well: a reporter that raised would abandon the dead-letter and leave a
+    hopeless command in the PEL to be redelivered forever.
+    """
+    if report is not None:
+        try:
+            await reporter(report)
+        except Exception as exc:
+            logger.error(
+                "failure reporter raised — dead-lettering anyway",
+                extra={
+                    "command_id": report.command_id,
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+                exc_info=exc,
+            )
+    return await _dead_letter(consumer, message_id, fields, reason=reason, detail=detail)
 
 
 async def _dead_letter(
@@ -381,6 +533,7 @@ async def process_batch(
     group: str,
     settings: Settings,
     handler: Handler,
+    reporter: FailureReporter,
     stop: asyncio.Event,
 ) -> None:
     """Dispatch a polled batch, stopping between messages once asked to.
@@ -399,6 +552,7 @@ async def process_batch(
             group=group,
             handler=handler,
             settings=settings,
+            reporter=reporter,
         )
         if stop.is_set():
             break
@@ -411,6 +565,7 @@ async def run_loop(
     group: str,
     settings: Settings,
     handler: Handler,
+    reporter: FailureReporter,
     stop: asyncio.Event,
 ) -> None:
     """Poll and dispatch until ``stop`` is set.
@@ -437,6 +592,7 @@ async def run_loop(
                 group=group,
                 settings=settings,
                 handler=handler,
+                reporter=reporter,
                 stop=stop,
             )
         except Exception as exc:

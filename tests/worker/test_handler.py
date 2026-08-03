@@ -11,7 +11,7 @@ from co_core.pure.util.hashing import sha256
 from redis.exceptions import ResponseError
 
 from src.core.config import get_settings
-from src.core.errors import PermanentFetchError, TransientFetchError
+from src.core.errors import FailureReason, PermanentFetchError, TransientFetchError
 from src.storage.local import LocalBlobStore
 from src.storage.sweeper import BlobUsage
 from src.worker.handler import build_handler
@@ -122,8 +122,14 @@ async def test_the_fact_stream_is_overridable(handler, fake_redis):
 @pytest.mark.parametrize("status_code", [400, 404, 410, 451])
 async def test_a_client_error_is_permanent(handler, status_code):
     """Re-fetching a 404 gets another 404 — retrying it is only a slower DLQ."""
-    with pytest.raises(PermanentFetchError):
+    with pytest.raises(PermanentFetchError) as caught:
         await handler(FakeFetcher(fetch_result(status_code=status_code)))(command())
+
+    # The status travels as a field, not only inside the message: it is the one
+    # datum a 4xx fact carries that the reason token alone cannot express, and
+    # Watcher's per-domain backoff branches on it (#9).
+    assert caught.value.reason is FailureReason.HTTP_STATUS
+    assert caught.value.status_code == status_code
 
 
 @pytest.mark.parametrize("status_code", [408, 429, 500, 502, 503, 504])
@@ -135,8 +141,11 @@ async def test_a_server_error_or_backpressure_is_transient(handler, status_code)
 
 async def test_a_body_less_redirect_is_permanent(handler):
     """A 304 passes ``is_success`` but carries no body — storing it would store nothing."""
-    with pytest.raises(PermanentFetchError):
+    with pytest.raises(PermanentFetchError) as caught:
         await handler(FakeFetcher(fetch_result(content=b"", status_code=304)))(command())
+
+    assert caught.value.reason is FailureReason.HTTP_STATUS
+    assert caught.value.status_code == 304
 
 
 async def test_a_failed_fetch_stores_nothing_and_publishes_nothing(handler, fake_redis, tmp_path):
@@ -220,8 +229,12 @@ async def test_a_transport_failure_is_transient(handler, error):
 )
 async def test_an_unusable_url_is_permanent(handler, error):
     """A malformed URL does not become well-formed on the next reclaim."""
-    with pytest.raises(PermanentFetchError):
+    with pytest.raises(PermanentFetchError) as caught:
         await handler(FakeFetcher(error=error))(command())
+
+    assert caught.value.reason is FailureReason.NOT_FETCHABLE
+    # No HTTP exchange happened, so there is no status to report.
+    assert caught.value.status_code is None
 
 
 async def test_a_body_larger_than_the_cap_is_permanent(handler, monkeypatch):
@@ -229,8 +242,10 @@ async def test_a_body_larger_than_the_cap_is_permanent(handler, monkeypatch):
     monkeypatch.setenv("REPLICATOR_MAX_BLOB_BYTES", "8")
     get_settings.cache_clear()
 
-    with pytest.raises(PermanentFetchError):
+    with pytest.raises(PermanentFetchError) as caught:
         await handler(FakeFetcher(fetch_result(content=b"x" * 9)))(command())
+
+    assert caught.value.reason is FailureReason.TOO_LARGE
 
 
 async def test_a_body_at_the_cap_is_stored(handler, fake_redis, monkeypatch):

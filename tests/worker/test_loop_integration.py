@@ -19,6 +19,10 @@ Redis acts, or about a reply shape the fake never produces:
    message is reclaimed.
 4. The DLQ round-trip, including the ``XRANGE``-by-id re-read for a frame that
    failed to decode and the synthesized-fields fallback when that entry is gone.
+5. Fact-before-ack on a permanent failure (#9). ``dead_letter`` acks inside
+   itself, so "the ``fetch_failed`` is on the stream by the time the PEL is
+   empty" is an ordering claim about the broker's own state, not about a
+   sequence of calls a spy could record.
 
 Everything runs on ``replicator.itest.*`` scratch streams. The ``real_redis``
 fixture refuses db 0 outright — the database that carries the live
@@ -33,6 +37,7 @@ from collections.abc import AsyncGenerator
 import pytest
 from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
 from co_core.pure.adapters.bus.streams import dlq_name
+from co_core.pure.models.changes import FetchFailedEvent
 from co_core.pure.util.hashing import sha256
 
 from scripts.seed_fetch import last_id, publish, resolve_blobs_topic, watch_for_facts
@@ -48,7 +53,8 @@ from src.worker.loop import (
     run_loop,
 )
 from src.worker.main import build_consumer
-from tests.worker.conftest import BODY, FakeFetcher, make_command
+from src.worker.reporter import build_failure_reporter
+from tests.worker.conftest import BODY, FakeFetcher, fetch_result, make_command
 
 pytestmark = pytest.mark.integration
 
@@ -188,6 +194,10 @@ async def seed_and_consume(
             group=GROUP,
             settings=settings,
             handler=handler,
+            # Same scratch stream as the handler's facts, for the same reason: a
+            # fetch_failed on the real content.blobs during a test would tell an
+            # issuer that a command it is waiting on has failed.
+            reporter=build_failure_reporter(client=real_redis, blobs_topic=blobs_topic),
             stop=stop,
         )
     )
@@ -387,6 +397,69 @@ async def test_a_seeded_command_stores_a_blob_and_publishes_the_fact(
     # Exactly one fact, and the command is off the PEL — the loop acked it.
     assert await real_redis.xlen(scratch_blobs_topic) == 1
     assert (await real_redis.xpending(scratch_topic, GROUP))["pending"] == 0
+
+
+async def test_a_permanently_failing_command_publishes_a_fact_and_dead_letters(
+    real_redis, scratch_topic, scratch_blobs_topic, itest_settings, tmp_path
+):
+    """The failure half of the loop, against the real broker (#9).
+
+    Two surfaces, not one — the fact is the issuer's, the DLQ is the operator's —
+    and the ordering between them is the part the fake cannot really prove:
+    ``dead_letter`` acks inside itself, so the fact has to be on the stream by the
+    time the PEL is empty. No ``dedupe_keys`` fixture here, deliberately: a
+    dead-lettered command never writes one, and this asserts that too.
+    """
+    settings = itest_settings.model_copy(update={"blob_dir": tmp_path})
+    consumer = build_consumer(real_redis, settings, topic=scratch_topic)
+    await consumer.ensure_group(start_id="0")
+    # A 404, captured into the FetchResult rather than raised — the co-core driver
+    # does not raise on a non-2xx, so this is the shape the real byte path sees.
+    handler = build_handler(
+        fetcher=FakeFetcher(fetch_result(status_code=404)),
+        store=LocalBlobStore(tmp_path),
+        client=real_redis,
+        settings=settings,
+        blobs_topic=scratch_blobs_topic,
+    )
+    stop = asyncio.Event()
+    loop = asyncio.create_task(
+        run_loop(
+            client=real_redis,
+            consumer=consumer,
+            group=GROUP,
+            settings=settings,
+            handler=handler,
+            reporter=build_failure_reporter(client=real_redis, blobs_topic=scratch_blobs_topic),
+            stop=stop,
+        )
+    )
+    start_id = await last_id(real_redis, scratch_blobs_topic)
+    (seeded,) = await publish(real_redis, scratch_topic, ["https://example.test/gone"])
+    try:
+        facts = await watch_for_facts(
+            real_redis,
+            scratch_blobs_topic,
+            start_id,
+            {seeded.command_id},
+            timeout_seconds=FACT_TIMEOUT_SECONDS,
+        )
+    finally:
+        stop.set()
+        await asyncio.wait_for(loop, timeout=5)
+
+    (fact,) = facts
+    assert isinstance(fact, FetchFailedEvent)
+    assert fact.command_id == seeded.command_id
+    assert fact.reason == "http_status"
+    assert fact.status_code == 404
+    assert fact.terminal is True
+    # Both surfaces, and the command is off the PEL — so the fact preceded the ack.
+    assert await real_redis.xlen(dlq_name(scratch_topic)) == 1
+    assert (await real_redis.xpending(scratch_topic, GROUP))["pending"] == 0
+    # Nothing was stored, and no dedupe key was written for a command that failed.
+    assert list(tmp_path.iterdir()) == []
+    assert not await real_redis.exists(f"{DEDUPE_KEY_PREFIX}{seeded.command_id}")
 
 
 async def test_an_end_to_end_run_only_creates_predictable_keys(

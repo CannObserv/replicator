@@ -14,13 +14,19 @@ from datetime import UTC, datetime
 import pytest
 from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.envelope import from_wire, to_wire
-from co_core.pure.models.changes import BlobAvailableEvent, ContentFetchCommand
+from co_core.pure.models.changes import (
+    BlobAvailableEvent,
+    ContentFetchCommand,
+    FetchFailedEvent,
+)
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 from ulid import ULID
 
 from scripts.seed_fetch import (
     ProductionTargetError,
+    SeedResult,
+    _report_facts,
     build_parser,
     guard_production_target,
     last_id,
@@ -69,6 +75,23 @@ def fact_fields(command_id: str) -> dict[str, str]:
 async def add_fact(client, command_id: str, topic: str = BLOBS) -> bytes:
     """XADD a ``blob_available`` frame as the worker's handler would."""
     return await client.xadd(topic, fact_fields(command_id))
+
+
+async def add_failure(client, command_id: str, topic: str = BLOBS) -> bytes:
+    """XADD a ``fetch_failed`` frame as the worker's reporter would (#9)."""
+    return await client.xadd(
+        topic,
+        to_wire(
+            FetchFailedEvent(
+                occurred_at=datetime.now(UTC),
+                command_id=command_id,
+                url=URL,
+                reason="http_status",
+                terminal=True,
+                status_code=404,
+            )
+        ),
+    )
 
 
 def seed_args(*argv: str):
@@ -219,6 +242,57 @@ async def test_watching_gives_up_at_the_timeout(fake_redis):
     start = await last_id(fake_redis, BLOBS)
 
     assert await watch_for_facts(fake_redis, BLOBS, start, {"cmd-1"}, timeout_seconds=0.2) == []
+
+
+async def test_watching_closes_a_command_on_a_failure_fact(fake_redis):
+    """#9: the failure is now an outcome, not a timeout the operator waits out.
+
+    ``content.blobs`` carries both outcomes, so the watch has to accept either —
+    filtering to ``blob_available`` would render the exact case ``fetch_failed``
+    exists to make visible as the silence it replaced.
+    """
+    start = await last_id(fake_redis, BLOBS)
+    await add_failure(fake_redis, "cmd-1")
+
+    (fact,) = await watch_for_facts(fake_redis, BLOBS, start, {"cmd-1"}, timeout_seconds=1)
+
+    assert isinstance(fact, FetchFailedEvent)
+    assert fact.command_id == "cmd-1"
+    assert fact.reason == "http_status"
+
+
+async def test_watching_ignores_a_failure_for_another_issuers_command(fake_redis):
+    start = await last_id(fake_redis, BLOBS)
+    await add_failure(fake_redis, "someone-elses")
+    await add_fact(fake_redis, "cmd-1")
+
+    facts = await watch_for_facts(fake_redis, BLOBS, start, {"cmd-1"}, timeout_seconds=1)
+
+    assert [f.command_id for f in facts] == ["cmd-1"]
+
+
+async def test_a_failure_is_reported_and_exits_non_zero(fake_redis, capsys):
+    """A closed-with-a-reason command is still a failed seed — but a *named* one.
+
+    The distinction the operator gets that MUST-6's silence never could: the
+    reason, rather than "nothing arrived within the timeout".
+    """
+    start = await last_id(fake_redis, BLOBS)
+    await add_failure(fake_redis, "cmd-1")
+
+    code = await _report_facts(
+        fake_redis,
+        blobs_topic=BLOBS,
+        timeout_seconds=1,
+        start_id=start,
+        results=[SeedResult(command_id="cmd-1", url=URL, bus_message_id="1-1")],
+    )
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "fetch_failed" in out
+    assert "reason=http_status" in out
+    assert "status=404" in out
 
 
 @pytest.mark.parametrize(
