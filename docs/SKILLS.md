@@ -41,6 +41,7 @@ Every override's `SKILL.md` must declare `overrides:` and `override-reason:` in 
 
 | Skill | Purpose |
 |---|---|
+| `enforcing-architecture` | Turns an accepted architecture finding into an executable fitness function |
 | `init-project-fastapi` | Bootstraps a CannObserv FastAPI service (this repo's own foundation) |
 | `init-socraticode` | Installs and indexes SocratiCode semantic code search |
 | `managing-skills` | Adds/updates/removes skill submodules and symlinks |
@@ -53,6 +54,11 @@ Every override's `SKILL.md` must declare `overrides:` and `override-reason:` in 
 
 Only the `-python-fastapi` variants of the cross-cutting review/ship workflows are linked; the
 stack-neutral and other-stack variants are deliberately skipped.
+
+`enforcing-architecture` is linked because `reviewing-architecture` **delegates** to it when a finding
+is accepted with a `N: fix + fitness` or bare `N: fitness` directive — without the symlink that
+directive fails to resolve. The daily auto-refresh hook bumps the submodule pointer but never creates
+per-skill symlinks, so linking a newly published skill stays a manual step (#13).
 
 ### From `obra-superpowers`
 
