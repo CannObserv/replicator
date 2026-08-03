@@ -117,6 +117,7 @@ async def test_the_delivery_ceiling_reports_how_many_attempts_it_took(
     (report,) = reports.reports
     assert report.reason is FailureReason.HANDLER_ERROR
     assert report.attempts == 1
+    assert report.detail is not None
     assert "ValueError" in report.detail
 
 
