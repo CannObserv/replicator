@@ -52,7 +52,8 @@ uv run python -m scripts.seed_fetch \
 
 # The live loop. --production is required for db 0 + content.fetch, because the
 # running service will fetch these URLs for real. --watch tails the fact stream
-# until each command's blob_available arrives (exit 1 if one never does).
+# until each command has an outcome — blob_available, or a fetch_failed naming
+# the reason. Exit 1 if a command failed or no fact ever arrived.
 # The target below is the local /health app — start it first (see API, below).
 uv run python -m scripts.seed_fetch \
   --redis-url redis://localhost:6379/0 --topic content.fetch \
@@ -61,7 +62,8 @@ uv run python -m scripts.seed_fetch \
 
 `--watch` reads `content.blobs` for `content.fetch` and `<topic>.blobs` otherwise, so the
 scratch invocation above watches its own facts rather than production's. `--blobs-topic`
-overrides that.
+overrides that. One stream, both outcomes: an issuer needs a single consumer group to see
+whether its command produced bytes or a reason.
 
 Watch the other side with `sudo journalctl -u replicator -f`.
 
@@ -80,10 +82,16 @@ redis-cli XRANGE content.fetch.dlq - + COUNT 5
 # Dedupe keys (one per handled command, TTL REPLICATOR_DEDUPE_TTL_SECONDS).
 redis-cli --scan --pattern 'replicator:cmd:*' | head
 
-# Facts published. blob_uri points at REPLICATOR_BLOB_DIR; the fingerprint is the
-# filename, so `sha256sum` on the blob must reproduce it.
+# Facts published — content.blobs carries both outcomes. On blob_available,
+# blob_uri points at REPLICATOR_BLOB_DIR and the fingerprint is the filename, so
+# `sha256sum` on the blob must reproduce it.
 redis-cli XLEN content.blobs
 redis-cli XRANGE content.blobs - + COUNT 5
+
+# Just the failures. The envelope hoists event_type, so this needs no JSON parsing.
+# A dead-lettered command should appear here *and* in content.fetch.dlq — the fact
+# is the issuer's surface, the DLQ is the operator's.
+redis-cli XRANGE content.blobs - + COUNT 200 | grep -A2 fetch_failed
 ```
 
 ## API (dev only)
