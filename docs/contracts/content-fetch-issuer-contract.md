@@ -85,9 +85,9 @@ would shard on.
 > `AwareDatetime` on every payload: a **naive** value is rejected fail-loud rather than assumed
 > to be UTC, because "assume UTC" corrupts the instant when a producer stamps a naive local time.
 > An aware non-UTC value is normalized. A naive one fails `from_wire` inside Replicator's `read`,
-> which means it dead-letters as a malformed frame and is one of the two rows that stay
-> **silent** — the same shape as an issuer that flattened the envelope. `datetime.now(UTC)`,
-> not `datetime.now()`.
+> which means it dead-letters as a malformed frame and is one of the rows that stay **silent** —
+> the same shape as an issuer that flattened the envelope. `datetime.now(UTC)`, not
+> `datetime.now()`.
 
 **Fact — `content.blobs`, `BlobAvailableEvent`**:
 
@@ -116,7 +116,7 @@ would shard on.
 | `terminal` | `bool` | `True` = the command is closed, no blob will ever arrive. **Branch on this first** |
 | `status_code` | `int \| None` | Set for `http_status`; absent otherwise |
 | `attempts` | `int \| None` | Set only where the attempt count is *why* the command closed |
-| `detail` | `str \| None` | Free text for the journal. **Never branch on it** |
+| `detail` | `str \| None` | Free text for the journal. **Never branch on it**, and never surface it to an end user — on `handler_error` it is the text of an exception Replicator did not anticipate, so its content is unbounded |
 
 `reason` tokens, one per row of the failure taxonomy below:
 
@@ -126,8 +126,13 @@ would shard on.
 | `not_fetchable` | bad scheme / invalid URL |
 | `too_large` | body over `REPLICATOR_MAX_BLOB_BYTES` |
 | `unsupported_schema_version` | the command decoded at a `schema_version` Replicator does not support |
-| `wrong_payload_type` | the frame decoded to something that is not a `content.fetch` command |
 | `handler_error` | unclassified, and it exhausted the delivery ceiling (`attempts` set) |
+
+co-core's own docstring also lists `wrong_payload_type`. **Replicator never emits it**, and an
+issuer should not expect it: a frame that decoded to a non-`content.fetch` payload carries, at
+most, *somebody else's* `command_id` — `BlobAvailableEvent`'s names a command that **succeeded**,
+which is why a blob exists for it. A terminal failure keyed on that id would tell an issuer its
+good bytes are never coming. That frame dead-letters and stays silent.
 
 `reason` is a plain `str` and **not** a `Literal`, deliberately: a producer adding a token must
 never crash an older `extra="ignore"` consumer. So the token list is additive, and a consumer
@@ -170,6 +175,11 @@ Mint a ULID per fetch intent — one per call, not one per URL and not one per r
 
 Uniqueness is required *for correctness* only within the dedupe TTL, but *for correlation* it must
 be global and permanent — the issuer's own map is keyed on it.
+
+An **empty** `command_id` is not a `command_id`. Replicator dead-letters it before the fetch
+rather than treating `replicator:cmd:` as a dedupe key — under which the second blank-id command
+ever published would be a silent no-op, and the first would produce a `blob_available` nothing
+can be matched against.
 
 ### 2. Persist `command_id → domain` durably, **before** publishing
 
@@ -248,16 +258,23 @@ So an issuer's primary mechanism is now the fact: consume `content.blobs`, branc
 type, and on a `fetch_failed` with `terminal=True` close the pending entry **with a reason**. Off
 one consumer group, since both outcomes share the stream.
 
-**Silence has not gone away — it has narrowed.** Two conditions still produce nothing, and one
+**Silence has not gone away — it has narrowed.** Three conditions still produce nothing, and one
 produces nothing *yet*:
 
 - **A frame that fails `from_wire` entirely.** It has no payload, therefore no `command_id`,
   therefore nothing a fact could correlate on. DLQ-only. The commonest cause is an issuer that
   `XADD`ed flat fields instead of publishing through `to_wire` — see **The frame** — and, since
   co-core 0.7.2, a naive `occurred_at`.
-- **A frame that decodes to a payload carrying no `command_id`.** `FetchFailedEvent.command_id` is
-  required and *is* the event; most of the payload union has no such field, so most of this row
-  cannot be announced. (A misrouted `blob_available` happens to echo one and is reported.)
+- **A frame that decodes to a payload that is not a `content.fetch` command.** Not merely
+  unreportable — *unsafe* to report. Most of the payload union has no `command_id` at all, and the
+  members that do carry one that belongs to a different command: a misrouted `blob_available`
+  names a command that **succeeded**. Announcing a terminal failure against it would contradict a
+  fact the issuer has already applied, and MUST-4 covers duplicates, not contradictions. Silent by
+  design.
+- **A command whose `command_id` is blank.** Refused before the fetch and dead-lettered, with no
+  fact — there is no correlator to key one on. Silent to the issuer, but *not* silently
+  processed: an empty id is not a valid `command_id` (MUST-1), and accepting it would take the
+  dedupe key `replicator:cmd:` under which every later blank-id command becomes a no-op.
 - **A command still retrying.** Replicator emits no non-terminal fact today (#9 §3), so a 5xx,
   a 429, a network error, or a blob tree over its ceiling is invisible for as long as it retries —
   and there is no latency bound on that: transient failures retry indefinitely at the
@@ -281,7 +298,7 @@ See the failure taxonomy below for exactly which outcomes are visible and which 
 **The DLQ is still readable, and still worth reading** — for what the fact cannot carry. It is an
 ordinary stream on the same broker, and every entry carries the original **command** envelope — so
 `key` is the failed `command_id` — plus `dlq_reason` and `dlq_original_id`. Its value is now the
-complement of the fact rather than a substitute for it: it is the only place the two silent rows
+complement of the fact rather than a substitute for it: it is the only place the silent rows
 above show up at all, and it preserves the offending frame itself, which no fact does. Read it with
 a plain `XREAD` and no consumer group: a group left behind by a non-owner accumulates a PEL nothing
 drains.
@@ -333,7 +350,10 @@ A consumer on another host cannot open it, and nothing on the wire says so.
 
 - **No *non-terminal* failure fact** — a command that is retrying announces nothing until it
   either succeeds or is closed. See MUST-6 and the `FetchFailedEvent` note above.
-- **No failure fact for a frame with no `command_id`** — nothing to correlate one on. MUST-6.
+- **No failure fact for a frame that is not a `content.fetch` command** — any `command_id` it
+  carries is another command's, so there is nothing *safe* to correlate one on. MUST-6.
+- **No failure fact for a command whose `command_id` is blank** — nothing to correlate one on at
+  all. It is dead-lettered before the fetch rather than run. MUST-1, MUST-6.
 - **No latency bound**, and no SLA on turnaround.
 - **No ordering.** Two commands issued in sequence may produce facts in either order.
 - **No cross-command dedupe.** Two `command_id`s for one URL are two fetches and two facts, by
@@ -351,8 +371,8 @@ A consumer on another host cannot open it, and nothing on the wire says so.
 |---|---|---|
 | Duplicate `command_id` inside the dedupe window (default 24 h) | ack, no fetch | **nothing** — silent drop |
 | `schema_version` ≠ 1 | fact, then `content.fetch.dlq` | `fetch_failed` · `unsupported_schema_version` |
-| Frame decodes to a non-`content_fetch` payload **carrying a `command_id`** | fact, then `content.fetch.dlq` | `fetch_failed` · `wrong_payload_type` |
-| Frame decodes to a payload with **no `command_id`** | `content.fetch.dlq` | **nothing** — nothing to correlate on |
+| Frame decodes to a non-`content_fetch` payload | `content.fetch.dlq` | **nothing** — any `command_id` in it is another command's |
+| Command with a blank `command_id` | `content.fetch.dlq`, before the fetch | **nothing** — no correlator to key a fact on |
 | Malformed frame (fails `from_wire`; includes a naive `occurred_at`) | `content.fetch.dlq`, synthesized record | **nothing** — no payload at all |
 | HTTP 4xx, or a body-less 304 | fact, then `content.fetch.dlq` | `fetch_failed` · `http_status` (+ `status_code`) |
 | URL not fetchable (bad scheme / invalid URL) | fact, then `content.fetch.dlq` | `fetch_failed` · `not_fetchable` |
@@ -363,12 +383,20 @@ A consumer on another host cannot open it, and nothing on the wire says so.
 | Success | `blob_available` on `content.blobs` | the fact |
 
 Every `fetch_failed` row carries `terminal=True` — the command is closed and no blob will arrive.
-Every remaining "nothing" row is why MUST-6 keeps the reaper.
 
-Note the two shapes of silence are not the same problem. The three rows with no `command_id` are
-**permanently** silent, and an issuer's only recourse there is the reaper. The two retrying rows
-are silent **for now** (#9 §3), and an issuer that would use an in-flight signal should say so on
-its tracker rather than lengthening its timeout to compensate.
+The "nothing" rows are not one problem, and the reaper is not the answer to all of them:
+
+- **Three rows have no usable `command_id`** — a non-`content_fetch` payload, a blank
+  `command_id`, and a frame that failed to decode. Permanently silent, and the reaper is the
+  only recourse. This is what MUST-6 keeps it for.
+- **Two rows are silent only while the command is in flight** — a retrying transient failure and
+  a blob tree over its ceiling. Silent **for now** (#9 §3); an issuer that would use an
+  in-flight signal should say so on its tracker rather than lengthening its timeout to
+  compensate.
+- **The duplicate-`command_id` row is neither.** It is silent because the command was *already
+  handled* — the first delivery ran and published its fact, so the issuer's entry is already
+  closed. Reaping and re-issuing there sends the origin a second request for work that
+  succeeded. The fix is MUST-1: mint a fresh id per fetch occasion and the row cannot occur.
 
 ---
 
@@ -406,6 +434,8 @@ oversights:
   prunes. The cost is real and named in MUST-6: a 429 backing off is invisible while it retries,
   which is one of the four Watcher behaviours cannobserv#270 set out to enable. Reopen it on the
   consumer's tracker if the reaper turns out to re-issue under live retries in practice.
-- **The two `command_id`-less rows stay DLQ-only.** Not a scope cut — `FetchFailedEvent.command_id`
-  is required, and a fact naming no command closes nothing while adding noise to a broadcast
-  stream. The reaper is the mechanism there, permanently.
+- **The rows with no usable `command_id` stay DLQ-only.** Not a scope cut. `FetchFailedEvent`'s
+  `command_id` is required, so a fact naming no command closes nothing; and for a frame that
+  decoded to a *foreign* payload, the `command_id` it carries belongs to a different command —
+  reporting it would be worse than silence, not better. The reaper is the mechanism there,
+  permanently.

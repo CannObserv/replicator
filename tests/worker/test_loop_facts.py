@@ -2,9 +2,19 @@
 
 Before this, every row of the contract's failure taxonomy that dead-lettered was
 issuer-visible as **nothing** — the DLQ is a stream no issuer reads. Each test
-here pins one row of that table to a ``fetch_failed`` fact, and the last two pin
-the rows that deliberately stay silent because there is no ``command_id`` to
-correlate on.
+here pins one row of that table: either to a ``fetch_failed`` fact, or to the
+silence the row keeps.
+
+The silent rows are not silent for one reason, and the tests say which:
+
+- **no correlator at all** — a frame that did not decode, and a command whose
+  ``command_id`` is blank;
+- **no *safe* correlator** — a frame that decoded to a foreign payload, whose
+  ``command_id`` (if any) names a different command, usually one that succeeded;
+- **not closed yet** — a transient failure still retrying (#9 §3, deferred).
+
+Every route that reaches the DLQ also pins its ``dlq_reason``: five routes, five
+strings, and it is what an operator greps (CR #11).
 """
 
 import asyncio
@@ -22,7 +32,13 @@ from co_core.pure.models.changes import (
 )
 
 from src.core.errors import FailureReason, PermanentFetchError
-from src.worker.loop import Outcome, dead_letter_anomaly, poll_once, process_message
+from src.worker.loop import (
+    DEDUPE_KEY_PREFIX,
+    Outcome,
+    dead_letter_anomaly,
+    poll_once,
+    process_message,
+)
 from tests.worker.conftest import (
     GROUP,
     TOPIC,
@@ -33,6 +49,16 @@ from tests.worker.conftest import (
     process_one,
     unreachable_handler,
 )
+
+
+async def dlq_reasons(client) -> list[str]:
+    """The ``dlq_reason`` on every entry in ``<topic>.dlq``, in order.
+
+    CR #11: five routes reach the DLQ with five different reasons, and the
+    string is what an operator triages on — a reword that no test notices is a
+    reword that silently breaks somebody's grep.
+    """
+    return [fields[b"dlq_reason"].decode() for _, fields in await client.xrange(dlq_name(TOPIC))]
 
 
 async def failing_handler(command: ContentFetchCommand) -> None:
@@ -52,6 +78,7 @@ async def test_a_permanent_handler_failure_is_announced(fake_redis, consumer, se
     )
 
     assert outcome is Outcome.DEAD_LETTERED
+    assert await dlq_reasons(fake_redis) == ["handler reported a permanent failure"]
     (report,) = reports.reports
     assert report.command_id == "cmd-404"
     assert report.url == "https://example.test/x"
@@ -94,6 +121,7 @@ async def test_an_unsupported_schema_version_is_announced(fake_redis, consumer, 
         fake_redis, consumer, settings, message, unreachable_handler, reporter=reports
     )
 
+    assert await dlq_reasons(fake_redis) == ["unsupported schema_version"]
     (report,) = reports.reports
     assert report.command_id == "cmd-future"
     assert report.reason is FailureReason.UNSUPPORTED_SCHEMA_VERSION
@@ -114,6 +142,7 @@ async def test_the_delivery_ceiling_reports_how_many_attempts_it_took(
     outcome = await process_one(fake_redis, consumer, settings, message, buggy, reporter=reports)
 
     assert outcome is Outcome.DEAD_LETTERED
+    assert await dlq_reasons(fake_redis) == ["unclassified failure hit the delivery ceiling"]
     (report,) = reports.reports
     assert report.reason is FailureReason.HANDLER_ERROR
     assert report.attempts == 1
@@ -170,8 +199,18 @@ async def test_a_deduped_command_announces_nothing(fake_redis, consumer, setting
     assert reports.reports == []
 
 
-async def test_a_foreign_payload_carrying_a_command_id_is_announced(fake_redis, consumer, settings):
-    """Best effort: ``BlobAvailableEvent`` happens to echo one, so it can be closed."""
+async def test_a_foreign_payload_is_never_announced_even_when_it_echoes_a_command_id(
+    fake_redis, consumer, settings
+):
+    """CR #1: a ``command_id`` inside a foreign payload is not *our* command.
+
+    ``BlobAvailableEvent.command_id`` names a command that **succeeded** — that
+    is why a blob exists for it. Announcing ``fetch_failed(terminal=True)``
+    against it would tell the issuer that a command it already closed with good
+    bytes will never produce any: a wrong correlation applied silently, which is
+    the failure class MUST-1 / MUST-3 / MUST-5 all exist to prevent. Emitting
+    nothing costs a reaper timeout; emitting this corrupts issuer state.
+    """
     await fake_redis.xadd(
         TOPIC,
         to_wire(
@@ -182,20 +221,106 @@ async def test_a_foreign_payload_carrying_a_command_id_is_announced(fake_redis, 
                 size_bytes=1,
                 media_type="text/html",
                 url="https://example.test/a",
-                command_id="cmd-misrouted",
+                command_id="cmd-that-actually-succeeded",
             )
         ),
     )
     reports = collected_reports()
 
     message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
-    await process_one(
+    outcome = await process_one(
         fake_redis, consumer, settings, message, unreachable_handler, reporter=reports
     )
 
-    (report,) = reports.reports
-    assert report.command_id == "cmd-misrouted"
-    assert report.reason is FailureReason.WRONG_PAYLOAD_TYPE
+    assert outcome is Outcome.DEAD_LETTERED
+    assert reports.reports == []
+    assert await fake_redis.xlen(dlq_name(TOPIC)) == 1
+
+
+def blank_id_command(url: str = "https://example.test/a") -> dict[str, str]:
+    """A well-formed v1 frame whose ``command_id`` is the empty string."""
+    fields = make_command(url=url)
+    payload = json.loads(fields["payload"])
+    payload["command_id"] = ""
+    fields["payload"] = json.dumps(payload)
+    return fields
+
+
+async def test_a_blank_command_id_is_refused_before_anything_can_use_it(
+    fake_redis, consumer, settings
+):
+    """CR #6: a command with no correlator is malformed, and caught as such.
+
+    Not merely unannounceable. Left to run it would fetch, publish a
+    ``blob_available`` no issuer can match, and take out the dedupe key
+    ``replicator:cmd:`` — under which *every* later blank-id command is a silent
+    no-op. That is MUST-1's failure mode reached from a direction MUST-1 does not
+    describe, and it is silent on both sides.
+    """
+    await fake_redis.xadd(TOPIC, blank_id_command())
+    reports = collected_reports()
+
+    message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
+    outcome = await process_one(
+        fake_redis, consumer, settings, message, unreachable_handler, reporter=reports
+    )
+
+    assert outcome is Outcome.DEAD_LETTERED
+    # No fact: there is no command_id to key one on. No dedupe key either — the
+    # bare prefix is the collision this guard exists to prevent.
+    assert reports.reports == []
+    assert await fake_redis.exists(f"{DEDUPE_KEY_PREFIX}") == 0
+    assert await dlq_reasons(fake_redis) == ["command_id is blank"]
+
+
+async def test_two_blank_command_ids_are_two_dead_letters_not_one_silent_drop(
+    fake_redis, consumer, settings
+):
+    """The half of CR #6 that made it a bug rather than an untidiness.
+
+    Before the guard the second of these was ``DEDUPED`` — acked, never fetched,
+    one INFO line — because both hashed to the same bare dedupe key.
+    """
+    await fake_redis.xadd(TOPIC, blank_id_command("https://example.test/1"))
+    await fake_redis.xadd(TOPIC, blank_id_command("https://example.test/2"))
+    outcomes = []
+
+    for _ in range(2):
+        (message,) = await poll_once(fake_redis, consumer, settings, group=GROUP)
+        outcomes.append(
+            await process_one(fake_redis, consumer, settings, message, unreachable_handler)
+        )
+
+    assert outcomes == [Outcome.DEAD_LETTERED, Outcome.DEAD_LETTERED]
+    assert await fake_redis.xlen(dlq_name(TOPIC)) == 2
+
+
+async def test_an_unsupported_version_with_a_blank_id_still_cannot_be_announced(
+    fake_redis, consumer, settings, caplog
+):
+    """The ``_close`` correlator guard, still the backstop behind CR #6's guard.
+
+    ``schema_version`` is branched on *before* ``command_id`` so the contract's
+    branch-before-destructure rule holds, which leaves this combination reaching
+    a report site with nothing to key on. Refused at the one choke point, and
+    logged — silence here would read in the journal as an ordinary dead-letter.
+    """
+    fields = blank_id_command()
+    payload = json.loads(fields["payload"])
+    payload["schema_version"] = 2
+    fields["payload"] = json.dumps(payload)
+    await fake_redis.xadd(TOPIC, fields)
+    reports = collected_reports()
+
+    with caplog.at_level("WARNING", logger="src.worker.loop"):
+        message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
+        outcome = await process_one(
+            fake_redis, consumer, settings, message, unreachable_handler, reporter=reports
+        )
+
+    assert outcome is Outcome.DEAD_LETTERED
+    assert reports.reports == []
+    assert any("no command_id" in record.message for record in caplog.records)
 
 
 async def test_a_foreign_payload_without_a_command_id_stays_silent(fake_redis, consumer, settings):

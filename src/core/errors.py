@@ -46,11 +46,17 @@ class FailureReason(StrEnum):
     UNSUPPORTED_SCHEMA_VERSION = "unsupported_schema_version"
     """The command decoded, but at a ``schema_version`` this worker does not know."""
 
-    WRONG_PAYLOAD_TYPE = "wrong_payload_type"
-    """The frame decoded to something that is not a ``content.fetch`` command."""
-
     HANDLER_ERROR = "handler_error"
     """Unclassified, and it exhausted the delivery ceiling."""
+
+    # Deliberately absent: ``wrong_payload_type``. co-core's FetchFailedEvent
+    # docstring lists it, but Replicator cannot emit it correctly (CR #1). A
+    # frame that decoded to a non-command payload carries, at most, somebody
+    # else's command_id — BlobAvailableEvent's names a command that *succeeded*,
+    # which is why a blob exists for it. Announcing a terminal failure against
+    # that id would tell an issuer its good bytes are never coming: a wrong
+    # correlation, applied silently, which is the one failure shape the contract
+    # spends three MUSTs preventing. The frame dead-letters and stays silent.
 
 
 class HandlerError(RuntimeError):

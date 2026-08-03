@@ -48,9 +48,19 @@ def test_the_reason_tokens_are_the_wire_tokens():
         "not_fetchable",
         "too_large",
         "unsupported_schema_version",
-        "wrong_payload_type",
         "handler_error",
     }
+
+
+def test_wrong_payload_type_is_not_a_token_this_repo_emits():
+    """CR #1: co-core documents it; Replicator deliberately cannot use it.
+
+    A ``command_id`` found inside a foreign payload names somebody else's
+    command — usually one that *succeeded*. There is no correct fact to publish
+    for that frame, so the token has no raise site here and must not sit in the
+    enum looking emittable.
+    """
+    assert "wrong_payload_type" not in {reason.value for reason in FailureReason}
 
 
 def test_a_reason_serializes_as_its_token():
