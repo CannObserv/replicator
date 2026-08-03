@@ -22,18 +22,22 @@ requires ``--production``. A flag rather than a prompt: the script has to stay
 usable non-interactively.
 
 ``--watch`` tails the fact stream so a human can see the loop close without
-hand-writing ``XRANGE``. It reads with a plain ``XREAD`` and never joins a
-consumer group: ``content.blobs`` is Archiver-operated, and a group left behind by
-an operator tool accumulates a pending entries list nothing will ever drain. The
-stream it watches follows ``--topic`` unless overridden, so seeding a scratch
-stream watches that stream's facts rather than production's.
+hand-writing ``XRANGE``. It accepts **either** outcome — ``blob_available`` or,
+since #9, ``fetch_failed`` — because a watch that recognized only success would
+report a named, terminal failure as an indistinguishable timeout. It reads with a
+plain ``XREAD`` and never joins a consumer group: ``content.blobs`` is
+Archiver-operated, and a group left behind by an operator tool accumulates a
+pending entries list nothing will ever drain. The stream it watches follows
+``--topic`` unless overridden, so seeding a scratch stream watches that stream's
+facts rather than production's.
 
-Exit codes: ``0`` published (and, under ``--watch``, every fact seen) · ``1`` the
-run did not complete — publishing failed, watching failed, or a fact never
-arrived · ``2`` the target was refused. Commands are reported on stdout as they
-land, so a non-zero exit never hides a command it saw land — a connection lost
-between the ``XADD`` and its reply is the one gap, and the "N of M" count on
-stderr is what marks that boundary as fuzzy.
+Exit codes: ``0`` published (and, under ``--watch``, every command produced a
+blob) · ``1`` the run did not complete — publishing failed, watching failed, a
+command was closed by a ``fetch_failed``, or no fact ever arrived · ``2`` the
+target was refused. Commands are reported on stdout as they land, so a non-zero
+exit never hides a command it saw land — a connection lost between the ``XADD``
+and its reply is the one gap, and the "N of M" count on stderr is what marks that
+boundary as fuzzy.
 """
 
 import argparse
@@ -47,7 +51,11 @@ from datetime import UTC, datetime
 from co_core.effects.bus import BusPublish
 from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.envelope import from_wire, to_wire
-from co_core.pure.models.changes import BlobAvailableEvent, ContentFetchCommand
+from co_core.pure.models.changes import (
+    BlobAvailableEvent,
+    ContentFetchCommand,
+    FetchFailedEvent,
+)
 from co_core_aio.bus import AsyncBusPublisher
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
@@ -60,6 +68,10 @@ from ulid import ULID
 IDLE_SLEEP_SECONDS = 0.05
 
 DEFAULT_WATCH_TIMEOUT_SECONDS = 30.0
+
+# Either outcome of a command. ``content.blobs`` has carried both since #9, so
+# "the fact for this command_id" is no longer synonymous with "the blob".
+Fact = BlobAvailableEvent | FetchFailedEvent
 
 
 class ProductionTargetError(RuntimeError):
@@ -181,8 +193,13 @@ async def watch_for_facts(
     command_ids: set[str],
     *,
     timeout_seconds: float,
-) -> list[BlobAvailableEvent]:
+) -> list[Fact]:
     """Tail ``topic`` until every awaited command has a fact, or time runs out.
+
+    A fact is **either outcome**: ``content.blobs`` carries ``blob_available``
+    and, since #9, ``fetch_failed``. Accepting only the success would leave this
+    tool timing out on exactly the case the failure fact exists to make visible,
+    reporting a named failure as the silence it replaced.
 
     Returns what it saw — an incomplete list is the caller's signal that the loop
     did not close, not an error here. Frames for other issuers' commands are
@@ -195,7 +212,7 @@ async def watch_for_facts(
     cancelling mid-read would discard the partial results this returns.
     """
     outstanding = set(command_ids)
-    found: list[BlobAvailableEvent] = []
+    found: list[Fact] = []
     cursor = start_id
     deadline = time.monotonic() + timeout_seconds
     while outstanding:
@@ -218,12 +235,14 @@ async def watch_for_facts(
 
 def _decode_fact(
     topic: str, message_id: str, fields: dict[bytes | str, bytes | str]
-) -> BlobAvailableEvent | None:
+) -> Fact | None:
     """Decode one fact frame, or ``None`` if it is not one this run cares about.
 
     ``from_wire``'s dispatch table is global, so any known event type on this
     stream decodes cleanly into the wrong model — hence the ``isinstance`` check
-    rather than trusting the topic.
+    rather than trusting the topic. Both fact types pass; a ``content_fetch``
+    command misrouted here does not, and neither does an archiver fact that
+    happens to share the stream.
 
     The catch is deliberately broad (CR #7). ``from_wire`` documents
     ``BusMessageAnomaly`` as its failure mode, but the fallback for *any* decode
@@ -240,7 +259,7 @@ def _decode_fact(
     except Exception as exc:
         print(f"warning: skipping undecodable frame {message_id}: {exc}", file=sys.stderr)
         return None
-    return payload if isinstance(payload, BlobAvailableEvent) else None
+    return payload if isinstance(payload, BlobAvailableEvent | FetchFailedEvent) else None
 
 
 def _as_str(value: bytes | str) -> str:
@@ -278,7 +297,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--watch",
         action="store_true",
-        help="tail the fact stream until every command's blob_available arrives",
+        help="tail the fact stream until every command has an outcome "
+        "(blob_available or fetch_failed)",
     )
     parser.add_argument(
         "--blobs-topic",
@@ -403,25 +423,39 @@ async def _report_facts(
     start_id: str,
     results: list[SeedResult],
 ) -> int:
-    """Wait for each command's fact and print it; non-zero if any never arrived."""
+    """Wait for each command's outcome and print it; non-zero unless all succeeded.
+
+    Three exits, not two: every blob arrived (0), a command was closed with a
+    reason (1), or nothing arrived at all (1). The last two share a code because
+    both are a failed seed, but they no longer share a *message* — naming the
+    reason is the whole of what #9 bought the operator over waiting out a
+    timeout and guessing.
+    """
     awaited = {result.command_id for result in results}
     facts = await watch_for_facts(
         client, blobs_topic, start_id, awaited, timeout_seconds=timeout_seconds
     )
+    failed = set()
     for fact in facts:
+        if isinstance(fact, FetchFailedEvent):
+            failed.add(fact.command_id)
+            print(
+                f"fetch_failed command_id={fact.command_id} reason={fact.reason} "
+                f"terminal={fact.terminal} status={fact.status_code} url={fact.url}"
+            )
+            continue
         print(
             f"blob_available command_id={fact.command_id} "
             f"fingerprint={fact.content_fingerprint} size={fact.size_bytes} uri={fact.blob_uri}"
         )
     missing = awaited - {fact.command_id for fact in facts}
-    if not missing:
-        return 0
-    print(
-        f"error: no blob_available on {blobs_topic} after {timeout_seconds}s "
-        f"for: {', '.join(sorted(missing))}",
-        file=sys.stderr,
-    )
-    return 1
+    if missing:
+        print(
+            f"error: no fact on {blobs_topic} after {timeout_seconds}s "
+            f"for: {', '.join(sorted(missing))}",
+            file=sys.stderr,
+        )
+    return 1 if missing or failed else 0
 
 
 def main(argv: list[str] | None = None) -> int:
