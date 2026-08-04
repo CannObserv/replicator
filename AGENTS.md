@@ -74,7 +74,7 @@ src/api/        — FastAPI app (/health only; not part of the MVP loop)
 src/api/main.py — App factory, lifespan, router registration
 src/core/       — Shared domain logic, logging, config
 src/core/errors.py   — TransientFetchError / PermanentFetchError + FailureReason (handler failure vocabulary)
-src/core/logging.py  — build_json_formatter() + configure_logging() + get_logger()
+src/core/logging.py  — build_json_formatter() + ColorMessageFilter + configure_logging() + get_logger()
 src/core/log_config.json — uvicorn --log-config; routes uvicorn's own loggers through that formatter
 src/core/config.py   — Settings / env access (see Environment Variables)
 scripts/        — sync_wheelhouse.py, check_redis_floor.sh, seed_fetch.py
@@ -275,6 +275,8 @@ logger = get_logger(__name__)
 Entry points only: `configure_logging()` is called once inside the FastAPI `lifespan` or the worker's `run()`. Never in library modules.
 
 **One formatter, two installers.** `build_json_formatter()` is the single definition of the JSON schema (`timestamp`, `level`, `logger`, `message`). `configure_logging()` installs it on the root logger; `src/core/log_config.json` names the *same factory* through dictConfig's `"()"` key, so there is no second fmt string to drift. The dev server must be launched with `--log-config src/core/log_config.json` — uvicorn's `uvicorn` / `uvicorn.access` / `uvicorn.error` loggers ship with `propagate=False` and their own plain-text handlers, so a root-only config never reaches them and the output is half JSON, half plain text. **The worker runs no uvicorn**, so `replicator.service` needs no `--log-config`; its `ExecStart` is `python -m src.worker.main` and `configure_logging()` is the whole story there (#14).
+
+**The colour strip is a filter on the loggers, deliberately.** uvicorn attaches an ANSI-coloured duplicate of each lifecycle message as `extra={"color_message": ...}`, and every extra reaches the JSON payload. `ColorMessageFilter` deletes it from the record at its source — not via the formatter's `reserved_attrs`, and not on the stdout handler. Both alternatives scope the fix to *this* sink: a handler that builds its payload from the record's `__dict__` rather than a `logging.Formatter` resurrects the field, and OpenTelemetry's `LoggingHandler` is exactly that (its own reserved list does not cover `color_message`). Mutating the record once means the strip survives a sink swap with no failing test to warn you it had stopped working. `tests/core/test_logging.py` pins the filter's placement, not just its effect.
 
 **Date & Time:**
 - All UTC

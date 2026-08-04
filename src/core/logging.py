@@ -19,6 +19,32 @@ def _resolve_level(level: int | str) -> int:
     return logging.getLevelNamesMapping().get(level.strip().upper(), logging.INFO)
 
 
+class ColorMessageFilter(logging.Filter):
+    """Drop uvicorn's ``color_message`` extra before anything serializes it.
+
+    uvicorn logs its lifecycle lines with an ANSI-coloured duplicate of the
+    message attached as ``extra={"color_message": ...}``, for its own colour-
+    aware default formatter. Every extra reaches the JSON payload, so without
+    this the records carry a second copy of the message full of escape
+    sequences — the one thing structured logging exists to avoid.
+
+    A **filter**, not the formatter's ``reserved_attrs``, and on the **loggers**
+    rather than the handler: both choices put the strip at the record's source,
+    before any handler reads it. A handler that builds its payload from the
+    record's ``__dict__`` instead of a ``logging.Formatter`` — which is exactly
+    what OpenTelemetry's ``LoggingHandler`` does, against a reserved list that
+    does not cover ``color_message`` — would otherwise resurrect the field the
+    day the sink changes, silently and with no failing test. Mutating the
+    record once keeps the fix independent of what consumes it.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Strip the extra if present. Never drops a record."""
+        if hasattr(record, "color_message"):
+            del record.color_message
+        return True
+
+
 def build_json_formatter() -> JsonFormatter:
     """The single JSON formatter definition for the whole process.
 

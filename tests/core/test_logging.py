@@ -7,7 +7,12 @@ import logging
 import logging.config
 from pathlib import Path
 
-from src.core.logging import build_json_formatter, configure_logging, get_logger
+from src.core.logging import (
+    ColorMessageFilter,
+    build_json_formatter,
+    configure_logging,
+    get_logger,
+)
 
 # Resolved from this file, not the working directory: the suite must pin the
 # shipped config wherever pytest happens to be invoked from.
@@ -65,17 +70,74 @@ def test_uvicorn_log_config_is_valid_and_shares_formatter():
             logging.getLogger(n).handlers[:],
             logging.getLogger(n).propagate,
             logging.getLogger(n).level,
+            logging.getLogger(n).filters[:],
         )
         for n in names
     }
     try:
         logging.config.dictConfig(config)  # raises on a malformed config
+        # The color_message filter must sit on the uvicorn *loggers*, not on the
+        # stdout handler: a record is mutated once at its source, so the strip
+        # survives whatever consumes it downstream (see ColorMessageFilter).
+        for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+            assert any(
+                isinstance(f, ColorMessageFilter) for f in logging.getLogger(name).filters
+            ), f"{name} has no ColorMessageFilter"
     finally:
-        # Restore level too: dictConfig sets root + uvicorn loggers to INFO,
-        # and leaking that into later tests would be an order-dependent flake.
-        for n, (handlers, propagate, level) in saved.items():
+        # Restore level and filters too: dictConfig sets root + uvicorn loggers
+        # to INFO and attaches the filter, and leaking either into later tests
+        # would be an order-dependent flake.
+        for n, (handlers, propagate, level, filters) in saved.items():
             lg = logging.getLogger(n)
-            lg.handlers, lg.propagate, lg.level = handlers, propagate, level
+            lg.handlers, lg.propagate, lg.level, lg.filters = handlers, propagate, level, filters
+
+
+def test_color_message_extra_is_stripped():
+    """uvicorn attaches an ANSI-coloured duplicate of its lifecycle messages as
+    `extra={"color_message": ...}`, which python-json-logger would serialize as
+    a field full of escape sequences.
+
+    Stripped by a filter rather than the formatter's `reserved_attrs` on
+    purpose: a filter mutates the record before *any* handler reads it, so the
+    strip also holds for a handler that builds its payload from the record's
+    __dict__ instead of a logging.Formatter — which is exactly what
+    OpenTelemetry's LoggingHandler does, and its own reserved list does not
+    cover `color_message`.
+    """
+    record = logging.LogRecord(
+        name="uvicorn.error",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="Started server process [%d]",
+        args=(4066888,),
+        exc_info=None,
+    )
+    record.color_message = "Started server process [\x1b[36m%d\x1b[0m]"
+
+    assert ColorMessageFilter().filter(record) is True  # never drops the record
+
+    parsed = json.loads(build_json_formatter().format(record))
+    assert "color_message" not in parsed
+    assert parsed["message"] == "Started server process [4066888]"
+    # The strip is on the record itself, so it holds for any consumer, not just
+    # this formatter.
+    assert not hasattr(record, "color_message")
+
+
+def test_color_message_filter_passes_ordinary_records_through():
+    """A record without the extra is untouched — the filter is not a gate."""
+    record = logging.LogRecord(
+        name="src.some.module",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="plain",
+        args=(),
+        exc_info=None,
+    )
+    assert ColorMessageFilter().filter(record) is True
+    assert json.loads(build_json_formatter().format(record))["message"] == "plain"
 
 
 def test_documented_uvicorn_commands_pass_log_config():
