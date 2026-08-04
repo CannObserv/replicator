@@ -7,8 +7,13 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
-    "co-core[extract]>=0.7,<0.8",
-    "co-core-aio[bus]>=0.7,<0.8",
+    # Floor is 0.7.5, not 0.7: the enriched BlobAvailableEvent fields landed in
+    # 0.7.3 and FetchResult.final_url in 0.7.5, and the event model is
+    # extra="ignore" — on an older wheel the enriched kwargs construct cleanly
+    # and are silently discarded. Without the floor a version skew publishes
+    # facts that look right and carry nothing (#10, cannobserv#271/#279).
+    "co-core[extract]>=0.7.5,<0.8",
+    "co-core-aio[bus]>=0.7.5,<0.8",
     "fastapi>=0.126.0,<1",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.5.0,<3",
