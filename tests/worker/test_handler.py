@@ -1,12 +1,7 @@
 """The byte path behind the loop's handler seam: fetch, fingerprint, store, publish."""
 
-from datetime import UTC, datetime
-
 import httpx
 import pytest
-from co_core.pure.adapters.bus import streams
-from co_core.pure.adapters.bus.envelope import from_wire
-from co_core.pure.models.changes import BlobAvailableEvent, ContentFetchCommand
 from co_core.pure.util.hashing import sha256
 from redis.exceptions import ResponseError
 
@@ -14,52 +9,7 @@ from src.core.config import get_settings
 from src.core.errors import FailureReason, PermanentFetchError, TransientFetchError
 from src.storage.local import LocalBlobStore
 from src.storage.sweeper import BlobUsage
-from src.worker.handler import build_handler
-from tests.worker.conftest import BODY, FakeFetcher, fetch_result
-
-URL = "https://example.test/a"
-
-
-def command(command_id: str = "cmd-1", url: str = URL) -> ContentFetchCommand:
-    return ContentFetchCommand(occurred_at=datetime.now(UTC), command_id=command_id, url=url)
-
-
-async def published_facts(client, topic: str = streams.CONTENT_BLOBS) -> list[BlobAvailableEvent]:
-    """Decode the fact stream the way a downstream consumer would.
-
-    The ``isinstance`` check is the assertion, not a type-checker appeasement:
-    ``from_wire``'s dispatch table is global, so it happily decodes any known
-    event type off any topic. A handler that published the wrong model to
-    ``content.blobs`` would otherwise sail through every assertion below.
-    """
-    facts = []
-    entries = await client.xrange(topic)
-    for message_id, fields in entries:
-        payload = from_wire(
-            {k.decode(): v.decode() for k, v in fields.items()},
-            topic=topic,
-            message_id=message_id.decode(),
-        ).payload
-        assert isinstance(payload, BlobAvailableEvent)
-        facts.append(payload)
-    return facts
-
-
-@pytest.fixture
-def handler(fake_redis, tmp_path):
-    """The real handler over a real store and publisher, with the fetch faked."""
-
-    def build(fetcher=None, blobs_topic: str | None = None, usage: BlobUsage | None = None):
-        return build_handler(
-            fetcher=fetcher or FakeFetcher(),
-            store=LocalBlobStore(tmp_path),
-            client=fake_redis,
-            settings=get_settings(),
-            usage=usage,
-            **({} if blobs_topic is None else {"blobs_topic": blobs_topic}),
-        )
-
-    return build
+from tests.worker.conftest import BODY, URL, FakeFetcher, command, fetch_result, published_facts
 
 
 async def test_the_command_url_is_the_url_fetched(handler):

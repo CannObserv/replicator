@@ -25,8 +25,10 @@ follows fails *silently* when it is got wrong: no error, no dead letter, no log 
 side — just a fact nobody can match, or a command that was never run.
 
 Contracts settled in cannobserv#266 (co-core v0.7.0); the failure fact added in cannobserv#270 and
-the tz-aware `occurred_at` in cannobserv#273, both shipped in **co-core v0.7.2**. Founding
-rationale:
+the tz-aware `occurred_at` in cannobserv#273, both shipped in **co-core v0.7.2**; the enriched
+`blob_available` metadata in cannobserv#271/#279 and the command's request options in
+cannobserv#272, shipped in **v0.7.3** and **v0.7.5**. Replicator requires **co-core ≥ 0.7.5**.
+Founding rationale:
 [`docs/plans/2026-06-25-replicator-mvp-design.md`](../plans/2026-06-25-replicator-mvp-design.md).
 
 ---
@@ -80,6 +82,18 @@ would shard on.
 | `occurred_at` | `datetime` | **tz-aware UTC, enforced.** Not used for ordering or expiry by Replicator |
 | `command_id` | `str` | **The idempotency key and the sole correlator.** See MUST-1 |
 | `url` | `str` | What to fetch. **Not** a key. See MUST-3 |
+| `headers` | `dict[str, str] \| None` | co-core ≥ 0.7.3. **Accepted and currently ignored** — see below |
+| `timeout_seconds` | `float \| None` | co-core ≥ 0.7.3. **Accepted and currently ignored** — see below |
+
+> **`headers` and `timeout_seconds` are legal on the wire but do nothing yet.** They are part of
+> `ContentFetchCommand` from co-core v0.7.3 (cannobserv#272), so a frame carrying them decodes
+> cleanly and is fetched normally — with Replicator's own default headers and timeout. Teaching
+> the fetcher to honour them, and the header hardening that must come with it (strip hop-by-hop
+> headers, bound the count and total size, reject rather than truncate, case-normalize before the
+> merge so "issuer wins" actually holds), is #11. They are listed here because the alternative is
+> an issuer reading this table and concluding the fields do not exist — the failure mode being
+> that an issuer sends a validator header, sees no conditional-GET behaviour, and has nothing in
+> this document to explain why.
 
 > **`occurred_at` must carry a timezone.** Since co-core v0.7.2 (cannobserv#273) it is an
 > `AwareDatetime` on every payload: a **naive** value is rejected fail-loud rather than assumed
@@ -102,6 +116,47 @@ would shard on.
 | `media_type` | `str` | Normalized, `charset` dropped; `application/octet-stream` when absent |
 | `url` | `str` | Echoed from the command. Confirmation and debugging only |
 | `command_id` | `str \| None` | Echoed from the command. `None` only for non-command emits |
+| `final_url` | `str \| None` | co-core ≥ 0.7.3. Where the fetch **landed** after redirects. `None` = *unknown*, see below |
+| `status_code` | `int \| None` | co-core ≥ 0.7.3. **Always 2xx on this fact** — see below |
+| `fetched_at` | `datetime \| None` | co-core ≥ 0.7.3. tz-aware UTC. When the bytes were on the **wire**, not when the fact was published |
+| `content_type_raw` | `str \| None` | co-core ≥ 0.7.3. The **verbatim** `Content-Type`, `charset` and all. `None` = *the origin sent none*, see below |
+| `etag` | `str \| None` | co-core ≥ 0.7.3. Verbatim, `W/` prefix and quotes included. Replay unparsed in `If-None-Match` |
+| `last_modified` | `str \| None` | co-core ≥ 0.7.3. Verbatim, unparsed. Replay in `If-Modified-Since` |
+
+The six enriched fields (cannobserv#271, `final_url` sourced by cannobserv#279, produced by #10)
+carry what Replicator holds at publish time and a broadcast consumer cannot recover once fetching
+lives here rather than in Watcher. Three details are the whole value of them:
+
+- **`None` means nobody said, never "the default".** `final_url` is `None` when the *driver* did
+  not report a landing URL — **not** "no redirect occurred", and Replicator never substitutes the
+  requested `url` to fill the gap. `content_type_raw` is `None` when the *origin* sent no
+  `Content-Type` — deliberately **not** `application/octet-stream`, which is a value some
+  consumers read as "unknown, guess from the URL" and which `media_type` (normalized, required)
+  substitutes on its own channel. An issuer that collapses these to a default destroys the
+  distinction it is being handed.
+- **`status_code` is always 2xx here.** Every other status closes the command as a `fetch_failed`
+  instead, so this field distinguishes 200 from 203 or 206 — it is not a success/failure branch,
+  and a branch written as `if status_code == 200` will silently drop a 203.
+- **An absurd header value is dropped, not truncated.** Replicator refuses to carry a
+  `Content-Type` / `ETag` / `Last-Modified` over 1024 characters and sends `None` instead: these
+  are origin-controlled strings on a broadcast stream nothing trims, and a *truncated* ETag
+  replayed in an `If-None-Match` is a validator that can never match, which is worse than none.
+
+> **These are per-*occasion* values on a fingerprint-keyed fact.** They describe the fetch that
+> produced this fact, not the bytes — which is why MUST-5 matters more now than it did. Two
+> commands returning identical bytes emit two facts with the same `content_fingerprint` and
+> possibly *different* `final_url`, `etag`, `last_modified`, and `fetched_at`. A consumer deduping
+> its inbox on the fingerprint — already forbidden — now also pins its stored validators to the
+> first emission for those bytes, and will replay a stale `If-None-Match` for as long as that
+> content is unchanged.
+
+> **Do not attempt conditional GET yet.** `etag` and `last_modified` are the *read* half of the
+> seam; the write half is the command's `headers`, which Replicator does not yet honour (#11). And
+> even once it does, a validator that matches earns a **body-less 304**, which today closes the
+> command as `fetch_failed` / `http_status` — a *failure* for what is in fact the most useful
+> possible answer. Both halves must land, and the 304 must become an outcome of its own, before an
+> issuer stores a validator and replays it. Until then these two fields are for the issuer's own
+> records.
 
 **Fact — `content.blobs`, `FetchFailedEvent`** (co-core ≥ 0.7.2, cannobserv#270):
 
@@ -241,6 +296,12 @@ loses that correlation entirely: the same silent-failure shape as MUST-1, arrive
 opposite direction.
 
 Dedupe on `command_id`. Treat the fingerprint as content identity.
+
+Since the fact carries per-occasion fetch metadata (cannobserv#271), fingerprint-dedupe now also
+loses **which fetch** a fact describes. Two facts sharing a fingerprint may carry different
+`final_url`, `etag`, `last_modified`, and `fetched_at`; keeping only the first pins an issuer's
+stored validators to whichever occasion arrived first and holds them there for as long as the
+content is unchanged — precisely the period a conditional GET would have been useful.
 
 And do not dedupe **`fetch_failed`** on `command_id` either — for the opposite reason. More than
 one failure fact per command is expected (MUST-4), and once non-terminal facts exist a command
