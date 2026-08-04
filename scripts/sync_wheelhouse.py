@@ -22,6 +22,11 @@ network, or a missing bucket). The unit runs this as a non-fatal
 ``ExecStartPre`` (``-`` prefix): a transient failure is surfaced to the journal,
 and if the wheelhouse is already populated the service still starts — only a
 genuinely missing wheel surfaces later as a hard ``uv`` resolution error.
+
+What this prints on either path reaches journald as **plain text**, not the
+app's JSON — it runs before the project is importable, so it cannot share
+``build_json_formatter()``, and a second hand-maintained copy of that schema is
+not worth one boot line. Do not "fix" this (#15, skills#83).
 """
 
 from __future__ import annotations

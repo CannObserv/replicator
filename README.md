@@ -162,7 +162,9 @@ sudo journalctl -u replicator -f
 
 Production secrets live in `/etc/replicator/.env` (managed manually on the VM, not in the repo).
 The unit's `ExecStartPre` writes the current git SHA to `/run/replicator/build-id` and exposes it
-as `BUILD_ID`, and asserts the Redis `>=7.0` floor via `scripts/check_redis_floor.sh`.
+as `BUILD_ID`, asserts the Redis `>=7.0` floor via `scripts/check_redis_floor.sh`, and refreshes the
+wheelhouse via `scripts/sync_wheelhouse.py` — whose journald output is **plain text, not JSON**, by
+design (see [AGENTS.md](AGENTS.md), "Not everything in the journal is JSON").
 
 Because `ExecStart` runs `--frozen --no-sync`, run `uv sync --frozen` as part of the deploy, before
 `systemctl restart`.
