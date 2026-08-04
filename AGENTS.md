@@ -169,7 +169,7 @@ In `/etc/replicator/.env` (read by the service):
 - `REPLICATOR_ERROR_BACKOFF_BASE_SECONDS` / `REPLICATOR_ERROR_BACKOFF_MAX_SECONDS` — backoff for a poll *cycle* that raised (broker outage); defaults `1.0` / `30.0`, escalating `base * 2**(n-1)`
 - `REPLICATOR_MAX_CONSECUTIVE_CYCLE_FAILURES` — consecutive failed cycles before the worker exits so the unit restarts; default `20` (~8 min at the default backoff). Paired with the unit's `StartLimitIntervalSec=3600` / `StartLimitBurst=3`
 - `REPLICATOR_DEDUPE_TTL_SECONDS` — lifetime of the `replicator:cmd:<command_id>` dedupe key; default `86400`
-- `REPLICATOR_LOG_LEVEL` — default `INFO`
+- `REPLICATOR_LOG_LEVEL` — default `INFO`. Governs the **root** logger only, which is the whole tree for the worker. Under the dev server's `--log-config`, uvicorn's own `uvicorn` / `uvicorn.access` / `uvicorn.error` loggers are pinned `INFO` by `src/core/log_config.json` and do not follow it (nor did they under uvicorn's built-in config), so setting `WARNING` will not silence access lines; root itself is `INFO` from boot until the lifespan's `configure_logging()` applies this value
 - `BUILD_ID` — git SHA stamped by the systemd unit's `ExecStartPre`; defaults to `"dev"` outside systemd
 
 ## Bus Conventions
