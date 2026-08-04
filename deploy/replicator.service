@@ -51,6 +51,10 @@ ExecStartPre=/bin/bash /home/exedev/replicator/scripts/check_redis_floor.sh
 # Refresh the cannobserv wheelhouse. Non-fatal ('-' prefix): a transient GCS
 # failure is surfaced to the journal, and an already-populated wheelhouse still
 # starts. Only a genuinely missing wheel surfaces as a hard uv resolution error.
+#
+# What it writes to journald is plain text, not the app's JSON — it runs
+# --no-project, before uv sync, so it cannot import build_json_formatter()
+# (#15, skills#83).
 ExecStartPre=-/usr/local/bin/uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
 
 # --frozen --no-sync: run exactly the committed lockfile; dependency sync is a
