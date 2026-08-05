@@ -131,7 +131,13 @@ def build_handler(
                 # command.url included in the silence: echoing the request would
                 # leave an issuer unable to tell "it landed where I asked" from
                 # "nobody knows where it landed" (cannobserv#279).
-                final_url=result.final_url,
+                #
+                # `or None` normalizes the one shape the contract says cannot
+                # occur — an empty string is neither a URL nor the None an issuer
+                # branches on. Unreachable through the http driver, whose value
+                # is str(response.url); this keeps a future driver from inventing
+                # a third state the issuer has no rule for.
+                final_url=result.final_url or None,
                 status_code=result.status_code,
                 fetched_at=fetched_at,
                 content_type_raw=_passthrough(headers, "content-type"),
@@ -287,6 +293,14 @@ def _folded_headers(result: FetchResult) -> dict[str, str]:
     ``Mapping[str, str]`` with no such guarantee, and the failure mode of
     assuming it — every response silently typed ``application/octet-stream``,
     every validator silently absent — is quiet enough to survive a long time.
+
+    **Single-valued mapping assumed.** Two names differing only by case collapse
+    to the last one seen, where HTTP semantics say repeated field lines are
+    comma-joined. Unreachable through the co-core driver, which builds
+    ``headers`` from an httpx ``Headers`` already collapsed to one value per
+    name, so this is a note rather than a fix: a future driver handing over raw
+    multi-value headers would silently discard the earlier ones, and three
+    fields depend on this fold now rather than one.
     """
     return {name.lower(): value for name, value in result.headers.items()}
 

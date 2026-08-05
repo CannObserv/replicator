@@ -49,6 +49,20 @@ async def test_an_unreported_landing_url_stays_none(handler, fake_redis):
     assert fact.final_url is None
 
 
+async def test_a_blank_landing_url_normalizes_to_none(handler, fake_redis):
+    """An empty string is a third state the contract does not define — neither a
+    URL nor the ``None`` an issuer branches on.
+
+    Unreachable through co-core's http driver, whose value is
+    ``str(response.url)``. Pinned so a future driver reporting ``""`` collapses
+    into the absent case rather than reaching a consumer as a URL of length zero.
+    """
+    await handler(FakeFetcher(fetch_result(final_url="")))(command())
+
+    (fact,) = await published_facts(fake_redis)
+    assert fact.final_url is None
+
+
 async def test_the_status_code_rides_on_the_fact(handler, fake_redis):
     """Always a 2xx — ``_raise_for_status`` closes every other status as
     ``fetch_failed`` — so its value is telling 200 from 203 or 206."""
@@ -142,16 +156,30 @@ async def test_absent_validators_stay_none(handler, fake_redis):
     assert fact.last_modified is None
 
 
-@pytest.mark.parametrize("name", ["ETag", "Last-Modified", "Content-Type"])
-async def test_the_passthroughs_are_found_case_insensitively(handler, fake_redis, name):
+PASSTHROUGHS = [
+    ("ETag", "etag"),
+    ("Last-Modified", "last_modified"),
+    ("Content-Type", "content_type_raw"),
+]
+
+
+@pytest.mark.parametrize(("name", "attribute"), PASSTHROUGHS)
+async def test_the_passthroughs_are_found_case_insensitively(handler, fake_redis, name, attribute):
     """``FetchResult.headers`` is a plain ``Mapping[str, str]`` with no
-    lower-casing guarantee — the same reason ``_media_type`` folds."""
+    lower-casing guarantee — the same reason ``_media_type`` folds.
+
+    Each header is asserted onto **its own** field, and the other two onto
+    ``None``. A membership check across all three would pass an implementation
+    that found every header and then filed them under the wrong names — which is
+    the mistake three near-identical lookups actually invite.
+    """
     fetcher = FakeFetcher(fetch_result(headers={name: "value"}))
 
     await handler(fetcher)(command())
 
     (fact,) = await published_facts(fake_redis)
-    assert "value" in (fact.etag, fact.last_modified, fact.content_type_raw)
+    assert getattr(fact, attribute) == "value"
+    assert [getattr(fact, other) for _, other in PASSTHROUGHS if other != attribute] == [None, None]
 
 
 async def test_an_absurdly_long_header_value_is_dropped_not_truncated(handler, fake_redis):
@@ -186,7 +214,9 @@ async def test_an_oversized_content_type_still_normalizes_to_a_media_type(handle
     """The bound applies to the raw channel only. ``media_type`` is required and
     non-optional on the fact, so dropping it is not an available outcome — it
     normalizes to the fallback exactly as an absent header would."""
-    fetcher = FakeFetcher(fetch_result(headers={"content-type": "x" * 5000}))
+    fetcher = FakeFetcher(
+        fetch_result(headers={"content-type": "x" * (MAX_HEADER_VALUE_LENGTH + 1)})
+    )
 
     await handler(fetcher)(command())
 

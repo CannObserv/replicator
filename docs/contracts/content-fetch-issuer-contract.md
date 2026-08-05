@@ -123,6 +123,12 @@ would shard on.
 | `etag` | `str \| None` | co-core ≥ 0.7.3. Verbatim, `W/` prefix and quotes included. Replay unparsed in `If-None-Match` |
 | `last_modified` | `str \| None` | co-core ≥ 0.7.3. Verbatim, unparsed. Replay in `If-Modified-Since` |
 
+"Verbatim" on those three means *verbatim apart from surrounding whitespace*, which RFC 9110
+excludes from a field value (it is optional whitespace around it, not part of it). Nothing inside
+the value is touched — no case folding, no quote stripping, no date parsing. A header whose value
+is blank or whitespace-only is reported as `None`, since "present but empty" is not a distinction
+an issuer can act on. A value over 1024 characters is reported as `None` as well; see below.
+
 The six enriched fields (cannobserv#271, `final_url` sourced by cannobserv#279, produced by #10)
 carry what Replicator holds at publish time and a broadcast consumer cannot recover once fetching
 lives here rather than in Watcher. Three details are the whole value of them:
