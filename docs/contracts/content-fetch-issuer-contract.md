@@ -468,6 +468,13 @@ A consumer on another host cannot open it, and nothing on the wire says so.
 - **No failure fact for a command whose `command_id` is blank** — nothing to correlate one on at
   all. It is dead-lettered before the fetch rather than run. MUST-1, MUST-6.
 - **No latency bound**, and no SLA on turnaround.
+- **No promise that a burst runs at the rate it was issued (#12).** Requests to one host are
+  spaced by at least `REPLICATOR_MIN_HOST_INTERVAL_SECONDS` — 1 s by default, the interim
+  stand-in for the politeness numbers until they travel over the bus. Publishing 100 commands
+  for one host means at least 100 s of fetching, and a command whose wait exceeds the poll
+  window simply stays pending until the next reclaim, which is a *minute* of cadence rather
+  than a second. Size a reaper's timeout (MUST-6) against the depth of your own burst, not
+  against one fetch. Commands for different hosts are unaffected by each other.
 - **No ordering.** Two commands issued in sequence may produce facts in either order.
 - **No cross-command dedupe.** Two `command_id`s for one URL are two fetches and two facts, by
   design — that is what makes MUST-1 work.

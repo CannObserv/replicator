@@ -93,6 +93,7 @@ rather than deleting bytes a consumer was promised.
 | `REPLICATOR_CONSUMER_NAME` | `replicator@<hostname>` | This worker's identity in the group — never share one |
 | `REPLICATOR_CONSUMER_START_ID` | `$` | Group start position. Applies only at group *creation*; changing it later also needs `XGROUP SETID` |
 | `REPLICATOR_READ_BLOCK_MS` | `5000` | Blocking-read window. Bounds shutdown latency, so the unit's `TimeoutStopSec` must exceed it plus `REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS` (the handler's worst-case budget since #11) and an in-flight sweep — `tests/test_deploy.py` pins the first two terms |
+| `REPLICATOR_MIN_HOST_INTERVAL_SECONDS` | `1.0` | Minimum spacing between two requests to the same host (#12). The interim politeness default until the numbers travel over the bus; matches Watcher's own `DEFAULT_MIN_INTERVAL` so the Phase 4 cutover changes who paces, not how much. A wait under `REPLICATOR_READ_BLOCK_MS` is slept through, a longer one parks the command for the next reclaim. `0` disables pacing entirely |
 | `REPLICATOR_CLAIM_MIN_IDLE_MS` | `60000` | Idle time before a pending entry may be reclaimed — also the retry cadence |
 | `REPLICATOR_MAX_DELIVERY_ATTEMPTS` | `5` | Deliveries of an *unclassified* failure before the DLQ |
 | `REPLICATOR_DEDUPE_TTL_SECONDS` | `86400` | Lifetime of the `replicator:cmd:<command_id>` dedupe key |

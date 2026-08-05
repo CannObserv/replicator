@@ -170,19 +170,41 @@ what makes it easy to ship.
 The constraint, stated so a design has to answer it: **a serial consume path cannot both sleep
 for a short wait and stay available to other hosts.** Sleeping in the handler blocks every
 other command in the group — which is why parking exists — and parking cannot express a
-sub-reclaim interval. Two candidate resolutions, neither adopted here: split the wait by
-duration (sleep below a bound, park above it), or take per-host pacing off the consume path
-entirely. Choosing between them is the policy-stream implementation's job; shipping the naive
-version and discovering the 60× in production is what this paragraph exists to prevent.
+sub-reclaim interval.
+
+**Resolved by splitting the wait by duration**, and shipped with the interim default below:
+a wait no longer than one poll window (`REPLICATOR_READ_BLOCK_MS`) is slept through in the
+handler, and anything longer parks. The bound is derived from an existing setting rather than
+given its own, because it is the same quantity — a wait shorter than a poll the loop already
+performs adds nothing to the shutdown latency `TimeoutStopSec` is sized for. The stop event
+cuts the sleep short, and an interrupted wait is not an elapsed one: the command parks rather
+than fetching unpaced on the way out. `src/worker/pacing.py`, `handler.py::_pace`.
+
+### The interim default (shipped)
+
+`REPLICATOR_MIN_HOST_INTERVAL_SECONDS`, default **1.0 s** — Watcher's own
+`DEFAULT_MIN_INTERVAL`, chosen precisely because it invents nothing. The numbers are the
+issuer's under this charter, so until they travel over the bus the least-wrong value is the one
+the cluster already commits to; the cutover then changes *who* paces rather than *how much*.
+`0` disables pacing outright, an operator escape hatch and a choice to have none.
+
+Consistent with the charter on both halves: enforcement is mechanism (test 2 — nobody but the
+fetcher can see a host's tolerance across commands), and a single default is not policy in the
+sense test 3 cares about — it names no domain concept and carries no per-host table. The state
+is a host → last-request map in memory: derived, bounded by pruning, and rebuildable by replay,
+which is the second of the three permitted state shapes. A cold worker is polite from scratch,
+which errs in the safe direction.
+
+What it is **not** is the design. One number for every origin is exactly the "conservative
+default" the policy stream exists to replace with real per-host values.
 
 **The stream is a precondition of the Phase 4 cutover, not a follow-on to it.** Watcher's
 limiter (`src/core/rate_limiter.py::acquire_for_domain`, fed by 429s its own fetch path
 observes) is load-bearing today and stops functioning the moment that fetch path becomes a
 publish path — it does not fail, it silently becomes decorative, pacing command publication
-rather than origin requests. Replicator has no pacing of any kind today. Either the stream
-ships first, or the cutover carries a **conservative per-host default in Replicator as an
-interim** — one env var over the existing ceiling idiom, and mechanism rather than policy, so
-it fits this charter cleanly. Tracked issuer-side at
+rather than origin requests. **The interim default above closes that window**, so the cutover
+is no longer blocked on the stream; what remains is that one number for every origin is not
+what the cluster wants for long. Tracked issuer-side at
 [CannObserv/watcher#245](https://github.com/CannObserv/watcher/issues/245).
 
 ## Reviewing a proposed payload field
