@@ -31,6 +31,19 @@ logger = get_logger(__name__)
 # What a response with no usable Content-Type is stored and announced as.
 DEFAULT_MEDIA_TYPE = "application/octet-stream"
 
+# How long a header value may be before the fact refuses to carry it.
+#
+# The passthrough fields (etag, last_modified, content_type_raw) are strings the
+# *origin* chooses, riding onto a broadcast stream nothing trims. A generous
+# bound costs nothing real — an ETag is tens of characters, an HTTP-date is 29 —
+# and a value past it is not a validator, it is an origin misbehaving.
+#
+# Over the bound the value is **dropped, not truncated**. A truncated ETag
+# replayed in an If-None-Match is a validator that can never match: the origin
+# answers 200 every time while the issuer believes it asked conditionally, which
+# is strictly worse than having sent no validator at all.
+MAX_HEADER_VALUE_LENGTH = 1024
+
 # Non-2xx statuses worth another attempt. 5xx is the origin failing rather than
 # refusing; 429 and 408 are it asking for later explicitly. Everything else
 # non-2xx is the origin's settled answer — re-fetching a 404 gets another 404,
@@ -77,10 +90,15 @@ def build_handler(
     async def handle(command: ContentFetchCommand) -> None:
         _raise_for_ceiling(usage, settings.blob_max_total_bytes)
         result = await _fetch(fetcher, command)
+        # Stamped here rather than at publish: occurred_at is when the fact went
+        # onto the bus, which under a reclaim is minutes after the bytes were on
+        # the wire. This is the closest the handler can stand to that instant.
+        fetched_at = datetime.now(UTC)
         _raise_for_status(result, command)
         _raise_for_size(result, command, settings.max_blob_bytes)
         fingerprint = sha256(result.content)
-        media_type = _media_type(result)
+        headers = _folded_headers(result)
+        media_type = _media_type(headers)
         # Asked before storing, because store's short-circuit does not report
         # which branch it took and counting a re-store would inflate the tree's
         # measured size on every redelivery.
@@ -104,6 +122,27 @@ def build_handler(
                 media_type=media_type,
                 url=command.url,
                 command_id=command.command_id,
+                # The metadata a broadcast consumer cannot recover once fetching
+                # lives here rather than in Watcher (cannobserv#271). Every one
+                # is optional, and None means "nobody said" — never a stand-in
+                # value that would read as an answer.
+                #
+                # final_url is passed through exactly as the driver reported it,
+                # command.url included in the silence: echoing the request would
+                # leave an issuer unable to tell "it landed where I asked" from
+                # "nobody knows where it landed" (cannobserv#279).
+                #
+                # `or None` normalizes the one shape the contract says cannot
+                # occur — an empty string is neither a URL nor the None an issuer
+                # branches on. Unreachable through the http driver, whose value
+                # is str(response.url); this keeps a future driver from inventing
+                # a third state the issuer has no rule for.
+                final_url=result.final_url or None,
+                status_code=result.status_code,
+                fetched_at=fetched_at,
+                content_type_raw=_passthrough(headers, "content-type"),
+                etag=_passthrough(headers, "etag"),
+                last_modified=_passthrough(headers, "last-modified"),
             ),
             command=command,
         )
@@ -114,8 +153,10 @@ def build_handler(
                 "content_fingerprint": fingerprint,
                 "size_bytes": len(result.content),
                 "media_type": media_type,
-                # The one number nothing else keeps: the fact carries size but
-                # not how long the origin took to give it up.
+                # Still the one number nothing else keeps. The fact gained the
+                # rest of the fetch metadata in #10 — status, landing URL, and
+                # the wire instant — but not how long the origin took to give
+                # the bytes up, which stays journal-only.
                 "duration_ms": result.duration_ms,
             },
         )
@@ -244,7 +285,49 @@ def _raise_for_status(result: FetchResult, command: ContentFetchCommand) -> None
     )
 
 
-def _media_type(result: FetchResult) -> str:
+def _folded_headers(result: FetchResult) -> dict[str, str]:
+    """The response headers, keyed lowercase, folded once for every reader.
+
+    Case-folded rather than trusting the names to arrive lowercased. httpx does
+    normalize, but ``FetchResult.headers`` is typed as a plain
+    ``Mapping[str, str]`` with no such guarantee, and the failure mode of
+    assuming it — every response silently typed ``application/octet-stream``,
+    every validator silently absent — is quiet enough to survive a long time.
+
+    **Single-valued mapping assumed.** Two names differing only by case collapse
+    to the last one seen, where HTTP semantics say repeated field lines are
+    comma-joined. Unreachable through the co-core driver, which builds
+    ``headers`` from an httpx ``Headers`` already collapsed to one value per
+    name, so this is a note rather than a fix: a future driver handing over raw
+    multi-value headers would silently discard the earlier ones, and three
+    fields depend on this fold now rather than one.
+    """
+    return {name.lower(): value for name, value in result.headers.items()}
+
+
+def _passthrough(headers: dict[str, str], name: str) -> str | None:
+    """A header's value verbatim, or ``None`` when the origin sent nothing usable.
+
+    Verbatim is the contract, not laziness: ``etag`` and ``last_modified`` are
+    replayed unparsed in a conditional GET's ``If-None-Match`` /
+    ``If-Modified-Since`` (cannobserv#272), and a parse/re-serialize round trip
+    can hand the origin a value it never sent. The ETag's ``W/`` prefix and its
+    quotes are part of the value.
+
+    ``None`` and a value are a distinction an issuer branches on, so a blank or
+    whitespace-only header reads as absent rather than propagating ``""``.
+    Surrounding whitespace is optional whitespace per RFC 9110 and not part of
+    the value, so stripping it is not a modification.
+
+    Over :data:`MAX_HEADER_VALUE_LENGTH` the value is dropped — see the constant.
+    """
+    value = headers.get(name, "").strip()
+    if not value or len(value) > MAX_HEADER_VALUE_LENGTH:
+        return None
+    return value
+
+
+def _media_type(headers: dict[str, str]) -> str:
     """The response's media type, normalized, or the generic fallback.
 
     The ``charset`` parameter describes the bytes' *encoding*, not their type, so
@@ -253,15 +336,16 @@ def _media_type(result: FetchResult) -> str:
     thing. Case is normalized for the same reason — RFC 9110 makes the type and
     subtype case-insensitive, and origins are inconsistent about it.
 
-    An absent, blank, or parameter-only header falls back rather than
-    propagating an empty ``media_type`` onto the fact.
+    Reads the same bounded value ``_passthrough`` does, so an absurd
+    ``Content-Type`` cannot reach the fact through the normalized channel after
+    being refused on the raw one. An absent, blank, parameter-only, or dropped
+    header falls back rather than propagating an empty ``media_type``.
 
-    The lookup is case-folded rather than trusting ``content-type`` to arrive
-    lowercased. httpx does normalize, but ``FetchResult.headers`` is typed as a
-    plain ``Mapping[str, str]`` with no such guarantee, and the failure mode of
-    assuming it — every response silently typed ``application/octet-stream`` —
-    is quiet enough to survive a long time.
+    This is a *second channel*, not a replacement: ``content_type_raw`` keeps
+    what normalization discards, because Watcher stores the verbatim header as an
+    observed fact (watcher#168) and reads ``application/octet-stream`` as
+    "unknown, guess from the URL" — a meaning the fallback must not manufacture
+    on the raw side.
     """
-    headers = {name.lower(): value for name, value in result.headers.items()}
-    header = headers.get("content-type", "")
+    header = _passthrough(headers, "content-type") or ""
     return header.split(";")[0].strip().lower() or DEFAULT_MEDIA_TYPE

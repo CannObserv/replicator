@@ -394,6 +394,13 @@ async def test_a_seeded_command_stores_a_blob_and_publishes_the_fact(
         == f"file://{tmp_path}/{sha256(BODY)[:2]}/{sha256(BODY)[2:4]}/{sha256(BODY)}.bin"
     )
     assert LocalBlobStore(tmp_path).open(fact.content_fingerprint) == BODY
+    # The enriched fetch metadata survived a real round trip (#10). These ride
+    # *inside* the payload JSON rather than as hoisted envelope keys, which is
+    # the half of to_wire/from_wire the fake broker exercises least — a
+    # serialization regression in a co-core bump would pass the whole unit suite
+    # and only surface here.
+    assert fact.status_code == 200
+    assert fact.fetched_at is not None
     # Exactly one fact, and the command is off the PEL — the loop acked it.
     assert await real_redis.xlen(scratch_blobs_topic) == 1
     assert (await real_redis.xpending(scratch_topic, GROUP))["pending"] == 0

@@ -58,7 +58,13 @@ async def decoded_commands(client, topic: str = TOPIC) -> list[ContentFetchComma
 
 
 def fact_fields(command_id: str) -> dict[str, str]:
-    """The wire frame the worker's handler publishes for a handled command."""
+    """The wire frame the worker's handler publishes for a handled command.
+
+    Carries the enriched fetch metadata (#10) as well, because the claim in that
+    first line is what the helper is for: a sample missing six of the fields the
+    handler actually sends is a quietly wrong model of the wire, and the watch
+    output is read against it.
+    """
     return to_wire(
         BlobAvailableEvent(
             occurred_at=datetime.now(UTC),
@@ -68,6 +74,12 @@ def fact_fields(command_id: str) -> dict[str, str]:
             media_type="text/html",
             url=URL,
             command_id=command_id,
+            final_url=URL,
+            status_code=200,
+            fetched_at=datetime.now(UTC),
+            content_type_raw="text/html; charset=utf-8",
+            etag='W/"abc-123"',
+            last_modified="Wed, 21 Oct 2015 07:28:00 GMT",
         )
     )
 
@@ -498,6 +510,12 @@ async def test_a_watched_run_reports_the_fact_for_the_command_it_published(
     out = capsys.readouterr().out
     assert "blob_available" in out
     assert "f" * 64 in out
+    # The two enriched fields the line carries (#10). They are on it because an
+    # operator checks a live fetch against them — a 203 where a 200 was
+    # expected, a redirect nobody knew about — so an unasserted format leaves
+    # the one change aimed at an operator's eyes covered by nothing.
+    assert "status=200" in out
+    assert f"final_url={URL}" in out
 
 
 async def test_a_watched_run_that_sees_no_fact_reports_the_command_that_is_missing(

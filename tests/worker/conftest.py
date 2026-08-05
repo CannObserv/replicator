@@ -18,9 +18,12 @@ from co_core.effects.fetch import FetchResult
 from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.envelope import from_wire, to_wire
 from co_core.pure.adapters.bus.streams import dlq_name
-from co_core.pure.models.changes import ContentFetchCommand
+from co_core.pure.models.changes import BlobAvailableEvent, ContentFetchCommand
 
 from src.core.config import get_settings
+from src.storage.local import LocalBlobStore
+from src.storage.sweeper import BlobUsage
+from src.worker.handler import build_handler
 from src.worker.loop import FailureReport, process_message, run_loop
 from src.worker.main import build_consumer
 
@@ -31,17 +34,31 @@ GROUP = "replicator.fetch"
 # the live end-to-end test agree on what a successful fetch returns.
 BODY = b"<html>hello</html>"
 
+# The URL the byte-path tests ask for. Distinct from any landing URL a
+# FetchResult reports, so a handler echoing the request in place of the redirect
+# target is visible rather than tautological.
+URL = "https://example.test/a"
+
 
 def fetch_result(
-    content: bytes = BODY, status_code: int = 200, headers: dict[str, str] | None = None
+    content: bytes = BODY,
+    status_code: int = 200,
+    headers: dict[str, str] | None = None,
+    final_url: str | None = None,
 ) -> FetchResult:
-    """A ``FetchResult`` as the co-core driver would return it."""
+    """A ``FetchResult`` as the co-core driver would return it.
+
+    ``final_url`` defaults to ``None`` — the "driver did not report a landing
+    URL" case (cannobserv#279), which is the one a handler could paper over by
+    echoing the requested URL. Tests that care about the passthrough set it.
+    """
     return FetchResult(
         content=content,
         status_code=status_code,
         headers={"content-type": "text/html"} if headers is None else headers,
         duration_ms=12,
         fetcher_used="http",
+        final_url=final_url,
     )
 
 
@@ -95,7 +112,50 @@ async def decoded_facts(client, topic: str) -> list:
     return payloads
 
 
-def make_command(command_id: str = "cmd-1", url: str = "https://example.test/a") -> dict[str, str]:
+def command(command_id: str = "cmd-1", url: str = URL) -> ContentFetchCommand:
+    """A decoded ``content.fetch`` command, as the handler receives it."""
+    return ContentFetchCommand(occurred_at=datetime.now(UTC), command_id=command_id, url=url)
+
+
+async def published_facts(client, topic: str = streams.CONTENT_BLOBS) -> list[BlobAvailableEvent]:
+    """Decode the fact stream the way a downstream consumer would.
+
+    The ``isinstance`` check is the assertion, not a type-checker appeasement:
+    ``from_wire``'s dispatch table is global, so it happily decodes any known
+    event type off any topic. A handler that published the wrong model to
+    ``content.blobs`` would otherwise sail through every assertion below.
+    """
+    facts = []
+    entries = await client.xrange(topic)
+    for message_id, fields in entries:
+        payload = from_wire(
+            {k.decode(): v.decode() for k, v in fields.items()},
+            topic=topic,
+            message_id=message_id.decode(),
+        ).payload
+        assert isinstance(payload, BlobAvailableEvent)
+        facts.append(payload)
+    return facts
+
+
+@pytest.fixture
+def handler(fake_redis, tmp_path):
+    """The real handler over a real store and publisher, with the fetch faked."""
+
+    def build(fetcher=None, blobs_topic: str | None = None, usage: BlobUsage | None = None):
+        return build_handler(
+            fetcher=fetcher or FakeFetcher(),
+            store=LocalBlobStore(tmp_path),
+            client=fake_redis,
+            settings=get_settings(),
+            usage=usage,
+            **({} if blobs_topic is None else {"blobs_topic": blobs_topic}),
+        )
+
+    return build
+
+
+def make_command(command_id: str = "cmd-1", url: str = URL) -> dict[str, str]:
     """A well-formed ``content.fetch`` wire frame."""
     return to_wire(
         ContentFetchCommand(

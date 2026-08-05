@@ -444,9 +444,15 @@ async def _report_facts(
                 f"terminal={fact.terminal} status={fact.status_code} url={fact.url}"
             )
             continue
+        # status and final_url join the line because they are what an operator
+        # checks a live fetch against — a 203 where a 200 was expected, or a
+        # redirect nobody knew about. The validators (etag, last_modified) and
+        # the raw Content-Type stay off: they exist for an issuer's database,
+        # and printing them would bury the two fields worth reading at a glance.
         print(
             f"blob_available command_id={fact.command_id} "
-            f"fingerprint={fact.content_fingerprint} size={fact.size_bytes} uri={fact.blob_uri}"
+            f"fingerprint={fact.content_fingerprint} size={fact.size_bytes} "
+            f"status={fact.status_code} final_url={fact.final_url} uri={fact.blob_uri}"
         )
     missing = awaited - {fact.command_id for fact in facts}
     if missing:
