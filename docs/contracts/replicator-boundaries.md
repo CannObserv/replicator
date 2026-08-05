@@ -126,6 +126,12 @@ are asserted.
 
 ### The policy stream (agreed, not yet built)
 
+Upstream model tracked at
+[CannObserv/cannobserv#285](https://github.com/CannObserv/cannobserv/issues/285) —
+`CONTENT_FETCH_POLICY`, `FetchPolicyEvent`, and the two gaps it surfaced: `BusPublish` cannot
+carry a `MAXLEN`, so the trimming this section requires is currently unexpressible through
+co-core, and `AsyncBusConsumer` is group-only, so the replay-then-tail read has no driver seam.
+
 `content.fetch.policy` — last-write-wins per host key. Replicator replays it from `0-0` at
 boot into memory and tails it thereafter. No DB, rebuildable, no inbound calls, and the data
 stays owned by its producer.
