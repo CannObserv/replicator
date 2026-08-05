@@ -16,6 +16,7 @@ import pytest
 from src.core.errors import FailureReason, PermanentFetchError, TransientFetchError
 from src.storage.sweeper import BlobUsage
 from src.worker.handler import (
+    _HEADER_NAME,
     _HEADER_VALUE,  # the guard under test, pinned to httpx
     MAX_REQUEST_HEADER_BYTES,
     MAX_REQUEST_HEADERS,
@@ -155,6 +156,8 @@ async def test_a_case_collision_is_refused_even_when_the_values_agree(handler):
         "",
         "acc€pt",
         "  accept  ",  # padding a name is malformed, not OWS — CR #4
+        "accept\n",  # trailing LF: Python's `$` would have allowed it — CR #14
+        "accept\r",
     ],
 )
 async def test_a_header_name_that_is_not_a_token_is_refused(handler, name):
@@ -201,19 +204,43 @@ async def test_a_header_value_that_cannot_be_sent_verbatim_is_refused(handler, v
     await assert_refused(handler, command(headers={"x-test": value}))
 
 
-async def test_the_value_guard_covers_everything_httpx_cannot_send(handler):
+async def test_the_value_guard_covers_everything_httpx_cannot_send():
     """The guard's real contract, asserted against httpx rather than a charset.
 
     A regex is only as good as its agreement with the transport, and CR #1 was
     exactly a place where the two had drifted. This walks the whole single-byte
     range and pins the invariant directly: nothing this module accepts may fail
     at request construction.
+
+    The count assertion is the other half of the claim (CR #10). Without it the
+    loop proves only that the guard is not too *permissive* — a guard narrowed
+    all the way to ``^$`` would accept nothing, send nothing to httpx, and pass.
+    95 is the printable US-ASCII range ``\\x20``–``\\x7e`` inclusive, so this
+    fails on a narrowing as loudly as on a widening.
     """
     accepted = [chr(code) for code in range(256) if _HEADER_VALUE.match(chr(code))]
 
+    assert len(accepted) == 95
+    assert accepted[0] == " " and accepted[-1] == "~"
     for character in accepted:
         # Raises UnicodeEncodeError / LocalProtocolError if the guard is wrong.
         httpx.Request("GET", "http://x.test", headers={"x-test": f"a{character}b"})
+
+
+@pytest.mark.parametrize("pattern", [_HEADER_NAME, _HEADER_VALUE])
+def test_the_guards_anchor_on_the_absolute_end_of_the_string(pattern):
+    """``\\Z``, not ``$`` — the trap that produced CR #14.
+
+    Python's ``$`` also matches immediately *before* a trailing newline, so a
+    validator written ``^…$`` silently accepts ``"accept\\n"``. httpx does not
+    catch it either: it puts the name on the wire with a bare LF inside it.
+
+    Pinned as a property of the patterns rather than only through the refusal
+    cases above, because this is a whole class of mistake — the next pattern
+    added here inherits the same footgun, and a parametrized check is what makes
+    that visible at the moment it is written.
+    """
+    assert pattern.match("accept\n") is None
 
 
 async def test_too_many_headers_are_refused(handler):

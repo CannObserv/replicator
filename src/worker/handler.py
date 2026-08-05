@@ -109,7 +109,15 @@ _REFUSED_HEADER_PREFIX = "proxy-"
 
 # A field name is an RFC 9110 token. Matched against the *folded* name, so the
 # alphabetic range is lowercase only.
-_HEADER_NAME = re.compile(r"^[!#$%&'*+\-.^_`|~0-9a-z]+$")
+#
+# **`\Z`, never `$`.** Python's `$` also matches immediately before a trailing
+# newline, so `^token+$` accepts `"accept\n"` — and httpx passes that straight
+# through to the wire as a header name containing a bare LF, which is header
+# injection by any other name. `\Z` is the absolute end of the string and the
+# only correct anchor for a validator (CR #14). The same trap applies to the
+# value pattern below, where `.strip()` happens to hide it; relying on that
+# would make one guard's correctness depend on another's ordering.
+_HEADER_NAME = re.compile(r"\A[!#$%&'*+\-.^_`|~0-9a-z]+\Z")
 
 # A field value here is printable US-ASCII and SP — narrower than RFC 9110's
 # VCHAR / obs-text on both edges, and deliberately so on each.
@@ -129,7 +137,7 @@ _HEADER_NAME = re.compile(r"^[!#$%&'*+\-.^_`|~0-9a-z]+$")
 #
 # What the guard is really for is CR and LF: a CRLF in a value is request
 # splitting, and everything else here is the cheap part of drawing that line.
-_HEADER_VALUE = re.compile(r"^[\x20-\x7e]*$")
+_HEADER_VALUE = re.compile(r"\A[\x20-\x7e]*\Z")
 
 
 class RequestOptions(NamedTuple):
@@ -367,13 +375,16 @@ def _request_headers(headers: dict[str, str] | None) -> dict[str, str] | None:
         key = name.lower()
         if not _HEADER_NAME.match(key):
             raise _invalid_options(f"{name!r} is not a valid header name")
+        # Every refusal names the header as the *issuer* spelled it, not as the
+        # fold left it: the message is read by somebody grepping their own
+        # publishing code, where `Host` will not be found under `host` (CR #12).
         if key in REFUSED_HEADERS or key.startswith(_REFUSED_HEADER_PREFIX):
-            raise _invalid_options(f"{key!r} is not a header Replicator will send")
+            raise _invalid_options(f"{name!r} is not a header Replicator will send")
         if key in folded:
-            raise _invalid_options(f"{key!r} was given more than once, differing only in case")
+            raise _invalid_options(f"{name!r} was given more than once, differing only in case")
         stripped = value.strip()
         if not _HEADER_VALUE.match(stripped):
-            raise _invalid_options(f"{key!r} has a value that cannot be sent verbatim")
+            raise _invalid_options(f"{name!r} has a value that cannot be sent verbatim")
         # +4 for the ": " and the CRLF the value costs on the wire, so the bound
         # measures what the origin will measure rather than the payload alone.
         #
