@@ -8,15 +8,17 @@ fingerprint-affecting change nobody can see, so the command dies with a reason
 instead of fetching something the issuer cannot account for.
 """
 
+import inspect
 import math
+import re
 
 import httpx
 import pytest
 
 from src.core.errors import FailureReason, PermanentFetchError, TransientFetchError
 from src.storage.sweeper import BlobUsage
+from src.worker import handler as handler_module
 from src.worker.handler import (
-    _HEADER_NAME,
     _HEADER_VALUE,  # the guard under test, pinned to httpx
     MAX_REQUEST_HEADER_BYTES,
     MAX_REQUEST_HEADERS,
@@ -161,13 +163,20 @@ async def test_a_case_collision_is_refused_even_when_the_values_agree(handler):
     ],
 )
 async def test_a_header_name_that_is_not_a_token_is_refused(handler, name):
-    """A padded name is in this list on purpose.
+    """Three concerns share this list, and two of them are not "another bad char".
 
-    RFC 9110 excludes OWS from a field *value*, which is why a value is trimmed
-    rather than refused. It says the opposite about a name: no space may sit
-    between the name and its colon, so ``"  accept  "`` is malformed input, and
-    trimming it into ``accept`` would be the silent adjustment every other rule
-    in this module exists to avoid.
+    **Padding** (``"  accept  "``) is here because RFC 9110 excludes OWS from a
+    field *value* — which is why a value is trimmed rather than refused — and
+    says the opposite about a name: no space may sit between the name and its
+    colon. Trimming it into ``accept`` would be the silent adjustment every other
+    rule in this module exists to avoid (CR #4).
+
+    **Trailing CR and LF** (``"accept\\n"``, ``"accept\\r"``) are here because
+    they were once *accepted*: Python's ``$`` matches before a trailing newline,
+    so the original ``^token+$`` let them through, and httpx forwards such a name
+    to the wire with the control character intact (CR #14). They are not
+    redundant with ``"user\\nagent"`` above — that one fails on any anchor, these
+    two fail only on ``\\Z``.
     """
     await assert_refused(handler, command(headers={name: "x"}))
 
@@ -227,20 +236,42 @@ async def test_the_value_guard_covers_everything_httpx_cannot_send():
         httpx.Request("GET", "http://x.test", headers={"x-test": f"a{character}b"})
 
 
-@pytest.mark.parametrize("pattern", [_HEADER_NAME, _HEADER_VALUE])
-def test_the_guards_anchor_on_the_absolute_end_of_the_string(pattern):
+def module_patterns() -> list[tuple[str, re.Pattern[str]]]:
+    """Every compiled pattern in ``src.worker.handler``, discovered not listed.
+
+    A hand-written list would have to be *remembered*, which is the same failure
+    mode the test below exists to prevent (CR #15): a new validator added to that
+    module is only protected if its author also thinks to enrol it here, and an
+    author who thought about it would not have written ``$`` in the first place.
+    """
+    return inspect.getmembers(handler_module, lambda value: isinstance(value, re.Pattern))
+
+
+@pytest.mark.parametrize(("name", "pattern"), module_patterns())
+def test_every_guard_anchors_on_the_absolute_end_of_the_string(name, pattern):
     """``\\Z``, not ``$`` — the trap that produced CR #14.
 
     Python's ``$`` also matches immediately *before* a trailing newline, so a
     validator written ``^…$`` silently accepts ``"accept\\n"``. httpx does not
     catch it either: it puts the name on the wire with a bare LF inside it.
 
-    Pinned as a property of the patterns rather than only through the refusal
-    cases above, because this is a whole class of mistake — the next pattern
-    added here inherits the same footgun, and a parametrized check is what makes
-    that visible at the moment it is written.
+    Pinned as a property of *every* pattern in the module rather than only
+    through the refusal cases above, because this is a whole class of mistake
+    rather than one bug. The subjects are discovered by reflection, so a pattern
+    added tomorrow is covered on the run that follows — see ``module_patterns``.
     """
+    assert pattern.pattern.endswith(("\\Z", "\\z")), f"{name} anchors on $ rather than \\Z"
     assert pattern.match("accept\n") is None
+
+
+def test_the_anchoring_check_has_subjects():
+    """A reflection-driven parametrize that finds nothing passes silently.
+
+    The whole value of ``module_patterns`` is that it needs no maintenance; the
+    cost is that a rename or a move makes it return ``[]`` and take its coverage
+    with it, with every test above still green.
+    """
+    assert len(module_patterns()) >= 2
 
 
 async def test_too_many_headers_are_refused(handler):

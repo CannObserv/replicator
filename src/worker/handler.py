@@ -137,6 +137,11 @@ _HEADER_NAME = re.compile(r"\A[!#$%&'*+\-.^_`|~0-9a-z]+\Z")
 #
 # What the guard is really for is CR and LF: a CRLF in a value is request
 # splitting, and everything else here is the cheap part of drawing that line.
+#
+# Anchored `\A`/`\Z` for the reason spelled out on `_HEADER_NAME` above — `$`
+# would admit a trailing newline. Unreachable here (the value is stripped before
+# it is matched) and fixed anyway: one guard's correctness must not rest on
+# another's ordering.
 _HEADER_VALUE = re.compile(r"\A[\x20-\x7e]*\Z")
 
 
