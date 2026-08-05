@@ -43,6 +43,14 @@ class FailureReason(StrEnum):
     TOO_LARGE = "too_large"
     """Body over ``REPLICATOR_MAX_BLOB_BYTES``."""
 
+    INVALID_REQUEST_OPTIONS = "invalid_request_options"
+    """The command's ``headers`` or ``timeout_seconds`` are not sendable (#11).
+
+    One token for both fields deliberately: the issuer's remedy is identical
+    either way — fix the command and re-issue it under a fresh ``command_id`` —
+    and ``detail`` carries which guard refused it for the journal.
+    """
+
     UNSUPPORTED_SCHEMA_VERSION = "unsupported_schema_version"
     """The command decoded, but at a ``schema_version`` this worker does not know."""
 

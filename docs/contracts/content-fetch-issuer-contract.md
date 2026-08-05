@@ -82,18 +82,49 @@ would shard on.
 | `occurred_at` | `datetime` | **tz-aware UTC, enforced.** Not used for ordering or expiry by Replicator |
 | `command_id` | `str` | **The idempotency key and the sole correlator.** See MUST-1 |
 | `url` | `str` | What to fetch. **Not** a key. See MUST-3 |
-| `headers` | `dict[str, str] \| None` | co-core ≥ 0.7.3. **Accepted and currently ignored** — see below |
-| `timeout_seconds` | `float \| None` | co-core ≥ 0.7.3. **Accepted and currently ignored** — see below |
+| `headers` | `dict[str, str] \| None` | co-core ≥ 0.7.3, **honoured since #11**. Merged over the fetcher's defaults, issuer wins. Guards below |
+| `timeout_seconds` | `float \| None` | co-core ≥ 0.7.3, **honoured since #11**. Seconds; bounded above. `None` = the driver default |
 
-> **`headers` and `timeout_seconds` are legal on the wire but do nothing yet.** They are part of
-> `ContentFetchCommand` from co-core v0.7.3 (cannobserv#272), so a frame carrying them decodes
-> cleanly and is fetched normally — with Replicator's own default headers and timeout. Teaching
-> the fetcher to honour them, and the header hardening that must come with it (strip hop-by-hop
-> headers, bound the count and total size, reject rather than truncate, case-normalize before the
-> merge so "issuer wins" actually holds), is #11. They are listed here because the alternative is
-> an issuer reading this table and concluding the fields do not exist — the failure mode being
-> that an issuer sends a validator header, sees no conditional-GET behaviour, and has nothing in
-> this document to explain why.
+### Request options: what Replicator will send, and what it refuses (#11)
+
+`headers` and `timeout_seconds` shape the individual fetch. Both are optional and both default to
+`None`, which means **exactly** the pre-#11 behaviour: the fetcher's own `user-agent` and its 30 s
+timeout, byte for byte. An issuer that sends neither is unaffected by any of the following.
+
+**Header names are lower-cased before the merge, and the issuer wins.** The fetch driver merges
+`{"user-agent": <default>, **your headers}` as a plain, case-*sensitive* dict. Without the fold a
+capitalized `User-Agent` leaves both keys in the mapping and httpx sends **two** `User-Agent` field
+lines — the default first, yours second — leaving the origin to decide which applies. Folding first
+is what makes "issuer wins" a rule rather than a coincidence. Send `User-Agent` or `user-agent`;
+either way exactly one line goes on the wire and it carries your value.
+
+**Surrounding whitespace is dropped from a value** and nothing else is: RFC 9110 excludes OWS from
+a field value in the first place, so `"  text/html  "` is sent as `text/html`. Nothing *inside* a
+value is touched.
+
+**Everything below is refused, not adjusted.** A refusal is a terminal
+`fetch_failed` · `invalid_request_options` plus the DLQ, arriving before any request goes out — so
+a refused command never reaches the origin at all. The reject-rather-than-fix posture is the same
+one the `blob_available` passthroughs take: a header Replicator silently dropped, or a timeout it
+silently shortened, is a change to your fetch that you cannot see and cannot account for in your
+own fingerprints.
+
+| Refused | Why |
+|---|---|
+| `connection`, `keep-alive`, `proxy-connection`, `te`, `trailer`, `transfer-encoding`, `upgrade` | Hop-by-hop (RFC 9110 §7.6.1) — they describe one connection, which httpx and h11 own |
+| `host`, `content-length` | Not hop-by-hop: httpx derives both. Overriding `host` addresses one origin while contacting another |
+| Any `proxy-*` header | Configures the hop rather than the request |
+| A name that is not an RFC 9110 token | `user agent`, `user:agent`, an empty name, anything non-ASCII |
+| A value that cannot be sent verbatim | CR, LF, NUL, any other control character, anything above latin-1. A CRLF here is request splitting |
+| Two names differing only in case | Folding them would silently discard one. Refused even when the values agree — the rule is about the shape, not the values |
+| More than **32** headers, or more than **8192 bytes** of them | 8 KiB is the common origin-side limit (nginx, Apache), so past it the far end answers an opaque 400. The constants in [`src/worker/handler.py`](../../src/worker/handler.py) are authoritative |
+| `timeout_seconds` that is zero, negative, NaN, or infinite | Not a duration |
+| `timeout_seconds` over `REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS` (default **120**) | Replicator's consume path is serial, so your timeout is a lien on every *other* issuer's commands too. Ask an operator if 120 s is genuinely too short for a target |
+
+**Neither field touches identity.** They ride inside `payload`, not the envelope: `command_id`
+remains the sole dedupe key and the sole correlator. Two commands differing only in options are two
+fetch occasions (MUST-1 unchanged); a *redelivery* carrying different options is still the same
+command and is still deduped.
 
 > **`occurred_at` must carry a timezone.** Since co-core v0.7.2 (cannobserv#273) it is an
 > `AwareDatetime` on every payload: a **naive** value is rejected fail-loud rather than assumed
@@ -158,13 +189,21 @@ lives here rather than in Watcher. Three details are the whole value of them:
 > first emission for those bytes, and will replay a stale `If-None-Match` for as long as that
 > content is unchanged.
 
-> **Do not attempt conditional GET yet.** `etag` and `last_modified` are the *read* half of the
-> seam; the write half is the command's `headers`, which Replicator does not yet honour (#11). And
-> even once it does, a validator that matches earns a **body-less 304**, which today closes the
-> command as `fetch_failed` / `http_status` — a *failure* for what is in fact the most useful
-> possible answer. Both halves must land, and the 304 must become an outcome of its own, before an
-> issuer stores a validator and replays it. Until then these two fields are for the issuer's own
-> records.
+> **Do not attempt conditional GET yet — this is now the *only* thing standing in the way.**
+> `etag` and `last_modified` are the *read* half of the seam, and since #11 the write half exists:
+> Replicator honours the command's `headers`, so an `If-None-Match` you send **will** be sent to
+> the origin. What has not landed is the outcome. A validator that *matches* earns a **body-less
+> 304**, which Replicator still closes as `fetch_failed` / `http_status` — a terminal failure fact
+> for what is in fact the most useful possible answer, and one that would tell you the content is
+> gone when it is merely unchanged.
+>
+> So the trap is live rather than theoretical: nothing stops you replaying a validator today, and
+> doing so converts every *successful* no-change check into a closed command. The missing piece is
+> tracked as **#17** — a 304 needs an outcome of its own, since there is no blob to announce and
+> `fetch_failed` means "no blob will ever arrive". Until #17 lands, keep these two fields in your
+> own records and send the request unconditionally. (#17 recommends `reason="not_modified"` on the
+> existing fact rather than a new event type, so an issuer branching on `terminal` first is already
+> forward-compatible with it.)
 
 **Fact — `content.blobs`, `FetchFailedEvent`** (co-core ≥ 0.7.2, cannobserv#270):
 
@@ -189,6 +228,7 @@ lives here rather than in Watcher. Three details are the whole value of them:
 | `not_fetchable` | bad scheme / invalid URL |
 | `too_large` | body over `REPLICATOR_MAX_BLOB_BYTES` |
 | `unsupported_schema_version` | the command decoded at a `schema_version` Replicator does not support |
+| `invalid_request_options` | `headers` or `timeout_seconds` are not sendable — see the refusal table above |
 | `handler_error` | unclassified, and it exhausted the delivery ceiling (`attempts` set) |
 
 co-core's own docstring also lists `wrong_payload_type`. **Replicator never emits it**, and an
@@ -446,6 +486,7 @@ A consumer on another host cannot open it, and nothing on the wire says so.
 | HTTP 4xx, or a body-less 304 | fact, then `content.fetch.dlq` | `fetch_failed` · `http_status` (+ `status_code`) |
 | URL not fetchable (bad scheme / invalid URL) | fact, then `content.fetch.dlq` | `fetch_failed` · `not_fetchable` |
 | Body over `REPLICATOR_MAX_BLOB_BYTES` (default 64 MiB) | fact, then `content.fetch.dlq` | `fetch_failed` · `too_large` |
+| Unsendable `headers` / `timeout_seconds` | fact, then `content.fetch.dlq`, **before the fetch** | `fetch_failed` · `invalid_request_options` |
 | HTTP 5xx / 408 / 429, or a network error | retry indefinitely, default ~60 s cadence | delayed fact, or **nothing while it retries** |
 | Blob tree over `REPLICATOR_BLOB_MAX_TOTAL_BYTES` | parked in the PEL until a sweep frees space | delayed fact, or **nothing while it waits** |
 | Unclassified handler error | retried to the delivery ceiling (~4 reclaims / ~4 min at default settings), then fact + DLQ | `fetch_failed` · `handler_error` (+ `attempts`) |
@@ -479,6 +520,19 @@ Integrity rests entirely on **bus access control** — the broker is Archiver-op
 localhost on a single trusted VM. That is proportionate today. It stops being proportionate the
 moment the bus spans hosts or tenants, at which point message signing or a URL allowlist becomes
 the conversation. Not before.
+
+**`headers` widens that capability, and the widening is bounded here rather than by the broker.**
+A bus writer can now attach an arbitrary header — an `Authorization` among them — to a host of its
+own choosing. The trust model is unchanged (same localhost broker, same single VM), so the guards
+in the refusal table above are not a substitute for it; they are the cheap part, taken because it
+is cheap. Concretely they stop three things the broker's boundary says nothing about: a `Host`
+override that contacts one origin while addressing another, a CRLF in a value that splits the
+request into two, and a `timeout_seconds` large enough to park the serial consume path — that last
+one a denial of service against every *other* issuer, not against the origin.
+
+Two properties an issuer can rely on: a refused command is refused **before** any request goes out,
+and header **values never reach the journal** — only names are logged, so an `Authorization` an
+issuer attaches is not re-exposed one layer down.
 
 Relatedly: nothing but the seed script writes to `content.fetch` today, and `seed_fetch.py`
 requires `--production` for the one target the live worker consumes. A frame on that stream is

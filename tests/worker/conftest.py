@@ -14,7 +14,7 @@ from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 
 import pytest
-from co_core.effects.fetch import FetchResult
+from co_core.effects.fetch import FetchContent, FetchResult
 from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.envelope import from_wire, to_wire
 from co_core.pure.adapters.bus.streams import dlq_name
@@ -74,12 +74,23 @@ class FakeFetcher:
         self._result = result if result is not None else fetch_result()
         self._error = error
         self.urls: list[str] = []
+        # The whole effect, not only its URL: since #11 the handler also decides
+        # what headers and timeout reach the driver, and those are only
+        # observable here.
+        self.effects: list[FetchContent] = []
 
-    async def execute(self, effect) -> FetchResult:
+    async def execute(self, effect: FetchContent) -> FetchResult:
         self.urls.append(effect.url)
+        self.effects.append(effect)
         if self._error is not None:
             raise self._error
         return self._result
+
+    @property
+    def effect(self) -> FetchContent:
+        """The single effect this fetcher was asked for."""
+        (effect,) = self.effects
+        return effect
 
 
 def now() -> datetime:
@@ -112,9 +123,24 @@ async def decoded_facts(client, topic: str) -> list:
     return payloads
 
 
-def command(command_id: str = "cmd-1", url: str = URL) -> ContentFetchCommand:
-    """A decoded ``content.fetch`` command, as the handler receives it."""
-    return ContentFetchCommand(occurred_at=datetime.now(UTC), command_id=command_id, url=url)
+def command(
+    command_id: str = "cmd-1",
+    url: str = URL,
+    headers: dict[str, str] | None = None,
+    timeout_seconds: float | None = None,
+) -> ContentFetchCommand:
+    """A decoded ``content.fetch`` command, as the handler receives it.
+
+    ``headers`` / ``timeout_seconds`` default to ``None`` — the omitted-field
+    shape, which the contract says must behave exactly as it did before #11.
+    """
+    return ContentFetchCommand(
+        occurred_at=datetime.now(UTC),
+        command_id=command_id,
+        url=url,
+        headers=headers,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 async def published_facts(client, topic: str = streams.CONTENT_BLOBS) -> list[BlobAvailableEvent]:
@@ -155,15 +181,14 @@ def handler(fake_redis, tmp_path):
     return build
 
 
-def make_command(command_id: str = "cmd-1", url: str = URL) -> dict[str, str]:
+def make_command(
+    command_id: str = "cmd-1",
+    url: str = URL,
+    headers: dict[str, str] | None = None,
+    timeout_seconds: float | None = None,
+) -> dict[str, str]:
     """A well-formed ``content.fetch`` wire frame."""
-    return to_wire(
-        ContentFetchCommand(
-            occurred_at=datetime.now(UTC),
-            command_id=command_id,
-            url=url,
-        )
-    )
+    return to_wire(command(command_id, url, headers, timeout_seconds))
 
 
 @pytest.fixture

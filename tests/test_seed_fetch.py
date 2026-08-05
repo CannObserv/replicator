@@ -543,3 +543,85 @@ def test_a_broker_that_refuses_the_connection_is_an_error_not_a_traceback(capsys
 
     assert code == 1
     assert "error:" in capsys.readouterr().err
+
+
+async def test_published_commands_carry_the_request_options(fake_redis):
+    """The only issuer there is, so the only way to exercise #11 on a live worker."""
+    await publish(
+        fake_redis,
+        TOPIC,
+        [URL],
+        headers={"User-Agent": "watcher/0.1.0"},
+        timeout_seconds=2.5,
+    )
+
+    (command,) = await decoded_commands(fake_redis)
+    assert command.headers == {"User-Agent": "watcher/0.1.0"}
+    assert command.timeout_seconds == 2.5
+
+
+async def test_a_command_without_options_carries_neither_field(fake_redis):
+    """Omitted stays omitted: the pre-#11 wire, byte for byte."""
+    await publish(fake_redis, TOPIC, [URL])
+
+    (command,) = await decoded_commands(fake_redis)
+    assert command.headers is None
+    assert command.timeout_seconds is None
+
+
+def test_repeated_header_flags_collect_into_one_mapping():
+    args = seed_args("--topic", TOPIC, "--header", "Accept: text/html", "--header", "X-A: b", URL)
+
+    assert args.headers == {"Accept": "text/html", "X-A": "b"}
+
+
+def test_a_header_value_may_contain_a_colon():
+    """Split on the first colon only — a Referer is the obvious case."""
+    args = seed_args("--topic", TOPIC, "--header", "Referer: https://x.test/a", URL)
+
+    assert args.headers == {"Referer": "https://x.test/a"}
+
+
+@pytest.mark.parametrize("header", ["no-colon", ": novalue"])
+def test_a_malformed_header_is_a_usage_error(header):
+    with pytest.raises(SystemExit) as excinfo:
+        seed_args("--topic", TOPIC, "--header", header, URL)
+
+    assert excinfo.value.code == 2
+
+
+def test_a_repeated_header_name_is_a_usage_error():
+    """Last-wins would discard one silently — the worker refuses the same shape."""
+    with pytest.raises(SystemExit) as excinfo:
+        seed_args("--topic", TOPIC, "--header", "Accept: a", "--header", "accept: b", URL)
+
+    assert excinfo.value.code == 2
+
+
+def test_no_header_flag_means_no_headers():
+    args = seed_args("--topic", TOPIC, URL)
+
+    assert args.headers is None
+    assert args.timeout_seconds is None
+
+
+def test_a_dry_run_shows_the_options_that_would_travel(capsys):
+    code = main(
+        [
+            "--redis-url",
+            "redis://localhost:1/0",
+            "--topic",
+            TOPIC,
+            "--dry-run",
+            "--header",
+            "User-Agent: watcher/0.1.0",
+            "--timeout",
+            "5",
+            URL,
+        ]
+    )
+
+    assert code == 0
+    printed = capsys.readouterr().out
+    assert "watcher/0.1.0" in printed
+    assert "5.0" in printed
