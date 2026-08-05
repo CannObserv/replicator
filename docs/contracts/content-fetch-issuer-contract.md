@@ -8,6 +8,10 @@ from the code the day it was written.
 **Audience:** any service that publishes a `ContentFetchCommand`. Today that is
 [`scripts/seed_fetch.py`](../../scripts/seed_fetch.py). From Phase 4 it is Watcher.
 
+**Sibling document.** This settles the *wire*. [`replicator-boundaries.md`](replicator-boundaries.md)
+settles the *service* — what Replicator is allowed to become, and therefore which proposed fields
+this contract will never grow. Read that one before proposing a payload addition (#12).
+
 **Changing this document.** "Link, don't copy" only holds if a change reaches the issuers. A change
 to any MUST, or to the failure taxonomy, is announced on the open issuer-side trackers — currently
 [CannObserv/watcher#241](https://github.com/CannObserv/watcher/issues/241) — in the same change that
