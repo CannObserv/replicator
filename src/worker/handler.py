@@ -6,6 +6,7 @@ this module's only vocabulary for influencing it is raising —
 message pending for the next reclaim.
 """
 
+import asyncio
 import math
 import re
 from datetime import UTC, datetime
@@ -26,7 +27,8 @@ from src.core.errors import FailureReason, PermanentFetchError, TransientFetchEr
 from src.core.logging import get_logger
 from src.storage.base import BlobStore
 from src.storage.sweeper import BlobUsage
-from src.worker.loop import Handler
+from src.worker.loop import Handler, park
+from src.worker.pacing import HostPacer
 
 logger = get_logger(__name__)
 
@@ -170,6 +172,9 @@ def build_handler(
     client: Redis,
     settings: Settings,
     usage: BlobUsage | None = None,
+    pacer: HostPacer | None = None,
+    park_above_seconds: float | None = None,
+    stop: asyncio.Event | None = None,
     blobs_topic: str = streams.CONTENT_BLOBS,
 ) -> Handler:
     """Wire the byte path into a handler the loop can dispatch to.
@@ -180,6 +185,20 @@ def build_handler(
     private to this handler, which only makes the ceiling later to notice; the
     worker passes the shared instance.
 
+    ``pacer`` is per-host politeness (#12). Built from ``settings`` when not
+    injected, deliberately: unwired it fails *open*, and a byte path that
+    silently stopped pacing looks exactly like one that is working. Tests inject
+    one with a controlled interval and clock.
+
+    ``park_above_seconds`` is where a pacing wait stops being slept through and
+    starts parking the message. Defaults to the poll window — a wait no longer
+    than one blocking read adds nothing to the shutdown latency the unit's
+    ``TimeoutStopSec`` is already sized for, and a longer one would hold the
+    serial consume path against every other host's commands.
+
+    ``stop`` lets a sleeping handler notice a SIGTERM. Unset, the sleep simply
+    runs its course; the bound above is what keeps that from mattering.
+
     ``blobs_topic`` is a defaulted argument rather than a setting, for the same
     reason ``build_consumer``'s ``topic`` is: the only caller that moves it is a
     live-broker test, which must keep its facts on a scratch stream. A fact
@@ -188,6 +207,10 @@ def build_handler(
     """
     publisher = AsyncBusPublisher(client)
     usage = usage if usage is not None else BlobUsage()
+    pacer = pacer if pacer is not None else HostPacer(settings.min_host_interval_seconds)
+    if park_above_seconds is None:
+        park_above_seconds = settings.read_block_ms / 1000
+    stop = stop if stop is not None else asyncio.Event()
 
     async def handle(command: ContentFetchCommand) -> None:
         # Ahead of the ceiling deliberately. Validation is pure and free; the
@@ -196,6 +219,14 @@ def build_handler(
         # sweep interval to reach a conclusion available immediately.
         options = _request_options(command, settings.max_fetch_timeout_seconds)
         _raise_for_ceiling(usage, settings.blob_max_total_bytes)
+        # Last of the three, and after the ceiling on purpose: spending a wait to
+        # reach a check that was going to park the message anyway is a wait the
+        # origin never benefits from. The cost of that ordering is that the tree
+        # can cross the ceiling *during* a wait — bounded by park_above_seconds,
+        # and the ceiling is an inter-sweep estimate either way (CR #9).
+        paced_seconds = await _pace(
+            pacer, command, stop=stop, park_above_seconds=park_above_seconds
+        )
         result = await _fetch(fetcher, command, options)
         # Stamped here rather than at publish: occurred_at is when the fact went
         # onto the bus, which under a reclaim is minutes after the bytes were on
@@ -272,6 +303,15 @@ def build_handler(
                 # read than can write to the bus.
                 "request_headers": sorted(options.headers or {}),
                 "request_timeout_seconds": options.timeout,
+                # Politeness, on the line that already exists rather than one of
+                # its own (CR #3): without it a mechanism that caps per-host
+                # throughput is absent from the journal, and an operator seeing a
+                # slow drain cannot tell "waiting politely" from "origin is
+                # slow". A per-fetch datum, correlated with duration_ms above —
+                # the *gauge* (how much of the corpus is under pacing) rides
+                # _pace's own line instead, so a slowly-changing number is not
+                # repeated once per command (CR #13).
+                "paced_seconds": paced_seconds,
             },
         )
 
@@ -463,6 +503,74 @@ async def _fetch(
         ) from exc
     except httpx.HTTPError as exc:
         raise TransientFetchError(f"{command.url} failed to fetch: {exc}") from exc
+
+
+async def _pace(
+    pacer: HostPacer,
+    command: ContentFetchCommand,
+    *,
+    stop: asyncio.Event,
+    park_above_seconds: float,
+) -> float:
+    """Give the origin its space before asking it for anything (#12).
+
+    Returns the seconds actually waited, for the success line to report.
+
+    Two ways to spend a wait, split by duration, because neither is correct
+    alone on a serial consume path:
+
+    * **Sleep** a short one. The consume path is serial, so a sub-second pause
+      costs the group a sub-second pause — the same order as the fetch it is
+      about to do, and far cheaper than a reclaim round-trip.
+    * **Park** a long one, transiently, so the message returns via
+      ``claim_stale`` like a command over the disk ceiling. Sleeping instead
+      would hold every *other* host's commands behind this one origin's
+      politeness, and hold a SIGTERM behind it too.
+
+    Parking cannot express a wait shorter than ``REPLICATOR_CLAIM_MIN_IDLE_MS``
+    (60 s by default), which is the whole reason the sleep branch exists: the
+    normal interval is a second, and a park-only implementation would pace every
+    host at 1/60th of the rate the cluster runs at today. Silently, and in the
+    safe direction, which is what would have made it easy to ship.
+
+    Transient in both directions — a paced command has done nothing wrong, and
+    burning its delivery ceiling on politeness would dead-letter perfectly good
+    work.
+    """
+    wait = pacer.wait_seconds(command.url)
+    if wait <= 0:
+        pacer.record(command.url)
+        return 0.0
+    if wait > park_above_seconds:
+        raise TransientFetchError(
+            f"{command.url} is inside its host's {wait:.1f}-second politeness window; "
+            f"leaving it for the next reclaim"
+        )
+    # INFO, and only on the branch that actually waits (CR #13). At DEBUG this
+    # was invisible under the root INFO level; on every command it repeated a
+    # gauge that changes only when the corpus does. Here it appears exactly when
+    # the mechanism acts, which is when an operator wants it, and carries
+    # `tracked_hosts` as the periodic-ish gauge that has nowhere better to live —
+    # the sweep's line is the other candidate, and it is silent on an idle tree.
+    logger.info(
+        "waiting out a host's politeness window",
+        extra={
+            "command_id": command.command_id,
+            "wait_seconds": wait,
+            "tracked_hosts": pacer.tracked_hosts,
+        },
+    )
+    await park(stop, wait)
+    # park returns early on SIGTERM, and an interrupted wait is not an elapsed
+    # one — the origin has had no space. The message stays in the PEL, which is
+    # where a command interrupted mid-flight belongs anyway.
+    if stop.is_set():
+        raise TransientFetchError(
+            f"{command.url} was still inside its host's politeness window when the worker "
+            f"began stopping"
+        )
+    pacer.record(command.url)
+    return wait
 
 
 def _raise_for_ceiling(usage: BlobUsage, ceiling_bytes: int) -> None:

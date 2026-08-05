@@ -60,3 +60,24 @@ def test_the_stop_timeout_outlasts_the_slowest_fetch_a_command_may_ask_for():
     timeout_stop = float(_directive("TimeoutStopSec"))
 
     assert timeout_stop > settings.read_block_ms / 1000 + settings.max_fetch_timeout_seconds
+
+
+def test_the_stop_timeout_absorbs_a_pacing_wait_as_well():
+    """The #12 term.
+
+    A handler may now sleep out a per-host politeness window before it fetches,
+    bounded by the poll window (``build_handler``'s ``park_above_seconds``
+    default — anything longer parks instead). The stop event cuts that sleep
+    short, so this is belt-and-braces rather than the primary guard: the sum is
+    asserted because the alternative is discovering at the next deploy that
+    three separately-reasonable numbers no longer fit inside one.
+    """
+    settings = Settings()
+    timeout_stop = float(_directive("TimeoutStopSec"))
+    worst_case = (
+        settings.read_block_ms / 1000  # a poll already in flight
+        + settings.read_block_ms / 1000  # the pacing sleep bound, derived from it
+        + settings.max_fetch_timeout_seconds  # the slowest fetch a command may ask for
+    )
+
+    assert timeout_stop > worst_case

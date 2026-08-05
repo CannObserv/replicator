@@ -316,6 +316,10 @@ async def run(stop: asyncio.Event | None = None) -> None:
                     client=client,
                     settings=settings,
                     usage=usage,
+                    # The same stop event the loop and the sweeper ride, so a
+                    # handler waiting out a politeness window does not hold a
+                    # SIGTERM for it (#12).
+                    stop=stop,
                 ),
                 # The other outcome of a command, on the same stream: an issuer
                 # closes a pending entry off one consumer group either way (#9,

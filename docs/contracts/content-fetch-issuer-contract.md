@@ -8,6 +8,10 @@ from the code the day it was written.
 **Audience:** any service that publishes a `ContentFetchCommand`. Today that is
 [`scripts/seed_fetch.py`](../../scripts/seed_fetch.py). From Phase 4 it is Watcher.
 
+**Sibling document.** This settles the *wire*. [`replicator-boundaries.md`](replicator-boundaries.md)
+settles the *service* — what Replicator is allowed to become, and therefore which proposed fields
+this contract will never grow. Read that one before proposing a payload addition (#12).
+
 **Changing this document.** "Link, don't copy" only holds if a change reaches the issuers. A change
 to any MUST, or to the failure taxonomy, is announced on the open issuer-side trackers — currently
 [CannObserv/watcher#241](https://github.com/CannObserv/watcher/issues/241) — in the same change that
@@ -464,6 +468,18 @@ A consumer on another host cannot open it, and nothing on the wire says so.
 - **No failure fact for a command whose `command_id` is blank** — nothing to correlate one on at
   all. It is dead-lettered before the fetch rather than run. MUST-1, MUST-6.
 - **No latency bound**, and no SLA on turnaround.
+- **No promise that a burst runs at the rate it was issued (#12).** Requests to one host are
+  spaced by at least `REPLICATOR_MIN_HOST_INTERVAL_SECONDS` — 1 s by default, the interim
+  stand-in for the politeness numbers until they travel over the bus. Publishing 100 commands
+  for one host means at least 100 s of fetching. Size a reaper's timeout (MUST-6) against the
+  depth of your own burst, not against one fetch. Commands for different hosts are unaffected
+  by each other.
+  **At the shipped defaults every wait is slept through inside the handler**, so the cost is
+  seconds of added turnaround and nothing else. Only when an operator configures the interval
+  *above* `REPLICATOR_READ_BLOCK_MS` (5 s) does a paced command instead stay pending for the
+  next reclaim, which moves the cadence from seconds to a minute. That is a deployment
+  decision, not a default — but it is the one that changes what a reaper should expect, so it
+  is stated here rather than left to be discovered.
 - **No ordering.** Two commands issued in sequence may produce facts in either order.
 - **No cross-command dedupe.** Two `command_id`s for one URL are two fetches and two facts, by
   design — that is what makes MUST-1 work.

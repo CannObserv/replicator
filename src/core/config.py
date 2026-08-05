@@ -111,6 +111,30 @@ class Settings(BaseSettings):
     # systemd's TimeoutStopSec must exceed this plus the handler's budget.
     read_block_ms: int = Field(default=5_000, validation_alias="REPLICATOR_READ_BLOCK_MS")
 
+    # Minimum spacing between two requests to the same host — the interim
+    # politeness default (#12), replacing the limiter Watcher stops exercising
+    # the moment its fetch path becomes a publish path (watcher#245).
+    #
+    # 1.0 s is Watcher's own DEFAULT_MIN_INTERVAL, chosen precisely because it
+    # invents nothing: the *numbers* are the issuer's under the boundaries
+    # charter, and until the policy stream carries them the least-wrong value is
+    # the one the cluster already commits to. Enforcement is mechanism and
+    # belongs here; this default is a stand-in for a decision, not the decision.
+    #
+    # 0 disables pacing: an operator escape hatch, and the value the pacer's own
+    # unit tests pin. A deployment setting it is choosing no politeness at all.
+    #
+    # Capped at an hour (CR #8). Past that the mechanism is the wrong one rather
+    # than a stricter setting of the right one: the command parks and re-parks
+    # for an hour of reclaim cycles, never dead-letters (transient failures are
+    # exempt from the delivery ceiling), and the issuer's own reaper — the
+    # backstop the contract requires precisely because silence carries no
+    # cause — will have concluded loss long before. A fat-fingered extra zero
+    # should fail at startup, not become a black hole that reads as healthy.
+    min_host_interval_seconds: float = Field(
+        default=1.0, ge=0, le=3600, validation_alias="REPLICATOR_MIN_HOST_INTERVAL_SECONDS"
+    )
+
     # start_id applies only at group *creation* — once replicator.fetch exists
     # this value is inert, and switching to "0" (drain the backlog) additionally
     # needs a manual XGROUP SETID. Kept configurable so the eventual change is a
