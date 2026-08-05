@@ -471,10 +471,15 @@ A consumer on another host cannot open it, and nothing on the wire says so.
 - **No promise that a burst runs at the rate it was issued (#12).** Requests to one host are
   spaced by at least `REPLICATOR_MIN_HOST_INTERVAL_SECONDS` — 1 s by default, the interim
   stand-in for the politeness numbers until they travel over the bus. Publishing 100 commands
-  for one host means at least 100 s of fetching, and a command whose wait exceeds the poll
-  window simply stays pending until the next reclaim, which is a *minute* of cadence rather
-  than a second. Size a reaper's timeout (MUST-6) against the depth of your own burst, not
-  against one fetch. Commands for different hosts are unaffected by each other.
+  for one host means at least 100 s of fetching. Size a reaper's timeout (MUST-6) against the
+  depth of your own burst, not against one fetch. Commands for different hosts are unaffected
+  by each other.
+  **At the shipped defaults every wait is slept through inside the handler**, so the cost is
+  seconds of added turnaround and nothing else. Only when an operator configures the interval
+  *above* `REPLICATOR_READ_BLOCK_MS` (5 s) does a paced command instead stay pending for the
+  next reclaim, which moves the cadence from seconds to a minute. That is a deployment
+  decision, not a default — but it is the one that changes what a reaper should expect, so it
+  is stated here rather than left to be discovered.
 - **No ordering.** Two commands issued in sequence may produce facts in either order.
 - **No cross-command dedupe.** Two `command_id`s for one URL are two fetches and two facts, by
   design — that is what makes MUST-1 work.

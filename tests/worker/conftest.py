@@ -93,6 +93,30 @@ class FakeFetcher:
         return effect
 
 
+class Clock:
+    """A monotonic clock the test advances by hand.
+
+    Pacing is the one thing in the byte path whose whole behaviour is a duration,
+    so every assertion about it would otherwise be a real sleep — slow, and flaky
+    in exactly the direction that hides an off-by-one. Shared by the pacer's unit
+    tests and the handler's, so both express a wait the same way.
+    """
+
+    def __init__(self) -> None:
+        self.now = 1_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.fixture
+def clock() -> Clock:
+    return Clock()
+
+
 def now() -> datetime:
     """A tz-aware UTC stamp — the only kind co-core's payloads accept.
 

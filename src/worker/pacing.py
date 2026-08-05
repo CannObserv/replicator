@@ -45,10 +45,17 @@ class HostPacer:
         self._interval = min_interval_seconds
         self._clock = clock
         self._last: dict[str, float] = {}
+        # Earliest a prune could reclaim anything; see _prune.
+        self._prune_not_before = 0.0
 
     @property
     def tracked_hosts(self) -> int:
-        """How many hosts currently hold an entry — for the sweep-style log line."""
+        """How many hosts currently hold an entry.
+
+        Reported on the byte path's success line beside ``paced_seconds``
+        (``handler.py``), so a rising figure is visible as the corpus widening
+        rather than inferred from throughput.
+        """
         return len(self._last)
 
     def wait_seconds(self, url: str) -> float:
@@ -80,7 +87,7 @@ class HostPacer:
             return
         now = self._clock()
         self._last[host] = now
-        if len(self._last) > MAX_TRACKED_HOSTS:
+        if len(self._last) > MAX_TRACKED_HOSTS and now >= self._prune_not_before:
             self._prune(now)
 
     def _prune(self, now: float) -> None:
@@ -91,10 +98,23 @@ class HostPacer:
         over the bound that leaves us — enforcing the bound by forgetting a host
         that is still owed space would turn a memory limit into a politeness
         breach.
+
+        Which means the bound can be exceeded with nothing to reclaim, and a
+        prune that frees nothing must not run again on the next record: with more
+        than ``MAX_TRACKED_HOSTS`` hosts all inside a long interval, that would
+        be a full dict rebuild per message forever (CR #7). The retry is deferred
+        until the oldest entry could plausibly have aged out.
         """
+        before = len(self._last)
         self._last = {
             host: last for host, last in self._last.items() if now - last < self._interval
         }
+        if len(self._last) < before:
+            self._prune_not_before = 0.0
+            return
+        # Nothing was reclaimable. The earliest anything can be is one interval
+        # after the oldest entry still held.
+        self._prune_not_before = min(self._last.values(), default=now) + self._interval
 
 
 def _host(url: str) -> str | None:
@@ -105,6 +125,16 @@ def _host(url: str) -> str | None:
     asked, so a second port is the same machine and a capitalized host is the
     same name. Keying on anything finer would let an issuer multiply its own
     rate limit by spelling the URL differently.
+
+    **Known limitation: the host asked for, not the host reached (CR #4).** httpx
+    follows redirects inside the driver, so a URL that 301s elsewhere is paced
+    under the name the command carried and not at all under the name that
+    actually served it. A corpus where several watched URLs funnel into one
+    portal or CDN therefore hits that host at N times the intended rate — the
+    failure politeness exists to prevent. Recording the landing host too
+    (``FetchResult.final_url`` is available at the call site) would fix it at the
+    cost of "one request, one record", which wants its own decision rather than
+    a quiet change here; the policy stream is where it should land.
     """
     try:
         return urlsplit(url).hostname

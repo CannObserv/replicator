@@ -9,29 +9,6 @@ import pytest
 from src.worker.pacing import MAX_TRACKED_HOSTS, HostPacer
 
 
-class Clock:
-    """A monotonic clock the test advances by hand.
-
-    Pacing is the one thing in the byte path whose whole behaviour is a duration,
-    so every assertion here would otherwise be a real sleep — slow, and flaky in
-    exactly the direction that hides an off-by-one.
-    """
-
-    def __init__(self) -> None:
-        self.now = 1_000.0
-
-    def __call__(self) -> float:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += seconds
-
-
-@pytest.fixture
-def clock() -> Clock:
-    return Clock()
-
-
 def test_the_first_request_to_a_host_waits_for_nothing():
     """There is no previous request to space this one from."""
     pacer = HostPacer(1.0)
@@ -135,3 +112,35 @@ def test_pruning_keeps_the_hosts_that_do_constrain_something(clock):
         pacer.record(f"https://host{n}.test/a")
 
     assert pacer.wait_seconds("https://host0.test/a") > 0
+
+
+def test_a_prune_that_reclaims_nothing_is_not_retried_every_record(clock, monkeypatch):
+    """Over the bound with nothing reclaimable is a steady state, not an emergency.
+
+    Every host inside a long interval means the bound cannot be honoured, and
+    retrying the O(n) rebuild on each subsequent record would make a full dict
+    copy per message for as long as that lasts (CR #7). The retry waits until the
+    oldest entry could plausibly have aged out.
+    """
+    pacer = HostPacer(60.0, clock=clock)
+    for n in range(MAX_TRACKED_HOSTS + 1):
+        pacer.record(f"https://host{n}.test/a")
+
+    prunes = 0
+    original = pacer._prune
+
+    def counting(now: float) -> None:
+        nonlocal prunes
+        prunes += 1
+        original(now)
+
+    monkeypatch.setattr(pacer, "_prune", counting)
+    for n in range(10):
+        pacer.record(f"https://later{n}.test/a")
+
+    assert prunes == 0
+
+    clock.advance(61.0)
+    pacer.record("https://trigger.test/a")
+
+    assert prunes == 1

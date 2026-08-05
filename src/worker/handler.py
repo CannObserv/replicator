@@ -221,8 +221,12 @@ def build_handler(
         _raise_for_ceiling(usage, settings.blob_max_total_bytes)
         # Last of the three, and after the ceiling on purpose: spending a wait to
         # reach a check that was going to park the message anyway is a wait the
-        # origin never benefits from.
-        await _pace(pacer, command, stop=stop, park_above_seconds=park_above_seconds)
+        # origin never benefits from. The cost of that ordering is that the tree
+        # can cross the ceiling *during* a wait — bounded by park_above_seconds,
+        # and the ceiling is an inter-sweep estimate either way (CR #9).
+        paced_seconds = await _pace(
+            pacer, command, stop=stop, park_above_seconds=park_above_seconds
+        )
         result = await _fetch(fetcher, command, options)
         # Stamped here rather than at publish: occurred_at is when the fact went
         # onto the bus, which under a reclaim is minutes after the bytes were on
@@ -299,6 +303,15 @@ def build_handler(
                 # read than can write to the bus.
                 "request_headers": sorted(options.headers or {}),
                 "request_timeout_seconds": options.timeout,
+                # Politeness, on the line that already exists rather than one of
+                # its own (CR #2, CR #3). _pace logs at DEBUG, which the root
+                # INFO level drops, so without these two a mechanism that caps
+                # per-host throughput would be entirely absent from the journal —
+                # an operator seeing a slow drain could not tell "waiting
+                # politely" from "origin is slow". `tracked_hosts` is the gauge
+                # that says how much of the corpus is currently under pacing.
+                "paced_seconds": paced_seconds,
+                "tracked_hosts": pacer.tracked_hosts,
             },
         )
 
@@ -498,8 +511,10 @@ async def _pace(
     *,
     stop: asyncio.Event,
     park_above_seconds: float,
-) -> None:
+) -> float:
     """Give the origin its space before asking it for anything (#12).
+
+    Returns the seconds actually waited, for the success line to report.
 
     Two ways to spend a wait, split by duration, because neither is correct
     alone on a serial consume path:
@@ -525,7 +540,7 @@ async def _pace(
     wait = pacer.wait_seconds(command.url)
     if wait <= 0:
         pacer.record(command.url)
-        return
+        return 0.0
     if wait > park_above_seconds:
         raise TransientFetchError(
             f"{command.url} is inside its host's {wait:.1f}-second politeness window; "
@@ -545,6 +560,7 @@ async def _pace(
             f"began stopping"
         )
     pacer.record(command.url)
+    return wait
 
 
 def _raise_for_ceiling(usage: BlobUsage, ceiling_bytes: int) -> None:

@@ -29,7 +29,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
-from starlette.routing import Route
+from starlette.routing import Route, WebSocketRoute
 
 from src.api.main import app
 from src.core.config import Settings
@@ -259,12 +259,29 @@ def _routes(node, prefix: str = "") -> set[tuple[str, str]]:
     ``original_router`` for an included one) so this survives FastAPI moving
     between them. ``test_the_route_walk_sees_a_planted_write_route`` is what
     reports it if the walk ever stops descending.
+
+    **Two ways this used to fail open, both fixed in CR #1 and both now planted
+    as tests.** A ``Mount`` carries its prefix on ``.path`` rather than on an
+    ``include_context``, so a sub-app mounted at ``/admin`` reported its
+    children's bare paths — ``GET /admin/health`` passed the allowlist as
+    ``/health``. And a ``WebSocketRoute`` is not a ``Route`` and has no
+    ``methods``, so it fell through to the container branch, found no children,
+    and contributed nothing at all. Mounting a sub-app is the most plausible
+    shape an admin API would actually arrive in, which is exactly why the walk
+    has to see it.
     """
     if isinstance(node, Route):
         return {(prefix + node.path, method) for method in node.methods or {"GET"}}
+    if isinstance(node, WebSocketRoute):
+        # No methods of its own, and a socket is a write surface by construction:
+        # named so it fails the read-only assertion rather than vanishing.
+        return {(prefix + node.path, "WEBSOCKET")}
 
     context = getattr(node, "include_context", None)
     prefix += getattr(context, "prefix", "") or ""
+    # A Mount's own prefix. The app root and an _IncludedRouter have no `path`,
+    # so this is additive for them; for a Mount it is the whole point.
+    prefix += getattr(node, "path", "") or ""
     children = getattr(node, "routes", None)
     if children is None:
         children = getattr(getattr(node, "original_router", None), "routes", ())
@@ -295,6 +312,47 @@ def test_the_route_walk_sees_a_planted_write_route():
     probe.include_router(router, prefix="/admin")
 
     assert ("/admin/policy", "POST") in _routes(probe)
+
+
+def test_the_route_walk_sees_through_a_mounted_sub_app():
+    """The shape an admin API would actually arrive in (CR #1).
+
+    A sub-app is the natural way to add one — it carries its own router, its own
+    docs, its own everything — and before this the walk reported its children
+    without the mount prefix. A ``GET /admin/health`` returning the worker's
+    configuration passed both assertions as ``/health``.
+    """
+    from fastapi import FastAPI
+
+    sub = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    sub.get("/health")(lambda: {"config": "everything"})
+    probe = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    probe.mount("/admin", sub)
+
+    surface = _routes(probe)
+
+    assert ("/admin/health", "GET") in surface
+    assert not {path for path, _ in surface} <= ALLOWED_PATHS
+
+
+def test_the_route_walk_sees_a_websocket():
+    """Not a ``Route``, no ``methods`` — it used to contribute nothing at all.
+
+    A socket is a write surface by construction, so it is named with a method of
+    its own rather than left to fail the path allowlist alone: a websocket at
+    ``/health`` would otherwise be invisible on both assertions.
+    """
+    from fastapi import FastAPI
+
+    probe = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+    @probe.websocket("/health")
+    async def _socket(websocket): ...
+
+    surface = _routes(probe)
+
+    assert ("/health", "WEBSOCKET") in surface
+    assert not {method for _, method in surface} <= READ_ONLY_METHODS
 
 
 # --------------------------------------------------------------------------

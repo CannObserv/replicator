@@ -18,7 +18,7 @@ from src.core.errors import TransientFetchError
 from src.storage.local import LocalBlobStore
 from src.worker.handler import build_handler
 from src.worker.pacing import HostPacer
-from tests.worker.conftest import URL, FakeFetcher, command, published_facts
+from tests.worker.conftest import URL, Clock, FakeFetcher, command, published_facts
 
 
 @pytest.fixture
@@ -129,16 +129,23 @@ async def test_a_parked_command_does_not_consume_its_own_space(paced):
     Recording the attempt would let a burst of parked redeliveries push the next
     real fetch out indefinitely — the origin would be spaced from requests it
     never received.
+
+    Driven by a hand-advanced clock (CR #6). The earlier form compared two live
+    ``wait_seconds`` readings, which did kill the mutant but only via an implicit
+    argument about which of two elapsed intervals was larger — sound, and
+    impossible to see. Here the remaining wait is exact: 60 s minus the 10 s
+    advanced, and unchanged by the park in between.
     """
-    pacer = HostPacer(60.0)
+    clock = Clock()
+    pacer = HostPacer(60.0, clock=clock)
     handler, _ = paced(pacer, park_above_seconds=5.0)
     await handler(command("cmd-1"))
-    first = pacer.wait_seconds(URL)
 
+    clock.advance(10.0)
     with pytest.raises(TransientFetchError):
         await handler(command("cmd-2"))
 
-    assert pacer.wait_seconds(URL) <= first
+    assert pacer.wait_seconds(URL) == pytest.approx(50.0)
 
 
 async def test_an_uninjected_pacer_still_paces(fake_redis, tmp_path, monkeypatch):
@@ -188,6 +195,29 @@ async def test_the_default_park_bound_is_the_poll_window(fake_redis, tmp_path):
 
     with pytest.raises(TransientFetchError, match="politeness window"):
         await handler(command("cmd-2"))
+
+
+async def test_a_wait_inside_the_poll_window_sleeps_rather_than_parks(fake_redis, tmp_path):
+    """The other half of the bound (CR #11).
+
+    Asserted from below as well as above, because the park assertion alone would
+    also pass with a default of ``0`` — which would park every paced command and
+    put the whole corpus on a 60-second reclaim cadence. That is the 60x failure
+    the split exists to avoid, and it must not be one line from passing.
+    """
+    settings = get_settings()
+    handler = build_handler(
+        fetcher=(fetcher := FakeFetcher()),
+        store=LocalBlobStore(tmp_path),
+        client=fake_redis,
+        settings=settings,
+        pacer=HostPacer(0.05),
+    )
+
+    await handler(command("cmd-1"))
+    await handler(command("cmd-2"))
+
+    assert fetcher.urls == [URL, URL]
 
 
 async def test_an_unpaced_handler_is_the_pre_12_byte_path(fake_redis, tmp_path):

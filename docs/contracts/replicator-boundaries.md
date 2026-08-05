@@ -204,6 +204,16 @@ which errs in the safe direction.
 What it is **not** is the design. One number for every origin is exactly the "conservative
 default" the policy stream exists to replace with real per-host values.
 
+**Known limitation, for the stream to resolve: the host asked for is not always the host
+reached.** httpx follows redirects inside the driver, so a URL that 301s elsewhere is paced
+under the name the command carried and not at all under the name that served it. A corpus where
+several watched URLs funnel into one portal or CDN therefore hits that host at N times the
+intended rate — the failure politeness exists to prevent. `FetchResult.final_url` is available
+where the fix would go, but recording the landing host too breaks "one request, one record",
+so it belongs in the policy stream's design rather than in a quiet amendment to the interim.
+Recorded here for the same reason `blob_uri` is: an unwritten gap and a decorative charter are
+the same thing to a reader.
+
 **The stream is a precondition of the Phase 4 cutover, not a follow-on to it.** Watcher's
 limiter (`src/core/rate_limiter.py::acquire_for_domain`, fed by 429s its own fetch path
 observes) is load-bearing today and stops functioning the moment that fetch path becomes a
