@@ -109,14 +109,40 @@ _REFUSED_HEADER_PREFIX = "proxy-"
 
 # A field name is an RFC 9110 token. Matched against the *folded* name, so the
 # alphabetic range is lowercase only.
-_HEADER_NAME = re.compile(r"^[!#$%&'*+\-.^_`|~0-9a-z]+$")
+#
+# **`\Z`, never `$`.** Python's `$` also matches immediately before a trailing
+# newline, so `^token+$` accepts `"accept\n"` — and httpx passes that straight
+# through to the wire as a header name containing a bare LF, which is header
+# injection by any other name. `\Z` is the absolute end of the string and the
+# only correct anchor for a validator (CR #14). The same trap applies to the
+# value pattern below, where `.strip()` happens to hide it; relying on that
+# would make one guard's correctness depend on another's ordering.
+_HEADER_NAME = re.compile(r"\A[!#$%&'*+\-.^_`|~0-9a-z]+\Z")
 
-# A field value is VCHAR / obs-text, optionally separated by SP or HTAB — no
-# CR, no LF, no NUL, no other control character, nothing above latin-1. The
-# guard is not stylistic: a CRLF in a value is request splitting, and httpx
-# reports the rest as LocalProtocolError, an httpx.HTTPError that _fetch would
-# classify as *transient* — retried at the reclaim cadence forever, never closed.
-_HEADER_VALUE = re.compile(r"^[\x20-\x7e\x80-\xff]*$")
+# A field value here is printable US-ASCII and SP — narrower than RFC 9110's
+# VCHAR / obs-text on both edges, and deliberately so on each.
+#
+# **obs-text (\x80-\xff) is excluded because httpx cannot send it.** It encodes
+# header values as ASCII and raises UnicodeEncodeError, which — unlike the
+# LocalProtocolError a CRLF earns — is *not* an httpx.HTTPError, so it would slip
+# past _fetch's mapping entirely and land in the loop's unclassified branch:
+# retried to the delivery ceiling and finally closed as `handler_error` minutes
+# later, instead of the immediate `invalid_request_options` this guard exists to
+# produce. RFC 9110 deprecates obs-text anyway (CR #1).
+#
+# **HTAB (\x09) is excluded even though httpx accepts it.** RFC 9110 permits it
+# as internal whitespace, but a tab inside a header value is nobody's intent and
+# survives no round trip worth having. Refused on purpose, not by oversight
+# (CR #3).
+#
+# What the guard is really for is CR and LF: a CRLF in a value is request
+# splitting, and everything else here is the cheap part of drawing that line.
+#
+# Anchored `\A`/`\Z` for the reason spelled out on `_HEADER_NAME` above — `$`
+# would admit a trailing newline. Unreachable here (the value is stripped before
+# it is matched) and fixed anyway: one guard's correctness must not rest on
+# another's ordering.
+_HEADER_VALUE = re.compile(r"\A[\x20-\x7e]*\Z")
 
 
 class RequestOptions(NamedTuple):
@@ -331,8 +357,13 @@ def _request_headers(headers: dict[str, str] | None) -> dict[str, str] | None:
     invisible change these guards exist to prevent, and "refuse only when the
     values differ" would make the rule depend on the values instead of the shape.
 
-    Surrounding whitespace is dropped, not refused: RFC 9110 excludes OWS from a
-    field value, the same reading ``_passthrough`` applies to the response side.
+    Surrounding whitespace is dropped from a **value**, not refused: RFC 9110
+    excludes OWS from a field value, the same reading ``_passthrough`` applies to
+    the response side. A **name** gets no such treatment — RFC 9110 forbids space
+    between a field name and its colon, so padding there is malformed rather than
+    optional whitespace, and silently trimming it would be the one thing this
+    module refuses to do anywhere else: adjust a request instead of refusing it
+    (CR #4). A padded name simply fails the token match below.
 
     ``None`` in, ``None`` out — an omitted field must reach the driver as the
     absence it was, not as an empty mapping some future driver reads as
@@ -346,18 +377,25 @@ def _request_headers(headers: dict[str, str] | None) -> dict[str, str] | None:
     folded: dict[str, str] = {}
     total = 0
     for name, value in headers.items():
-        key = name.strip().lower()
+        key = name.lower()
         if not _HEADER_NAME.match(key):
             raise _invalid_options(f"{name!r} is not a valid header name")
+        # Every refusal names the header as the *issuer* spelled it, not as the
+        # fold left it: the message is read by somebody grepping their own
+        # publishing code, where `Host` will not be found under `host` (CR #12).
         if key in REFUSED_HEADERS or key.startswith(_REFUSED_HEADER_PREFIX):
-            raise _invalid_options(f"{key!r} is not a header Replicator will send")
+            raise _invalid_options(f"{name!r} is not a header Replicator will send")
         if key in folded:
-            raise _invalid_options(f"{key!r} was given more than once, differing only in case")
+            raise _invalid_options(f"{name!r} was given more than once, differing only in case")
         stripped = value.strip()
         if not _HEADER_VALUE.match(stripped):
-            raise _invalid_options(f"{key!r} has a value that cannot be sent verbatim")
+            raise _invalid_options(f"{name!r} has a value that cannot be sent verbatim")
         # +4 for the ": " and the CRLF the value costs on the wire, so the bound
         # measures what the origin will measure rather than the payload alone.
+        #
+        # Characters, counted against a bound stated in *bytes* — exact only
+        # because both charsets above are US-ASCII, one byte each. Widen either
+        # regex and this silently starts under-counting (CR #6).
         total += len(key) + len(stripped) + 4
         if total > MAX_REQUEST_HEADER_BYTES:
             raise _invalid_options(f"headers exceed the {MAX_REQUEST_HEADER_BYTES}-byte bound")

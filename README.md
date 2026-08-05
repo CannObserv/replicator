@@ -88,10 +88,11 @@ rather than deleting bytes a consumer was promised.
 | `REPLICATOR_BLOB_TEMP_GRACE_SECONDS` | `3600` | How long a `.tmp` may live before the sweep treats it as debris. Far shorter than the TTL — a temporary exists only across a single write |
 | `REPLICATOR_BLOB_MAX_TOTAL_BYTES` | `2147483648` | Ceiling on everything the tree holds (2 GiB). Crossing it **pauses fetching**; it never reaps a blob still inside its TTL |
 | `REPLICATOR_MAX_BLOB_BYTES` | `67108864` | Ceiling on one fetched body (64 MiB). A *storage* guard, not a memory one — co-core's fetch driver buffers the whole response first. Over it ⇒ DLQ |
+| `REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS` | `120` | The most a command's own `timeout_seconds` may ask for (#11). Not a default — an omitted field still gets the driver's 30 s — but a ceiling, and a guard rather than a preference: the consume path is serial, so one issuer's timeout is a lien on every other command in the group. Over it ⇒ DLQ. Bounded above by the unit's `TimeoutStopSec` |
 | `REPLICATOR_CONSUMER_GROUP` | `replicator.fetch` | Consumer group on `content.fetch` |
 | `REPLICATOR_CONSUMER_NAME` | `replicator@<hostname>` | This worker's identity in the group — never share one |
 | `REPLICATOR_CONSUMER_START_ID` | `$` | Group start position. Applies only at group *creation*; changing it later also needs `XGROUP SETID` |
-| `REPLICATOR_READ_BLOCK_MS` | `5000` | Blocking-read window. Bounds shutdown latency, so the unit's `TimeoutStopSec` must exceed it plus the handler budget and an in-flight sweep |
+| `REPLICATOR_READ_BLOCK_MS` | `5000` | Blocking-read window. Bounds shutdown latency, so the unit's `TimeoutStopSec` must exceed it plus `REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS` (the handler's worst-case budget since #11) and an in-flight sweep — `tests/test_deploy.py` pins the first two terms |
 | `REPLICATOR_CLAIM_MIN_IDLE_MS` | `60000` | Idle time before a pending entry may be reclaimed — also the retry cadence |
 | `REPLICATOR_MAX_DELIVERY_ATTEMPTS` | `5` | Deliveries of an *unclassified* failure before the DLQ |
 | `REPLICATOR_DEDUPE_TTL_SECONDS` | `86400` | Lifetime of the `replicator:cmd:<command_id>` dedupe key |

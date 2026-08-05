@@ -8,13 +8,21 @@ fingerprint-affecting change nobody can see, so the command dies with a reason
 instead of fetching something the issuer cannot account for.
 """
 
+import inspect
 import math
+import re
 
+import httpx
 import pytest
 
 from src.core.errors import FailureReason, PermanentFetchError, TransientFetchError
 from src.storage.sweeper import BlobUsage
-from src.worker.handler import MAX_REQUEST_HEADER_BYTES, MAX_REQUEST_HEADERS
+from src.worker import handler as handler_module
+from src.worker.handler import (
+    _HEADER_VALUE,  # the guard under test, pinned to httpx
+    MAX_REQUEST_HEADER_BYTES,
+    MAX_REQUEST_HEADERS,
+)
 from src.worker.handler import REFUSED_HEADERS as REFUSED
 from src.worker.loop import Outcome, poll_once
 from tests.worker.conftest import (
@@ -40,7 +48,6 @@ async def assert_refused(handler, cmd, fetcher=None):
         await handler(fetcher)(cmd)
     assert caught.value.reason is FailureReason.INVALID_REQUEST_OPTIONS
     assert fetcher.effects == []
-    return caught.value
 
 
 # --------------------------------------------------------------------------- #
@@ -150,9 +157,27 @@ async def test_a_case_collision_is_refused_even_when_the_values_agree(handler):
         "user\nagent",
         "",
         "acc€pt",
+        "  accept  ",  # padding a name is malformed, not OWS — CR #4
+        "accept\n",  # trailing LF: Python's `$` would have allowed it — CR #14
+        "accept\r",
     ],
 )
 async def test_a_header_name_that_is_not_a_token_is_refused(handler, name):
+    """Three concerns share this list, and two of them are not "another bad char".
+
+    **Padding** (``"  accept  "``) is here because RFC 9110 excludes OWS from a
+    field *value* — which is why a value is trimmed rather than refused — and
+    says the opposite about a name: no space may sit between the name and its
+    colon. Trimming it into ``accept`` would be the silent adjustment every other
+    rule in this module exists to avoid (CR #4).
+
+    **Trailing CR and LF** (``"accept\\n"``, ``"accept\\r"``) are here because
+    they were once *accepted*: Python's ``$`` matches before a trailing newline,
+    so the original ``^token+$`` let them through, and httpx forwards such a name
+    to the wire with the control character intact (CR #14). They are not
+    redundant with ``"user\\nagent"`` above — that one fails on any anchor, these
+    two fail only on ``\\Z``.
+    """
     await assert_refused(handler, command(headers={name: "x"}))
 
 
@@ -164,18 +189,89 @@ async def test_a_header_name_that_is_not_a_token_is_refused(handler, name):
         "one\rtwo",
         "one\x00two",
         "one\x1btwo",
-        "snőw",  # beyond latin-1: not encodable as a field value
+        "one\ttwo",  # HTAB: legal per RFC 9110, refused here on purpose (CR #3)
+        "caf\xe9",  # obs-text — httpx cannot encode it at all (CR #1)
+        "snőw",  # beyond latin-1
     ],
 )
 async def test_a_header_value_that_cannot_be_sent_verbatim_is_refused(handler, value):
-    """Terminal on purpose.
+    """Terminal on purpose, and for two different reasons.
 
-    httpx raises ``LocalProtocolError`` for these, which subclasses
-    ``httpx.HTTPError`` and would therefore land in ``_fetch``'s catch-all as
-    *transient* — exempt from the delivery ceiling, so the command would retry at
-    the reclaim cadence forever and never close.
+    A CR/LF/CTL earns ``LocalProtocolError`` from httpx, which subclasses
+    ``httpx.HTTPError`` and would land in ``_fetch``'s catch-all as *transient* —
+    exempt from the delivery ceiling, so the command would retry at the reclaim
+    cadence forever and never close.
+
+    ``caf\\xe9`` is the sharper case and the one the first version of this guard
+    let through (CR #1): httpx encodes header values as ASCII and raises
+    ``UnicodeEncodeError``, which is **not** an ``httpx.HTTPError`` and so does
+    not reach that catch-all at all. It escapes to the loop's unclassified
+    branch, burns the delivery ceiling, and closes the command as
+    ``handler_error`` minutes later — the generic token, for a fault this module
+    can name instantly.
     """
     await assert_refused(handler, command(headers={"x-test": value}))
+
+
+async def test_the_value_guard_covers_everything_httpx_cannot_send():
+    """The guard's real contract, asserted against httpx rather than a charset.
+
+    A regex is only as good as its agreement with the transport, and CR #1 was
+    exactly a place where the two had drifted. This walks the whole single-byte
+    range and pins the invariant directly: nothing this module accepts may fail
+    at request construction.
+
+    The count assertion is the other half of the claim (CR #10). Without it the
+    loop proves only that the guard is not too *permissive* — a guard narrowed
+    all the way to ``^$`` would accept nothing, send nothing to httpx, and pass.
+    95 is the printable US-ASCII range ``\\x20``–``\\x7e`` inclusive, so this
+    fails on a narrowing as loudly as on a widening.
+    """
+    accepted = [chr(code) for code in range(256) if _HEADER_VALUE.match(chr(code))]
+
+    assert len(accepted) == 95
+    assert accepted[0] == " " and accepted[-1] == "~"
+    for character in accepted:
+        # Raises UnicodeEncodeError / LocalProtocolError if the guard is wrong.
+        httpx.Request("GET", "http://x.test", headers={"x-test": f"a{character}b"})
+
+
+def module_patterns() -> list[tuple[str, re.Pattern[str]]]:
+    """Every compiled pattern in ``src.worker.handler``, discovered not listed.
+
+    A hand-written list would have to be *remembered*, which is the same failure
+    mode the test below exists to prevent (CR #15): a new validator added to that
+    module is only protected if its author also thinks to enrol it here, and an
+    author who thought about it would not have written ``$`` in the first place.
+    """
+    return inspect.getmembers(handler_module, lambda value: isinstance(value, re.Pattern))
+
+
+@pytest.mark.parametrize(("name", "pattern"), module_patterns())
+def test_every_guard_anchors_on_the_absolute_end_of_the_string(name, pattern):
+    """``\\Z``, not ``$`` — the trap that produced CR #14.
+
+    Python's ``$`` also matches immediately *before* a trailing newline, so a
+    validator written ``^…$`` silently accepts ``"accept\\n"``. httpx does not
+    catch it either: it puts the name on the wire with a bare LF inside it.
+
+    Pinned as a property of *every* pattern in the module rather than only
+    through the refusal cases above, because this is a whole class of mistake
+    rather than one bug. The subjects are discovered by reflection, so a pattern
+    added tomorrow is covered on the run that follows — see ``module_patterns``.
+    """
+    assert pattern.pattern.endswith(("\\Z", "\\z")), f"{name} anchors on $ rather than \\Z"
+    assert pattern.match("accept\n") is None
+
+
+def test_the_anchoring_check_has_subjects():
+    """A reflection-driven parametrize that finds nothing passes silently.
+
+    The whole value of ``module_patterns`` is that it needs no maintenance; the
+    cost is that a rename or a move makes it return ``[]`` and take its coverage
+    with it, with every test above still green.
+    """
+    assert len(module_patterns()) >= 2
 
 
 async def test_too_many_headers_are_refused(handler):
@@ -196,6 +292,23 @@ async def test_the_maximum_header_count_is_allowed(handler):
 
 async def test_headers_over_the_total_size_bound_are_refused(handler):
     await assert_refused(handler, command(headers={"x-big": "v" * MAX_REQUEST_HEADER_BYTES}))
+
+
+async def test_headers_exactly_at_the_total_size_bound_are_allowed(handler):
+    """The boundary the count bound already had a test for.
+
+    The per-header ``+4`` for ``": "`` and the CRLF makes this the easier of the
+    two bounds to get off by one, and it was the one without an at-the-limit case
+    (CR #7). ``len(name) + len(value) + 4`` must land on exactly
+    ``MAX_REQUEST_HEADER_BYTES``.
+    """
+    name = "x-big"
+    value = "v" * (MAX_REQUEST_HEADER_BYTES - len(name) - 4)
+    fetcher = FakeFetcher()
+
+    await handler(fetcher)(command(headers={name: value}))
+
+    assert fetcher.effect.headers == {name: value}
 
 
 # --------------------------------------------------------------------------- #

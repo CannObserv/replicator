@@ -114,8 +114,8 @@ own fingerprints.
 | `connection`, `keep-alive`, `proxy-connection`, `te`, `trailer`, `transfer-encoding`, `upgrade` | Hop-by-hop (RFC 9110 §7.6.1) — they describe one connection, which httpx and h11 own |
 | `host`, `content-length` | Not hop-by-hop: httpx derives both. Overriding `host` addresses one origin while contacting another |
 | Any `proxy-*` header | Configures the hop rather than the request |
-| A name that is not an RFC 9110 token | `user agent`, `user:agent`, an empty name, anything non-ASCII |
-| A value that cannot be sent verbatim | CR, LF, NUL, any other control character, anything above latin-1. A CRLF here is request splitting |
+| A name that is not an RFC 9110 token | `user agent`, `user:agent`, an empty name, anything non-ASCII — and a name with surrounding whitespace, which RFC 9110 forbids before the colon and which is therefore malformed rather than trimmable |
+| A value with any byte outside `\x20`–`\x7e` | Printable US-ASCII and SP only. Excludes CR, LF, NUL, every other control character, HTAB, and all of `obs-text` (`\x80`–`\xff`) — narrower than RFC 9110 permits, deliberately. A CRLF here is request splitting |
 | Two names differing only in case | Folding them would silently discard one. Refused even when the values agree — the rule is about the shape, not the values |
 | More than **32** headers, or more than **8192 bytes** of them | 8 KiB is the common origin-side limit (nginx, Apache), so past it the far end answers an opaque 400. The constants in [`src/worker/handler.py`](../../src/worker/handler.py) are authoritative |
 | `timeout_seconds` that is zero, negative, NaN, or infinite | Not a duration |
