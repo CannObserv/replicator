@@ -304,14 +304,14 @@ def build_handler(
                 "request_headers": sorted(options.headers or {}),
                 "request_timeout_seconds": options.timeout,
                 # Politeness, on the line that already exists rather than one of
-                # its own (CR #2, CR #3). _pace logs at DEBUG, which the root
-                # INFO level drops, so without these two a mechanism that caps
-                # per-host throughput would be entirely absent from the journal —
-                # an operator seeing a slow drain could not tell "waiting
-                # politely" from "origin is slow". `tracked_hosts` is the gauge
-                # that says how much of the corpus is currently under pacing.
+                # its own (CR #3): without it a mechanism that caps per-host
+                # throughput is absent from the journal, and an operator seeing a
+                # slow drain cannot tell "waiting politely" from "origin is
+                # slow". A per-fetch datum, correlated with duration_ms above —
+                # the *gauge* (how much of the corpus is under pacing) rides
+                # _pace's own line instead, so a slowly-changing number is not
+                # repeated once per command (CR #13).
                 "paced_seconds": paced_seconds,
-                "tracked_hosts": pacer.tracked_hosts,
             },
         )
 
@@ -546,9 +546,19 @@ async def _pace(
             f"{command.url} is inside its host's {wait:.1f}-second politeness window; "
             f"leaving it for the next reclaim"
         )
-    logger.debug(
+    # INFO, and only on the branch that actually waits (CR #13). At DEBUG this
+    # was invisible under the root INFO level; on every command it repeated a
+    # gauge that changes only when the corpus does. Here it appears exactly when
+    # the mechanism acts, which is when an operator wants it, and carries
+    # `tracked_hosts` as the periodic-ish gauge that has nowhere better to live —
+    # the sweep's line is the other candidate, and it is silent on an idle tree.
+    logger.info(
         "waiting out a host's politeness window",
-        extra={"command_id": command.command_id, "wait_seconds": wait},
+        extra={
+            "command_id": command.command_id,
+            "wait_seconds": wait,
+            "tracked_hosts": pacer.tracked_hosts,
+        },
     )
     await park(stop, wait)
     # park returns early on SIGTERM, and an interrupted wait is not an elapsed

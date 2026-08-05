@@ -52,9 +52,10 @@ class HostPacer:
     def tracked_hosts(self) -> int:
         """How many hosts currently hold an entry.
 
-        Reported on the byte path's success line beside ``paced_seconds``
-        (``handler.py``), so a rising figure is visible as the corpus widening
-        rather than inferred from throughput.
+        Reported on ``handler.py::_pace``'s log line — the branch that actually
+        waits — so a rising figure is visible as the corpus widening rather than
+        inferred from throughput, without repeating a slow gauge once per
+        command.
         """
         return len(self._last)
 

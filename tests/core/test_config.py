@@ -2,7 +2,10 @@
 
 from pathlib import Path
 
-from src.core.config import get_settings
+import pytest
+from pydantic import ValidationError
+
+from src.core.config import Settings, get_settings
 
 
 def test_defaults_match_the_shared_vm(monkeypatch):
@@ -87,3 +90,39 @@ def test_retention_env_overrides(monkeypatch):
     assert settings.blob_ttl_seconds == 60
     assert settings.blob_sweep_interval_seconds == 5
     assert settings.blob_max_total_bytes == 1024
+
+
+def test_the_pacing_default_matches_what_watcher_already_commits_to(monkeypatch):
+    """1.0s is Watcher's own DEFAULT_MIN_INTERVAL, and that is the whole argument.
+
+    The politeness *numbers* belong to the issuer under the boundaries charter,
+    so until the policy stream carries them the interim must not invent one. A
+    change here is a change to what the cluster promises origins (#12).
+    """
+    monkeypatch.delenv("REPLICATOR_MIN_HOST_INTERVAL_SECONDS", raising=False)
+
+    assert get_settings().min_host_interval_seconds == 1.0
+
+
+def test_pacing_can_be_disabled_and_configured(monkeypatch):
+    monkeypatch.setenv("REPLICATOR_MIN_HOST_INTERVAL_SECONDS", "0")
+    assert get_settings().min_host_interval_seconds == 0
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("REPLICATOR_MIN_HOST_INTERVAL_SECONDS", "2.5")
+    assert get_settings().min_host_interval_seconds == 2.5
+
+
+@pytest.mark.parametrize("value", ["-1", "7200"], ids=["negative", "over-the-cap"])
+def test_an_out_of_range_pacing_interval_fails_at_startup(monkeypatch, value):
+    """The cap has to bite where the comment says it does (CR #14).
+
+    Past an hour the command parks and re-parks without ever dead-lettering —
+    transient failures are exempt from the delivery ceiling — while the issuer's
+    reaper concludes loss. A fat-fingered extra zero must fail loudly at
+    construction rather than become a black hole that reads as healthy.
+    """
+    monkeypatch.setenv("REPLICATOR_MIN_HOST_INTERVAL_SECONDS", value)
+
+    with pytest.raises(ValidationError):
+        Settings()

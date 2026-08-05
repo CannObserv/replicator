@@ -121,6 +121,15 @@ def test_a_prune_that_reclaims_nothing_is_not_retried_every_record(clock, monkey
     retrying the O(n) rebuild on each subsequent record would make a full dict
     copy per message for as long as that lasts (CR #7). The retry waits until the
     oldest entry could plausibly have aged out.
+
+    **Why counting calls on a private attribute is safe here (CR #12).** The
+    worry about a spy like this is that a refactor stops going through the
+    patched attribute, leaving a test that passes while measuring nothing. The
+    ``prunes == 1`` assertion is what forecloses that: inline ``_prune``'s body
+    into ``record`` and this fails ``assert 0 == 1`` rather than passing.
+    Verified by doing exactly that, not by argument. The ``tracked_hosts``
+    assertions below say the same thing in observable terms, so a reader who
+    distrusts the spy still has the behaviour.
     """
     pacer = HostPacer(60.0, clock=clock)
     for n in range(MAX_TRACKED_HOSTS + 1):
@@ -139,8 +148,12 @@ def test_a_prune_that_reclaims_nothing_is_not_retried_every_record(clock, monkey
         pacer.record(f"https://later{n}.test/a")
 
     assert prunes == 0
+    # Observable half: nothing was reclaimable, so the set only grew — the bound
+    # is deliberately exceeded rather than honoured by forgetting a waiting host.
+    assert pacer.tracked_hosts == MAX_TRACKED_HOSTS + 11
 
     clock.advance(61.0)
     pacer.record("https://trigger.test/a")
 
     assert prunes == 1
+    assert pacer.tracked_hosts == 1
