@@ -116,7 +116,7 @@ would shard on.
 | `media_type` | `str` | Normalized, `charset` dropped; `application/octet-stream` when absent |
 | `url` | `str` | Echoed from the command. Confirmation and debugging only |
 | `command_id` | `str \| None` | Echoed from the command. `None` only for non-command emits |
-| `final_url` | `str \| None` | co-core ≥ 0.7.3. Where the fetch **landed** after redirects. `None` = *unknown*, see below |
+| `final_url` | `str \| None` | co-core ≥ 0.7.3 (model), **≥ 0.7.5 to be populated**. Where the fetch **landed** after redirects. `None` = *unknown*, see below |
 | `status_code` | `int \| None` | co-core ≥ 0.7.3. **Always 2xx on this fact** — see below |
 | `fetched_at` | `datetime \| None` | co-core ≥ 0.7.3. tz-aware UTC. When the bytes were on the **wire**, not when the fact was published |
 | `content_type_raw` | `str \| None` | co-core ≥ 0.7.3. The **verbatim** `Content-Type`, `charset` and all. `None` = *the origin sent none*, see below |
@@ -144,8 +144,8 @@ lives here rather than in Watcher. Three details are the whole value of them:
   first place. Three cases report `None`: an absent header, a blank or whitespace-only one
   ("present but empty" is not a distinction an issuer can act on), and a value longer than
   Replicator's `MAX_HEADER_VALUE_LENGTH`
-  ([`src/worker/handler.py`](../../src/worker/handler.py), currently 1024 characters — that
-  constant is the number, this document does not restate it). The last case is dropped rather
+  ([`src/worker/handler.py`](../../src/worker/handler.py); currently 1024 characters, and the
+  constant is authoritative). The last case is dropped rather
   than truncated because these are origin-controlled strings on a broadcast stream nothing trims,
   and a *truncated* ETag replayed in an `If-None-Match` is a validator that can never match,
   which is worse than none.
