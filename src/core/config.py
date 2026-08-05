@@ -176,6 +176,26 @@ class Settings(BaseSettings):
         default=64 * 1024 * 1024, validation_alias="REPLICATOR_MAX_BLOB_BYTES"
     )
 
+    # Ceiling on a command's own timeout_seconds (#11). Not a default — an
+    # omitted field still gets the fetch driver's 30s — but the most an issuer
+    # may ask for.
+    #
+    # A setting rather than a constant because the right value depends on the
+    # corpus, which is the argument for the field existing at all: small JSON
+    # endpoints and slow PDF-serving portals have no one right timeout.
+    #
+    # It is a guard, not a preference. The consume path reads count=1 and
+    # processes serially, so one command's timeout is a lien on every other
+    # command in the group — an unbounded value parks the whole worker.
+    #
+    # Bounded above by the unit's TimeoutStopSec, which must exceed this plus
+    # REPLICATOR_READ_BLOCK_MS plus an in-flight sweep: a fetch past that window
+    # is SIGKILLed mid-flight on every deploy. Changing one means revisiting the
+    # other (deploy/replicator.service).
+    max_fetch_timeout_seconds: float = Field(
+        default=120.0, validation_alias="REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS"
+    )
+
     log_level: str = Field(default="INFO", validation_alias="REPLICATOR_LOG_LEVEL")
 
     # Stamped by the systemd unit's ExecStartPre; "dev" outside systemd.

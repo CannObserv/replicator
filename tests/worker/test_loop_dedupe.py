@@ -79,3 +79,33 @@ async def test_a_dead_lettered_command_leaves_no_dedupe_key(fake_redis, consumer
     await process_one(fake_redis, consumer, settings, message, unreachable_handler)
 
     assert not await fake_redis.exists(f"{DEDUPE_KEY_PREFIX}cmd-future-2")
+
+
+async def test_request_options_are_not_part_of_the_command_identity(fake_redis, consumer, settings):
+    """MUST-1 survives #11: ``command_id`` alone is the identity, options included.
+
+    The redelivery here carries *different* headers, which is the direction that
+    could actually break — a dedupe key that folded in the options would treat
+    this as a new command and fetch twice for one occasion, while still passing
+    every test that varies only the ``command_id``.
+
+    The converse (two distinct ids, same URL, different options ⇒ two fetches)
+    needs no test: distinct ids are distinct keys by construction, and MUST-1
+    already requires the issuer to mint one per occasion.
+    """
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-opt", headers={"accept": "*/*"}))
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-opt", timeout_seconds=5))
+    calls: list[str] = []
+
+    async def handler(command: ContentFetchCommand) -> None:
+        calls.append(command.command_id)
+
+    first = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
+    assert await process_one(fake_redis, consumer, settings, first, handler) is Outcome.ACKED
+
+    second = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
+    assert await process_one(fake_redis, consumer, settings, second, unreachable_handler) is (
+        Outcome.DEDUPED
+    )
+
+    assert calls == ["cmd-opt"]

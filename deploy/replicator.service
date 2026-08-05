@@ -69,11 +69,18 @@ RestartSec=5
 # 5s by default) plus the handler's own budget, or systemd SIGKILLs mid-message
 # and forces a stale-claim round-trip that a clean restart has no reason to need.
 #
+# The handler's budget stopped being the fetch driver's own 30s in #11: a command
+# may now carry its own timeout_seconds, bounded by
+# REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS (120s by default). That ceiling and this
+# value are one decision — tests/test_deploy.py enforces the pairing, so raising
+# the ceiling without widening this window fails the suite rather than producing
+# a deploy that SIGKILLs every slow fetch.
+#
 # The retention sweep is a third term: it runs in asyncio.to_thread, which cannot
 # be cancelled, so shutdown waits out whatever walk is in flight. Fast at the
 # volumes the ceiling permits (REPLICATOR_BLOB_MAX_TOTAL_BYTES), but revisit this
 # alongside any change that lets the tree hold far more files.
-TimeoutStopSec=60
+TimeoutStopSec=180
 
 [Install]
 WantedBy=multi-user.target

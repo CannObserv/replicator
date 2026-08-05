@@ -65,6 +65,29 @@ scratch invocation above watches its own facts rather than production's. `--blob
 overrides that. One stream, both outcomes: an issuer needs a single consumer group to see
 whether its command produced bytes or a reason.
 
+`--header` and `--timeout` set the command's per-fetch request options (#11). They apply to
+every URL in the run, and omitting them is the pre-#11 wire exactly.
+
+```bash
+# Pin the User-Agent — the fingerprint-continuity case Watcher needs at cutover.
+# --header is repeatable; the name is case-insensitive (the worker folds it).
+uv run python -m scripts.seed_fetch \
+  --redis-url redis://localhost:6379/15 --topic replicator.itest.seed \
+  --header 'User-Agent: watcher/0.1.0' --header 'Accept: text/html' \
+  --timeout 5 --watch https://example.test/a
+
+# Exercise the refusal path: a Host override is refused before any request goes
+# out, closing the command as fetch_failed / invalid_request_options.
+uv run python -m scripts.seed_fetch \
+  --redis-url redis://localhost:6379/15 --topic replicator.itest.seed \
+  --header 'Host: elsewhere.test' --watch https://example.test/a
+```
+
+The script rejects a malformed `--header` and a repeated name (exit 2) but deliberately does
+**not** pre-empt the worker's refusal list — sending a refused header is how the refusal is
+exercised against a live worker. The full list is in
+[`docs/contracts/content-fetch-issuer-contract.md`](contracts/content-fetch-issuer-contract.md).
+
 Watch the other side with `sudo journalctl -u replicator -f`.
 
 ### Inspecting the consume path

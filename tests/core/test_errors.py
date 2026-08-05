@@ -45,6 +45,7 @@ def test_the_reason_tokens_are_the_wire_tokens():
     """
     assert {reason.value for reason in FailureReason} == {
         "http_status",
+        "invalid_request_options",
         "not_fetchable",
         "too_large",
         "unsupported_schema_version",

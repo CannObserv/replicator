@@ -39,3 +39,24 @@ def test_the_stop_timeout_outlasts_a_blocking_read():
     timeout_stop = float(_directive("TimeoutStopSec"))
 
     assert timeout_stop > settings.read_block_ms / 1000
+
+
+def test_the_stop_timeout_outlasts_the_slowest_fetch_a_command_may_ask_for():
+    """The second half of the #11 pairing.
+
+    A command carries its own ``timeout_seconds`` now, so the handler's budget is
+    no longer the driver's fixed 30s — it is whatever
+    ``REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS`` permits. A poll that starts just
+    before SIGTERM can therefore cost a full read window *plus* a full fetch, and
+    a grace period shorter than the sum SIGKILLs the worker mid-message on every
+    deploy that lands during a slow fetch — turning a routine restart into a
+    stale-claim round-trip.
+
+    Strictly greater, not equal: the sweep is a third term this cannot quantify
+    (it rides an uncancellable ``asyncio.to_thread``), so the margin is where it
+    lives.
+    """
+    settings = Settings()
+    timeout_stop = float(_directive("TimeoutStopSec"))
+
+    assert timeout_stop > settings.read_block_ms / 1000 + settings.max_fetch_timeout_seconds

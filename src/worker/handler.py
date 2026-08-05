@@ -6,8 +6,10 @@ this module's only vocabulary for influencing it is raising —
 message pending for the next reclaim.
 """
 
+import math
+import re
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
 import httpx
 from co_core.effects.bus import BusPublish
@@ -54,6 +56,80 @@ MAX_HEADER_VALUE_LENGTH = 1024
 # and the next reclaim brings it back a minute later.
 _RETRYABLE_STATUSES = frozenset({408, 429})
 
+# How many request headers a command may carry, and how many bytes they may add
+# up to on the wire (#11).
+#
+# Deliberately not MAX_HEADER_VALUE_LENGTH, which reasons about *response*
+# passthroughs riding a broadcast stream nothing trims — a different argument
+# that happens to land on a similar number. This bound is about what an origin
+# will accept: 8 KiB is the common server-side limit (nginx's
+# large_client_header_buffers, Apache's LimitRequestFieldSize), so exceeding it
+# earns an opaque 400 from the far end. Refusing locally turns that into a named
+# reason on a fact the issuer already consumes.
+#
+# Constants rather than settings: these bound an unauthenticated capability, and
+# a per-deployment knob is an invitation to loosen the one thing standing between
+# a bus writer and an arbitrary request.
+MAX_REQUEST_HEADERS = 32
+MAX_REQUEST_HEADER_BYTES = 8192
+
+# Request headers Replicator will not send on an issuer's behalf.
+#
+# Two groups, refused for different reasons and listed together because the
+# refusal is the same. The hop-by-hop set (RFC 9110 §7.6.1) describes a single
+# connection, not the request — httpx and h11 own it, and an issuer's value is
+# either ignored or corrupts the framing. `host` and `content-length` are not
+# hop-by-hop: httpx derives both, and overriding `host` in particular points the
+# request at one origin while addressing another (domain fronting) — precisely
+# the widening the contract's trust model says the broker, not this list, is
+# holding back.
+#
+# **Refused, not stripped.** Silently dropping one changes what the origin saw
+# with nothing the issuer can observe, which is the same failure the
+# reject-not-truncate rule exists to prevent, applied to the request side. It is
+# also the conservative direction: relaxing a refusal to a strip later stays
+# compatible, tightening a strip into a refusal does not.
+REFUSED_HEADERS = frozenset(
+    {
+        "connection",
+        "content-length",
+        "host",
+        "keep-alive",
+        "proxy-connection",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+    }
+)
+
+# Every Proxy-* header, refused as a family: they configure the hop rather than
+# the request, and enumerating them would date the list.
+_REFUSED_HEADER_PREFIX = "proxy-"
+
+# A field name is an RFC 9110 token. Matched against the *folded* name, so the
+# alphabetic range is lowercase only.
+_HEADER_NAME = re.compile(r"^[!#$%&'*+\-.^_`|~0-9a-z]+$")
+
+# A field value is VCHAR / obs-text, optionally separated by SP or HTAB — no
+# CR, no LF, no NUL, no other control character, nothing above latin-1. The
+# guard is not stylistic: a CRLF in a value is request splitting, and httpx
+# reports the rest as LocalProtocolError, an httpx.HTTPError that _fetch would
+# classify as *transient* — retried at the reclaim cadence forever, never closed.
+_HEADER_VALUE = re.compile(r"^[\x20-\x7e\x80-\xff]*$")
+
+
+class RequestOptions(NamedTuple):
+    """What the command asked the fetch itself to look like (#11).
+
+    ``None`` on both fields is the omitted-field shape and means the driver's own
+    defaults, unchanged — the compatibility promise the additive co-core fields
+    were designed around (cannobserv#272).
+    """
+
+    headers: dict[str, str] | None
+    timeout: float | None
+
 
 class Fetcher(Protocol):
     """The fetch seam — ``co_core_aio.fetch.AsyncFetchDriver`` in production."""
@@ -88,8 +164,13 @@ def build_handler(
     usage = usage if usage is not None else BlobUsage()
 
     async def handle(command: ContentFetchCommand) -> None:
+        # Ahead of the ceiling deliberately. Validation is pure and free; the
+        # ceiling raise is *transient* and parks the message in the PEL until a
+        # sweep frees space. A command that can never succeed must not wait a
+        # sweep interval to reach a conclusion available immediately.
+        options = _request_options(command, settings.max_fetch_timeout_seconds)
         _raise_for_ceiling(usage, settings.blob_max_total_bytes)
-        result = await _fetch(fetcher, command)
+        result = await _fetch(fetcher, command, options)
         # Stamped here rather than at publish: occurred_at is when the fact went
         # onto the bus, which under a reclaim is minutes after the bytes were on
         # the wire. This is the closest the handler can stand to that instant.
@@ -158,6 +239,13 @@ def build_handler(
                 # the wire instant — but not how long the origin took to give
                 # the bytes up, which stays journal-only.
                 "duration_ms": result.duration_ms,
+                # Names only, never values. The trust-model paragraph these
+                # guards answer to is specifically about an issuer attaching an
+                # Authorization header; logging its value would re-open the same
+                # exposure one layer down, in a journal a wider set of people
+                # read than can write to the bus.
+                "request_headers": sorted(options.headers or {}),
+                "request_timeout_seconds": options.timeout,
             },
         )
 
@@ -209,7 +297,113 @@ async def _publish(
         raise
 
 
-async def _fetch(fetcher: Fetcher, command: ContentFetchCommand) -> FetchResult:
+def _request_options(command: ContentFetchCommand, max_timeout: float) -> RequestOptions:
+    """Validate the command's per-fetch options and shape them for the driver.
+
+    Every refusal here is a :class:`PermanentFetchError`: an issuer that sent an
+    unsendable header will send it again on the next reclaim, and the guards
+    exist precisely so the issuer *hears* about it — through a terminal
+    ``fetch_failed`` naming ``invalid_request_options`` — rather than receiving
+    bytes fetched under conditions it did not ask for.
+    """
+    return RequestOptions(
+        headers=_request_headers(command.headers),
+        timeout=_request_timeout(command.timeout_seconds, max_timeout),
+    )
+
+
+def _request_headers(headers: dict[str, str] | None) -> dict[str, str] | None:
+    """Fold an issuer's headers to lowercase, refusing anything unsendable.
+
+    **The fold is what makes "issuer wins" true.** ``AsyncFetchDriver`` merges
+    ``{"user-agent": DEFAULT_USER_AGENT, **effect.headers}`` — a plain,
+    case-sensitive dict — so a capitalized ``User-Agent`` leaves *both* keys in
+    the mapping, and httpx does not resolve them: it puts **two** ``User-Agent``
+    field lines on the wire, the default first. Which one applies is then the
+    origin's decision (RFC 9110 lets it join repeated lines with a comma), so the
+    issuer's value is not overridden so much as adulterated. Verified against a
+    real driver and a real socket, not inferred. That is exactly the
+    fingerprint-continuity case Watcher needs at cutover (watcher#241), so it
+    cannot be left to chance.
+
+    A collision the fold would create is refused rather than resolved
+    last-wins — discarding one of two headers an issuer deliberately set is the
+    invisible change these guards exist to prevent, and "refuse only when the
+    values differ" would make the rule depend on the values instead of the shape.
+
+    Surrounding whitespace is dropped, not refused: RFC 9110 excludes OWS from a
+    field value, the same reading ``_passthrough`` applies to the response side.
+
+    ``None`` in, ``None`` out — an omitted field must reach the driver as the
+    absence it was, not as an empty mapping some future driver reads as
+    "send no headers".
+    """
+    if headers is None:
+        return None
+    if len(headers) > MAX_REQUEST_HEADERS:
+        raise _invalid_options(f"{len(headers)} headers, over the {MAX_REQUEST_HEADERS} allowed")
+
+    folded: dict[str, str] = {}
+    total = 0
+    for name, value in headers.items():
+        key = name.strip().lower()
+        if not _HEADER_NAME.match(key):
+            raise _invalid_options(f"{name!r} is not a valid header name")
+        if key in REFUSED_HEADERS or key.startswith(_REFUSED_HEADER_PREFIX):
+            raise _invalid_options(f"{key!r} is not a header Replicator will send")
+        if key in folded:
+            raise _invalid_options(f"{key!r} was given more than once, differing only in case")
+        stripped = value.strip()
+        if not _HEADER_VALUE.match(stripped):
+            raise _invalid_options(f"{key!r} has a value that cannot be sent verbatim")
+        # +4 for the ": " and the CRLF the value costs on the wire, so the bound
+        # measures what the origin will measure rather than the payload alone.
+        total += len(key) + len(stripped) + 4
+        if total > MAX_REQUEST_HEADER_BYTES:
+            raise _invalid_options(f"headers exceed the {MAX_REQUEST_HEADER_BYTES}-byte bound")
+        folded[key] = stripped
+    return folded
+
+
+def _request_timeout(timeout_seconds: float | None, maximum: float) -> float | None:
+    """Validate the command's timeout, or ``None`` for the driver's default.
+
+    Bounded above because the consume path is serial — ``read`` takes
+    ``count=1`` and the handler is awaited before the next poll — so a command's
+    timeout is a lien on every *other* command in the group, not only its own.
+    An unbounded value parks the worker for as long as the issuer likes, through
+    the same unauthenticated capability the header guards answer to.
+
+    Refused rather than clamped, for the reason the whole of #11 refuses rather
+    than adjusts: a silently shortened timeout produces a failure the issuer
+    cannot distinguish from a slow origin.
+    """
+    if timeout_seconds is None:
+        return None
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise _invalid_options(f"timeout_seconds={timeout_seconds!r} is not a duration")
+    if timeout_seconds > maximum:
+        raise _invalid_options(
+            f"timeout_seconds={timeout_seconds} is over the {maximum}-second ceiling"
+        )
+    return timeout_seconds
+
+
+def _invalid_options(detail: str) -> PermanentFetchError:
+    """The one refusal both option guards raise.
+
+    Built rather than raised so each call site reads as the ``raise`` it is, and
+    so the reason cannot drift between them.
+    """
+    return PermanentFetchError(
+        f"command request options refused: {detail}",
+        reason=FailureReason.INVALID_REQUEST_OPTIONS,
+    )
+
+
+async def _fetch(
+    fetcher: Fetcher, command: ContentFetchCommand, options: RequestOptions
+) -> FetchResult:
     """Fetch the command's URL, mapping httpx's failures into the loop's vocabulary.
 
     httpx's exception hierarchy is disjoint from the builtin ``ConnectionError`` /
@@ -222,7 +416,9 @@ async def _fetch(fetcher: Fetcher, command: ContentFetchCommand) -> FetchResult:
     not a URL will not become one on the next reclaim.
     """
     try:
-        return await fetcher.execute(FetchContent(command.url))
+        return await fetcher.execute(
+            FetchContent(command.url, headers=options.headers, timeout=options.timeout)
+        )
     except (httpx.UnsupportedProtocol, httpx.InvalidURL) as exc:
         raise PermanentFetchError(
             f"{command.url} is not fetchable: {exc}", reason=FailureReason.NOT_FETCHABLE

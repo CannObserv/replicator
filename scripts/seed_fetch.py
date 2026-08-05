@@ -44,9 +44,10 @@ import argparse
 import asyncio
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from co_core.effects.bus import BusPublish
 from co_core.pure.adapters.bus import streams
@@ -87,7 +88,11 @@ class SeedResult:
     bus_message_id: str
 
 
-def build_command(url: str) -> ContentFetchCommand:
+def build_command(
+    url: str,
+    headers: dict[str, str] | None = None,
+    timeout_seconds: float | None = None,
+) -> ContentFetchCommand:
     """Mint a command for one URL.
 
     The ``command_id`` is a ULID — the cluster's identifier convention — minted
@@ -97,12 +102,57 @@ def build_command(url: str) -> ContentFetchCommand:
     stable across runs would make every run after the first a no-op. Both are
     silent — the worker acks and fetches nothing. See
     ``docs/contracts/content-fetch-issuer-contract.md`` MUST-1.
+
+    ``headers`` / ``timeout_seconds`` apply to every URL in the run and default
+    to ``None`` — the omitted-field shape, which is the worker's pre-#11
+    behaviour exactly.
     """
     return ContentFetchCommand(
         occurred_at=datetime.now(UTC),
         command_id=str(ULID()),
         url=url,
+        headers=headers,
+        timeout_seconds=timeout_seconds,
     )
+
+
+class HeaderAction(argparse.Action):
+    """Collect repeated ``--header 'Name: value'`` into a mapping as they parse.
+
+    An action rather than a post-processing step so ``args.headers`` is the final
+    mapping everywhere it is read, and a malformed argument exits 2 through
+    argparse's own error path instead of a second hand-rolled one.
+
+    Splits on the **first** colon only: a value may contain one (a URL in a
+    ``Referer``, a port in a custom header) while a name may not.
+
+    A repeated name is a usage error rather than last-wins, because a dict would
+    otherwise swallow one silently — the same reasoning that makes the worker
+    refuse a case-collision (#11). What this deliberately does *not* do is
+    duplicate the worker's guard list: sending a refused header is how an
+    operator exercises the refusal against a live worker, and a script that
+    pre-empted it would leave that path testable only in the unit suite.
+    """
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: str | Sequence[Any] | None,
+        option_string: str | None = None,
+    ) -> None:
+        # The signature is argparse's, widened for every `nargs`. This action
+        # declares none, so argparse only ever hands over the single string.
+        value = str(values)
+        headers = getattr(namespace, self.dest, None) or {}
+        name, separator, header_value = value.partition(":")
+        name = name.strip()
+        if not separator or not name:
+            raise argparse.ArgumentError(self, f"{value!r} is not a 'Name: value' header")
+        if name.lower() in {existing.lower() for existing in headers}:
+            raise argparse.ArgumentError(self, f"{name!r} was given more than once")
+        headers[name] = header_value.strip()
+        setattr(namespace, self.dest, headers)
 
 
 def resolve_db(client: Redis) -> int:
@@ -152,6 +202,8 @@ async def publish(
     urls: list[str],
     *,
     on_published: Callable[[SeedResult], None] | None = None,
+    headers: dict[str, str] | None = None,
+    timeout_seconds: float | None = None,
 ) -> list[SeedResult]:
     """XADD one command per URL, in the order given.
 
@@ -159,11 +211,15 @@ async def publish(
     incrementally (CR #10). A command that has landed is in flight whether or not
     the rest of the loop succeeds — the live worker will fetch it — so a failure
     on URL two must not swallow the id of URL one.
+
+    ``headers`` / ``timeout_seconds`` are keyword-only and shared by every URL in
+    the run: this is the only issuer there is today, so it is also the only way
+    to exercise the worker's request-option path against a live broker (#11).
     """
     publisher = AsyncBusPublisher(client)
     results = []
     for url in urls:
-        command = build_command(url)
+        command = build_command(url, headers, timeout_seconds)
         result = await publisher.execute(BusPublish(topic, to_wire(command)))
         published = SeedResult(command.command_id, url, result.bus_message_id)
         results.append(published)
@@ -310,6 +366,23 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--header",
+        action=HeaderAction,
+        dest="headers",
+        default=None,
+        metavar="'Name: value'",
+        help="request header to attach to every command; repeatable (#11)",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        dest="timeout_seconds",
+        help=(
+            "per-fetch timeout in seconds for every command (default: the worker's driver default)"
+        ),
+    )
+    parser.add_argument(
         "--watch-timeout",
         type=float,
         default=DEFAULT_WATCH_TIMEOUT_SECONDS,
@@ -318,10 +391,21 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _print_dry_run(topic: str, urls: list[str]) -> None:
-    """Show the wire frames without publishing them."""
+def _print_dry_run(
+    topic: str,
+    urls: list[str],
+    headers: dict[str, str] | None = None,
+    timeout_seconds: float | None = None,
+) -> None:
+    """Show the wire frames without publishing them.
+
+    The options ride inside the printed ``payload``, which is the point of
+    showing the frame rather than a summary: an operator checking a header
+    against what the worker will refuse should read the value that will actually
+    travel, after this script's own stripping.
+    """
     for url in urls:
-        command = build_command(url)
+        command = build_command(url, headers, timeout_seconds)
         print(f"would publish to {topic}: {to_wire(command)}")
 
 
@@ -391,7 +475,14 @@ async def _seed(client: Redis, args: argparse.Namespace) -> int:
             return 1
 
     try:
-        await publish(client, args.topic, args.urls, on_published=report)
+        await publish(
+            client,
+            args.topic,
+            args.urls,
+            on_published=report,
+            headers=args.headers,
+            timeout_seconds=args.timeout_seconds,
+        )
     except (RedisError, OSError) as exc:
         print(
             f"error: publishing to {args.topic} failed after {len(published)} of "
@@ -468,7 +559,7 @@ def main(argv: list[str] | None = None) -> int:
     """Parse arguments and run; the dry run never opens a connection."""
     args = build_parser().parse_args(argv)
     if args.dry_run:
-        _print_dry_run(args.topic, args.urls)
+        _print_dry_run(args.topic, args.urls, args.headers, args.timeout_seconds)
         return 0
     return asyncio.run(run(args))
 
