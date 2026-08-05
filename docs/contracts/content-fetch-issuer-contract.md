@@ -123,12 +123,6 @@ would shard on.
 | `etag` | `str \| None` | co-core ≥ 0.7.3. Verbatim, `W/` prefix and quotes included. Replay unparsed in `If-None-Match` |
 | `last_modified` | `str \| None` | co-core ≥ 0.7.3. Verbatim, unparsed. Replay in `If-Modified-Since` |
 
-"Verbatim" on those three means *verbatim apart from surrounding whitespace*, which RFC 9110
-excludes from a field value (it is optional whitespace around it, not part of it). Nothing inside
-the value is touched — no case folding, no quote stripping, no date parsing. A header whose value
-is blank or whitespace-only is reported as `None`, since "present but empty" is not a distinction
-an issuer can act on. A value over 1024 characters is reported as `None` as well; see below.
-
 The six enriched fields (cannobserv#271, `final_url` sourced by cannobserv#279, produced by #10)
 carry what Replicator holds at publish time and a broadcast consumer cannot recover once fetching
 lives here rather than in Watcher. Three details are the whole value of them:
@@ -143,10 +137,18 @@ lives here rather than in Watcher. Three details are the whole value of them:
 - **`status_code` is always 2xx here.** Every other status closes the command as a `fetch_failed`
   instead, so this field distinguishes 200 from 203 or 206 — it is not a success/failure branch,
   and a branch written as `if status_code == 200` will silently drop a 203.
-- **An absurd header value is dropped, not truncated.** Replicator refuses to carry a
-  `Content-Type` / `ETag` / `Last-Modified` over 1024 characters and sends `None` instead: these
-  are origin-controlled strings on a broadcast stream nothing trims, and a *truncated* ETag
-  replayed in an `If-None-Match` is a validator that can never match, which is worse than none.
+- **"Verbatim" excludes surrounding whitespace, and an absurd value is dropped rather than
+  truncated.** On the three header passthroughs — `content_type_raw`, `etag`, `last_modified` —
+  nothing *inside* the value is touched: no case folding, no quote stripping, no date parsing.
+  What is stripped is the whitespace around it, which RFC 9110 excludes from a field value in the
+  first place. Three cases report `None`: an absent header, a blank or whitespace-only one
+  ("present but empty" is not a distinction an issuer can act on), and a value longer than
+  Replicator's `MAX_HEADER_VALUE_LENGTH`
+  ([`src/worker/handler.py`](../../src/worker/handler.py), currently 1024 characters — that
+  constant is the number, this document does not restate it). The last case is dropped rather
+  than truncated because these are origin-controlled strings on a broadcast stream nothing trims,
+  and a *truncated* ETag replayed in an `If-None-Match` is a validator that can never match,
+  which is worse than none.
 
 > **These are per-*occasion* values on a fingerprint-keyed fact.** They describe the fetch that
 > produced this fact, not the bytes — which is why MUST-5 matters more now than it did. Two

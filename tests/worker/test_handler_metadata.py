@@ -21,6 +21,15 @@ import pytest
 from src.worker.handler import MAX_HEADER_VALUE_LENGTH
 from tests.worker.conftest import URL, FakeFetcher, command, fetch_result, published_facts
 
+# Each header the handler passes through, paired with the field it lands on.
+# Kept as one table so the case-insensitivity test can assert the mapping and
+# the *absence* of the other two in the same pass.
+PASSTHROUGHS = [
+    ("ETag", "etag"),
+    ("Last-Modified", "last_modified"),
+    ("Content-Type", "content_type_raw"),
+]
+
 
 async def test_the_landing_url_is_passed_through(handler, fake_redis):
     """The redirect chain is the whole point: Watcher derives its rate-limiter
@@ -156,13 +165,6 @@ async def test_absent_validators_stay_none(handler, fake_redis):
     assert fact.last_modified is None
 
 
-PASSTHROUGHS = [
-    ("ETag", "etag"),
-    ("Last-Modified", "last_modified"),
-    ("Content-Type", "content_type_raw"),
-]
-
-
 @pytest.mark.parametrize(("name", "attribute"), PASSTHROUGHS)
 async def test_the_passthroughs_are_found_case_insensitively(handler, fake_redis, name, attribute):
     """``FetchResult.headers`` is a plain ``Mapping[str, str]`` with no
@@ -179,7 +181,7 @@ async def test_the_passthroughs_are_found_case_insensitively(handler, fake_redis
 
     (fact,) = await published_facts(fake_redis)
     assert getattr(fact, attribute) == "value"
-    assert [getattr(fact, other) for _, other in PASSTHROUGHS if other != attribute] == [None, None]
+    assert all(getattr(fact, other) is None for _, other in PASSTHROUGHS if other != attribute)
 
 
 async def test_an_absurdly_long_header_value_is_dropped_not_truncated(handler, fake_redis):
