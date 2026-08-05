@@ -173,5 +173,11 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now replicator
 
 uv sync --frozen && sudo systemctl restart replicator   # after merging to main
+
+# The installed unit is a COPY, not a symlink — a merge that touched
+# deploy/replicator.service needs the cp above re-run before the reload, or the
+# worker comes up on new code under the old unit with nothing to show for it.
+diff /etc/systemd/system/replicator.service deploy/replicator.service
+
 sudo journalctl -u replicator -f
 ```

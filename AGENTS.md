@@ -115,10 +115,14 @@ The **redis-py client** resolves `>=5,<8` transitively via `co-core-aio[bus]`. D
 | Code committed to main | `uv sync --frozen && sudo systemctl restart replicator` |
 | Testing a worktree/branch | `uv run python -m src.worker.main` (set a distinct `REPLICATOR_CONSUMER_NAME`) |
 | Debugging the live service | `sudo journalctl -u replicator -f` |
-| After editing `deploy/replicator.service` | `sudo systemctl daemon-reload && sudo systemctl restart replicator` |
+| After editing `deploy/replicator.service` | `sudo cp deploy/replicator.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart replicator` |
 | After a co-core version bump | re-run `sync_wheelhouse.py`, then `uv sync` |
 
 `ExecStart` uses `--frozen --no-sync`, so dependency sync is a deploy step, not a service-start side effect.
+
+**`/etc/systemd/system/replicator.service` is a *copy*, not a symlink to `deploy/`.** So the `cp` above is load-bearing and `daemon-reload` alone silently does nothing — systemd re-reads the installed file, which is still the old one. The failure has no symptom at restart: the worker comes up on the new code under the *old* unit, and the mismatch only surfaces the first time a directive actually matters. Nothing guards it, either — `tests/test_deploy.py` reads the repo file, which is exactly the copy that is still correct. Diff the two when a restart follows a unit edit (#11 deploy).
+
+The copy is deliberate, for the same reason `/etc/replicator/.env` is not read from the repo: the live unit must survive a repo reset, a worktree switch, or a branch checkout that happens to be mid-edit.
 
 **Dev server workflow** (the `/health` app, port 8041 so a future live service stays up):
 
