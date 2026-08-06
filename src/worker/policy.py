@@ -378,6 +378,9 @@ async def run_policy_reader(
                 # the backoff escalates to its cap and damps the logging with
                 # it.
                 consecutive_failures += 1
+                # Nothing was stepped over, so the run of successful skips is
+                # broken — the other counter starts again (CR #25).
+                skips = 0
                 await _backoff(stop, settings, consecutive_failures)
                 continue
             # A frame the broker served fine and co-core could not decode. That

@@ -72,13 +72,21 @@ async def test_two_requests_to_one_host_are_actually_spaced(paced):
     assert loop.time() - started >= 0.2
 
 
-async def test_a_wait_longer_than_the_bound_parks_the_message(paced, fake_redis):
+async def test_a_wait_longer_than_the_bound_parks_the_message(paced, fake_redis, clock):
     """Transient, so the delivery ceiling is not burned for being polite.
 
     The command comes back through ``claim_stale`` — the same idiom the disk
     ceiling uses, and the reason a paced command can never dead-letter for pacing.
+
+    On the injected clock, not the real one (CR #24). The wait is the *remainder*
+    of the interval and the message formats it to one decimal, so with a live
+    clock the first handler's store-and-publish spending 50ms turns
+    ``60.0-second`` into ``59.9-second`` and this fails — about one run in ten,
+    and it fails identically to a real regression in the wait calculation.
+    Freezing the clock makes the number exact by construction, which is what
+    ``test_the_pacer_reports_the_remaining_wait`` below already does.
     """
-    handler, fetcher = paced(HostPacer(60.0), park_above_seconds=5.0)
+    handler, fetcher = paced(HostPacer(60.0, clock=clock), park_above_seconds=5.0)
     await handler(command("cmd-1"))
 
     with pytest.raises(TransientFetchError, match="60.0-second"):

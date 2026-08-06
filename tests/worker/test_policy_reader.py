@@ -18,8 +18,8 @@ from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
 from co_core.pure.models.changes import FetchPolicyState
 
 from src.core.config import get_settings
+from src.worker.loop import MAX_POISON_SKIPS
 from src.worker.policy import (
-    MAX_POISON_SKIPS,
     FetchPolicyMap,
     build_policy_reader,
     replay_policies,
