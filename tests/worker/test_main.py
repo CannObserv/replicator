@@ -561,7 +561,12 @@ async def test_the_policy_map_is_rebuilt_before_the_consume_loop_starts(
 ):
     """Started as a peer, the loop would fetch its opening commands against an
     empty map and pace every host at the fallback — safe only because the
-    fallback is supposed to be the stricter number."""
+    fallback is supposed to be the stricter number.
+
+    Not ``_stopped()``: since CR #13 the replay honours the stop event, so a
+    pre-set one correctly skips it. The stubbed consume loop returning is what
+    ends the run here instead.
+    """
     monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
     monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
     await fake_redis.xadd(
@@ -583,7 +588,7 @@ async def test_the_policy_map_is_rebuilt_before_the_consume_loop_starts(
     monkeypatch.setattr("src.worker.main.FetchPolicyMap", recording_map)
     monkeypatch.setattr("src.worker.main.run_loop", recording_run_loop)
 
-    await run(_stopped())
+    await run(asyncio.Event())
 
     assert seen["at_loop_start"] == 30.0
 

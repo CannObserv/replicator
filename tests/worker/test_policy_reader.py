@@ -14,10 +14,12 @@ import asyncio
 
 import pytest
 from co_core.pure.adapters.bus.envelope import to_wire
+from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
 from co_core.pure.models.changes import FetchPolicyState
 
 from src.core.config import get_settings
 from src.worker.policy import (
+    MAX_POISON_SKIPS,
     FetchPolicyMap,
     build_policy_reader,
     replay_policies,
@@ -81,7 +83,9 @@ async def test_replay_reads_from_the_beginning_of_the_stream(fake_redis, policie
     await publish(fake_redis, TOPIC, "slow.test", 30.0)
     await publish(fake_redis, TOPIC, "fast.test", 0.5)
 
-    await replay_policies(build_policy_reader(fake_redis, topic=TOPIC), policies)
+    await replay_policies(
+        build_policy_reader(fake_redis, topic=TOPIC), policies, stop=asyncio.Event()
+    )
 
     assert policies.interval_for("slow.test") == 30.0
     assert policies.interval_for("fast.test") == 0.5
@@ -89,7 +93,9 @@ async def test_replay_reads_from_the_beginning_of_the_stream(fake_redis, policie
 
 async def test_replay_of_an_empty_stream_leaves_an_empty_map(fake_redis, policies):
     """No stream yet is not an error — the producer may not have started."""
-    await replay_policies(build_policy_reader(fake_redis, topic=TOPIC), policies)
+    await replay_policies(
+        build_policy_reader(fake_redis, topic=TOPIC), policies, stop=asyncio.Event()
+    )
 
     assert policies.tracked_hosts == 0
 
@@ -99,7 +105,9 @@ async def test_replay_reports_what_it_rebuilt(fake_redis, policies, caplog):
     await publish(fake_redis, TOPIC, "slow.test")
 
     with caplog.at_level("INFO"):
-        await replay_policies(build_policy_reader(fake_redis, topic=TOPIC), policies)
+        await replay_policies(
+            build_policy_reader(fake_redis, topic=TOPIC), policies, stop=asyncio.Event()
+        )
 
     record = next(r for r in caplog.records if r.message == "fetch policy replay complete")
     assert record.tracked_hosts == 1
@@ -115,7 +123,7 @@ async def test_replay_leaves_the_cursor_where_the_tail_picks_up(fake_redis, poli
     can land on the wrong side of — and nothing already applied is applied twice."""
     reader = build_policy_reader(fake_redis, topic=TOPIC)
     await publish(fake_redis, TOPIC, "slow.test", 30.0)
-    await replay_policies(reader, policies)
+    await replay_policies(reader, policies, stop=asyncio.Event())
 
     await publish(fake_redis, TOPIC, "later.test", 12.0)
     for message in await reader.read(count=1):
@@ -171,7 +179,7 @@ async def test_a_malformed_frame_does_not_block_the_ones_behind_it(
     await publish(fake_redis, TOPIC, "slow.test", 30.0)
     reader = build_policy_reader(fake_redis, topic=TOPIC)
 
-    await replay_policies(reader, policies)
+    await replay_policies(reader, policies, stop=asyncio.Event())
     stop = asyncio.Event()
     task = asyncio.create_task(
         run_policy_reader(reader, policies=policies, settings=fast_settings, stop=stop)
@@ -187,7 +195,9 @@ async def test_a_malformed_frame_is_reported(fake_redis, policies, caplog):
     await fake_redis.xadd(TOPIC, {"not": "a frame"})
 
     with caplog.at_level("WARNING"):
-        await replay_policies(build_policy_reader(fake_redis, topic=TOPIC), policies)
+        await replay_policies(
+            build_policy_reader(fake_redis, topic=TOPIC), policies, stop=asyncio.Event()
+        )
 
     assert "skipping a malformed frame" in caplog.text
 
@@ -213,7 +223,7 @@ async def test_a_failed_replay_does_not_stop_the_boot(policies, caplog):
     decoded: the tail resumes from the same place and drains the rest.
     """
     with caplog.at_level("ERROR"):
-        await replay_policies(BrokenReader(), policies)
+        await replay_policies(BrokenReader(), policies, stop=asyncio.Event())
 
     assert "could not finish replaying the fetch policy stream" in caplog.text
 
@@ -294,8 +304,102 @@ async def test_replay_keeps_the_policies_it_read_before_a_poison_frame(fake_redi
     await fake_redis.xadd(TOPIC, {"not": "a frame"})
     await publish(fake_redis, TOPIC, "behind.test", 12.0)
 
-    await replay_policies(build_policy_reader(fake_redis, topic=TOPIC), policies)
+    await replay_policies(
+        build_policy_reader(fake_redis, topic=TOPIC), policies, stop=asyncio.Event()
+    )
 
     assert policies.interval_for("ahead.test") == 30.0
     # And it drains past the poison rather than stopping there.
     assert policies.interval_for("behind.test") == 12.0
+
+
+# --------------------------------------------------------------------------- #
+# Bounded, interruptible recovery (CR #13, #14, #15).
+# --------------------------------------------------------------------------- #
+
+
+class PoisonReader:
+    """A reader whose every frame is undecodable. Counts reads and seeks."""
+
+    def __init__(self, *, message_id: str = "1-1") -> None:
+        self.reads = 0
+        self.seeks: list[str] = []
+        self._message_id = message_id
+
+    async def read(self, *, count: int, block_ms: int | None = None):
+        self.reads += 1
+        raise BusMessageAnomaly("undecodable", topic=TOPIC, message_id=self._message_id)
+
+    def seek(self, message_id: str) -> None:
+        self.seeks.append(message_id)
+
+
+async def test_replay_stops_when_the_worker_is_asked_to(fake_redis, policies):
+    """A SIGTERM during boot must not wait out an unbounded replay.
+
+    Replay length is the producer's business — the charter asks it to MAXLEN the
+    stream and Replicator cannot enforce that — so an untrimmed stream is one
+    round trip per historical entry at ``count=1``. Ignoring the stop event
+    until that finishes is a worker systemd ends up killing.
+    """
+    await publish(fake_redis, TOPIC, "slow.test", 30.0)
+    stop = asyncio.Event()
+    stop.set()
+
+    await replay_policies(build_policy_reader(fake_redis, topic=TOPIC), policies, stop=stop)
+
+    assert policies.tracked_hosts == 0
+
+
+async def test_replay_gives_up_on_a_run_of_malformed_frames(policies, caplog):
+    """Unbounded skipping in the boot path spins at broker round-trip speed."""
+    reader = PoisonReader()
+    stop = asyncio.Event()
+
+    with caplog.at_level("WARNING"):
+        await replay_policies(reader, policies, stop=stop)
+
+    assert reader.reads == MAX_POISON_SKIPS
+    assert "gave up replaying" in caplog.text
+
+
+async def test_the_tail_paces_itself_through_a_run_of_malformed_frames(
+    policies, fast_settings, caplog
+):
+    """The tail cannot give up — it is the worker's task — so it parks instead.
+
+    Without the bound a producer emitting garbage spins this loop at broker
+    speed forever: an anomaly is not a broker failure, so it clears the outage
+    counter (CR #9) and backoff never engages.
+    """
+    reader = PoisonReader()
+    stop = asyncio.Event()
+    task = asyncio.create_task(
+        run_policy_reader(reader, policies=policies, settings=fast_settings, stop=stop)
+    )
+    try:
+        with caplog.at_level("WARNING"):
+            await until(lambda: "malformed frames in a row" in caplog.text)
+    finally:
+        stop.set()
+        await task
+
+
+async def test_a_poison_frame_with_no_id_is_not_seeked_past(policies, caplog):
+    """``BusMessageAnomaly.message_id`` defaults to ``"?"`` rather than being
+    required, and a ``"?"`` cursor wedges every later read with a redis
+    ``ResponseError`` — absorbed, backed off on forever, and silent.
+
+    Not reachable through today's driver, which always passes a real id. Guarded
+    for the same reason ``loop.py``'s transient tuple carries its co-core NOTE:
+    the cost of the guard is two lines and the cost of the failure is a policy
+    map frozen until someone restarts the worker.
+    """
+    reader = PoisonReader(message_id="?")
+    stop = asyncio.Event()
+
+    with caplog.at_level("ERROR"):
+        await replay_policies(reader, policies, stop=stop)
+
+    assert reader.seeks == []
+    assert "cannot skip past a malformed frame" in caplog.text

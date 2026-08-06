@@ -71,7 +71,7 @@ async def test_replay_then_tail_against_a_real_stream(real_redis, policy_topic, 
     reader = build_policy_reader(real_redis, topic=policy_topic)
     policies = FetchPolicyMap(DEFAULT)
 
-    await replay_policies(reader, policies)
+    await replay_policies(reader, policies, stop=asyncio.Event())
     assert policies.interval_for("before.test") == 30.0
 
     stop = asyncio.Event()
@@ -101,7 +101,7 @@ async def test_tailing_the_stream_creates_no_consumer_group(real_redis, policy_t
     await publish(real_redis, policy_topic, "slow.test", 30.0)
     reader = build_policy_reader(real_redis, topic=policy_topic)
     policies = FetchPolicyMap(DEFAULT)
-    await replay_policies(reader, policies)
+    await replay_policies(reader, policies, stop=asyncio.Event())
 
     stop = asyncio.Event()
     task = asyncio.create_task(
@@ -122,7 +122,9 @@ async def test_the_read_really_blocks(real_redis, policy_topic, settings):
         to_wire(FetchPolicyState(occurred_at=now(), host="seed.test", min_interval_seconds=1.0)),
     )
     reader = build_policy_reader(real_redis, topic=policy_topic)
-    await reader.replay(count=1)
+    # read, not replay: the module removed `replay` from its seam as unsafe
+    # (CR #1), so nothing here should demonstrate the call (CR #18).
+    await reader.read(count=1)
 
     started = time.monotonic()
     assert await reader.read(count=1, block_ms=500) == []
@@ -162,7 +164,9 @@ async def test_a_malformed_frame_on_a_real_stream_is_skipped(real_redis, policy_
     await publish(real_redis, policy_topic, "behind.test", 30.0)
     policies = FetchPolicyMap(DEFAULT)
 
-    await replay_policies(build_policy_reader(real_redis, topic=policy_topic), policies)
+    await replay_policies(
+        build_policy_reader(real_redis, topic=policy_topic), policies, stop=asyncio.Event()
+    )
 
     assert policies.interval_for("ahead.test") == 5.0
     assert policies.interval_for("behind.test") == 30.0

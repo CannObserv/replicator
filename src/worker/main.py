@@ -325,7 +325,7 @@ async def run(
         # call at boot, so this adds a round trip, not a new failure mode.
         policies = FetchPolicyMap(settings.min_host_interval_seconds)
         policy_reader = build_policy_reader(client, topic=policy_topic)
-        await replay_policies(policy_reader, policies)
+        await replay_policies(policy_reader, policies, stop=stop)
         await _run_until_first_exit(
             run_loop(
                 client=client,

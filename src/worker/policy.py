@@ -63,6 +63,18 @@ logger = get_logger(__name__)
 # get right today and easy to break on the next edit.
 READ_COUNT = 1
 
+# Consecutive undecodable frames stepped over before the reader pauses (replay
+# gives up, the tail parks). Mirrors ``loop.py``'s ``MAX_POISON_SKIPS`` and
+# exists for the same reason: skipping is cheap enough per frame to hide that an
+# unbounded run of them is a hot loop against the broker. Sharper here, because
+# an anomaly clears the outage counter, so backoff can never engage on a run.
+MAX_POISON_SKIPS = 10
+
+# What ``BusMessageAnomaly.__init__`` puts in ``message_id`` when the raiser did
+# not supply one. A sentinel, not an id — seeking to it wedges the cursor. See
+# ``_skip_poison``.
+_UNKNOWN_MESSAGE_ID = "?"
+
 
 class PolicyReader(Protocol):
     """The read seam — ``AsyncBusTailReader`` in production.
@@ -253,7 +265,9 @@ def build_policy_reader(client: Redis, *, topic: str) -> AsyncBusTailReader:
     return AsyncBusTailReader(client, topic=topic)
 
 
-async def replay_policies(reader: PolicyReader, policies: FetchPolicyMap) -> None:
+async def replay_policies(
+    reader: PolicyReader, policies: FetchPolicyMap, *, stop: asyncio.Event
+) -> None:
     """Rebuild the map from the stream, before the worker fetches anything.
 
     Runs synchronously at boot rather than as the first pass of the tail task:
@@ -275,14 +289,36 @@ async def replay_policies(reader: PolicyReader, policies: FetchPolicyMap) -> Non
     lost policy is indistinguishable from one that was never published. Applying
     each batch as it arrives means nothing already read can be thrown away, and
     it lets a poison frame be stepped over instead of ending the replay.
+
+    ``stop`` is **required**, not defaulted (CR #13). How long this runs is the
+    producer's business — the charter asks it to ``MAXLEN`` the stream and
+    Replicator cannot enforce that, so an untrimmed one is a round trip per
+    historical entry. Signal handlers are already installed by the time this is
+    called, so a SIGTERM here sets the event and would otherwise be ignored
+    until the replay finished, leaving systemd to ``SIGKILL`` at
+    ``TimeoutStopSec``. A default would make "uninterruptible" the outcome of
+    forgetting to wire one.
     """
     started = time.monotonic()
     messages = 0
-    while True:
+    skips = 0
+    while not stop.is_set():
         try:
             batch = await reader.read(count=READ_COUNT)
         except BusMessageAnomaly as exc:
-            _skip_poison(reader, exc)
+            if not _skip_poison(reader, exc):
+                break
+            skips += 1
+            if skips >= MAX_POISON_SKIPS:
+                # Bounded for the same reason loop.py bounds its recovery pass:
+                # unbounded skipping spins at broker round-trip speed. Giving up
+                # is safe here and not in the tail, because the tail is still
+                # running and resumes from this exact cursor.
+                logger.warning(
+                    "gave up replaying the fetch policy stream after a run of malformed frames",
+                    extra={"skipped": skips, "messages": messages},
+                )
+                break
             continue
         except Exception as exc:
             # Whatever has been applied so far stands, and the tail resumes from
@@ -292,6 +328,7 @@ async def replay_policies(reader: PolicyReader, policies: FetchPolicyMap) -> Non
                 extra={"error": f"{type(exc).__name__}: {exc}", "messages": messages},
             )
             break
+        skips = 0
         if not batch:
             break
         for message in batch:
@@ -332,6 +369,7 @@ async def run_policy_reader(
     is the same quantity, a poll cycle that raised.
     """
     consecutive_failures = 0
+    skips = 0
     while not stop.is_set():
         try:
             messages = await reader.read(count=READ_COUNT, block_ms=settings.read_block_ms)
@@ -341,7 +379,19 @@ async def run_policy_reader(
             # counter rather than leaving the next real failure to resume
             # backoff from an exponent nothing is still waiting on (CR #9).
             consecutive_failures = 0
-            _skip_poison(reader, exc)
+            skips += 1
+            # Which is exactly why the run needs its own bound (CR #14): with
+            # backoff cleared and no blocking read reached, a producer emitting
+            # garbage would spin this loop at broker round-trip speed forever.
+            # Unlike the replay, this task cannot give up — returning would end
+            # the worker — so it paces itself and keeps going.
+            if not _skip_poison(reader, exc) or skips >= MAX_POISON_SKIPS:
+                logger.warning(
+                    "pausing the fetch policy tail after malformed frames in a row",
+                    extra={"skipped": skips, "message_id": exc.message_id},
+                )
+                skips = 0
+                await park(stop, IDLE_SLEEP_SECONDS)
             continue
         # No CancelledError branch: it is a BaseException, so shutdown propagates
         # through the clause below untouched — the same reason process_message
@@ -365,6 +415,7 @@ async def run_policy_reader(
             )
             continue
         consecutive_failures = 0
+        skips = 0
         for message in messages:
             policies.apply(message.payload)
         if not messages:
@@ -374,16 +425,34 @@ async def run_policy_reader(
             await park(stop, IDLE_SLEEP_SECONDS)
 
 
-def _skip_poison(reader: PolicyReader, exc: BusMessageAnomaly) -> None:
-    """Advance past a frame that will never decode.
+def _skip_poison(reader: PolicyReader, exc: BusMessageAnomaly) -> bool:
+    """Advance past a frame that will never decode. ``False`` if it could not.
 
     With no group there is no ``ack`` to move past one, so the cursor has to be
     forced or the next read redelivers the same frame and raises forever. Safe to
     seek straight to it only because reads are ``count=1``: there is no
     well-formed prefix behind it to skip.
+
+    **The id is checked rather than trusted (CR #15).**
+    ``BusMessageAnomaly.__init__`` *defaults* ``message_id`` to ``"?"`` instead
+    of requiring it, and seeking to that wedges the reader permanently: every
+    later read raises ``ResponseError: Invalid stream ID``, which this task
+    absorbs and backs off on forever while the map silently freezes at whatever
+    it last held. Not reachable through today's driver —
+    ``AsyncBusTailReader.read`` always passes a real id — so this is a co-core
+    coupling of the same kind as the NOTE on ``loop.py``'s transient-error
+    tuple, guarded because the guard is two lines and the failure has no local
+    symptom and no recovery short of a restart.
     """
+    if not exc.message_id or exc.message_id == _UNKNOWN_MESSAGE_ID:
+        logger.error(
+            "cannot skip past a malformed frame on the fetch policy stream: it carries no id",
+            extra={"topic": exc.topic, "error": str(exc)},
+        )
+        return False
     logger.warning(
         "skipping a malformed frame on the fetch policy stream",
         extra={"message_id": exc.message_id, "error": str(exc)},
     )
     reader.seek(exc.message_id)
+    return True

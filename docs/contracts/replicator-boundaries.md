@@ -170,10 +170,27 @@ Four consumer-side rules that came out of building it, each one a way to be wron
   applied `occurred_at` per host and applies on `>=` — `>=` rather than `>` so a full set
   stamped with one instant does not lose every host after the first.
 
-And one that is about the frame rather than the policy: **`from_wire`'s dispatch table is
-global**, so a `blob_available` XADDed here decodes *cleanly* into the wrong model rather than
-raising. There is no anomaly to recover from, no group, and nothing to dead-letter — the only
-defence is an `isinstance` check before destructuring, exactly as the command path does.
+And two that are about the frame rather than the policy:
+
+- **`from_wire`'s dispatch table is global**, so a `blob_available` XADDed here decodes *cleanly*
+  into the wrong model rather than raising. There is no anomaly to recover from, no group, and
+  nothing to dead-letter — the only defence is an `isinstance` check before destructuring,
+  exactly as the command path does.
+- **`AsyncBusTailReader.replay()` cannot be used to do the replay.** It accumulates across many
+  `read` calls and returns its list only on a clean finish, so any raise part-way through
+  discards everything it read while the cursor has already advanced — a poison frame at position
+  *k* silently loses the *k−1* policies ahead of it, permanently, and on a last-write-wins stream
+  a lost policy is indistinguishable from one never published. Drive `read` and apply each batch
+  as it arrives. Recorded here and not only in the code because the next consumer of this stream —
+  or of any future config/state stream — will reach for the method whose name says what they
+  want. Worth fixing upstream (cannobserv#285) so the driver's own docstring carries it.
+
+Recovery from a frame that will never decode is **bounded and interruptible**: an anomaly is
+evidence the broker is answering, so it must not count toward the outage backoff — which leaves
+a run of them with nothing slowing it down, hence a `MAX_POISON_SKIPS` bound past which the boot
+replay gives up (the tail resumes from the same cursor) and the tail parks. The replay also
+rides the worker's stop event, because how long it runs is the producer's business: this
+document asks the producer to `MAXLEN`, and Replicator cannot enforce it.
 
 **Why a stream and not a Redis hash.** Broker state is explicitly permitted by test 1, so
 `HGETALL` on a per-host hash is a reasonable reach and will be proposed. It is rejected
