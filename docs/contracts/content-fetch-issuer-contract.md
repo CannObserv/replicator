@@ -77,6 +77,8 @@ would shard on.
 
 ## The payload (inside `payload`)
 
+### The command
+
 **Command — `content.fetch`, `ContentFetchCommand`** (`co_core.pure.models.changes`):
 
 | Field | Type | Notes |
@@ -88,6 +90,14 @@ would shard on.
 | `url` | `str` | What to fetch. **Not** a key. See MUST-3 |
 | `headers` | `dict[str, str] \| None` | co-core ≥ 0.7.3, **honoured since #11**. Merged over the fetcher's defaults, issuer wins. Guards below |
 | `timeout_seconds` | `float \| None` | co-core ≥ 0.7.3, **honoured since #11**. Seconds; bounded above. `None` = the driver default |
+
+> **`occurred_at` must carry a timezone.** Since co-core v0.7.2 (cannobserv#273) it is an
+> `AwareDatetime` on every payload: a **naive** value is rejected fail-loud rather than assumed
+> to be UTC, because "assume UTC" corrupts the instant when a producer stamps a naive local time.
+> An aware non-UTC value is normalized. A naive one fails `from_wire` inside Replicator's `read`,
+> which means it dead-letters as a malformed frame and is one of the rows that stay **silent** —
+> the same shape as an issuer that flattened the envelope. `datetime.now(UTC)`, not
+> `datetime.now()`.
 
 ### Request options: what Replicator will send, and what it refuses (#11)
 
@@ -130,13 +140,7 @@ remains the sole dedupe key and the sole correlator. Two commands differing only
 fetch occasions (MUST-1 unchanged); a *redelivery* carrying different options is still the same
 command and is still deduped.
 
-> **`occurred_at` must carry a timezone.** Since co-core v0.7.2 (cannobserv#273) it is an
-> `AwareDatetime` on every payload: a **naive** value is rejected fail-loud rather than assumed
-> to be UTC, because "assume UTC" corrupts the instant when a producer stamps a naive local time.
-> An aware non-UTC value is normalized. A naive one fails `from_wire` inside Replicator's `read`,
-> which means it dead-letters as a malformed frame and is one of the rows that stay **silent** —
-> the same shape as an issuer that flattened the envelope. `datetime.now(UTC)`, not
-> `datetime.now()`.
+### The success fact
 
 **Fact — `content.blobs`, `BlobAvailableEvent`**:
 
@@ -208,6 +212,8 @@ lives here rather than in Watcher. Three details are the whole value of them:
 > own records and send the request unconditionally. (#17 recommends `reason="not_modified"` on the
 > existing fact rather than a new event type, so an issuer branching on `terminal` first is already
 > forward-compatible with it.)
+
+### The failure fact
 
 **Fact — `content.blobs`, `FetchFailedEvent`** (co-core ≥ 0.7.2, cannobserv#270):
 
