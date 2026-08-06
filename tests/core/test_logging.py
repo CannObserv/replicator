@@ -26,6 +26,7 @@ UVICORN_COMMAND_SOURCES = (
     "README.md",
     "AGENTS.md",
     "docs/COMMANDS.md",
+    "docs/DEPLOYMENT.md",
     "deploy/replicator.service",
 )
 UVICORN_INVOCATION = "uvicorn src.api.main:app"

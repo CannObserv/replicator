@@ -67,10 +67,10 @@ For local work, load both:
 set -a; . /etc/replicator/.env 2>/dev/null; . .env 2>/dev/null; set +a
 ```
 
-Variables the service uses (all in `/etc/replicator/.env`). The **Default** column is the
-value baked into `src/core/config.py` — several are overridden on the VM, so check
-`/etc/replicator/.env` before assuming a default applies. On this deployment
-`REPLICATOR_BLOB_DIR` is `/var/lib/replicator/blobs`, not the `blobs` shown below.
+Variables the service uses all live in `/etc/replicator/.env`. **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+is the authoritative reference** — every variable, its default, and the reasoning behind
+each one. Below is only what this deployment actually overrides; anything absent from
+`/etc/replicator/.env` runs on the default baked into `src/core/config.py`.
 
 **If you pre-create the blob directory, make it and every parent traversable** (`0755`).
 The worker sets modes only on directories it creates itself — an existing one keeps
@@ -86,30 +86,18 @@ unchanged bytes restarts it. Disk pressure never shortens it: over
 `REPLICATOR_BLOB_MAX_TOTAL_BYTES` the worker stops fetching and leaves commands on the bus
 rather than deleting bytes a consumer was promised.
 
-| Variable | Default | Purpose |
+| Variable | Set on this VM | Purpose |
 |---|---|---|
-| `GOOGLE_APPLICATION_CREDENTIALS` | — | SA key for the wheelhouse mirror (`/etc/replicator/co-pypi-reader.json`) |
+| `GOOGLE_APPLICATION_CREDENTIALS` | `/etc/replicator/co-pypi-reader.json` | SA key for the wheelhouse mirror |
 | `REPLICATOR_REDIS_URL` | `redis://localhost:6379/0` | Change-bus client URL |
-| `REPLICATOR_BLOB_DIR` | `blobs` | Temp-storage root for fetched bytes. Resolved to an absolute path — `file://` URIs require it |
-| `REPLICATOR_BLOB_TTL_SECONDS` | `604800` | How long a blob survives after it was **last referenced** (7 days). A commitment made to archiver (archiver#118), not a local knob — raise it if a `content.blobs` consumer needs longer |
-| `REPLICATOR_BLOB_SWEEP_INTERVAL_SECONDS` | `900` | How often the tree is walked. Also the staleness bound on the size the ceiling reads |
-| `REPLICATOR_BLOB_TEMP_GRACE_SECONDS` | `3600` | How long a `.tmp` may live before the sweep treats it as debris. Far shorter than the TTL — a temporary exists only across a single write |
-| `REPLICATOR_BLOB_MAX_TOTAL_BYTES` | `2147483648` | Ceiling on everything the tree holds (2 GiB). Crossing it **pauses fetching**; it never reaps a blob still inside its TTL |
-| `REPLICATOR_MAX_BLOB_BYTES` | `67108864` | Ceiling on one fetched body (64 MiB). A *storage* guard, not a memory one — co-core's fetch driver buffers the whole response first. Over it ⇒ DLQ |
-| `REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS` | `120` | The most a command's own `timeout_seconds` may ask for (#11). Not a default — an omitted field still gets the driver's 30 s — but a ceiling, and a guard rather than a preference: the consume path is serial, so one issuer's timeout is a lien on every other command in the group. Over it ⇒ DLQ. Bounded above by the unit's `TimeoutStopSec` |
-| `REPLICATOR_CONSUMER_GROUP` | `replicator.fetch` | Consumer group on `content.fetch` |
+| `REPLICATOR_BLOB_DIR` | `/var/lib/replicator/blobs` | Temp-storage root — **not** the `blobs` default |
 | `REPLICATOR_CONSUMER_NAME` | `replicator@<hostname>` | This worker's identity in the group — never share one |
-| `REPLICATOR_CONSUMER_START_ID` | `$` | Group start position. Applies only at group *creation*; changing it later also needs `XGROUP SETID` |
-| `REPLICATOR_READ_BLOCK_MS` | `5000` | Blocking-read window, used by both the consume loop and the policy tail (#19). Bounds shutdown latency, so the unit's `TimeoutStopSec` must exceed it plus `REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS` (the handler's worst-case budget since #11) and an in-flight sweep — `tests/test_deploy.py` pins the first two terms. The two readers block concurrently, so this contributes one term rather than two |
-| `REPLICATOR_MIN_HOST_INTERVAL_SECONDS` | `1.0` | Minimum spacing for a host with **no explicit policy** (#12, #19). Since #19 the per-host numbers arrive on `content.fetch-policy`; this is the fallback an unknown, revoked, or not-yet-replayed host resolves to — never "unlimited". Matches Watcher's own `DEFAULT_MIN_INTERVAL`. A wait under `REPLICATOR_READ_BLOCK_MS` is slept through, a longer one parks the command for the next reclaim. **`0` does not disable pacing** — it is the fallback for unpublished hosts only, and a host with a policy is still paced by it. Capped at `3600` |
-| `REPLICATOR_CLAIM_MIN_IDLE_MS` | `60000` | Idle time before a pending entry may be reclaimed — also the retry cadence |
-| `REPLICATOR_MAX_DELIVERY_ATTEMPTS` | `5` | Deliveries of an *unclassified* failure before the DLQ |
-| `REPLICATOR_DEDUPE_TTL_SECONDS` | `86400` | Lifetime of the `replicator:cmd:<command_id>` dedupe key |
-| `REPLICATOR_ERROR_BACKOFF_BASE_SECONDS` | `1.0` | Backoff after a failed poll cycle (broker outage), escalating `base * 2**(n-1)` |
-| `REPLICATOR_ERROR_BACKOFF_MAX_SECONDS` | `30.0` | Cap on that backoff |
-| `REPLICATOR_MAX_CONSECUTIVE_CYCLE_FAILURES` | `20` | Failed cycles before the worker exits so the unit restarts (~8 min). Paired with the unit's `StartLimitIntervalSec` |
 | `REPLICATOR_LOG_LEVEL` | `INFO` | Root log level |
-| `BUILD_ID` | `dev` | Git SHA, stamped by the unit's `ExecStartPre` |
+
+`BUILD_ID` is stamped by the unit's `ExecStartPre` rather than set in the env file. Every
+other `REPLICATOR_*` setting — the blob TTL and ceilings, the consumer group and start id,
+the read window and pacing fallback, the reclaim and backoff numbers — is on its default;
+see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for what each one is and why.
 
 ## Seeding a fetch
 
@@ -174,7 +162,7 @@ Production secrets live in `/etc/replicator/.env` (managed manually on the VM, n
 The unit's `ExecStartPre` writes the current git SHA to `/run/replicator/build-id` and exposes it
 as `BUILD_ID`, asserts the Redis `>=7.0` floor via `scripts/check_redis_floor.sh`, and refreshes the
 wheelhouse via `scripts/sync_wheelhouse.py` — whose journald output is **plain text, not JSON**, by
-design (see [AGENTS.md](AGENTS.md), "Not everything in the journal is JSON").
+design (see [docs/STYLE.md](docs/STYLE.md), "Not everything in the journal is JSON").
 
 Because `ExecStart` runs `--frozen --no-sync`, run `uv sync --frozen` as part of the deploy, before
 `systemctl restart`.
