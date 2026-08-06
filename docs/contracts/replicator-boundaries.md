@@ -366,6 +366,7 @@ than no test, because this document then cites it.
 ## Refs
 
 - [`content-fetch-issuer-contract.md`](content-fetch-issuer-contract.md) — the wire contract this sits beside
+- [`content-fetch-issuer-reference.md`](content-fetch-issuer-reference.md) — its lookup half
 - #7 — object-store blob backend (the tracked violation)
 - #9, #10, #11 — the Phase 4 contract additions
 - #12 — this charter

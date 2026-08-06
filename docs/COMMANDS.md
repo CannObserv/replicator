@@ -86,7 +86,7 @@ uv run python -m scripts.seed_fetch \
 The script rejects a malformed `--header` and a repeated name (exit 2) but deliberately does
 **not** pre-empt the worker's refusal list — sending a refused header is how the refusal is
 exercised against a live worker. The full list is in
-[`docs/contracts/content-fetch-issuer-contract.md`](contracts/content-fetch-issuer-contract.md).
+[`docs/contracts/content-fetch-issuer-reference.md`](contracts/content-fetch-issuer-reference.md).
 
 Watch the other side with `sudo journalctl -u replicator -f`.
 

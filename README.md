@@ -27,8 +27,10 @@ The founding design lives in
 
 **Issuing `content.fetch` commands?** Read
 [`docs/contracts/content-fetch-issuer-contract.md`](docs/contracts/content-fetch-issuer-contract.md)
-first — it is the normative issuer contract and its permanent home. Publish through co-core's
-`to_wire`, never hand-rolled fields; and because the wire carries no domain identity, correlation is
+first — it is the normative issuer contract and its permanent home, with the refusal list, failure
+taxonomy and trust posture in its companion
+[`content-fetch-issuer-reference.md`](docs/contracts/content-fetch-issuer-reference.md).
+Publish through co-core's `to_wire`, never hand-rolled fields; and because the wire carries no domain identity, correlation is
 entirely the issuer's job. Most ways of getting either wrong fail silently.
 
 ## Shape

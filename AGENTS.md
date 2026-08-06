@@ -144,9 +144,10 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
   requires `--production` for the one combination the live worker consumes — a
   frame there is fetched for real.
 - **Two normative contracts bound the wire and the roadmap**, both under
-  `docs/contracts/` and linked from sibling repos. `tests/test_boundaries.py`
-  enforces eight charter invariants in CI; change a charter and its tests
-  together.
+  `docs/contracts/` and linked from sibling repos. The issuer contract splits
+  into a read-through half and a lookup half (`-contract` / `-reference`, #24);
+  both are normative. `tests/test_boundaries.py` enforces eight charter
+  invariants in CI; change a charter and its tests together.
 
 Blob paths, modes, and the retention sweep: [docs/STORAGE.md](docs/STORAGE.md).
 Fakeredis's divergences from the live broker, and the keys an integration run may
@@ -229,4 +230,5 @@ are deliberately not JSON: [docs/STYLE.md](docs/STYLE.md).
 - [docs/COMMANDS.md](docs/COMMANDS.md) — every runnable command, with flags
 - [docs/SKILLS.md](docs/SKILLS.md) — vendored skill inventory and refresh procedure
 - [docs/contracts/content-fetch-issuer-contract.md](docs/contracts/content-fetch-issuer-contract.md) — what a `content.fetch` producer must do; normative, linked from issuer repos
+- [docs/contracts/content-fetch-issuer-reference.md](docs/contracts/content-fetch-issuer-reference.md) — its lookup half: the refusal list, the failure taxonomy, the silent conditions, trust posture
 - [docs/contracts/replicator-boundaries.md](docs/contracts/replicator-boundaries.md) — what Replicator may become; run its three tests against any proposed capability
