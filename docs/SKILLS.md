@@ -61,12 +61,32 @@ is accepted with a `N: fix + fitness` or bare `N: fitness` directive — without
 directive fails to resolve. The daily auto-refresh hook bumps the submodule pointer but never creates
 per-skill symlinks, so linking a newly published skill stays a manual step (#13).
 
-**`curating-context` is pinned at v1.2 until the wave-B comparison resolves (#22).** The twelve
-cohort repos are the held-out validation split for the skill itself: a proposed change is tried on
-one arm and scored against the other, and Replicator's first curation is this arm's data point.
-Bumping the vendored pointer past v1.2 before that resolves puts two skill versions inside one arm
-and `score-cohort.sh` returns INCONCLUSIVE rather than a verdict. The daily auto-refresh hook bumps
-the submodule pointer, so this pin is a review obligation, not something the tooling enforces.
+**`curating-context` is pinned at v1.2 (`3fc7b71`) until the wave-B comparison resolves (#22).** The
+twelve cohort repos are the held-out validation split for the skill itself: a proposed change is
+tried on one arm and scored against the other, and Replicator's first curation is this arm's data
+point. Bumping the vendored pointer past v1.2 before that resolves puts two skill versions inside one
+arm and `score-cohort.sh` returns INCONCLUSIVE rather than a verdict.
+
+**So the daily auto-refresh is suspended for the duration of the hold.** The hook's `SessionStart`
+entry is removed from `.claude/settings.json`; `.claude/hooks/skills-submodule-update.sh` itself is
+left in place, so restoring the refresh is a one-entry edit and not a re-install. Suspension is
+blunter than the problem — it also stops the `obra-superpowers` refresh and the `.skills/doctor.sh`
+self-heal commit, neither of which has anything to do with the hold — but it is the only remedy a
+consumer repo currently has: `git submodule update --remote --merge -- skills-vendor/` takes no
+per-submodule exclusion, and one submodule carries every `gregoryfoster` skill, so pinning
+`curating-context` alone is not expressible. Tracked upstream as
+[gregoryfoster/skills#100](https://github.com/gregoryfoster/skills/issues/100), which proposes a
+committed pin file the hook consults; restore the `SessionStart` entry when that lands or when the
+hold ends, whichever comes first.
+
+While the refresh is suspended, updating vendor skills is manual:
+
+```bash
+git -C skills-vendor/obra-superpowers fetch origin && git -C skills-vendor/obra-superpowers checkout origin/HEAD
+bash .skills/doctor.sh
+```
+
+Leave `skills-vendor/gregoryfoster-skills` at `3fc7b71` until the hold ends.
 
 ### From `obra-superpowers`
 
