@@ -157,6 +157,41 @@ redis-cli XINFO CONSUMERS content.fetch replicator.fetch
 redis-cli XLEN content.fetch.dlq                        # dead-lettered frames
 ```
 
+### Politeness — `content.fetch-policy` (#19)
+
+Where to start when a host is being fetched more or less often than expected. The stream is
+config/state: last-write-wins per host, read **without a consumer group**, replayed from the
+beginning at every worker boot.
+
+```bash
+# Has the producer published anything at all? An empty stream is not an error —
+# it means every host resolves to REPLICATOR_MIN_HOST_INTERVAL_SECONDS — but it
+# is the first thing to rule out, and it looks identical to a working consumer.
+redis-cli XLEN content.fetch-policy
+redis-cli XRANGE content.fetch-policy - + COUNT 10
+
+# What one host is actually paced at. `revoked: true` is a tombstone meaning
+# "no explicit policy", not "no limit" — it falls back to the env default.
+redis-cli XRANGE content.fetch-policy - + COUNT 500 | grep '"host":"example.test"'
+
+# Expected EMPTY. A group here is a bug: every worker needs every message, so a
+# group would compete for them and grow a PEL nothing acks or drains.
+redis-cli XINFO GROUPS content.fetch-policy
+```
+
+The worker's own view, from the journal — what it rebuilt at boot and what it has applied since:
+
+```bash
+sudo journalctl -u replicator | grep 'fetch policy replay complete'   # tracked_hosts, messages, duration_ms
+sudo journalctl -u replicator -f | grep 'applied a host fetch policy' # host, min_interval, and the default beside it
+sudo journalctl -u replicator | grep 'stricter than the fallback'     # raise REPLICATOR_MIN_HOST_INTERVAL_SECONDS
+```
+
+`tracked_hosts: 0` with a non-empty `XLEN` means messages arrived and none applied — check for
+`ignoring a ...` warnings on the same boot. The last grep is the one that needs acting on: it
+names a host whose real policy is stricter than the fallback that would replace it if the
+policy were revoked or missed on a replay.
+
 ## Submodules
 
 ```bash

@@ -9,10 +9,18 @@ Redis change bus and reports outcomes as **facts**:
 ```
 content.fetch (command)  →  fetch  →  fingerprint  →  temp-store  →  blob_available (fact)
                          ↘  closed without bytes  ──────────────→  fetch_failed  (fact)
+
+content.fetch-policy (config)  →  per-host request spacing applied to that fetch
 ```
 
 Both facts land on `content.blobs`, so an issuer's one consumer group sees either outcome of
 its command.
+
+`content.fetch-policy` is the third stream kind and the only one Replicator reads without a
+consumer group: it carries how often each host may be asked, last-write-wins per host, replayed
+from the beginning at every boot. The numbers are the issuer's — Replicator enforces spacing,
+it does not decide it. See
+[`docs/contracts/replicator-boundaries.md`](docs/contracts/replicator-boundaries.md).
 
 The founding design lives in
 [`docs/plans/2026-06-25-replicator-mvp-design.md`](docs/plans/2026-06-25-replicator-mvp-design.md).
@@ -92,8 +100,8 @@ rather than deleting bytes a consumer was promised.
 | `REPLICATOR_CONSUMER_GROUP` | `replicator.fetch` | Consumer group on `content.fetch` |
 | `REPLICATOR_CONSUMER_NAME` | `replicator@<hostname>` | This worker's identity in the group — never share one |
 | `REPLICATOR_CONSUMER_START_ID` | `$` | Group start position. Applies only at group *creation*; changing it later also needs `XGROUP SETID` |
-| `REPLICATOR_READ_BLOCK_MS` | `5000` | Blocking-read window. Bounds shutdown latency, so the unit's `TimeoutStopSec` must exceed it plus `REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS` (the handler's worst-case budget since #11) and an in-flight sweep — `tests/test_deploy.py` pins the first two terms |
-| `REPLICATOR_MIN_HOST_INTERVAL_SECONDS` | `1.0` | Minimum spacing between two requests to the same host (#12). The interim politeness default until the numbers travel over the bus; matches Watcher's own `DEFAULT_MIN_INTERVAL` so the Phase 4 cutover changes who paces, not how much. A wait under `REPLICATOR_READ_BLOCK_MS` is slept through, a longer one parks the command for the next reclaim. `0` disables pacing entirely; capped at `3600` |
+| `REPLICATOR_READ_BLOCK_MS` | `5000` | Blocking-read window, used by both the consume loop and the policy tail (#19). Bounds shutdown latency, so the unit's `TimeoutStopSec` must exceed it plus `REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS` (the handler's worst-case budget since #11) and an in-flight sweep — `tests/test_deploy.py` pins the first two terms. The two readers block concurrently, so this contributes one term rather than two |
+| `REPLICATOR_MIN_HOST_INTERVAL_SECONDS` | `1.0` | Minimum spacing for a host with **no explicit policy** (#12, #19). Since #19 the per-host numbers arrive on `content.fetch-policy`; this is the fallback an unknown, revoked, or not-yet-replayed host resolves to — never "unlimited". Matches Watcher's own `DEFAULT_MIN_INTERVAL`. A wait under `REPLICATOR_READ_BLOCK_MS` is slept through, a longer one parks the command for the next reclaim. **`0` does not disable pacing** — it is the fallback for unpublished hosts only, and a host with a policy is still paced by it. Capped at `3600` |
 | `REPLICATOR_CLAIM_MIN_IDLE_MS` | `60000` | Idle time before a pending entry may be reclaimed — also the retry cadence |
 | `REPLICATOR_MAX_DELIVERY_ATTEMPTS` | `5` | Deliveries of an *unclassified* failure before the DLQ |
 | `REPLICATOR_DEDUPE_TTL_SECONDS` | `86400` | Lifetime of the `replicator:cmd:<command_id>` dedupe key |

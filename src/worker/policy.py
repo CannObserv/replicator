@@ -28,6 +28,7 @@ bounded by the producer's host count, and rebuilt by replay on every boot.
 """
 
 import asyncio
+import time
 from datetime import datetime
 from typing import Protocol
 
@@ -35,6 +36,7 @@ from co_core.pure.adapters.bus.envelope import BusMessage
 from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
 from co_core.pure.models.changes import ChangeEventPayload, FetchPolicyState
 from co_core_aio.bus import AsyncBusTailReader
+from redis.asyncio import Redis
 
 from src.core.config import Settings
 from src.core.logging import get_logger
@@ -66,13 +68,15 @@ class PolicyReader(Protocol):
     """The read seam — ``AsyncBusTailReader`` in production.
 
     Declared here for the same reason ``handler.py`` declares ``Fetcher``: the
-    poll loop's contract with the broker is three calls, and stating them lets a
+    poll loop's contract with the broker is two calls, and stating them lets a
     test stand in an outage or a fixed sequence without a live client.
+
+    ``replay`` is deliberately absent. Both the boot rebuild and the tail drive
+    ``read`` directly — see ``replay_policies`` for why the driver's own helper
+    cannot be used safely.
     """
 
     async def read(self, *, count: int, block_ms: int | None = None) -> list[BusMessage]: ...
-
-    async def replay(self, *, count: int = 100) -> list[BusMessage]: ...
 
     def seek(self, message_id: str) -> None: ...
 
@@ -95,6 +99,11 @@ class FetchPolicyMap:
         # order is not publication order: the producer periodically republishes
         # its whole set, and a republish assembled from a snapshot taken before a
         # change that already shipped would otherwise revert it.
+        #
+        # A revoked host keeps its stamp even though _intervals drops it, so this
+        # map outgrows tracked_hosts. Deliberate: forgetting the stamp on
+        # revocation would let the stale *live* policy that the tombstone
+        # superseded resurrect the host on the next republish (CR #10).
         self._applied_at: dict[str, datetime] = {}
 
     @property
@@ -233,7 +242,7 @@ class FetchPolicyMap:
             )
 
 
-def build_policy_reader(client, *, topic: str) -> AsyncBusTailReader:
+def build_policy_reader(client: Redis, *, topic: str) -> AsyncBusTailReader:
     """Wire a groupless reader for the policy stream.
 
     ``topic`` is a defaulted argument at the call site rather than a setting, for
@@ -253,26 +262,53 @@ async def replay_policies(reader: PolicyReader, policies: FetchPolicyMap) -> Non
     safe only because the fallback is meant to be the stricter number, which is
     exactly the assumption not worth spending on startup ordering.
 
-    A failure is absorbed. The cursor advances only over messages that decoded,
-    so the tail resumes from the same place and drains the rest — a failed
-    replay repairs itself, while failing the boot would turn a policy-stream
-    hiccup into a total fetch outage.
+    A failure is absorbed rather than fatal: the last-known map survives, and
+    failing the boot would turn a policy-stream hiccup into a total fetch
+    outage.
+
+    **Reads are driven here rather than through ``AsyncBusTailReader.replay``,
+    which cannot be used safely (CR #1).** That helper accumulates across many
+    ``read`` calls and returns the whole list at the end, so a raise part-way
+    through discards everything collected — while the cursor has already
+    advanced past it. A poison frame at position *k* would silently lose the
+    *k-1* policies ahead of it, permanently, and on a last-write-wins stream a
+    lost policy is indistinguishable from one that was never published. Applying
+    each batch as it arrives means nothing already read can be thrown away, and
+    it lets a poison frame be stepped over instead of ending the replay.
     """
-    try:
-        for message in await reader.replay(count=READ_COUNT):
+    started = time.monotonic()
+    messages = 0
+    while True:
+        try:
+            batch = await reader.read(count=READ_COUNT)
+        except BusMessageAnomaly as exc:
+            _skip_poison(reader, exc)
+            continue
+        except Exception as exc:
+            # Whatever has been applied so far stands, and the tail resumes from
+            # the same cursor and drains the rest — so this repairs itself.
+            logger.error(
+                "could not finish replaying the fetch policy stream — continuing with what arrived",
+                extra={"error": f"{type(exc).__name__}: {exc}", "messages": messages},
+            )
+            break
+        if not batch:
+            break
+        for message in batch:
             policies.apply(message.payload)
-    except BusMessageAnomaly as exc:
-        # A poison frame at boot. Skip it and leave the rest to the tail loop,
-        # which re-enters the same recovery on the next one.
-        _skip_poison(reader, exc)
-    except Exception as exc:
-        logger.error(
-            "could not replay the fetch policy stream — starting with what arrived",
-            extra={"error": f"{type(exc).__name__}: {exc}"},
-        )
+            messages += 1
     logger.info(
         "fetch policy replay complete",
-        extra={"tracked_hosts": policies.tracked_hosts},
+        extra={
+            "tracked_hosts": policies.tracked_hosts,
+            # Both, because they diverge for reasons worth seeing: entries the
+            # producer never trimmed (the charter asks it to MAXLEN, which
+            # Replicator cannot enforce) show up as messages far exceeding
+            # hosts, and at count=1 each one is a round trip — so a slow boot
+            # has a cause in the journal rather than only a symptom.
+            "messages": messages,
+            "duration_ms": round((time.monotonic() - started) * 1000, 1),
+        },
     )
 
 
@@ -300,6 +336,11 @@ async def run_policy_reader(
         try:
             messages = await reader.read(count=READ_COUNT, block_ms=settings.read_block_ms)
         except BusMessageAnomaly as exc:
+            # A frame the broker served fine and co-core could not decode. That
+            # is evidence the broker is answering, so it clears the outage
+            # counter rather than leaving the next real failure to resume
+            # backoff from an exponent nothing is still waiting on (CR #9).
+            consecutive_failures = 0
             _skip_poison(reader, exc)
             continue
         # No CancelledError branch: it is a BaseException, so shutdown propagates

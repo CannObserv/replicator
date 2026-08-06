@@ -151,14 +151,18 @@ async def test_shutdown_is_bounded_by_the_poll_window(real_redis, policy_topic, 
 
 async def test_a_malformed_frame_on_a_real_stream_is_skipped(real_redis, policy_topic):
     """With no group there is no ack to move past one — the cursor has to be
-    forced, or every policy published after it is permanently unreachable."""
+    forced, or every policy published after it is permanently unreachable.
+
+    The frame ahead of the poison is what makes this more than a smoke test
+    (CR #1): a replay that surfaces messages only on a clean finish loses it,
+    silently, with the cursor already past it.
+    """
+    await publish(real_redis, policy_topic, "ahead.test", 5.0)
     await real_redis.xadd(policy_topic, {"not": "a frame"})
     await publish(real_redis, policy_topic, "behind.test", 30.0)
     policies = FetchPolicyMap(DEFAULT)
-    reader = build_policy_reader(real_redis, topic=policy_topic)
 
-    # Replay stops at the poison and skips it; the second pass drains the rest.
-    await replay_policies(reader, policies)
-    await replay_policies(reader, policies)
+    await replay_policies(build_policy_reader(real_redis, topic=policy_topic), policies)
 
+    assert policies.interval_for("ahead.test") == 5.0
     assert policies.interval_for("behind.test") == 30.0

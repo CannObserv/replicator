@@ -103,6 +103,11 @@ async def test_replay_reports_what_it_rebuilt(fake_redis, policies, caplog):
 
     record = next(r for r in caplog.records if r.message == "fetch policy replay complete")
     assert record.tracked_hosts == 1
+    # Entries read, not hosts held: they diverge when the producer has not
+    # trimmed, and at count=1 each one is a round trip — so a slow boot has a
+    # cause in the journal rather than only a symptom.
+    assert record.messages == 1
+    assert record.duration_ms >= 0
 
 
 async def test_replay_leaves_the_cursor_where_the_tail_picks_up(fake_redis, policies):
@@ -197,9 +202,6 @@ class BrokenReader:
         self.reads += 1
         raise ConnectionError("broker is gone")
 
-    async def replay(self, *, count: int = 100):
-        raise ConnectionError("broker is gone")
-
     def seek(self, message_id: str) -> None:  # pragma: no cover - never reached
         raise AssertionError("nothing to seek past")
 
@@ -213,7 +215,7 @@ async def test_a_failed_replay_does_not_stop_the_boot(policies, caplog):
     with caplog.at_level("ERROR"):
         await replay_policies(BrokenReader(), policies)
 
-    assert "could not replay the fetch policy stream" in caplog.text
+    assert "could not finish replaying the fetch policy stream" in caplog.text
 
 
 async def test_a_failed_read_backs_off_instead_of_taking_the_worker_down(
@@ -276,3 +278,24 @@ async def test_a_malformed_frame_arriving_mid_tail_is_skipped(fake_redis, polici
     finally:
         stop.set()
         await task
+
+
+async def test_replay_keeps_the_policies_it_read_before_a_poison_frame(fake_redis, policies):
+    """A poison frame must not discard the messages already applied ahead of it.
+
+    ``AsyncBusTailReader.replay`` accumulates across many reads and returns the
+    whole batch at the end, so a raise part-way through loses everything
+    collected — while the cursor has already advanced past it. On a
+    last-write-wins stream those hosts are then indistinguishable from hosts
+    nobody ever published a policy for, until the producer's next full
+    republish.
+    """
+    await publish(fake_redis, TOPIC, "ahead.test", 30.0)
+    await fake_redis.xadd(TOPIC, {"not": "a frame"})
+    await publish(fake_redis, TOPIC, "behind.test", 12.0)
+
+    await replay_policies(build_policy_reader(fake_redis, topic=TOPIC), policies)
+
+    assert policies.interval_for("ahead.test") == 30.0
+    # And it drains past the poison rather than stopping there.
+    assert policies.interval_for("behind.test") == 12.0
