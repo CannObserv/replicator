@@ -30,7 +30,7 @@ class FailureReason(StrEnum):
     changes what Watcher branches on.
 
     ``StrEnum`` so ``model_dump_json`` writes the token itself. Mirrors the
-    taxonomy in ``docs/contracts/content-fetch-issuer-contract.md``; the two are
+    taxonomy in ``docs/contracts/content-fetch-issuer-reference.md``; the two are
     edited together.
     """
 
