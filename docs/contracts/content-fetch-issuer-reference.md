@@ -8,9 +8,10 @@ Replicator's behaviour exactly as the contract does — this file is not comment
 the payload shapes, the seven MUSTs, and the guarantee/non-guarantee pair. This file carries
 what an issuer *looks up* — the header and timeout rules it consults when a command is refused,
 the reasoning behind the enriched `blob_available` fields, the condition-by-condition failure
-taxonomy, and the trust posture the whole capability rests on. The split exists so the contract
-stays short enough to read start to finish; both files are normative, and a rule does not become
-advisory by living here.
+taxonomy, the trust posture the whole capability rests on, and the mechanisms behind several of
+the MUSTs, each of which states its rule there and explains itself here. The split exists so the
+contract stays short enough to read start to finish; both files are normative, and a rule does not
+become advisory by living here.
 
 **Changing this document.** The same rule the contract states applies: a change to the failure
 taxonomy or to the refusal rules is announced on the open issuer-side trackers — currently
