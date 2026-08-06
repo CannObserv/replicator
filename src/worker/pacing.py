@@ -1,14 +1,14 @@
-"""Per-host request spacing — the mechanism half of politeness (#12).
+"""Per-host request spacing — the mechanism half of politeness (#12, #19).
 
 `docs/contracts/replicator-boundaries.md` splits this capability: Replicator
 **enforces** a per-host rate because it is the only process that can see the
 origin's tolerance across commands, and the issuer **decides** the numbers,
-which are operator policy. Until the `content.fetch.policy` stream exists there
-is nothing to decide with, so this carries a single conservative default from
-env — a default is mechanism, and the alternative at the Phase 4 cutover is no
-politeness at all: Watcher's limiter paces its own fetches, and the moment that
-fetch path becomes a publish path it silently starts pacing nothing
-(CannObserv/watcher#245).
+which are operator policy. Since #19 the numbers arrive over
+`content.fetch-policy` and reach this module through the `policy` seam;
+`src/worker/policy.py` owns the map they land in. The env default did not go
+away — it is what an unknown or revoked host resolves to, never "unlimited",
+because a boot replay cannot tell a consumer whether the set it received is
+whole.
 
 The state is a host -> last-request timestamp map, in memory. That is one of the
 three shapes the charter permits: derived, bounded, and rebuildable by replay —
@@ -18,6 +18,11 @@ a cold worker is simply polite from scratch, which errs in the safe direction.
 import time
 from collections.abc import Callable
 from urllib.parse import urlsplit
+
+# How a host's interval is looked up. ``None`` means "no explicit policy" — an
+# unknown host and a revoked one are the same answer here on purpose, since the
+# fallback rule the charter fixes is the same for both.
+HostPolicy = Callable[[str], float | None]
 
 # When to prune. Each entry is a hostname and a float; the bound is not about
 # memory pressure at this size but about the shape — an unbounded map that only
@@ -40,13 +45,34 @@ class HostPacer:
     """
 
     def __init__(
-        self, min_interval_seconds: float, *, clock: Callable[[], float] = time.monotonic
+        self,
+        default_interval_seconds: float,
+        *,
+        policy: HostPolicy | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        self._interval = min_interval_seconds
+        self._default = default_interval_seconds
+        # Defaulted rather than required, and the default resolves every host to
+        # "no policy" rather than to "no pacing": an unwired seam falls back to
+        # exactly the pre-#19 behaviour instead of silently disabling the
+        # mechanism, which is the same reason build_handler constructs a pacer
+        # when none is injected.
+        self._policy: HostPolicy = policy if policy is not None else lambda _host: None
         self._clock = clock
         self._last: dict[str, float] = {}
         # Earliest a prune could reclaim anything; see _prune.
         self._prune_not_before = 0.0
+
+    def _interval_for(self, host: str) -> float:
+        """This host's minimum spacing: its policy, or the conservative default.
+
+        ``is None`` rather than a truthiness test. ``0.0`` is a legal published
+        interval meaning "this host needs no spacing" — an explicit operator
+        decision — and ``policy(host) or self._default`` would read it as an
+        absent one and pace the host anyway.
+        """
+        interval = self._policy(host)
+        return self._default if interval is None else interval
 
     @property
     def tracked_hosts(self) -> int:
@@ -68,12 +94,15 @@ class HostPacer:
         terminal fact its issuer is waiting for.
         """
         host = _host(url)
-        if host is None or self._interval <= 0:
+        if host is None:
+            return 0.0
+        interval = self._interval_for(host)
+        if interval <= 0:
             return 0.0
         last = self._last.get(host)
         if last is None:
             return 0.0
-        return max(0.0, self._interval - (self._clock() - last))
+        return max(0.0, interval - (self._clock() - last))
 
     def record(self, url: str) -> None:
         """Stamp a request as having gone out.
@@ -105,17 +134,27 @@ class HostPacer:
         than ``MAX_TRACKED_HOSTS`` hosts all inside a long interval, that would
         be a full dict rebuild per message forever (CR #7). The retry is deferred
         until the oldest entry could plausibly have aged out.
+
+        Both halves resolve the interval **per host** (#19). Against one global
+        number a host on a 300-second policy would be dropped as soon as the
+        one-second default elapsed, losing its spacing silently and in the
+        loosening direction — the failure the policy stream exists to remove —
+        and the deferral would be computed from a number no remaining entry is
+        actually waiting on.
         """
         before = len(self._last)
         self._last = {
-            host: last for host, last in self._last.items() if now - last < self._interval
+            host: last for host, last in self._last.items() if now - last < self._interval_for(host)
         }
         if len(self._last) < before:
             self._prune_not_before = 0.0
             return
-        # Nothing was reclaimable. The earliest anything can be is one interval
-        # after the oldest entry still held.
-        self._prune_not_before = min(self._last.values(), default=now) + self._interval
+        # Nothing was reclaimable. The earliest anything can be is when the
+        # entry that frees up soonest finishes its own interval.
+        self._prune_not_before = min(
+            (last + self._interval_for(host) for host, last in self._last.items()),
+            default=now,
+        )
 
 
 def _host(url: str) -> str | None:

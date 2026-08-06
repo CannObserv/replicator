@@ -630,7 +630,7 @@ async def run_loop(
                 )
             await park(
                 stop,
-                _error_backoff_seconds(
+                error_backoff_seconds(
                     consecutive_failures,
                     base=settings.error_backoff_base_seconds,
                     maximum=settings.error_backoff_max_seconds,
@@ -645,7 +645,7 @@ async def run_loop(
             await park(stop, IDLE_SLEEP_SECONDS)
 
 
-def _error_backoff_seconds(consecutive_failures: int, *, base: float, maximum: float) -> float:
+def error_backoff_seconds(consecutive_failures: int, *, base: float, maximum: float) -> float:
     """Exponential backoff (``base * 2**(n-1)``) capped at ``maximum``.
 
     The exponent is clamped so the intermediate cannot overflow before the cap
