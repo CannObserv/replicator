@@ -403,3 +403,45 @@ async def test_a_poison_frame_with_no_id_is_not_seeked_past(policies, caplog):
 
     assert reader.seeks == []
     assert "cannot skip past a malformed frame" in caplog.text
+
+
+async def test_the_tail_escalates_when_the_cursor_cannot_advance(
+    policies, fast_settings, monkeypatch, caplog
+):
+    """A stuck cursor is a broken reader, not a busy one (CR #19).
+
+    ``_skip_poison`` refusing an id-less frame leaves the cursor where it was, so
+    the identical frame is redelivered on every read. Parking the fixed idle tick
+    and retrying at 20Hz forever emits two log lines per pass — roughly 40 a
+    second, indefinitely, on a shared VM — and retrying sooner cannot help,
+    because nothing about the wait is what is stuck.
+
+    The escalation is asserted through the backoff call rather than by timing:
+    the argument sequence is what distinguishes "treated as a failure" from
+    "treated as a skip", and a wall-clock assertion would only say the loop is
+    slow.
+    """
+    attempts: list[int] = []
+
+    def recording_backoff(consecutive_failures: int, *, base: float, maximum: float) -> float:
+        attempts.append(consecutive_failures)
+        return 0.01
+
+    monkeypatch.setattr("src.worker.policy.error_backoff_seconds", recording_backoff)
+    reader = PoisonReader(message_id="?")
+    stop = asyncio.Event()
+    task = asyncio.create_task(
+        run_policy_reader(reader, policies=policies, settings=fast_settings, stop=stop)
+    )
+    try:
+        with caplog.at_level("WARNING"):
+            await until(lambda: len(attempts) >= 3)
+    finally:
+        stop.set()
+        await task
+
+    # Escalating, not a flat retry — and never through the skip branch, whose
+    # bound counts frames it actually got past.
+    assert attempts[:3] == [1, 2, 3]
+    assert reader.seeks == []
+    assert "malformed frames in a row" not in caplog.text

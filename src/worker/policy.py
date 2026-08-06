@@ -42,6 +42,7 @@ from src.core.config import Settings
 from src.core.logging import get_logger
 from src.worker.loop import (
     IDLE_SLEEP_SECONDS,
+    MAX_POISON_SKIPS,
     SUPPORTED_SCHEMA_VERSION,
     error_backoff_seconds,
     park,
@@ -62,13 +63,6 @@ logger = get_logger(__name__)
 # the extra round-trips are noise against a correctness argument that is easy to
 # get right today and easy to break on the next edit.
 READ_COUNT = 1
-
-# Consecutive undecodable frames stepped over before the reader pauses (replay
-# gives up, the tail parks). Mirrors ``loop.py``'s ``MAX_POISON_SKIPS`` and
-# exists for the same reason: skipping is cheap enough per frame to hide that an
-# unbounded run of them is a hot loop against the broker. Sharper here, because
-# an anomaly clears the outage counter, so backoff can never engage on a run.
-MAX_POISON_SKIPS = 10
 
 # What ``BusMessageAnomaly.__init__`` puts in ``message_id`` when the raiser did
 # not supply one. A sentinel, not an id — seeking to it wedges the cursor. See
@@ -288,7 +282,9 @@ async def replay_policies(
     *k-1* policies ahead of it, permanently, and on a last-write-wins stream a
     lost policy is indistinguishable from one that was never published. Applying
     each batch as it arrives means nothing already read can be thrown away, and
-    it lets a poison frame be stepped over instead of ending the replay.
+    it lets a poison frame be stepped over instead of ending the replay — up to
+    ``MAX_POISON_SKIPS`` in a row, past which this gives up and leaves the rest
+    to the tail.
 
     ``stop`` is **required**, not defaulted (CR #13). How long this runs is the
     producer's business — the charter asks it to ``MAXLEN`` the stream and
@@ -312,8 +308,8 @@ async def replay_policies(
             if skips >= MAX_POISON_SKIPS:
                 # Bounded for the same reason loop.py bounds its recovery pass:
                 # unbounded skipping spins at broker round-trip speed. Giving up
-                # is safe here and not in the tail, because the tail is still
-                # running and resumes from this exact cursor.
+                # is safe here and not in the tail, because the tail starts next
+                # and resumes from this exact cursor (CR #21).
                 logger.warning(
                     "gave up replaying the fetch policy stream after a run of malformed frames",
                     extra={"skipped": skips, "messages": messages},
@@ -374,6 +370,16 @@ async def run_policy_reader(
         try:
             messages = await reader.read(count=READ_COUNT, block_ms=settings.read_block_ms)
         except BusMessageAnomaly as exc:
+            if not _skip_poison(reader, exc):
+                # A stuck cursor is a broken reader, not a busy one (CR #19).
+                # The same frame comes back on every read, so retrying sooner
+                # cannot help and the fixed idle tick would spin at 20Hz
+                # forever, two log lines a pass. Counted as a failure instead:
+                # the backoff escalates to its cap and damps the logging with
+                # it.
+                consecutive_failures += 1
+                await _backoff(stop, settings, consecutive_failures)
+                continue
             # A frame the broker served fine and co-core could not decode. That
             # is evidence the broker is answering, so it clears the outage
             # counter rather than leaving the next real failure to resume
@@ -385,7 +391,7 @@ async def run_policy_reader(
             # garbage would spin this loop at broker round-trip speed forever.
             # Unlike the replay, this task cannot give up — returning would end
             # the worker — so it paces itself and keeps going.
-            if not _skip_poison(reader, exc) or skips >= MAX_POISON_SKIPS:
+            if skips >= MAX_POISON_SKIPS:
                 logger.warning(
                     "pausing the fetch policy tail after malformed frames in a row",
                     extra={"skipped": skips, "message_id": exc.message_id},
@@ -405,14 +411,7 @@ async def run_policy_reader(
                     "consecutive_failures": consecutive_failures,
                 },
             )
-            await park(
-                stop,
-                error_backoff_seconds(
-                    consecutive_failures,
-                    base=settings.error_backoff_base_seconds,
-                    maximum=settings.error_backoff_max_seconds,
-                ),
-            )
+            await _backoff(stop, settings, consecutive_failures)
             continue
         consecutive_failures = 0
         skips = 0
@@ -423,6 +422,24 @@ async def run_policy_reader(
             # the consume loop's idle tick is: fakeredis returns from a blocking
             # read immediately, which would busy-spin this loop in tests.
             await park(stop, IDLE_SLEEP_SECONDS)
+
+
+async def _backoff(stop: asyncio.Event, settings: Settings, consecutive_failures: int) -> None:
+    """Wait out a failed cycle, escalating with how many have failed in a row.
+
+    Shared by the two branches that mean "this reader is not working": a poll
+    that raised, and a cursor that cannot be advanced past a frame it will never
+    decode. Both want the same escalation to the same cap, and both want the
+    journal to quieten as the wait grows.
+    """
+    await park(
+        stop,
+        error_backoff_seconds(
+            consecutive_failures,
+            base=settings.error_backoff_base_seconds,
+            maximum=settings.error_backoff_max_seconds,
+        ),
+    )
 
 
 def _skip_poison(reader: PolicyReader, exc: BusMessageAnomaly) -> bool:
