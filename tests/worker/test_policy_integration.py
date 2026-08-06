@@ -16,10 +16,13 @@ import uuid
 from collections.abc import AsyncGenerator
 
 import pytest
+from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.envelope import to_wire
 from co_core.pure.models.changes import FetchPolicyState
 
+import src.worker.main
 from src.core.config import get_settings
+from src.worker.main import run
 from src.worker.policy import (
     FetchPolicyMap,
     build_policy_reader,
@@ -170,3 +173,54 @@ async def test_a_malformed_frame_on_a_real_stream_is_skipped(real_redis, policy_
 
     assert policies.interval_for("ahead.test") == 5.0
     assert policies.interval_for("behind.test") == 30.0
+
+
+async def test_run_replays_the_named_policy_stream_into_the_byte_path(
+    real_redis, policy_topic, monkeypatch, tmp_path
+):
+    """The assembled worker, against a live stream — and the only caller that
+    moves ``policy_topic`` (CR #27).
+
+    Every other test here drives ``replay_policies`` or ``run_policy_reader``
+    directly, and the two in ``test_main.py`` that cover the wiring stub the
+    broker. Between them nothing proved that ``run()`` points the reader at a
+    real stream, replays it, and hands the resulting lookup to the byte path —
+    which is the whole feature, and the composition a defaulted ``policy_topic``
+    exists to make testable.
+
+    The consume loop is stubbed so the run terminates; the handler is built for
+    real, so the callable asserted below is the one a fetch would consult.
+    """
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setenv("REPLICATOR_CONSUMER_GROUP", "replicator.itest")
+    monkeypatch.setenv("REPLICATOR_CONSUMER_NAME", "replicator@itest")
+    monkeypatch.setenv("REPLICATOR_READ_BLOCK_MS", "50")
+    get_settings.cache_clear()
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: real_redis)
+    await publish(real_redis, policy_topic, "slow.test", 30.0)
+
+    seen = {}
+    real_build_handler = src.worker.main.build_handler
+
+    def recording_build_handler(**kwargs):
+        seen["policy"] = kwargs["policy"]
+        return real_build_handler(**kwargs)
+
+    async def stubbed_run_loop(**kwargs):
+        """Returns immediately, which is what winds the run down."""
+
+    monkeypatch.setattr("src.worker.main.build_handler", recording_build_handler)
+    monkeypatch.setattr("src.worker.main.run_loop", stubbed_run_loop)
+
+    try:
+        async with asyncio.timeout(10):
+            await run(asyncio.Event(), policy_topic=policy_topic)
+    finally:
+        # run() is hard-wired to the real command stream, so on the scratch
+        # database it leaves a `content.fetch` key the itest fixtures do not own.
+        await real_redis.delete(streams.CONTENT_FETCH)
+
+    # Not just "a policy was applied" — the byte path's own lookup resolves the
+    # published interval, which is the end of the chain this feature is.
+    assert seen["policy"]("slow.test") == 30.0
+    assert seen["policy"]("unpublished.test") is None
