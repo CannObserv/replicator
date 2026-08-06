@@ -238,10 +238,6 @@ Persist first, then publish; outbox-style, symmetric to archiver's producer. (Re
 no outbox and must not grow one — its durable record of intent is the consumer group's PEL. The
 outbox belongs to producers with a database, which is the issuer.)
 
-Losing the map is recoverable but not free: the intent can be re-issued under a fresh
-`command_id`, at the cost of another origin request. What is *not* recoverable is the in-flight
-fact — it will arrive, match nothing, and have to be discarded.
-
 ### 3. Correlate on `command_id` only — `url` is not a key
 
 Archiver's model permits **multiple InfoSources per URL** (non-unique `url`, different extraction
@@ -263,14 +259,10 @@ cost of that ordering is the opposite duplicate — a crash between a successful
 Applying a fact must therefore be safe to do twice. Same `command_id`, same `content_fingerprint`,
 same `blob_uri` — an upsert, not an append.
 
-**This covers `fetch_failed` too, and there the duplicates are not even identical.** The failure
-fact is published *before* the dead-letter (`dead_letter` acks inside itself, so a fact published
-after it is lost outright on a crash in between). A crash in that window redelivers the command,
-re-runs the failure, and publishes a **second `fetch_failed` with the same `command_id` and a
-fresh `occurred_at`** — so its envelope key differs and consumer-side dedup-on-key will not
-collapse it. That is by design (see **The frame**); it is also not something Replicator can
-engineer away, since a deterministic `occurred_at` would need a durable store Replicator does not
-have and must not grow.
+**This covers `fetch_failed` too, and there the duplicates are not even identical** — a second
+failure fact under the same `command_id` with a fresh `occurred_at`, so its envelope key differs
+and consumer-side dedup-on-key will not collapse it. Why, and why Replicator cannot engineer it
+away, is in [the reference](content-fetch-issuer-reference.md#why-a-duplicate-failure-fact-is-not-identical).
 
 Closing a pending entry must therefore be idempotent in both directions: applying the same
 terminal failure twice, and applying a failure to an entry already closed.
@@ -288,12 +280,6 @@ loses that correlation entirely: the same silent-failure shape as MUST-1, arrive
 opposite direction.
 
 Dedupe on `command_id`. Treat the fingerprint as content identity.
-
-Since the fact carries per-occasion fetch metadata (cannobserv#271), fingerprint-dedupe now also
-loses **which fetch** a fact describes. Two facts sharing a fingerprint may carry different
-`final_url`, `etag`, `last_modified`, and `fetched_at`; keeping only the first pins an issuer's
-stored validators to whichever occasion arrived first and holds them there for as long as the
-content is unchanged — precisely the period a conditional GET would have been useful.
 
 And do not dedupe **`fetch_failed`** on `command_id` either — for the opposite reason. More than
 one failure fact per command is expected (MUST-4), and once non-terminal facts exist a command
@@ -328,9 +314,6 @@ Which is why the **reaper stays**, demoted from primary mechanism to backstop:
   cadence is an operator setting on Replicator's host, and an issuer that pins 60 s starts
   re-issuing under a live retry the day it is tuned. Expect duplicate work rather than assuming
   loss.
-- A `fetch_failed` publish that itself fails is swallowed on Replicator's side (the dead-letter
-  still happens, and raising there would only burn the delivery ceiling and reach the same DLQ
-  minutes later). Rare, logged, and another reason the reaper is not optional.
 
 See the [failure taxonomy](content-fetch-issuer-reference.md#failure-taxonomy-what-happens-and-what-the-issuer-sees) for exactly
 which outcomes are visible and which are not.
@@ -349,10 +332,9 @@ host. Treat it as a floor to ask about, not a constant to schedule against: cons
 promptly and re-issue if the URI fails to open, rather than building a pipeline whose timing
 assumes seven days.
 
-The clock runs from **last reference by a fetch**, not last read by a consumer: Replicator `utime`s
-the file when a re-fetch short-circuits on existing bytes
-([`src/storage/local.py::_touch`](../../src/storage/local.py)), but a consumer opening the path does
-not touch mtime. Holding a `blob_uri` for a week without a re-fetch loses the bytes.
+The clock runs from **last reference by a fetch**, not last read by a consumer — holding a
+`blob_uri` for a week without a re-fetch loses the bytes. The mechanism is in
+[the reference](content-fetch-issuer-reference.md#how-the-blob-ttl-clock-runs).
 
 Also: `blob_uri` is a **`file://` URI on Replicator's host**. The contract is VM-local today.
 A consumer on another host cannot open it, and nothing on the wire says so.
@@ -370,8 +352,7 @@ A consumer on another host cannot open it, and nothing on the wire says so.
 - **`command_id` is echoed** on every fact produced from a command, success or failure.
 - **The fingerprint is definitional.** Replicator is the cluster's sole fetcher and sole
   fingerprinter, so `content_fingerprint` *is* the content identity — there is nothing to
-  cross-check it against. A consumer can still re-hash the bytes at `blob_uri` and compare; worth
-  doing once the store crosses a boundary (object store, another host).
+  cross-check it against.
 - **Identical bytes are one blob.** Content-addressed storage, so a re-fetch of unchanged content
   costs an origin request and nothing else.
 - **At-least-once delivery**, both directions.
@@ -379,7 +360,8 @@ A consumer on another host cannot open it, and nothing on the wire says so.
 ## What Replicator does **not** guarantee
 
 - **No *non-terminal* failure fact** — a command that is retrying announces nothing until it
-  either succeeds or is closed. See MUST-6 and the `FetchFailedEvent` note above.
+  either succeeds or is closed. See MUST-6 and
+  [the failure-fact notes](content-fetch-issuer-reference.md#reading-the-failure-fact).
 - **No failure fact for a frame that is not a `content.fetch` command** — any `command_id` it
   carries is another command's, so there is nothing *safe* to correlate one on. MUST-6.
 - **No failure fact for a command whose `command_id` is blank** — nothing to correlate one on at
@@ -394,6 +376,7 @@ A consumer on another host cannot open it, and nothing on the wire says so.
   Whether a paced command is slept through or parked for the next reclaim depends on the deployed
   interval — see [the reference](content-fetch-issuer-reference.md#pacing-at-the-deployed-defaults),
   since it changes what a reaper should expect.
+- **No ordering.** Two commands issued in sequence may produce facts in either order.
 - **No cross-command dedupe.** Two `command_id`s for one URL are two fetches and two facts, by
   design — that is what makes MUST-1 work.
 - **No retention guarantee on `content.blobs`.** Replicator never trims it — `BusPublish` takes no
@@ -407,10 +390,10 @@ A consumer on another host cannot open it, and nothing on the wire says so.
 
 Split out in #24 so this document stays readable start to finish. Equally normative:
 
-- [`content-fetch-issuer-reference.md`](content-fetch-issuer-reference.md) — the refusal list, the
-  enriched `blob_available` fields, the **failure taxonomy**, the four silent conditions, reading
-  the DLQ, and the **provenance and trust** posture.
-- [`replicator-boundaries.md`](replicator-boundaries.md) — what Replicator may become, and therefore
-  which payload fields this contract will never grow (#12).
+- [`content-fetch-issuer-reference.md`](content-fetch-issuer-reference.md) — everything this file
+  points at: the refusal list, the enriched fields, the **failure taxonomy**, the silent
+  conditions, the DLQ, and **provenance and trust**.
+- [`replicator-boundaries.md`](replicator-boundaries.md) — which payload fields this contract will
+  never grow (#12).
 - [`2026-07-31-fetch-failed-fact-settled.md`](../plans/2026-07-31-fetch-failed-fact-settled.md) —
-  historical: how the silence-as-failure question was closed. MUST-6 above is the current contract.
+  historical: how the silence-as-failure question was closed.

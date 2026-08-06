@@ -9,14 +9,14 @@ The current contract is MUST-6 and the guarantee/non-guarantee pair in that docu
 
 ---
 
-## Settled: the `fetch_failed` fact
-
 **Resolved.** This document previously carried silence-as-failure as an open question, arguing the
 fix needed "a consumer that wants it — Watcher, once Phase 4 has a real pending map to close out."
 That consumer arrived ([CannObserv/watcher#241](https://github.com/CannObserv/watcher/issues/241)),
 co-core shipped `FetchFailedEvent` in **v0.7.2**
 ([cannobserv#270](https://github.com/CannObserv/cannobserv/issues/270)), and Replicator publishes
-it (#9). MUST-6 above is the current contract; the tables are the current shape.
+it (#9).
+[MUST-6](../contracts/content-fetch-issuer-contract.md#6-handle-fetch_failed-and-keep-a-reaper-anyway)
+is the current contract; the tables are the current shape.
 
 Two things the resolution deliberately did **not** do, recorded so they are not re-litigated as
 oversights:

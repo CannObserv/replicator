@@ -61,7 +61,6 @@ own fingerprints.
 remains the sole dedupe key and the sole correlator. Two commands differing only in options are two
 fetch occasions (MUST-1 unchanged); a *redelivery* carrying different options is still the same
 command and is still deduped.
-
 ---
 
 ## The enriched `blob_available` fields
@@ -120,7 +119,6 @@ lives here rather than in Watcher. Three details are the whole value of them:
 > own records and send the request unconditionally. (#17 recommends `reason="not_modified"` on the
 > existing fact rather than a new event type, so an issuer branching on `terminal` first is already
 > forward-compatible with it.)
-
 ---
 
 ## Failure taxonomy: what happens, and what the issuer sees
@@ -156,7 +154,81 @@ The "nothing" rows are not one problem, and the reaper is not the answer to all 
   handled* — the first delivery ran and published its fact, so the issuer's entry is already
   closed. Reaping and re-issuing there sends the origin a second request for work that
   succeeded. The fix is MUST-1: mint a fresh id per fetch occasion and the row cannot occur.
+---
 
+## Reading the failure fact
+
+Field types are in
+[the failure fact](content-fetch-issuer-contract.md#the-failure-fact). Three behaviours are not
+visible from the table.
+
+co-core's own docstring also lists `wrong_payload_type`. **Replicator never emits it**, and an
+issuer should not expect it: a frame that decoded to a non-`content.fetch` payload carries, at
+most, *somebody else's* `command_id` — `BlobAvailableEvent`'s names a command that **succeeded**,
+which is why a blob exists for it. A terminal failure keyed on that id would tell an issuer its
+good bytes are never coming. That frame dead-letters and stays silent.
+
+`reason` is a plain `str` and **not** a `Literal`, deliberately: a producer adding a token must
+never crash an older `extra="ignore"` consumer. So the token list is additive, and a consumer
+that has branched on `terminal` first is already correct for tokens that do not exist yet.
+
+**Everything Replicator emits today is `terminal=True`.** Non-terminal facts — a 5xx or a 429
+announcing itself while it is still retrying — are deferred (#9 §3): `content.blobs` is
+broadcast and nothing trims it, so a fact per reclaim during an origin outage is unbounded
+growth on a stream nobody prunes. The cost is stated plainly in MUST-6: a retrying command is
+still invisible for as long as it retries. If an issuer needs the in-flight signal, say so on
+its tracker rather than inferring one from silence.
+---
+
+## The four silent conditions
+
+Named in [MUST-6](content-fetch-issuer-contract.md#6-handle-fetch_failed-and-keep-a-reaper-anyway);
+this is each one and why it is silent.
+
+**Silence has not gone away — it has narrowed.** Three conditions still produce nothing, and one
+produces nothing *yet*:
+
+- **A frame that fails `from_wire` entirely.** It has no payload, therefore no `command_id`,
+  therefore nothing a fact could correlate on. DLQ-only. The commonest cause is an issuer that
+  `XADD`ed flat fields instead of publishing through `to_wire` — see
+  [The frame](content-fetch-issuer-contract.md#the-frame-envelope) — and, since
+  co-core 0.7.2, a naive `occurred_at`.
+- **A frame that decodes to a payload that is not a `content.fetch` command.** Not merely
+  unreportable — *unsafe* to report. Most of the payload union has no `command_id` at all, and the
+  members that do carry one that belongs to a different command: a misrouted `blob_available`
+  names a command that **succeeded**. Announcing a terminal failure against it would contradict a
+  fact the issuer has already applied, and MUST-4 covers duplicates, not contradictions. Silent by
+  design.
+- **A command whose `command_id` is blank.** Refused before the fetch and dead-lettered, with no
+  fact — there is no correlator to key one on. Silent to the issuer, but *not* silently
+  processed: an empty id is not a valid `command_id` (MUST-1), and accepting it would take the
+  dedupe key `replicator:cmd:` under which every later blank-id command becomes a no-op.
+- **A command still retrying.** Replicator emits no non-terminal fact today (#9 §3), so a 5xx,
+  a 429, a network error, or a blob tree over its ceiling is invisible for as long as it retries —
+  and there is no latency bound on that: transient failures retry indefinitely at the
+  `REPLICATOR_CLAIM_MIN_IDLE_MS` cadence (default 60 s), and over
+  `REPLICATOR_BLOB_MAX_TOTAL_BYTES` the command parks in the PEL until a retention sweep frees
+  space. A command can legitimately be in flight for a long time.
+---
+
+## Reading the DLQ
+
+The operator's surface, and the complement of the fact rather than a substitute for it.
+
+**The DLQ is still readable, and still worth reading** — for what the fact cannot carry. It is an
+ordinary stream on the same broker, and every entry carries the original **command** envelope — so
+`key` is the failed `command_id` — plus `dlq_reason` and `dlq_original_id`. Its value is now the
+complement of the fact rather than a substitute for it: it is the only place the silent rows
+above show up at all, and it preserves the offending frame itself, which no fact does. Read it with
+a plain `XREAD` and no consumer group: a group left behind by a non-owner accumulates a PEL nothing
+drains.
+
+One caveat that survives unchanged: the anomaly class that dead-letters a *synthesized* record (a
+frame that failed to decode at all, whose original entry has since been trimmed) carries no `key`
+to match on.
+
+Inspection commands live in [`docs/COMMANDS.md`](../COMMANDS.md). Monitoring the DLQ on
+Replicator's side remains an operator responsibility, not a bus-level one.
 ---
 
 ## Provenance and trust
@@ -186,84 +258,6 @@ issuer attaches is not re-exposed one layer down.
 Relatedly: nothing but the seed script writes to `content.fetch` today, and `seed_fetch.py`
 requires `--production` for the one target the live worker consumes. A frame on that stream is
 fetched for real.
-
----
-
-## Reading the failure fact
-
-Field types are in
-[the failure fact](content-fetch-issuer-contract.md#the-failure-fact). Two tokens' worth of
-behaviour is not visible from the table.
-
-co-core's own docstring also lists `wrong_payload_type`. **Replicator never emits it**, and an
-issuer should not expect it: a frame that decoded to a non-`content.fetch` payload carries, at
-most, *somebody else's* `command_id` — `BlobAvailableEvent`'s names a command that **succeeded**,
-which is why a blob exists for it. A terminal failure keyed on that id would tell an issuer its
-good bytes are never coming. That frame dead-letters and stays silent.
-
-`reason` is a plain `str` and **not** a `Literal`, deliberately: a producer adding a token must
-never crash an older `extra="ignore"` consumer. So the token list is additive, and a consumer
-that has branched on `terminal` first is already correct for tokens that do not exist yet.
-
-**Everything Replicator emits today is `terminal=True`.** Non-terminal facts — a 5xx or a 429
-announcing itself while it is still retrying — are deferred (#9 §3): `content.blobs` is
-broadcast and nothing trims it, so a fact per reclaim during an origin outage is unbounded
-growth on a stream nobody prunes. The cost is stated plainly in MUST-6: a retrying command is
-still invisible for as long as it retries. If an issuer needs the in-flight signal, say so on
-its tracker rather than inferring one from silence.
-
----
-
-## The four silent conditions
-
-Named in [MUST-6](content-fetch-issuer-contract.md#6-handle-fetch_failed-and-keep-a-reaper-anyway);
-this is each one and why it is silent.
-
-**Silence has not gone away — it has narrowed.** Three conditions still produce nothing, and one
-produces nothing *yet*:
-
-- **A frame that fails `from_wire` entirely.** It has no payload, therefore no `command_id`,
-  therefore nothing a fact could correlate on. DLQ-only. The commonest cause is an issuer that
-  `XADD`ed flat fields instead of publishing through `to_wire` — see **The frame** — and, since
-  co-core 0.7.2, a naive `occurred_at`.
-- **A frame that decodes to a payload that is not a `content.fetch` command.** Not merely
-  unreportable — *unsafe* to report. Most of the payload union has no `command_id` at all, and the
-  members that do carry one that belongs to a different command: a misrouted `blob_available`
-  names a command that **succeeded**. Announcing a terminal failure against it would contradict a
-  fact the issuer has already applied, and MUST-4 covers duplicates, not contradictions. Silent by
-  design.
-- **A command whose `command_id` is blank.** Refused before the fetch and dead-lettered, with no
-  fact — there is no correlator to key one on. Silent to the issuer, but *not* silently
-  processed: an empty id is not a valid `command_id` (MUST-1), and accepting it would take the
-  dedupe key `replicator:cmd:` under which every later blank-id command becomes a no-op.
-- **A command still retrying.** Replicator emits no non-terminal fact today (#9 §3), so a 5xx,
-  a 429, a network error, or a blob tree over its ceiling is invisible for as long as it retries —
-  and there is no latency bound on that: transient failures retry indefinitely at the
-  `REPLICATOR_CLAIM_MIN_IDLE_MS` cadence (default 60 s), and over
-  `REPLICATOR_BLOB_MAX_TOTAL_BYTES` the command parks in the PEL until a retention sweep frees
-  space. A command can legitimately be in flight for a long time.
-
----
-
-## Reading the DLQ
-
-The operator's surface, and the complement of the fact rather than a substitute for it.
-
-**The DLQ is still readable, and still worth reading** — for what the fact cannot carry. It is an
-ordinary stream on the same broker, and every entry carries the original **command** envelope — so
-`key` is the failed `command_id` — plus `dlq_reason` and `dlq_original_id`. Its value is now the
-complement of the fact rather than a substitute for it: it is the only place the silent rows
-above show up at all, and it preserves the offending frame itself, which no fact does. Read it with
-a plain `XREAD` and no consumer group: a group left behind by a non-owner accumulates a PEL nothing
-drains.
-
-One caveat that survives unchanged: the anomaly class that dead-letters a *synthesized* record (a
-frame that failed to decode at all, whose original entry has since been trimmed) carries no `key`
-to match on.
-
-Inspection commands live in [`docs/COMMANDS.md`](../COMMANDS.md). Monitoring the DLQ on
-Replicator's side remains an operator responsibility, not a bus-level one.
-
 ---
 
 ## Version history
@@ -274,16 +268,16 @@ the tz-aware `occurred_at` in cannobserv#273, both shipped in **co-core v0.7.2**
 cannobserv#272, shipped in **v0.7.3** and **v0.7.5**. Replicator requires **co-core ≥ 0.7.5**.
 Founding rationale:
 [`docs/plans/2026-06-25-replicator-mvp-design.md`](../plans/2026-06-25-replicator-mvp-design.md).
-
 ---
 
 ## What the envelope key is for
 
 `key` is **not** load-bearing on the consume path: Replicator decodes `payload` and dedupes on
 `payload.command_id`, never on the envelope key. Its value is operational — it is what makes a DLQ
-entry correlatable without parsing JSON (see MUST-6), and it is what a future partitioned consumer
+entry correlatable without parsing JSON (see
+[MUST-6](content-fetch-issuer-contract.md#6-handle-fetch_failed-and-keep-a-reaper-anyway)), and it
+is what a future partitioned consumer
 would shard on.
-
 ---
 
 ## Pacing at the deployed defaults
@@ -291,10 +285,70 @@ would shard on.
 Qualifies the pacing entry under
 [what Replicator does not guarantee](content-fetch-issuer-contract.md#what-replicator-does-not-guarantee).
 
-  **At the shipped defaults every wait is slept through inside the handler**, so the cost is
-  seconds of added turnaround and nothing else. Only when an operator configures the interval
-  *above* `REPLICATOR_READ_BLOCK_MS` (5 s) does a paced command instead stay pending for the
-  next reclaim, which moves the cadence from seconds to a minute. That is a deployment
-  decision, not a default — but it is the one that changes what a reaper should expect, so it
-  is stated here rather than left to be discovered.
-- **No ordering.** Two commands issued in sequence may produce facts in either order.
+**At the shipped defaults every wait is slept through inside the handler**, so the cost is
+seconds of added turnaround and nothing else. Only when an operator configures the interval
+*above* `REPLICATOR_READ_BLOCK_MS` (5 s) does a paced command instead stay pending for the
+next reclaim, which moves the cadence from seconds to a minute. That is a deployment
+decision, not a default — but it is the one that changes what a reaper should expect, so it
+is stated here rather than left to be discovered.
+
+---
+
+## Why a duplicate failure fact is not identical
+
+Expands [MUST-4](content-fetch-issuer-contract.md#4-make-correlation-idempotent--one-command-can-yield-more-than-one-fact).
+
+**This covers `fetch_failed` too, and there the duplicates are not even identical.** The failure
+fact is published *before* the dead-letter (`dead_letter` acks inside itself, so a fact published
+after it is lost outright on a crash in between). A crash in that window redelivers the command,
+re-runs the failure, and publishes a **second `fetch_failed` with the same `command_id` and a
+fresh `occurred_at`** — so its envelope key differs and consumer-side dedup-on-key will not
+collapse it. That is by design (see [The frame](content-fetch-issuer-contract.md#the-frame-envelope)); it is also not something Replicator can
+engineer away, since a deterministic `occurred_at` would need a durable store Replicator does not
+have and must not grow.
+
+---
+
+## How the blob TTL clock runs
+
+Expands [MUST-7](content-fetch-issuer-contract.md#7-copy-the-bytes-before-the-blob-expires).
+
+The clock runs from **last reference by a fetch**, not last read by a consumer: Replicator `utime`s
+the file when a re-fetch short-circuits on existing bytes
+([`src/storage/local.py::_touch`](../../src/storage/local.py)), but a consumer opening the path does
+not touch mtime. Holding a `blob_uri` for a week without a re-fetch loses the bytes.
+
+Also, on the reaper [MUST-6](content-fetch-issuer-contract.md#6-handle-fetch_failed-and-keep-a-reaper-anyway)
+keeps:
+
+- A `fetch_failed` publish that itself fails is swallowed on Replicator's side (the dead-letter
+  still happens, and raising there would only burn the delivery ceiling and reach the same DLQ
+  minutes later). Rare, logged, and another reason the reaper is not optional.
+
+---
+
+## Consequences an issuer inherits from the MUSTs
+
+Three follow-ons, each expanding a rule rather than adding one.
+
+**Losing the `command_id` -> domain map**
+([MUST-2](content-fetch-issuer-contract.md#2-persist-command_id--domain-durably-before-publishing)):
+
+Losing the map is recoverable but not free: the intent can be re-issued under a fresh
+`command_id`, at the cost of another origin request. What is *not* recoverable is the in-flight
+fact — it will arrive, match nothing, and have to be discarded.
+
+**Fingerprint-dedupe now loses more than a correlation**
+([MUST-5](content-fetch-issuer-contract.md#5-do-not-dedupe-facts-on-content_fingerprint)) — the
+same argument as the per-occasion blockquote above, from the consumer's side:
+
+Since the fact carries per-occasion fetch metadata (cannobserv#271), fingerprint-dedupe now also
+loses **which fetch** a fact describes. Two facts sharing a fingerprint may carry different
+`final_url`, `etag`, `last_modified`, and `fetched_at`; keeping only the first pins an issuer's
+stored validators to whichever occasion arrived first and holds them there for as long as the
+content is unchanged — precisely the period a conditional GET would have been useful.
+
+**Re-hashing the bytes** (against *the fingerprint is definitional*, under
+[what Replicator guarantees](content-fetch-issuer-contract.md#what-replicator-guarantees)):
+ A consumer can still re-hash the bytes at `blob_uri` and compare; worth
+  doing once the store crosses a boundary (object store, another host).
