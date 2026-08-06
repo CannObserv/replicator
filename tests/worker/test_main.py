@@ -18,6 +18,8 @@ from pathlib import Path
 import pytest
 from co_core.effects.fetch import FetchResult
 from co_core.pure.adapters.bus import streams
+from co_core.pure.adapters.bus.envelope import to_wire
+from co_core.pure.models.changes import FetchPolicyState
 from co_core.pure.util.hashing import sha256
 
 import src.worker.main
@@ -32,7 +34,22 @@ from src.worker.main import (
     run,
     warn_if_unreachable,
 )
-from tests.worker.conftest import make_command
+from tests.worker.conftest import make_command, now
+
+
+@pytest.fixture(autouse=True)
+def _short_poll_window(monkeypatch):
+    """Shrink the blocking-read window for every ``run()`` test in this module.
+
+    fakeredis honours ``block`` on the groupless ``XREAD`` the policy reader uses
+    (#19), while returning immediately from the consume loop's ``XREADGROUP`` —
+    so on the fake, and only there, shutdown is held for a full poll window by
+    the one task that is not what any of these tests are about. On a live broker
+    both block concurrently and the worst case is the larger of the two, which is
+    what ``TimeoutStopSec`` is already sized for.
+    """
+    monkeypatch.setenv("REPLICATOR_READ_BLOCK_MS", "50")
+    get_settings.cache_clear()
 
 
 def _stopped() -> asyncio.Event:
@@ -507,6 +524,73 @@ async def test_the_sweeper_and_the_byte_path_share_one_measurement(
     await run(_stopped())
 
     assert seen["handler"] is seen["sweeper"]
+
+
+async def test_the_byte_path_and_the_policy_reader_share_one_map(monkeypatch, fake_redis, tmp_path):
+    """Two ``FetchPolicyMap`` instances and the numbers never reach the pacer.
+
+    The same failure shape as two ``BlobUsage`` instances: both halves stay
+    individually correct, the worker logs policies being applied, and every host
+    is still paced at the fallback with nothing observing the difference.
+    """
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    seen = {}
+    real_build_handler = src.worker.main.build_handler
+
+    def recording_build_handler(**kwargs):
+        seen["policy"] = kwargs["policy"]
+        return real_build_handler(**kwargs)
+
+    async def recording_run_policy_reader(*args, **kwargs):
+        seen["reader"] = kwargs["policies"]
+
+    monkeypatch.setattr("src.worker.main.build_handler", recording_build_handler)
+    monkeypatch.setattr("src.worker.main.run_policy_reader", recording_run_policy_reader)
+
+    await run(_stopped())
+
+    # The handler is given a bound method, not the map, so the identity is
+    # asserted through it — which is also what proves the byte path reads the
+    # instance the reader writes to.
+    assert seen["policy"].__self__ is seen["reader"]
+
+
+async def test_the_policy_map_is_rebuilt_before_the_consume_loop_starts(
+    monkeypatch, fake_redis, tmp_path
+):
+    """Started as a peer, the loop would fetch its opening commands against an
+    empty map and pace every host at the fallback — safe only because the
+    fallback is supposed to be the stricter number.
+
+    Not ``_stopped()``: since CR #13 the replay honours the stop event, so a
+    pre-set one correctly skips it. The stubbed consume loop returning is what
+    ends the run here instead.
+    """
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    await fake_redis.xadd(
+        streams.CONTENT_FETCH_POLICY,
+        to_wire(FetchPolicyState(occurred_at=now(), host="slow.test", min_interval_seconds=30.0)),
+    )
+    seen = {}
+
+    async def recording_run_loop(**kwargs):
+        seen["at_loop_start"] = policies["map"].interval_for("slow.test")
+
+    real_map = src.worker.main.FetchPolicyMap
+    policies = {}
+
+    def recording_map(default):
+        policies["map"] = real_map(default)
+        return policies["map"]
+
+    monkeypatch.setattr("src.worker.main.FetchPolicyMap", recording_map)
+    monkeypatch.setattr("src.worker.main.run_loop", recording_run_loop)
+
+    await run(asyncio.Event())
+
+    assert seen["at_loop_start"] == 30.0
 
 
 async def test_a_failing_consume_loop_stops_the_sweeper_and_propagates(

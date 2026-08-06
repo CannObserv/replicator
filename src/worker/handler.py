@@ -28,7 +28,7 @@ from src.core.logging import get_logger
 from src.storage.base import BlobStore
 from src.storage.sweeper import BlobUsage
 from src.worker.loop import Handler, park
-from src.worker.pacing import HostPacer
+from src.worker.pacing import HostPacer, HostPolicy
 
 logger = get_logger(__name__)
 
@@ -172,6 +172,7 @@ def build_handler(
     client: Redis,
     settings: Settings,
     usage: BlobUsage | None = None,
+    policy: HostPolicy | None = None,
     pacer: HostPacer | None = None,
     park_above_seconds: float | None = None,
     stop: asyncio.Event | None = None,
@@ -190,6 +191,13 @@ def build_handler(
     silently stopped pacing looks exactly like one that is working. Tests inject
     one with a controlled interval and clock.
 
+    ``policy`` is where the per-host numbers come from (#19) — in the worker,
+    ``FetchPolicyMap.interval_for``. Passed as a bare callable rather than the
+    map itself so this module stays ignorant of ``content.fetch-policy``, the
+    same way ``loop.py`` stays ignorant of ``content.blobs``. Ignored when
+    ``pacer`` is injected: a caller supplying its own pacer has already decided
+    what that pacer consults.
+
     ``park_above_seconds`` is where a pacing wait stops being slept through and
     starts parking the message. Defaults to the poll window — a wait no longer
     than one blocking read adds nothing to the shutdown latency the unit's
@@ -207,7 +215,9 @@ def build_handler(
     """
     publisher = AsyncBusPublisher(client)
     usage = usage if usage is not None else BlobUsage()
-    pacer = pacer if pacer is not None else HostPacer(settings.min_host_interval_seconds)
+    pacer = (
+        pacer if pacer is not None else HostPacer(settings.min_host_interval_seconds, policy=policy)
+    )
     if park_above_seconds is None:
         park_above_seconds = settings.read_block_ms / 1000
     stop = stop if stop is not None else asyncio.Event()

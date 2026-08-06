@@ -31,6 +31,12 @@ from src.storage.local import LocalBlobStore, ensure_directory
 from src.storage.sweeper import BlobUsage
 from src.worker.handler import build_handler
 from src.worker.loop import run_loop
+from src.worker.policy import (
+    FetchPolicyMap,
+    build_policy_reader,
+    replay_policies,
+    run_policy_reader,
+)
 from src.worker.reporter import build_failure_reporter
 from src.worker.retention import run_sweeper
 
@@ -222,11 +228,19 @@ def _log_shutdown_failures(results: list[BaseException | None]) -> None:
             )
 
 
-async def run(stop: asyncio.Event | None = None) -> None:
+async def run(
+    stop: asyncio.Event | None = None,
+    *,
+    policy_topic: str = streams.CONTENT_FETCH_POLICY,
+) -> None:
     """Connect to the bus, ensure the consumer group, and consume until stopped.
 
     ``stop`` is injectable so tests drive the loop without signals; left unset,
     the process owns its own event and wires SIGTERM/SIGINT to it.
+
+    ``policy_topic`` is a defaulted argument for the same reason ``content.fetch``
+    and ``content.blobs`` are: the only caller that moves it is a live-broker test
+    working on a scratch stream.
     """
     settings = get_settings()
     configure_logging(settings.log_level)
@@ -302,6 +316,16 @@ async def run(stop: asyncio.Event | None = None) -> None:
         # would be individually correct and the ceiling would never fire, with
         # nothing observing the difference until the disk was full.
         usage = BlobUsage()
+        # Rebuilt from the stream *before* the consume loop starts, not as the
+        # first pass of the tail task (#19). Started as a peer, the loop would
+        # fetch its opening commands against an empty map and pace every host at
+        # the fallback — safe only because the fallback is supposed to be the
+        # stricter number, which is the one assumption not worth spending on
+        # startup ordering. `ensure_group` above already makes a blocking broker
+        # call at boot, so this adds a round trip, not a new failure mode.
+        policies = FetchPolicyMap(settings.min_host_interval_seconds)
+        policy_reader = build_policy_reader(client, topic=policy_topic)
+        await replay_policies(policy_reader, policies, stop=stop)
         await _run_until_first_exit(
             run_loop(
                 client=client,
@@ -316,6 +340,13 @@ async def run(stop: asyncio.Event | None = None) -> None:
                     client=client,
                     settings=settings,
                     usage=usage,
+                    # Where the per-host numbers come from (#19). A bound method
+                    # rather than the map, so the byte path never learns there is
+                    # a stream behind it — and the *same* map the reader below
+                    # writes to, for the reason `usage` is one instance: two
+                    # would both be individually correct and the policies would
+                    # never reach the pacer.
+                    policy=policies.interval_for,
                     # The same stop event the loop and the sweeper ride, so a
                     # handler waiting out a politeness window does not hold a
                     # SIGTERM for it (#12).
@@ -328,6 +359,10 @@ async def run(stop: asyncio.Event | None = None) -> None:
                 stop=stop,
             ),
             run_sweeper(root=blob_dir, settings=settings, usage=usage, stop=stop),
+            # Passed last: `_exit_failure` picks the raised failure by argument
+            # order, and this task absorbs its own errors anyway, so it should
+            # never be the one explaining an exit.
+            run_policy_reader(policy_reader, policies=policies, settings=settings, stop=stop),
             stop=stop,
         )
         logger.info("worker stopped", extra={"consumer": settings.consumer_name})

@@ -15,7 +15,7 @@ import pytest
 from co_core.pure.models.changes import ContentFetchCommand
 from redis.exceptions import ConnectionError as RedisConnectionError
 
-from src.worker.loop import _error_backoff_seconds
+from src.worker.loop import error_backoff_seconds
 from tests.worker.conftest import TOPIC, drive_loop, make_command, unreachable_handler
 
 # Resilience tests either patch park or drive sub-millisecond backoffs, so a
@@ -63,9 +63,9 @@ async def test_a_broker_failure_does_not_kill_the_loop(fake_redis, consumer, set
 
 async def test_the_backoff_escalates_and_caps():
     """Consecutive failures must escalate, capped — not hammer a down broker."""
-    first = _error_backoff_seconds(1, base=1.0, maximum=30.0)
-    second = _error_backoff_seconds(2, base=1.0, maximum=30.0)
-    huge = _error_backoff_seconds(10_000, base=1.0, maximum=30.0)
+    first = error_backoff_seconds(1, base=1.0, maximum=30.0)
+    second = error_backoff_seconds(2, base=1.0, maximum=30.0)
+    huge = error_backoff_seconds(10_000, base=1.0, maximum=30.0)
 
     assert first == 1.0
     assert second > first

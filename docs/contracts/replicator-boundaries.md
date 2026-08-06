@@ -124,17 +124,20 @@ under test differ from the app that ships — for a surface no deployment serves
 to the FastAPI app could pass forever while an admin listener grew inside `src/worker/`. Both
 are asserted.
 
-### The policy stream (agreed, not yet built)
+### The policy stream (shipped, #19)
 
-Upstream model tracked at
-[CannObserv/cannobserv#285](https://github.com/CannObserv/cannobserv/issues/285) —
-`CONTENT_FETCH_POLICY`, `FetchPolicyEvent`, and the two gaps it surfaced: `BusPublish` cannot
-carry a `MAXLEN`, so the trimming this section requires is currently unexpressible through
-co-core, and `AsyncBusConsumer` is group-only, so the replay-then-tail read has no driver seam.
+Upstream shipped in co-core **v0.7.7**
+([CannObserv/cannobserv#285](https://github.com/CannObserv/cannobserv/issues/285)):
+`CONTENT_FETCH_POLICY`, the `FetchPolicyState` payload, and `AsyncBusTailReader` — the
+groupless replay-then-tail driver whose absence this section previously recorded as a gap.
 
-`content.fetch.policy` — last-write-wins per host key. Replicator replays it from `0-0` at
-boot into memory and tails it thereafter. No DB, rebuildable, no inbound calls, and the data
-stays owned by its producer.
+**The stream is `content.fetch-policy`, with a hyphen.** The dotted `content.fetch.policy`
+this document used to name collides with the `<topic>.dlq` derivation of the command stream.
+Use the constant, never the literal.
+
+Last-write-wins per host key. Replicator replays it from `0-0` at boot into memory and tails
+it thereafter. No DB, rebuildable, no inbound calls, and the data stays owned by its producer.
+`src/worker/policy.py`.
 
 Four properties that must hold or the design fails quietly:
 
@@ -146,6 +149,48 @@ Four properties that must hold or the design fails quietly:
   grow with policy history rather than with host count;
 - an **unknown host resolves to a conservative default**, never to unlimited;
 - **enforcement has a rate floor of `REPLICATOR_CLAIM_MIN_IDLE_MS`** (default 60 s). See below.
+
+Four consumer-side rules that came out of building it, each one a way to be wrong silently:
+
+- **`revoked` means "no explicit policy", not "no limit".** It is the tombstone LWW has no
+  delete for, and the host falls back to the same conservative default an unknown host gets.
+  `min_interval_seconds` is `None` on a tombstone by design, so **branch on `revoked` first** —
+  a consumer that reaches for the interval stores a `None` and hands it on as a number.
+- **`0.0` is a legal interval** meaning "this host needs no spacing", and it is falsy.
+  `policy.get(host) or default` turns an explicit operator decision into a missing one.
+- **The default's strictness cannot be asserted at startup.** A published interval has no upper
+  bound, so there is no value to validate against short of importing the issuer's own backoff
+  ceiling — the constant this indirection exists to avoid importing. What is enforceable is the
+  moment a real policy turns out to be *stricter* than the fallback that would replace it on
+  revocation or staleness, which is logged per host at apply time and is the number an operator
+  raises.
+- **Arrival order is not publication order.** The producer republishes its whole set
+  periodically; a republish assembled from a snapshot taken before a change that already
+  shipped would revert it, silently and in the loosening direction. The map holds the last
+  applied `occurred_at` per host and applies on `>=` — `>=` rather than `>` so a full set
+  stamped with one instant does not lose every host after the first.
+
+And two that are about the frame rather than the policy:
+
+- **`from_wire`'s dispatch table is global**, so a `blob_available` XADDed here decodes *cleanly*
+  into the wrong model rather than raising. There is no anomaly to recover from, no group, and
+  nothing to dead-letter — the only defence is an `isinstance` check before destructuring,
+  exactly as the command path does.
+- **`AsyncBusTailReader.replay()` cannot be used to do the replay.** It accumulates across many
+  `read` calls and returns its list only on a clean finish, so any raise part-way through
+  discards everything it read while the cursor has already advanced — a poison frame at position
+  *k* silently loses the *k−1* policies ahead of it, permanently, and on a last-write-wins stream
+  a lost policy is indistinguishable from one never published. Drive `read` and apply each batch
+  as it arrives. Recorded here and not only in the code because the next consumer of this stream —
+  or of any future config/state stream — will reach for the method whose name says what they
+  want. Worth fixing upstream (cannobserv#285) so the driver's own docstring carries it.
+
+Recovery from a frame that will never decode is **bounded and interruptible**: an anomaly is
+evidence the broker is answering, so it must not count toward the outage backoff — which leaves
+a run of them with nothing slowing it down, hence a `MAX_POISON_SKIPS` bound past which the boot
+replay gives up (the tail resumes from the same cursor) and the tail parks. The replay also
+rides the worker's stop event, because how long it runs is the producer's business: this
+document asks the producer to `MAXLEN`, and Replicator cannot enforce it.
 
 **Why a stream and not a Redis hash.** Broker state is explicitly permitted by test 1, so
 `HGETALL` on a per-host hash is a reasonable reach and will be proposed. It is rejected
@@ -186,42 +231,63 @@ performs adds nothing to the shutdown latency `TimeoutStopSec` is sized for. The
 cuts the sleep short, and an interrupted wait is not an elapsed one: the command parks rather
 than fetching unpaced on the way out. `src/worker/pacing.py`, `handler.py::_pace`.
 
-### The interim default (shipped)
+### The fallback default (was the interim, #12 → #19)
 
 `REPLICATOR_MIN_HOST_INTERVAL_SECONDS`, default **1.0 s** — Watcher's own
-`DEFAULT_MIN_INTERVAL`, chosen precisely because it invents nothing. The numbers are the
-issuer's under this charter, so until they travel over the bus the least-wrong value is the one
-the cluster already commits to; the cutover then changes *who* paces rather than *how much*.
-`0` disables pacing outright, an operator escape hatch and a choice to have none.
+`DEFAULT_MIN_INTERVAL`, chosen precisely because it invents nothing. #12 shipped it as one
+number for every origin, standing in for a stream that did not exist. #19 gave it its permanent
+job: it is what a host with **no explicit policy** resolves to — unknown, revoked, or not yet
+replayed — and never "unlimited", because a boot replay cannot tell a consumer whether the set
+it received is whole.
+
+**`0` no longer disables pacing outright.** It is the fallback for unpublished hosts only; a
+host with a policy is still paced by it. The alternative would let a local env var veto a value
+the issuer published, which inverts the ownership split this whole document settles. An
+operator who wants no politeness at all now has to say so per host, through the producer that
+owns the numbers.
 
 Consistent with the charter on both halves: enforcement is mechanism (test 2 — nobody but the
-fetcher can see a host's tolerance across commands), and a single default is not policy in the
-sense test 3 cares about — it names no domain concept and carries no per-host table. The state
-is a host → last-request map in memory: derived, bounded by pruning, and rebuildable by replay,
-which is the second of the three permitted state shapes. A cold worker is polite from scratch,
-which errs in the safe direction.
+fetcher can see a host's tolerance across commands), and a fallback number is not policy in the
+sense test 3 cares about — it names no domain concept, and the per-host table it defers to is
+the producer's. **Two in-memory maps** now, with different bounding rules and deliberately so:
+the pacer's host → last-request map is consumer-derived and pruned to `MAX_TRACKED_HOSTS`,
+while the policy map is bounded by what the producer publishes and is **never pruned** —
+dropping an entry to honour a local limit would silently loosen a host's spacing, the exact
+failure the stream exists to remove. Both are derived, rebuildable by replay, and hold no
+domain vocabulary: the second of the three permitted state shapes, twice.
 
-What it is **not** is the design. One number for every origin is exactly the "conservative
-default" the policy stream exists to replace with real per-host values.
+**Boot ordering is part of the design, not an implementation detail.** `replay()` runs
+synchronously before the consume loop starts. Started as a peer task, the worker would fetch
+its opening commands against an empty map and pace every host at the fallback — safe only
+because the fallback is meant to be the stricter number, and that is the one assumption not
+worth spending on startup ordering. A failed replay is absorbed rather than fatal: the cursor
+advances only over messages that decoded, so the tail resumes from the same place and drains
+the rest, while failing the boot would turn a policy-stream hiccup into a total fetch outage.
+The rebuilt host count is logged, because an empty map and a working one are otherwise
+indistinguishable from outside.
 
-**Known limitation, for the stream to resolve: the host asked for is not always the host
+**Known limitation, still open after #19: the host asked for is not always the host
 reached.** httpx follows redirects inside the driver, so a URL that 301s elsewhere is paced
 under the name the command carried and not at all under the name that served it. A corpus where
 several watched URLs funnel into one portal or CDN therefore hits that host at N times the
 intended rate — the failure politeness exists to prevent. `FetchResult.final_url` is available
 where the fix would go, but recording the landing host too breaks "one request, one record",
-so it belongs in the policy stream's design rather than in a quiet amendment to the interim.
-Recorded here for the same reason `blob_uri` is: an unwritten gap and a decorative charter are
-the same thing to a reader.
+which wants its own decision. #19 did **not** resolve it: per-host numbers make the fix more
+defensible — the landing host would be paced under its own published policy rather than under a
+guess — without making it automatic. Tracked as its own gap rather than left as a promissory
+note against a stream that has now shipped, and recorded here for the same reason `blob_uri` is:
+an unwritten gap and a decorative charter are the same thing to a reader.
 
 **The stream is a precondition of the Phase 4 cutover, not a follow-on to it.** Watcher's
 limiter (`src/core/rate_limiter.py::acquire_for_domain`, fed by 429s its own fetch path
 observes) is load-bearing today and stops functioning the moment that fetch path becomes a
 publish path — it does not fail, it silently becomes decorative, pacing command publication
-rather than origin requests. **The interim default above closes that window**, so the cutover
-is no longer blocked on the stream; what remains is that one number for every origin is not
-what the cluster wants for long. Tracked issuer-side at
-[CannObserv/watcher#245](https://github.com/CannObserv/watcher/issues/245).
+rather than origin requests. #12's default closed that window on the consumer side and #19
+supplies the numbers; **what remains is issuer-side** — Watcher publishing its `Domain` rows
+onto this stream, tracked at
+[CannObserv/watcher#245](https://github.com/CannObserv/watcher/issues/245). Until it does,
+every host resolves to the fallback, which is the pre-#19 behaviour and is why the consumer
+half could land first.
 
 ## Reviewing a proposed payload field
 
@@ -303,6 +369,8 @@ than no test, because this document then cites it.
 - #7 — object-store blob backend (the tracked violation)
 - #9, #10, #11 — the Phase 4 contract additions
 - #12 — this charter
+- #19 — the policy stream's consumer half
+- [CannObserv/cannobserv#285](https://github.com/CannObserv/cannobserv/issues/285) — the policy stream contract (co-core v0.7.7)
 - [CannObserv/watcher#241](https://github.com/CannObserv/watcher/issues/241) — Phase 4 issuer
 - [CannObserv/watcher#245](https://github.com/CannObserv/watcher/issues/245) — the politeness gap at cutover
 - [CannObserv/archiver#72](https://github.com/CannObserv/archiver/issues/72) — cluster integration strategy

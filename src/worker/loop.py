@@ -57,10 +57,16 @@ _TRANSIENT_ERRORS: tuple[type[Exception], ...] = (
     BusyLoadingError,
 )
 
-# Bound on consecutive poison frames skipped in one recovery pass. claim_stale
-# restarts at 0-0 on every call, so each poison entry must be routed away before
-# the next claim can reach a good message; the bound keeps a pathological PEL
-# from starving the read path within a single tick.
+# Bound on consecutive poison frames stepped over before a reader pauses.
+#
+# Here: claim_stale restarts at 0-0 on every call, so each poison entry must be
+# routed away before the next claim can reach a good message, and the bound keeps
+# a pathological PEL from starving the read path within a single tick.
+#
+# Also imported by src/worker/policy.py, whose groupless reader skips by forcing
+# the cursor rather than by dead-lettering (#19). Same shape of hazard — skipping
+# is cheap enough per frame to hide that an unbounded run of them is a hot loop
+# against the broker — so it is one constant rather than two that drift apart.
 MAX_POISON_SKIPS = 10
 
 # The consume-path handler seam. Raising signals failure; the loop — not the
@@ -630,7 +636,7 @@ async def run_loop(
                 )
             await park(
                 stop,
-                _error_backoff_seconds(
+                error_backoff_seconds(
                     consecutive_failures,
                     base=settings.error_backoff_base_seconds,
                     maximum=settings.error_backoff_max_seconds,
@@ -645,7 +651,7 @@ async def run_loop(
             await park(stop, IDLE_SLEEP_SECONDS)
 
 
-def _error_backoff_seconds(consecutive_failures: int, *, base: float, maximum: float) -> float:
+def error_backoff_seconds(consecutive_failures: int, *, base: float, maximum: float) -> float:
     """Exponential backoff (``base * 2**(n-1)``) capped at ``maximum``.
 
     The exponent is clamped so the intermediate cannot overflow before the cap
