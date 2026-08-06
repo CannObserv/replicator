@@ -41,6 +41,7 @@ Every override's `SKILL.md` must declare `overrides:` and `override-reason:` in 
 
 | Skill | Purpose |
 |---|---|
+| `curating-context` | Curates `AGENTS.md` and its live reference docs against a token budget |
 | `enforcing-architecture` | Turns an accepted architecture finding into an executable fitness function |
 | `init-project-fastapi` | Bootstraps a CannObserv FastAPI service (this repo's own foundation) |
 | `init-socraticode` | Installs and indexes SocratiCode semantic code search |
@@ -59,6 +60,13 @@ stack-neutral and other-stack variants are deliberately skipped.
 is accepted with a `N: fix + fitness` or bare `N: fitness` directive — without the symlink that
 directive fails to resolve. The daily auto-refresh hook bumps the submodule pointer but never creates
 per-skill symlinks, so linking a newly published skill stays a manual step (#13).
+
+**`curating-context` is pinned at v1.2 until the wave-B comparison resolves (#22).** The twelve
+cohort repos are the held-out validation split for the skill itself: a proposed change is tried on
+one arm and scored against the other, and Replicator's first curation is this arm's data point.
+Bumping the vendored pointer past v1.2 before that resolves puts two skill versions inside one arm
+and `score-cohort.sh` returns INCONCLUSIVE rather than a verdict. The daily auto-refresh hook bumps
+the submodule pointer, so this pin is a review obligation, not something the tooling enforces.
 
 ### From `obra-superpowers`
 
