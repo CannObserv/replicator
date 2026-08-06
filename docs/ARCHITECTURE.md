@@ -30,7 +30,7 @@ src/core/config.py   — Settings / env access (see Environment Variables)
 scripts/        — sync_wheelhouse.py, check_redis_floor.sh, seed_fetch.py
 scripts/seed_fetch.py — the MVP command issuer; publishes content.fetch, --watch tails the facts
 tests/          — Mirrors src/ structure; integration tests in `@pytest.mark.integration`
-docs/           — Reference docs (COMMANDS, SKILLS)
+docs/           — Reference docs; the Detail Docs index in AGENTS.md is the roster
 docs/contracts/ — Normative contracts, linked to from sibling repos: the issuer-facing half of the wire, and the boundaries charter (what Replicator may become)
 docs/plans/     — Implementation plans
 deploy/         — Systemd unit + deployment config
@@ -39,7 +39,7 @@ deploy/         — Systemd unit + deployment config
 
 ## Bus Conventions
 
-Replicator is a **consumer** first. Follow the conventions co-core and the archiver producer established:
+Each rule `AGENTS.md` states in one line, with the reasoning that makes it non-negotiable:
 
 - **The issuer contract is written down and lives here.** `docs/contracts/content-fetch-issuer-contract.md` is the normative statement of what a `content.fetch` producer must do — per-occasion `command_id`, `url` is not a correlation key, persist the `command_id → domain` map before publishing, correlate idempotently, and keep a reaper as a backstop for the outcomes no fact can carry. Issuer-side repos (Watcher, Phase 4) link to it rather than copying it. Anything asserted there is asserted about this repo's code; change one, change both (#8).
 - **What Replicator is allowed to become is also written down.** `docs/contracts/replicator-boundaries.md` is the sibling charter: mechanism to Replicator, policy to the issuer, config over the bus, and an inbound admin HTTP API rejected by name. Run its three tests against any proposed capability, field, or setting before writing code — a database, domain vocabulary, or a write route is reached one defensible step at a time, not in one commit. `tests/test_boundaries.py` enforces eight invariants in CI, including the one that catches the regression review misses: an AST scan of `src/` for domain nouns in identifiers *and* string literals. Known violation recorded and pinned rather than omitted — `blob_uri` is host-local `file://` (#7). Change the charter and the tests together (#12).

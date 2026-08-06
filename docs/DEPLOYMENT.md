@@ -56,6 +56,7 @@ In `.env` (dev/agent only — never read by the service):
 
 Read by neither env file — test-only, defined in `tests/conftest.py`:
 - `REPLICATOR_TEST_REDIS_URL` — live broker for `@pytest.mark.integration`; default `redis://localhost:6379/15`. Must not resolve to db 0 (the fixture fails outright if it does) — see **Testing the bus**
+  in [TESTING.md](TESTING.md)
 
 In `/etc/replicator/.env` (read by the service):
 - `GOOGLE_APPLICATION_CREDENTIALS` — SA key for the wheelhouse mirror (`/etc/replicator/co-pypi-reader.json`)
@@ -64,6 +65,7 @@ In `/etc/replicator/.env` (read by the service):
 - `REPLICATOR_BLOB_TTL_SECONDS` — how long a blob survives after it was **last referenced**; default `604800` (7 days). Measured from mtime, which the store refreshes on its short-circuit. The number is a published commitment to archiver (archiver#118), not a local tuning knob — raise it if a `content.blobs` consumer says it needs longer
 - `REPLICATOR_BLOB_SWEEP_INTERVAL_SECONDS` — how often the tree is walked; default `900`. Also the staleness bound on the measured byte total the ceiling reads
 - `REPLICATOR_BLOB_TEMP_GRACE_SECONDS` — how long a `.tmp` may live before the sweep treats it as debris; default `3600`. Deliberately unrelated to the TTL and far shorter — see **Retention**
+  in [STORAGE.md](STORAGE.md)
 - `REPLICATOR_BLOB_MAX_TOTAL_BYTES` — ceiling on everything the blob tree holds; default `2147483648` (2 GiB). Crossing it pauses fetching (`TransientFetchError`); it never shortens the TTL
 - `REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS` — the most a command's own `timeout_seconds` may ask for; default `120`. Not a default (an omitted field still gets the driver's 30 s) but a ceiling, and a guard rather than a preference: the consume path is serial, so one issuer's timeout is a lien on every other command in the group. Over it ⇒ `PermanentFetchError`. Bounded above by the unit's `TimeoutStopSec` — change one, revisit the other
 - `REPLICATOR_MAX_BLOB_BYTES` — ceiling on one fetched body; default `67108864` (64 MiB). A **storage** guard, not a memory one: co-core's fetch driver buffers the whole response before returning it, so the bytes are already resident when this is checked. Over the ceiling ⇒ `PermanentFetchError` ⇒ DLQ

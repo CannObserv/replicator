@@ -84,9 +84,25 @@ While the refresh is suspended, updating vendor skills is manual:
 ```bash
 git -C skills-vendor/obra-superpowers fetch origin && git -C skills-vendor/obra-superpowers checkout origin/HEAD
 bash .skills/doctor.sh
+git add skills-vendor/obra-superpowers && git commit -m "chore: update skills submodules"
 ```
 
+The commit is the step the suspended hook used to perform; without it the new pointer is
+discarded by the next checkout.
+
 Leave `skills-vendor/gregoryfoster-skills` at `3fc7b71` until the hold ends.
+
+## The write-guard hook dangles on a submodule-less checkout
+
+`curating-context` installs `.claude/hooks/context-budget-guard.sh` as a symlink into the
+vendored skill, but `doctor.sh` scans `skills/*` only — `.claude/hooks/*` is outside its heal
+scope. On a checkout where the submodule is not initialized (fresh clone, `git worktree add`,
+shallow CI clone) the hook path dangles and the wired `PostToolUse` command fails with
+`No such file or directory` on **every** `Edit`/`Write`/`MultiEdit`, naming a path that `ls`
+shows as present. Run `bash .skills/doctor.sh` — it initializes the submodule and so heals the
+hook as a side effect, even though it never inspects it. Tracked upstream as
+[gregoryfoster/skills#99](https://github.com/gregoryfoster/skills/issues/99); the guard itself
+is correctly non-blocking once it resolves.
 
 ### From `obra-superpowers`
 
