@@ -97,6 +97,13 @@ git add skills-vendor/ && git commit -m "chore: update skill submodules"
 ```
 
 A `SessionStart` hook (`.claude/hooks/skills-submodule-update.sh`) refreshes `skills-vendor/` at most
-once per UTC day, on `main` only, auto-commits the pointer bump, and never blocks a session. It also
-re-installs `.skills/doctor.sh` each session so the doctor self-heals if deleted. Logs to
-`.git/skills-update.log`.
+once per UTC day, on `main` only, auto-commits the pointer bump (and `.skills/doctor.sh` when it
+changed — never `.skills/` wholesale, which holds operator config), and never blocks a session. It
+also re-installs `.skills/doctor.sh` each session, ahead of both gates, so the doctor self-heals on
+any branch if deleted. Logs to `.git/skills-update.log`.
+
+**The hook is a symlink into the submodule, not a copy** (`managing-skills` Step 1). That is what
+makes upstream fixes to the script arrive on the normal submodule refresh; a copy freezes at whatever
+version was current the day it was installed and drifts silently thereafter — this repo's had, for
+the whole `.skills/doctor.sh` commit path (#16). `readlink .claude/hooks/skills-submodule-update.sh`
+is the check; an empty result means someone re-copied it.
