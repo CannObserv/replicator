@@ -31,7 +31,7 @@ Python ≥3.12, uv, pytest, ruff. `ty` is available as a **non-gating** type che
 uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
 ```
 
-Auth is ADC: on the VM the SA key at `GOOGLE_APPLICATION_CREDENTIALS` (`/etc/replicator/co-pypi-reader.json`), in CI a keyless WIF token. Pin the current minor — `>=0.7.7,<0.8`. The **patch** floor is load-bearing, not tidiness: the change-bus payloads are `extra="ignore"`, so on an older wheel a model constructed with fields it does not have yet succeeds and silently discards them. Raise the floor with every co-core feature the code starts depending on, or a version skew publishes facts that look right and carry nothing (#10). The 0.7.7 floor is the exception that fails *loudly* — `AsyncBusTailReader` and `FetchPolicyState` do not exist below it, so a skew is an ImportError rather than a silent discard (#19).
+Auth is ADC: on the VM the SA key at `GOOGLE_APPLICATION_CREDENTIALS` (`/etc/replicator/co-pypi-reader.json`), in CI a keyless WIF token. Pin the current minor — `>=0.8.0,<0.9`. The **patch** floor is load-bearing, not tidiness: the change-bus payloads are `extra="ignore"`, so on an older wheel a model constructed with fields it does not have yet succeeds and silently discards them. Raise the floor with every co-core feature the code starts depending on, or a version skew publishes facts that look right and carry nothing (#10). The 0.8.0 floor fails *loudly* instead, twice over: `info_source_id` is required on the command and both facts, so a skew is a ValidationError at construction, and `AsyncBusTailReader` / `FetchPolicyState` (0.7.7) do not exist below it at all (#19, #28).
 
 <!-- BEGIN socraticode-policy -->
 ## Code Exploration Policy
@@ -115,9 +115,14 @@ Every variable the service reads, with the reasoning behind each default:
 
 Replicator is a **consumer** first. Follow the conventions co-core and the archiver producer established:
 
-- **At-least-once ⇒ idempotent.** The command dedupes on `command_id`, the fact on
-  `content_fingerprint`, and `fetch_failed` on neither — storage identity and
-  correlation identity are not interchangeable.
+- **At-least-once ⇒ idempotent.** The command dedupes on `command_id`; both facts
+  are keyed per *occurrence* (`content_fingerprint:command_id`,
+  `command_id:occurred_at`) so nothing an issuer is waiting on can collapse.
+  Storage identity and correlation identity are not interchangeable.
+- **`info_source_id` is echoed, never read (#28).** Required on the command and
+  both facts since co-core 0.8.0. `tests/test_boundaries.py` allows the name in
+  the three emit-path modules and forbids the value in any branch, lookup key, or
+  constructed string — widening that allowlist is editing the charter.
 - **Store, then publish — never the reverse.** A fact pointing at bytes that are
   not there is unrepairable by the consumer; stored bytes with no fact repair
   themselves on the reclaim.

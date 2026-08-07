@@ -292,8 +292,16 @@ half could land first.
 ## Reviewing a proposed payload field
 
 One question: **does this name a domain concept?** `politeness_key: str` passes — opaque to
-Replicator. `info_source_id` fails. The wire's domain-agnosticism is the property the whole
-issuer contract is built on; it erodes one plausible field at a time.
+Replicator. A field Replicator would have to *read* to do its job fails. The wire's
+domain-agnosticism is the property the whole issuer contract is built on; it erodes one plausible
+field at a time.
+
+**`info_source_id` is the settled exception, and its shape is the precedent (cannobserv#300,
+#28).** Required on all three payloads, copied across verbatim. What made it acceptable is not that
+the field is small — it is that Replicator **never reads it**: delete every line mentioning it and
+the byte path behaves identically. So the question is really *does Replicator have to understand
+this to act on it?* If yes it fails whatever it is called — a `jurisdiction` used to pick a fetch
+strategy fails though nothing named it a domain object. If no it is freight.
 
 **The rule governs payload *shapes*, not producer-owned token vocabularies.**
 [`src/core/errors.py::FailureReason`](../../src/core/errors.py) is a locally-defined `StrEnum`
@@ -335,7 +343,8 @@ is failing a PR, not documenting an intention.
 | Invariant | Test |
 |---|---|
 | No database | no persistence distribution in `uv.lock` (sqlalchemy, asyncpg, psycopg, alembic, …); no `sqlite3` / `shelve` / `dbm` / `pickle` import in `src/` |
-| No domain vocabulary | AST scan of `src/`: `info_source`, `info_item`, `watched_item`, `tenant`, `aspect` appear in no identifier and no string literal |
+| No domain vocabulary | AST scan of `src/`: `info_source`, `info_item`, `watched_item`, `tenant`, `aspect` appear in no identifier and no string literal — `info_source` exempted in the three emit-path modules only |
+| The echoed key is never interpreted | AST scan of `src/`: no domain token in a `Compare`, `BoolOp`, `Subscript`, f-string, or the test of an `if` / `while` / `match` |
 | Ingress is read-only | recursive route walk: every path in the allowlist, every method in `{GET, HEAD}` |
 | The deployed process has no ingress | `src/worker/` imports no server framework; the unit runs `src.worker.main` with no `uvicorn` and no `--port` |
 | No locally-defined wire models | no class in `src/` declares an `event_type` field — every wire payload comes from co-core |
@@ -353,6 +362,15 @@ English sentence is a test that gets deleted rather than heeded. The bare verb `
 deliberately absent from the token list; `watched_item`, the domain noun, is not. String
 literals are in scope alongside identifiers because domain leakage arrives as a dict key or a
 log field (`detail={"info_source_id": ...}`) at least as often as it arrives as an attribute.
+
+**The `info_source` exemption is a carve-out, and a second scan is what makes it one.** The wire
+requires naming the field to copy it, so the token is allowed in exactly `handler.py`,
+`reporter.py` and `loop.py` — a list, not a `src/worker/` glob, since the pacer, the sweep and the
+policy reader have no business naming a domain object either. The second scan holds the real
+invariant, forbidding the *value* in any position that implies reading it. Naming it is mechanics;
+keying on it is a domain model arriving one defensible commit at a time. Two assertions guard the
+allowlist itself — it can never name `src/core/config.py`, `src/storage/` or `src/api/`, and every
+entry must still be a file.
 
 **The `event_type` check is an AST check on class bodies, not a grep.** `event_type` appears
 twice in `src/worker/loop.py` legitimately — once in a comment, once reading a co-core model's

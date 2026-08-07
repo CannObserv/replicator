@@ -22,20 +22,28 @@ to any MUST, or to the failure taxonomy, is announced on the open issuer-side tr
 [CannObserv/watcher#241](https://github.com/CannObserv/watcher/issues/241) — in the same change that
 edits this file. Whatever is asserted here is asserted about this repo's code: edit one, edit both.
 
-**Why this document exists.** The bus wire shape is deliberately domain-agnostic: a `content.fetch`
-*payload* carries `{command_id, url}`, and `content.blobs` carries **both outcomes** of that
-command — `{content_fingerprint, blob_uri, size_bytes, media_type, url, command_id?}` on success,
-`{command_id, url, reason, terminal, status_code?, attempts?, detail?}` on failure. All three sit
-inside a co-core envelope, which is a shape in its own right and the first thing a producer must
-get right (see **The frame**). There is **no `info_source_id`, and no other domain identity,
-anywhere in any of them** — Replicator fetches bytes and knows nothing about what they mean. That
-keeps Replicator clean, and it pushes the whole of correlation onto the issuer. Most of what
-follows fails *silently* when it is got wrong: no error, no dead letter, no log on Replicator's
-side — just a fact nobody can match, or a command that was never run.
+**Why this document exists.** A `content.fetch` *payload* carries `{command_id, url,
+info_source_id}`, and `content.blobs` carries **both outcomes** of that command —
+`{content_fingerprint, blob_uri, size_bytes, media_type, url, command_id, info_source_id}` on
+success, `{command_id, url, info_source_id, reason, terminal, status_code?, attempts?, detail?}` on
+failure. All three sit inside a co-core envelope, which is a shape in its own right and the first
+thing a producer must get right (see **The frame**).
+
+`info_source_id` is **carried, not understood** (cannobserv#300, #28): echoed verbatim onto both
+facts, never parsed, deduped on, keyed on, or read by any routing or policy decision. It travels so
+a consumer of a *broadcast* stream can tell what a fact is about without holding the issuer's
+private map. [`replicator-boundaries.md`](replicator-boundaries.md) keeps it at that — its
+executable half forbids the value in any branch, lookup key, or constructed string in `src/`.
+
+Correlation still rests entirely on the issuer, and most of what follows fails *silently* when it
+is got wrong: no error, no dead letter, no log on Replicator's side — just a fact nobody can match,
+or a command that was never run.
 
 Version history and the co-core floor:
 [the reference](content-fetch-issuer-reference.md#version-history). Replicator requires
-**co-core ≥ 0.7.5**. Founding rationale:
+**co-core ≥ 0.8.0**, the release that made `info_source_id` and `BlobAvailableEvent.command_id`
+required — a 0.7.x command does not degrade, it fails `from_wire` and dead-letters. Founding
+rationale:
 [`docs/plans/2026-06-25-replicator-mvp-design.md`](../plans/2026-06-25-replicator-mvp-design.md).
 
 ---
@@ -60,13 +68,18 @@ produces exactly six keys, all of them derived from the model. None are caller-s
 | Payload | Derived `key` |
 |---|---|
 | `content_fetch` | `command_id` |
-| `blob_available` | `content_fingerprint` |
+| `blob_available` | **`content_fingerprint:command_id`** — per *occurrence*, not per bytes |
 | `fetch_failed` | **`command_id:occurred_at`** — deliberately *not* the bare `command_id` |
 
-The `fetch_failed` rule is load-bearing (cannobserv#270). One command can emit more than one
-failure over its life, so a bare-`command_id` key would make a consumer that dedupes on the
-envelope key collapse the sequence and drop the **terminal** event — the one that closes the
-pending entry. Correlation rides on the `command_id` *field*, never on the key.
+Neither fact is keyed on a bare identifier: a key naming less than the occurrence collapses
+occurrences. `fetch_failed` (cannobserv#270) would drop the **terminal** event of a multi-failure
+command; `blob_available` (cannobserv#300, the bare `content_fingerprint` through 0.7.7) collapsed
+two InfoSources fetching one URL into a single fact naming whichever issuer won the race — and left
+the second command never closed, which reads as a slow origin rather than a bug. **The re-key is a
+delivery-behaviour change**: emissions that used to collapse now all deliver. MUST-4 already
+required idempotence, so it moves in the safe direction, but the volume differs.
+
+Correlation rides on the `command_id` *field*, never on the key.
 
 An issuer that `XADD`s `command_id` and `url` as top-level fields produces a frame `from_wire`
 cannot decode. It raises `BusMessageAnomaly` from inside the consumer's `read`, and Replicator
@@ -90,6 +103,7 @@ never on the envelope key. Its value is operational — see
 | `occurred_at` | `datetime` | **tz-aware UTC, enforced.** Not used for ordering or expiry by Replicator |
 | `command_id` | `str` | **The idempotency key and the sole correlator.** See MUST-1 |
 | `url` | `str` | What to fetch. **Not** a key. See MUST-3 |
+| `info_source_id` | `str` | **Required** (co-core ≥ 0.8.0). The domain object this fetch is for. Echoed onto both facts, read by nothing here |
 | `headers` | `dict[str, str] \| None` | co-core ≥ 0.7.3, **honoured since #11**. Merged over the fetcher's defaults, issuer wins. Guards below |
 | `timeout_seconds` | `float \| None` | co-core ≥ 0.7.3, **honoured since #11**. Seconds; bounded above. `None` = the driver default |
 
@@ -135,13 +149,15 @@ reasoning behind each, is in
 | `size_bytes` | `int` | |
 | `media_type` | `str` | Normalized, `charset` dropped; `application/octet-stream` when absent |
 | `url` | `str` | Echoed from the command. Confirmation and debugging only |
-| `command_id` | `str \| None` | Echoed from the command. `None` only for non-command emits |
+| `command_id` | `str` | **Required** (co-core ≥ 0.8.0). Echoed from the command; half the envelope key |
+| `info_source_id` | `str` | **Required** (co-core ≥ 0.8.0). Echoed verbatim. Replicator neither parses nor interprets it |
 | `final_url` | `str \| None` | co-core ≥ 0.7.3 (model), **≥ 0.7.5 to be populated**. Where the fetch **landed** after redirects. `None` = *unknown*, see below |
 | `status_code` | `int \| None` | co-core ≥ 0.7.3. **Always 2xx on this fact** — see below |
 | `fetched_at` | `datetime \| None` | co-core ≥ 0.7.3. tz-aware UTC. When the bytes were on the **wire**, not when the fact was published |
 | `content_type_raw` | `str \| None` | co-core ≥ 0.7.3. The **verbatim** `Content-Type`, `charset` and all. `None` = *the origin sent none*, see below |
 | `etag` | `str \| None` | co-core ≥ 0.7.3. Verbatim, `W/` prefix and quotes included. Replay unparsed in `If-None-Match` |
 | `last_modified` | `str \| None` | co-core ≥ 0.7.3. Verbatim, unparsed. Replay in `If-Modified-Since` |
+| `blob_expires_at` | `datetime \| None` | co-core ≥ 0.8.0, **populated since #28**. When the blob stops being retrievable at `blob_uri`. Prefer it to re-deriving MUST-7's TTL — see below |
 
 The six enriched fields (cannobserv#271, `final_url` sourced by cannobserv#279, produced by #10)
 carry what Replicator holds at publish time and a broadcast consumer cannot recover once fetching
@@ -168,6 +184,7 @@ on them — all four in
 | `occurred_at` | `datetime` | tz-aware UTC, stamped at publish. Also half the envelope key |
 | `command_id` | `str` | **Required — the correlator, and the whole point of the event** |
 | `url` | `str` | Echoed. Confirmation and debugging only, exactly as on the success fact |
+| `info_source_id` | `str` | **Required** (co-core ≥ 0.8.0). Echoed verbatim, exactly as on the success fact |
 | `reason` | `str` | Stable token; see below. **Treat an unknown value as opaque** |
 | `terminal` | `bool` | `True` = the command is closed, no blob will ever arrive. **Branch on this first** |
 | `status_code` | `int \| None` | Set for `http_status`; absent otherwise |
@@ -230,13 +247,16 @@ can be matched against.
 
 ### 2. Persist `command_id → domain` durably, **before** publishing
 
-The bus carries nothing that can reconstruct the mapping. If the issuer crashes between minting the
-id and recording it, the returning `blob_available` is uncorrelatable — there is no query, on any
-stream, that recovers which InfoSource asked.
-
 Persist first, then publish; outbox-style, symmetric to archiver's producer. (Replicator itself has
 no outbox and must not grow one — its durable record of intent is the consumer group's PEL. The
 outbox belongs to producers with a database, which is the issuer.)
+
+**Narrowed by cannobserv#300, and not retroactively.** From the step-2 deploy onward every fact
+carries `info_source_id`, so a crash between minting an id and recording it costs the link to the
+*occasion*, not the domain object. Before that deploy — and for any issuer still on 0.7.x — the
+original statement holds: nothing on any stream recovers which InfoSource asked. The durable record
+stays required on narrower grounds (request options, audit, MUST-6's reaper), but it is no longer
+the only thing between a fetch and an orphaned blob.
 
 ### 3. Correlate on `command_id` only — `url` is not a key
 
@@ -246,6 +266,10 @@ its `url` will, sooner or later, attach bytes to the wrong InfoSource — silent
 looks like correct data downstream.
 
 `url` on the fact is confirmation and debugging. Nothing more.
+
+Since cannobserv#300 there is no longer any *reason* to reach for it either: `info_source_id` is on
+both outcomes, so an issuer that lost its `command_id` map can still tell which InfoSource a fact is
+about — without the one-to-many guess that makes `url` wrong.
 
 ### 4. Make correlation idempotent — one command can yield more than one fact
 
@@ -279,7 +303,8 @@ different `command_id`s**. A consumer deduping its inbox on fingerprint drops th
 loses that correlation entirely: the same silent-failure shape as MUST-1, arrived at from the
 opposite direction.
 
-Dedupe on `command_id`. Treat the fingerprint as content identity.
+Dedupe on `command_id`. Treat the fingerprint as content identity. cannobserv#300 closed the
+producer half — the envelope key names the occurrence now — but the consumer rule is unchanged.
 
 And do not dedupe **`fetch_failed`** on `command_id` either — for the opposite reason. More than
 one failure fact per command is expected (MUST-4), and once non-terminal facts exist a command
@@ -336,6 +361,12 @@ The clock runs from **last reference by a fetch**, not last read by a consumer �
 `blob_uri` for a week without a re-fetch loses the bytes. The mechanism is in
 [the reference](content-fetch-issuer-reference.md#how-the-blob-ttl-clock-runs).
 
+**Record `blob_expires_at` rather than re-deriving this** (cannobserv#301, carried since #28).
+Deriving a horizon from the TTL above hard-codes a policy Replicator owns and starts the clock where
+no consumer can see it. The published value can only fall **earlier** than the real reap, so acting
+on it is early, never too late; `None` means unknown, and should be recorded as absence rather than
+guessed. [Mechanism](content-fetch-issuer-reference.md#how-the-blob-ttl-clock-runs).
+
 Also: `blob_uri` is a **`file://` URI on Replicator's host**. The contract is VM-local today.
 A consumer on another host cannot open it, and nothing on the wire says so.
 
@@ -349,7 +380,9 @@ A consumer on another host cannot open it, and nothing on the wire says so.
 - **Announce, then ack.** Every path that closes a command without a blob publishes its
   `fetch_failed` *before* the dead-letter that acks it, so a crash in between costs a duplicate
   fact (MUST-4) rather than losing the fact outright.
-- **`command_id` is echoed** on every fact produced from a command, success or failure.
+- **`command_id` and `info_source_id` are echoed** on every fact produced from a command, success
+  or failure. Both are required on both outcomes; `info_source_id` is copied verbatim and read by
+  nothing in Replicator.
 - **The fingerprint is definitional.** Replicator is the cluster's sole fetcher and sole
   fingerprinter, so `content_fingerprint` *is* the content identity — there is nothing to
   cross-check it against.

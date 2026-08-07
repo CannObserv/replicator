@@ -65,6 +65,11 @@ scratch invocation above watches its own facts rather than production's. `--blob
 overrides that. One stream, both outcomes: an issuer needs a single consumer group to see
 whether its command produced bytes or a reason.
 
+`--info-source-id` sets the domain key the command carries and both facts echo, required on the
+wire since co-core 0.8.0 (#28). It defaults to `seed-harness-not-a-real-info-source`, which no
+issuer's InfoSource table contains — so a fact a seed run puts on a shared stream is recognizably
+synthetic. Pass a real id when the point of the run is watching an issuer's correlation end to end.
+
 `--header` and `--timeout` set the command's per-fetch request options (#11). They apply to
 every URL in the run, and omitting them is the pre-#11 wire exactly.
 

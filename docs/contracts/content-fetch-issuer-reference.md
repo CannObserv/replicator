@@ -72,7 +72,10 @@ shaped the way they are, and the one thing they do not yet let an issuer do.
 
 The six enriched fields (cannobserv#271, `final_url` sourced by cannobserv#279, produced by #10)
 carry what Replicator holds at publish time and a broadcast consumer cannot recover once fetching
-lives here rather than in Watcher. Three details are the whole value of them:
+lives here rather than in Watcher. `blob_expires_at` (cannobserv#301, populated by #28) is a
+seventh, and describes the **store** rather than the fetch — see
+[MUST-7](content-fetch-issuer-contract.md#7-copy-the-bytes-before-the-blob-expires). Three details
+are the whole value of the six:
 
 - **`None` means nobody said, never "the default".** `final_url` is `None` when the *driver* did
   not report a landing URL — **not** "no redirect occurred", and Replicator never substitutes the
@@ -97,13 +100,14 @@ lives here rather than in Watcher. Three details are the whole value of them:
   and a *truncated* ETag replayed in an `If-None-Match` is a validator that can never match,
   which is worse than none.
 
-> **These are per-*occasion* values on a fingerprint-keyed fact.** They describe the fetch that
-> produced this fact, not the bytes — which is why MUST-5 matters more now than it did. Two
-> commands returning identical bytes emit two facts with the same `content_fingerprint` and
-> possibly *different* `final_url`, `etag`, `last_modified`, and `fetched_at`. A consumer deduping
-> its inbox on the fingerprint — already forbidden — now also pins its stored validators to the
-> first emission for those bytes, and will replay a stale `If-None-Match` for as long as that
-> content is unchanged.
+> **These are per-*occasion* values, and since cannobserv#300 the fact is keyed per occasion too.**
+> They describe the fetch that produced this fact, not the bytes. Through 0.7.7 the envelope key was
+> the bare `content_fingerprint`, so two commands returning identical bytes collapsed to one fact and
+> its `final_url` / `etag` / `last_modified` / `fetched_at` were the *first* emission's — a consumer
+> replayed a stale `If-None-Match` for as long as that content stayed unchanged. **That caveat is
+> dissolved**: every fetch now emits its own fact carrying its own validators. Recorded because a
+> consumer written against 0.7.x may still carry a workaround for it. MUST-5 is unaffected — deduping
+> an inbox on the fingerprint is still wrong, and still loses a correlation.
 
 > **Do not attempt conditional GET yet — this is now the *only* thing standing in the way.**
 > `etag` and `last_modified` are the *read* half of the seam, and since #11 the write half exists:
@@ -130,7 +134,7 @@ lives here rather than in Watcher. Three details are the whole value of them:
 | `schema_version` ≠ 1 | fact, then `content.fetch.dlq` | `fetch_failed` · `unsupported_schema_version` |
 | Frame decodes to a non-`content_fetch` payload | `content.fetch.dlq` | **nothing** — any `command_id` in it is another command's |
 | Command with a blank `command_id` | `content.fetch.dlq`, before the fetch | **nothing** — no correlator to key a fact on |
-| Malformed frame (fails `from_wire`; includes a naive `occurred_at`) | `content.fetch.dlq`, synthesized record | **nothing** — no payload at all |
+| Malformed frame (fails `from_wire`; includes a naive `occurred_at`, and any 0.7.x command with no `info_source_id`) | `content.fetch.dlq`, synthesized record | **nothing** — no payload at all |
 | HTTP 4xx, or a body-less 304 | fact, then `content.fetch.dlq` | `fetch_failed` · `http_status` (+ `status_code`) |
 | URL not fetchable (bad scheme / invalid URL) | fact, then `content.fetch.dlq` | `fetch_failed` · `not_fetchable` |
 | Body over `REPLICATOR_MAX_BLOB_BYTES` (default 64 MiB) | fact, then `content.fetch.dlq` | `fetch_failed` · `too_large` |
@@ -266,7 +270,10 @@ fetched for real.
 Contracts settled in cannobserv#266 (co-core v0.7.0); the failure fact added in cannobserv#270 and
 the tz-aware `occurred_at` in cannobserv#273, both shipped in **co-core v0.7.2**; the enriched
 `blob_available` metadata in cannobserv#271/#279 and the command's request options in
-cannobserv#272, shipped in **v0.7.3** and **v0.7.5**. Replicator requires **co-core ≥ 0.7.5**.
+cannobserv#272, shipped in **v0.7.3** and **v0.7.5**. **v0.8.0** required `info_source_id` on all
+three payloads and `command_id` on `blob_available`, re-keyed `blob_available` to
+`content_fingerprint:command_id` (cannobserv#300), and added `blob_expires_at` (cannobserv#301).
+Replicator requires **co-core ≥ 0.8.0**.
 Founding rationale:
 [`docs/plans/2026-06-25-replicator-mvp-design.md`](../plans/2026-06-25-replicator-mvp-design.md).
 ---
@@ -318,6 +325,13 @@ The clock runs from **last reference by a fetch**, not last read by a consumer: 
 the file when a re-fetch short-circuits on existing bytes
 ([`src/storage/local.py::_touch`](../../src/storage/local.py)), but a consumer opening the path does
 not touch mtime. Holding a `blob_uri` for a week without a re-fetch loses the bytes.
+
+That is the event `blob_expires_at` exposes, since no consumer can see it. The value is
+`stored_at + REPLICATOR_BLOB_TTL_SECONDS`, read **before** the store, so it lands at or before the
+mtime the sweep measures against — and the sweep runs only every
+`REPLICATOR_BLOB_SWEEP_INTERVAL_SECONDS`, putting the real reap later still. The error is one-way:
+acting on the horizon is early, never too late. A later fetch pushes the expiry out and emits a
+fresh fact carrying the new value.
 
 Also, on the reaper [MUST-6](content-fetch-issuer-contract.md#6-handle-fetch_failed-and-keep-a-reaper-anyway)
 keeps:

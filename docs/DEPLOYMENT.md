@@ -41,6 +41,24 @@ The **redis-py client** resolves `>=5,<8` transitively via `co-core-aio[bus]`. D
 
 The copy is deliberate, for the same reason `/etc/replicator/.env` is not read from the repo: the live unit must survive a repo reset, a worktree switch, or a branch checkout that happens to be mid-edit.
 
+### The co-core 0.8.0 cutover is a two-repo deploy, streams flushed between (#28)
+
+`schema_version` stays 1, and that is a decision rather than an oversight: bumping to 2 would imply
+a v1 consumers must branch on, when the correct operation is to discard the v1 messages. The wire
+is pre-production, so it is discardable.
+
+**Flushing is a prerequisite step, not cleanup.** `content.fetch`, `content.blobs`, and **both
+`.dlq` streams** — a v1 dead-letter cannot be replayed under 0.8.0, so leaving it is leaving a trap
+for whoever triages next. Add `replicator:cmd:*` if any `command_id` will be reused across the
+flush. **Not** `content.fetch-policy`: it is a groupless state stream, and flushing it leaves every
+worker with an empty policy map until the next republish.
+
+**Ship with [CannObserv/watcher#252](https://github.com/CannObserv/watcher/issues/252).** Required
+fields mean a half-deployed cluster does not degrade, it dead-letters: a Replicator on 0.8.0 fails
+`from_wire` on any command from a Watcher still on 0.7.x, and that failure destroys the
+`command_id` correlator before any fact can name it. The two may be worked in parallel; they must
+land together.
+
 **Dev server workflow** (the `/health` app, port 8041 so a future live service stays up):
 
 ```bash
