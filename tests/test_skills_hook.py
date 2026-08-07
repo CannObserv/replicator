@@ -26,5 +26,8 @@ def test_the_session_start_hook_is_a_symlink_into_the_submodule():
 
 def test_the_hook_the_symlink_points_at_actually_exists():
     """A populated submodule is the other half — a dangling link is a silent no-op."""
-    assert HOOK.exists(), "skills-vendor/ is not checked out: run .skills/doctor.sh"
+    assert HOOK.exists(), (
+        "skills-vendor/ is not checked out: run .skills/doctor.sh locally, "
+        "or add `submodules: true` to the CI job's actions/checkout (#27)"
+    )
     assert os.access(HOOK, os.X_OK)
