@@ -61,6 +61,32 @@ is accepted with a `N: fix + fitness` or bare `N: fitness` directive — without
 directive fails to resolve. The daily auto-refresh hook bumps the submodule pointer but never creates
 per-skill symlinks, so linking a newly published skill stays a manual step (#13).
 
+This submodule is **pinned and its refresh suspended** — see
+[The curating-context v1.2 hold](#the-curating-context-v12-hold) before bumping it.
+
+### From `obra-superpowers`
+
+| Skill | Purpose |
+|---|---|
+| `dispatching-parallel-agents` | 2+ independent tasks with no shared state |
+| `executing-plans` | Execute a written plan in a separate session with review checkpoints |
+| `finishing-a-development-branch` | Decide how to integrate completed work |
+| `receiving-code-review` | Process review feedback before implementing suggestions |
+| `requesting-code-review` | Verify work before merging |
+| `subagent-driven-development` | Execute plan tasks in the current session |
+| `systematic-debugging` | Any bug or test failure, before proposing fixes |
+| `test-driven-development` | Any feature or bugfix, before writing implementation code |
+| `using-superpowers` | Conversation start — how to find and use skills |
+| `verification-before-completion` | Before claiming work complete, fixed, or passing |
+| `writing-skills` | Creating, editing, or verifying skills |
+
+## Plans directory
+
+`docs/plans/` is the default governed by `writing-plans`. Override with a single-line
+`.skills/plans_dir` file at the repo root if a different path is ever wanted.
+
+## The curating-context v1.2 hold
+
 **`curating-context` is pinned at v1.2 (`3fc7b71`) until the wave-B comparison resolves (#22).** The
 twelve cohort repos are the held-out validation split for the skill itself: a proposed change is
 tried on one arm and scored against the other, and Replicator's first curation is this arm's data
@@ -92,42 +118,6 @@ discarded by the next checkout.
 
 Leave `skills-vendor/gregoryfoster-skills` at `3fc7b71` until the hold ends.
 
-## The write-guard hook dangles on a submodule-less checkout
-
-`curating-context` installs `.claude/hooks/context-budget-guard.sh` as a symlink into the
-vendored skill, but `doctor.sh` scans `skills/*` only — `.claude/hooks/*` is outside its heal
-scope. On a checkout where the submodule is not initialized (fresh clone, `git worktree add`,
-shallow CI clone) the hook path dangles and the wired `PostToolUse` command fails with
-`No such file or directory` on **every** `Edit`/`Write`/`MultiEdit`, naming a path that `ls`
-shows as present. Run `bash .skills/doctor.sh` — it initializes the submodule and so heals the
-hook as a side effect, even though it never inspects it. Tracked upstream as
-[gregoryfoster/skills#99](https://github.com/gregoryfoster/skills/issues/99); the guard itself
-is correctly non-blocking once it resolves.
-
-CI is **no longer** one of those submodule-less checkouts — see [Submodules in CI](#submodules-in-ci)
-below. A `git worktree add` still is.
-
-### From `obra-superpowers`
-
-| Skill | Purpose |
-|---|---|
-| `dispatching-parallel-agents` | 2+ independent tasks with no shared state |
-| `executing-plans` | Execute a written plan in a separate session with review checkpoints |
-| `finishing-a-development-branch` | Decide how to integrate completed work |
-| `receiving-code-review` | Process review feedback before implementing suggestions |
-| `requesting-code-review` | Verify work before merging |
-| `subagent-driven-development` | Execute plan tasks in the current session |
-| `systematic-debugging` | Any bug or test failure, before proposing fixes |
-| `test-driven-development` | Any feature or bugfix, before writing implementation code |
-| `using-superpowers` | Conversation start — how to find and use skills |
-| `verification-before-completion` | Before claiming work complete, fixed, or passing |
-| `writing-skills` | Creating, editing, or verifying skills |
-
-## Plans directory
-
-`docs/plans/` is the default governed by `writing-plans`. Override with a single-line
-`.skills/plans_dir` file at the repo root if a different path is ever wanted.
-
 ## Maintenance
 
 ```bash
@@ -138,7 +128,8 @@ git submodule update --init --recursive
 # The reviewing-* / shipping-* skills invoke this as a Phase 1 preflight.
 bash .skills/doctor.sh
 
-# Pull upstream skill changes and bump the pointers
+# Pull upstream skill changes and bump the pointers.
+# SUSPENDED during the v1.2 hold — it would bump gregoryfoster-skills past the pin.
 git submodule update --remote --merge
 git add skills-vendor/ && git commit -m "chore: update skill submodules"
 ```
@@ -154,6 +145,21 @@ makes upstream fixes to the script arrive on the normal submodule refresh; a cop
 version was current the day it was installed and drifts silently thereafter — this repo's had, for
 the whole `.skills/doctor.sh` commit path (#16). `readlink .claude/hooks/skills-submodule-update.sh`
 is the check; an empty result means someone re-copied it.
+
+## The write-guard hook dangles on a submodule-less checkout
+
+`curating-context` installs `.claude/hooks/context-budget-guard.sh` as a symlink into the
+vendored skill, but `doctor.sh` scans `skills/*` only — `.claude/hooks/*` is outside its heal
+scope. On a checkout where the submodule is not initialized (fresh clone, `git worktree add`,
+shallow CI clone) the hook path dangles and the wired `PostToolUse` command fails with
+`No such file or directory` on **every** `Edit`/`Write`/`MultiEdit`, naming a path that `ls`
+shows as present. Run `bash .skills/doctor.sh` — it initializes the submodule and so heals the
+hook as a side effect, even though it never inspects it. Tracked upstream as
+[gregoryfoster/skills#99](https://github.com/gregoryfoster/skills/issues/99); the guard itself
+is correctly non-blocking once it resolves.
+
+CI is **no longer** one of those submodule-less checkouts — see [Submodules in CI](#submodules-in-ci)
+below. A `git worktree add` still is.
 
 ## Submodules in CI
 
@@ -182,8 +188,8 @@ Three things to know before touching it:
   selector, and trading the declarative key for an imperative `git submodule update --init <path>`
   step to save about a second is not worth it.
 - **CI resolves the SHA pinned here, never upstream tip.** So the key neither lifts nor weakens the
-  v1.2 hold above. A pin far behind upstream is fine: GitHub serves arbitrary SHAs, so the shallow
-  submodule fetch resolves it.
+  [v1.2 hold](#the-curating-context-v12-hold). A pin far behind upstream is fine: GitHub serves
+  arbitrary SHAs, so the shallow submodule fetch resolves it.
 
 The coupling accepted in exchange: an upstream force-push that garbage-collects a pinned SHA fails
 the job **at checkout**, an error that looks nothing like a test failure. If CI dies before the
