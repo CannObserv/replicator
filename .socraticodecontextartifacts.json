@@ -63,7 +63,7 @@
     {
       "name": "skills-doc",
       "path": "./docs/SKILLS.md",
-      "description": "Agent skills index. The two-level symlink chain (.claude/skills -> skills/ -> skills-vendor/) and why it lets a local override shadow a vendor skill in both discovery systems, the vendor submodules, the local brainstorming override and its required override frontmatter, and the once-per-day SessionStart submodule refresh hook."
+      "description": "Agent skills index. The two-level symlink chain (.claude/skills -> skills/ -> skills-vendor/) and why it lets a local override shadow a vendor skill in both discovery systems, the vendor submodules, the local brainstorming override and its required override frontmatter, the once-per-day SessionStart submodule refresh hook and its suspension for the v1.2 curating-context hold, the write-guard hook that dangles on a submodule-less checkout, and how CI handles submodules — the test job checks out skills-vendor/ because test_skills_hook.py dereferences the hook symlink while lint does not need it, with the cost, the pinned-SHA semantics against the v1.2 hold, and the checkout-time failure mode accepted in exchange (#27)."
     },
     {
       "name": "deployment-topology",
@@ -83,7 +83,7 @@
     {
       "name": "ci-pipeline",
       "path": "./.github/workflows/ci.yml",
-      "description": "GitHub Actions CI. Keyless Workload Identity Federation auth to GCP for the wheelhouse mirror, a fail-fast guard asserting the GCP_WIF_PROVIDER org variable is visible to this repo, ruff check and format gates, a co-core extras import smoke proving [extract] and [bus] wire up in a clean environment, and pytest with the coverage gate. Deliberately no Postgres service and no alembic steps — Replicator is DB-free."
+      "description": "GitHub Actions CI. Keyless Workload Identity Federation auth to GCP for the wheelhouse mirror, a fail-fast guard asserting the GCP_WIF_PROVIDER org variable is visible to this repo, ruff check and format gates, a co-core extras import smoke proving [extract] and [bus] wire up in a clean environment, and pytest with the coverage gate. Deliberately no Postgres service and no alembic steps — Replicator is DB-free. The test job's checkout carries `submodules: true` and the lint job deliberately does not (#27): tests/test_skills_hook.py dereferences the .claude/hooks/ symlink into skills-vendor/, and actions/checkout fetches no submodules by default, so without the key that test cannot pass in CI at all — it failed identically on every commit and main was red from 7bf5988 until the fix. Ruff extend-excludes skills-vendor/, so lint never reads what it never fetches. Costs ~2.2s of a ~1m10s job; checkout resolves the SHA pinned in this superproject rather than upstream tip, so it is independent of the v1.2 skills hold. Reasoning in docs/SKILLS.md."
     },
     {
       "name": "dependency-contract",
