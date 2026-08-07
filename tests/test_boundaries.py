@@ -134,8 +134,29 @@ def test_the_import_detector_sees_a_planted_import():
 # scan to identifiers is what lets the domain noun stay.
 DOMAIN_TOKENS = frozenset({"info_source", "info_item", "watched_item", "tenant", "aspect"})
 
+# The one carve-out, and it is a *word*, not a waiver (#28). co-core 0.8.0 makes
+# ``info_source_id`` required on the command and on both facts, so Replicator
+# must name it to copy it across. What the charter still forbids is
+# *understanding* it — see ``test_the_echoed_domain_key_is_never_interpreted``,
+# which is the assertion that makes this allowlist safe to have written.
+ECHOED_TOKEN = "info_source"
 
-def _docstring_nodes(tree: ast.Module) -> set[int]:
+# Exactly the three modules on the emit path: the two publishers, and the report
+# dataclass that carries the value between them. Deliberately not a directory
+# glob — ``src/worker/`` also holds the pacer, the sweep and the policy reader,
+# none of which has any business naming a domain object.
+DOMAIN_ECHO_MODULES = frozenset(
+    {"src/worker/handler.py", "src/worker/reporter.py", "src/worker/loop.py"}
+)
+
+# Where the echo may never spread, asserted against the allowlist itself rather
+# than against the source. A future change that needs the domain key in the
+# settings table or in a blob path would reach for this list first, and adding a
+# module here is the moment the charter is actually being edited.
+DOMAIN_ECHO_FORBIDDEN = ("src/core/config.py", "src/storage/", "src/api/")
+
+
+def _docstring_nodes(tree: ast.AST) -> set[int]:
     """Ids of the ``Constant`` nodes that are docstrings, so the scan can skip them."""
     skip: set[int] = set()
     for node in ast.walk(tree):
@@ -151,7 +172,7 @@ def _docstring_nodes(tree: ast.Module) -> set[int]:
     return skip
 
 
-def _vocabulary_surface(tree: ast.Module) -> set[str]:
+def _vocabulary_surface(tree: ast.AST) -> set[str]:
     """Every identifier and non-docstring string literal in ``tree``.
 
     String literals are in scope alongside identifiers because domain leakage
@@ -179,10 +200,40 @@ def _vocabulary_surface(tree: ast.Module) -> set[str]:
     return surface
 
 
-def _domain_hits(tree: ast.Module) -> set[str]:
+def _domain_hits(tree: ast.AST) -> set[str]:
     """Tokens from ``DOMAIN_TOKENS`` appearing anywhere in the vocabulary surface."""
     lowered = [text.lower() for text in _vocabulary_surface(tree)]
     return {token for token in DOMAIN_TOKENS if any(token in text for text in lowered)}
+
+
+def _interpreting_hits(tree: ast.AST) -> set[str]:
+    """Domain tokens appearing where the code is *reading* the value, not carrying it.
+
+    A verbatim echo is three shapes and no more: an annotated field declaration,
+    an attribute read, and a keyword argument. Every other position implies the
+    value meant something to Replicator —
+
+    - ``Compare`` / ``BoolOp`` and the test of an ``If`` / ``While`` / ``IfExp``:
+      a branch on the domain.
+    - ``Subscript``: a lookup keyed by it — a routing table, a per-source counter,
+      a policy map.
+    - ``JoinedStr``: an f-string. Every use anyone has proposed for one builds
+      either a Redis key or a filesystem path, which is domain *state* under
+      another name.
+
+    Scoped to the whole of ``src/``, not to the allowlist, so a module that is
+    not permitted to name the token at all still cannot interpret it in prose-shaped
+    ways the other scan would miss.
+    """
+    hits: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Compare | ast.BoolOp | ast.Subscript | ast.JoinedStr):
+            hits |= _domain_hits(node)
+        elif isinstance(node, ast.If | ast.While | ast.IfExp):
+            hits |= _domain_hits(node.test)
+        elif isinstance(node, ast.Match):
+            hits |= _domain_hits(node.subject)
+    return hits
 
 
 def test_no_module_names_a_domain_concept():
@@ -191,6 +242,33 @@ def test_no_module_names_a_domain_concept():
     A domain field on the wire is the regression no type checker and no reviewer
     reliably catches, because it always arrives looking reasonable: one optional
     field, one small settings table, and Replicator has a domain model.
+
+    ``ECHOED_TOKEN`` is exempted **only** in ``DOMAIN_ECHO_MODULES``, and only
+    when it is the sole hit: an allowlisted module that also named a tenant or a
+    watched item is offending on that, not on the echo.
+    """
+    files = _python_files(SRC)
+    assert files, f"no modules found under {SRC} — the scan is a no-op"
+
+    offenders = {}
+    for path in files:
+        name = path.relative_to(REPO).as_posix()
+        hits = _domain_hits(_parse(path))
+        if name in DOMAIN_ECHO_MODULES:
+            hits -= {ECHOED_TOKEN}
+        if hits:
+            offenders[name] = sorted(hits)
+    assert not offenders
+
+
+def test_the_echoed_domain_key_is_never_interpreted():
+    """What makes the allowlist a carve-out rather than a hole (#28).
+
+    The charter's rule is not "do not say ``info_source_id``" — the wire contract
+    now requires saying it. The rule is that Replicator never learns what it
+    means. Naming it to copy it across is mechanics; branching on it, keying on
+    it, or building a string out of it is the domain model arriving one
+    defensible commit at a time, which is the failure this file exists to catch.
     """
     files = _python_files(SRC)
     assert files, f"no modules found under {SRC} — the scan is a no-op"
@@ -198,9 +276,27 @@ def test_no_module_names_a_domain_concept():
     offenders = {
         path.relative_to(REPO).as_posix(): sorted(hits)
         for path in files
-        if (hits := _domain_hits(_parse(path)))
+        if (hits := _interpreting_hits(_parse(path)))
     }
     assert not offenders
+
+
+def test_the_echo_allowlist_cannot_reach_config_or_storage():
+    """The allowlist is the file a future change edits *first*, so it is guarded.
+
+    Adding a module here is how the domain key would acquire a settings entry, a
+    blob path segment, or an HTTP surface — each a different way of holding
+    domain state, and each one this assertion names before the code exists.
+    """
+    for forbidden in DOMAIN_ECHO_FORBIDDEN:
+        assert not [module for module in DOMAIN_ECHO_MODULES if module.startswith(forbidden)]
+
+
+def test_every_echo_module_exists():
+    """An allowlist entry that no longer names a file exempts nothing and hides
+    that it exempts nothing — the stale-allowlist failure mode."""
+    for module in DOMAIN_ECHO_MODULES:
+        assert (REPO / module).is_file(), module
 
 
 @pytest.mark.parametrize(
@@ -230,6 +326,36 @@ def test_the_vocabulary_detector_sees_a_planted_domain_name(source):
 def test_the_vocabulary_detector_ignores_prose(source):
     """Prose is where these words are legitimate, and where a false positive kills the test."""
     assert not _domain_hits(ast.parse(source))
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param('if command.info_source_id == "x": ...', id="branch"),
+        pytest.param("policy = table[command.info_source_id]", id="lookup"),
+        pytest.param('key = f"replicator:{command.info_source_id}"', id="key-building"),
+        pytest.param("ok = enabled and command.info_source_id", id="bool-op"),
+        pytest.param(
+            "match command.info_source_id:\n    case _:\n        pass", id="match-subject"
+        ),
+    ],
+)
+def test_the_interpretation_detector_sees_a_planted_read(source):
+    assert _interpreting_hits(ast.parse(source))
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param("info_source_id: str", id="field-declaration"),
+        pytest.param("Event(info_source_id=command.info_source_id)", id="keyword-echo"),
+        pytest.param("x = command.info_source_id", id="plain-read"),
+    ],
+)
+def test_the_interpretation_detector_passes_a_verbatim_echo(source):
+    """The three shapes the emit path actually uses. A detector that flagged these
+    would force the allowlist to be deleted rather than obeyed."""
+    assert not _interpreting_hits(ast.parse(source))
 
 
 # --------------------------------------------------------------------------

@@ -9,7 +9,7 @@ fields, so a producer-side envelope change breaks these tests instead of leaving
 the script quietly publishing something the worker cannot decode.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from co_core.pure.adapters.bus import streams
@@ -41,6 +41,9 @@ from scripts.seed_fetch import (
 TOPIC = "replicator.itest.fetch"
 BLOBS = "replicator.itest.blobs"
 URL = "https://example.test/a"
+# The domain key the sample facts echo. Unlike the harness's own default, so
+# a helper that quietly substituted SEED_INFO_SOURCE_ID would be visible.
+INFO_SOURCE_ID = "isrc-sample"
 
 
 async def decoded_commands(client, topic: str = TOPIC) -> list[ContentFetchCommand]:
@@ -60,10 +63,10 @@ async def decoded_commands(client, topic: str = TOPIC) -> list[ContentFetchComma
 def fact_fields(command_id: str) -> dict[str, str]:
     """The wire frame the worker's handler publishes for a handled command.
 
-    Carries the enriched fetch metadata (#10) as well, because the claim in that
-    first line is what the helper is for: a sample missing six of the fields the
-    handler actually sends is a quietly wrong model of the wire, and the watch
-    output is read against it.
+    Carries the enriched fetch metadata (#10) and the blob lifetime (#28) as
+    well, because the claim in that first line is what the helper is for: a sample
+    missing fields the handler actually sends is a quietly wrong model of the
+    wire, and the watch output is read against it.
     """
     return to_wire(
         BlobAvailableEvent(
@@ -74,12 +77,14 @@ def fact_fields(command_id: str) -> dict[str, str]:
             media_type="text/html",
             url=URL,
             command_id=command_id,
+            info_source_id=INFO_SOURCE_ID,
             final_url=URL,
             status_code=200,
             fetched_at=datetime.now(UTC),
             content_type_raw="text/html; charset=utf-8",
             etag='W/"abc-123"',
             last_modified="Wed, 21 Oct 2015 07:28:00 GMT",
+            blob_expires_at=datetime.now(UTC) + timedelta(days=7),
         )
     )
 
@@ -98,6 +103,7 @@ async def add_failure(client, command_id: str, topic: str = BLOBS) -> bytes:
                 occurred_at=datetime.now(UTC),
                 command_id=command_id,
                 url=URL,
+                info_source_id=INFO_SOURCE_ID,
                 reason="http_status",
                 terminal=True,
                 status_code=404,

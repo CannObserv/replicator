@@ -70,6 +70,12 @@ IDLE_SLEEP_SECONDS = 0.05
 
 DEFAULT_WATCH_TIMEOUT_SECONDS = 30.0
 
+# The domain key every seeded command carries unless the operator names one
+# (#28). Deliberately not id-shaped: no issuer's InfoSource table can contain
+# this, so a fact that reaches a real consumer is recognizably from the harness
+# rather than plausibly from a real fetch.
+SEED_INFO_SOURCE_ID = "seed-harness-not-a-real-info-source"
+
 # Either outcome of a command. ``content.blobs`` has carried both since #9, so
 # "the fact for this command_id" is no longer synonymous with "the blob".
 Fact = BlobAvailableEvent | FetchFailedEvent
@@ -92,6 +98,7 @@ def build_command(
     url: str,
     headers: dict[str, str] | None = None,
     timeout_seconds: float | None = None,
+    info_source_id: str = SEED_INFO_SOURCE_ID,
 ) -> ContentFetchCommand:
     """Mint a command for one URL.
 
@@ -106,6 +113,13 @@ def build_command(
     ``headers`` / ``timeout_seconds`` apply to every URL in the run and default
     to ``None`` — the omitted-field shape, which is the worker's pre-#11
     behaviour exactly.
+
+    ``info_source_id`` is required by co-core 0.8.0 and has no omitted shape, so
+    it defaults to a value that is deliberately **not** a real InfoSource id
+    (#28). The harness is not an issuer: it holds no domain state and has nothing
+    to name here. A recognizable placeholder makes the facts a seed run produces
+    identifiable as synthetic; pass ``--info-source-id`` when the point of the
+    run is to watch a real issuer's correlation work end to end.
     """
     return ContentFetchCommand(
         occurred_at=datetime.now(UTC),
@@ -113,6 +127,7 @@ def build_command(
         url=url,
         headers=headers,
         timeout_seconds=timeout_seconds,
+        info_source_id=info_source_id,
     )
 
 
@@ -204,6 +219,7 @@ async def publish(
     on_published: Callable[[SeedResult], None] | None = None,
     headers: dict[str, str] | None = None,
     timeout_seconds: float | None = None,
+    info_source_id: str = SEED_INFO_SOURCE_ID,
 ) -> list[SeedResult]:
     """XADD one command per URL, in the order given.
 
@@ -219,7 +235,7 @@ async def publish(
     publisher = AsyncBusPublisher(client)
     results = []
     for url in urls:
-        command = build_command(url, headers, timeout_seconds)
+        command = build_command(url, headers, timeout_seconds, info_source_id)
         result = await publisher.execute(BusPublish(topic, to_wire(command)))
         published = SeedResult(command.command_id, url, result.bus_message_id)
         results.append(published)
@@ -374,6 +390,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="request header to attach to every command; repeatable (#11)",
     )
     parser.add_argument(
+        "--info-source-id",
+        default=SEED_INFO_SOURCE_ID,
+        dest="info_source_id",
+        help=(
+            "domain key echoed onto both facts, required on the wire since co-core 0.8.0 "
+            f"(default: {SEED_INFO_SOURCE_ID!r}, which no issuer's InfoSource table contains)"
+        ),
+    )
+    parser.add_argument(
         "--timeout",
         type=float,
         default=None,
@@ -396,6 +421,7 @@ def _print_dry_run(
     urls: list[str],
     headers: dict[str, str] | None = None,
     timeout_seconds: float | None = None,
+    info_source_id: str = SEED_INFO_SOURCE_ID,
 ) -> None:
     """Show the wire frames without publishing them.
 
@@ -405,7 +431,7 @@ def _print_dry_run(
     travel, after this script's own stripping.
     """
     for url in urls:
-        command = build_command(url, headers, timeout_seconds)
+        command = build_command(url, headers, timeout_seconds, info_source_id)
         print(f"would publish to {topic}: {to_wire(command)}")
 
 
@@ -482,6 +508,7 @@ async def _seed(client: Redis, args: argparse.Namespace) -> int:
             on_published=report,
             headers=args.headers,
             timeout_seconds=args.timeout_seconds,
+            info_source_id=args.info_source_id,
         )
     except (RedisError, OSError) as exc:
         print(
@@ -559,7 +586,9 @@ def main(argv: list[str] | None = None) -> int:
     """Parse arguments and run; the dry run never opens a connection."""
     args = build_parser().parse_args(argv)
     if args.dry_run:
-        _print_dry_run(args.topic, args.urls, args.headers, args.timeout_seconds)
+        _print_dry_run(
+            args.topic, args.urls, args.headers, args.timeout_seconds, args.info_source_id
+        )
         return 0
     return asyncio.run(run(args))
 

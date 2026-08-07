@@ -9,7 +9,15 @@ from src.core.config import get_settings
 from src.core.errors import FailureReason, PermanentFetchError, TransientFetchError
 from src.storage.local import LocalBlobStore
 from src.storage.sweeper import BlobUsage
-from tests.worker.conftest import BODY, URL, FakeFetcher, command, fetch_result, published_facts
+from tests.worker.conftest import (
+    BODY,
+    INFO_SOURCE_ID,
+    URL,
+    FakeFetcher,
+    command,
+    fetch_result,
+    published_facts,
+)
 
 
 async def test_the_command_url_is_the_url_fetched(handler):
@@ -45,6 +53,46 @@ async def test_a_successful_fetch_publishes_blob_available(handler, fake_redis, 
     assert fact.media_type == "text/html"
     assert fact.url == URL
     assert fact.command_id == "cmd-7"
+
+
+async def test_the_domain_key_is_echoed_verbatim_onto_the_success_fact(handler, fake_redis):
+    """#28: copy ``info_source_id`` across, interpret nothing.
+
+    Verbatim is the whole requirement — Replicator holds no domain state, so the
+    value is opaque here and the only way to get it wrong is to transform it.
+    Asserted against a value the handler could not have derived from anything
+    else on the command, so a site reading ``command_id`` by mistake fails
+    instead of coincidentally matching.
+    """
+    await handler()(command("cmd-7", info_source_id="isrc-elsewhere"))
+
+    (fact,) = await published_facts(fake_redis)
+    assert fact.info_source_id == "isrc-elsewhere"
+    assert fact.command_id == "cmd-7"
+
+
+async def test_an_opaque_domain_key_is_not_normalized(handler, fake_redis):
+    """Whatever the issuer sent is what the fact carries, shape included.
+
+    Replicator has no schema for this value and must not acquire one: trimming,
+    lower-casing, or rejecting an odd-looking id would all be *interpretation*,
+    and the charter's rule is that the mechanics layer never reads domain meaning
+    (``docs/contracts/replicator-boundaries.md``). co-core sets no ``min_length``,
+    so even the empty string is the issuer's business, not the fetcher's.
+    """
+    await handler()(command(info_source_id="  Odd/Id:v2  "))
+
+    (fact,) = await published_facts(fake_redis)
+    assert fact.info_source_id == "  Odd/Id:v2  "
+
+
+async def test_the_default_command_carries_the_shared_domain_key(handler, fake_redis):
+    """Guards the fixture itself: a default of ``""`` would make the echo tests
+    above pass against a handler that hardcoded a blank."""
+    await handler()(command())
+
+    (fact,) = await published_facts(fake_redis)
+    assert fact.info_source_id == INFO_SOURCE_ID
 
 
 async def test_the_fact_stream_defaults_to_content_blobs(handler, fake_redis):

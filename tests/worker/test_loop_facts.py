@@ -222,6 +222,7 @@ async def test_a_foreign_payload_is_never_announced_even_when_it_echoes_a_comman
                 media_type="text/html",
                 url="https://example.test/a",
                 command_id="cmd-that-actually-succeeded",
+                info_source_id="isrc-of-that-other-command",
             )
         ),
     )
