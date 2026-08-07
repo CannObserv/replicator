@@ -82,7 +82,18 @@ jobs:
       contents: read
       id-token: write
     steps:
+      # `submodules` is load-bearing for tests/test_skills_hook.py, which
+      # dereferences the .claude/hooks/ symlink into skills-vendor/ — an
+      # unpopulated submodule makes that link dangle and the test cannot pass.
+      # Both submodules are public HTTPS in .gitmodules, so no token is needed,
+      # and neither nests, so `true` is enough (`recursive` would only add a
+      # foreach pass). The coupling this buys: an upstream force-push that GCs a
+      # pinned SHA fails the job *at checkout*, which looks nothing like a test
+      # failure. The lint job deliberately omits this — ruff never reads
+      # skills-vendor/.
       - uses: actions/checkout@v5
+        with:
+          submodules: true
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
