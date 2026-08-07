@@ -104,6 +104,9 @@ hook as a side effect, even though it never inspects it. Tracked upstream as
 [gregoryfoster/skills#99](https://github.com/gregoryfoster/skills/issues/99); the guard itself
 is correctly non-blocking once it resolves.
 
+CI is **no longer** one of those submodule-less checkouts — see [Submodules in CI](#submodules-in-ci)
+below. A `git worktree add` still is.
+
 ### From `obra-superpowers`
 
 | Skill | Purpose |
@@ -151,3 +154,37 @@ makes upstream fixes to the script arrive on the normal submodule refresh; a cop
 version was current the day it was installed and drifts silently thereafter — this repo's had, for
 the whole `.skills/doctor.sh` commit path (#16). `readlink .claude/hooks/skills-submodule-update.sh`
 is the check; an empty result means someone re-copied it.
+
+## Submodules in CI
+
+`tests/test_skills_hook.py` pins that symlink, and its second assertion **dereferences** it — a
+correctly-shaped link into an unpopulated submodule is a dangling no-op, which is the failure #16
+existed to catch. `actions/checkout` does not fetch submodules by default, so the `test` job carries
+the key that makes the test runnable at all:
+
+```yaml
+- uses: actions/checkout@v5
+  with:
+    submodules: true
+```
+
+Without it the link dangles on the runner and the test **cannot pass in CI** — it fails identically
+on every commit, which is indistinguishable from a check that just started failing and trains
+everyone to merge past red. That is what happened: `main` was red from `7bf5988` until #27.
+
+Three things to know before touching it:
+
+- **`lint` deliberately omits the key.** Ruff `extend-exclude`s `skills-vendor/` (`pyproject.toml`),
+  so the linter never reads what the job never fetches. Both halves are load-bearing; either alone
+  would do.
+- **It costs ~2.2s** of a ~1m10s job, for both submodules. `submodules: true` fetches
+  `obra-superpowers` too, which no test dereferences — `actions/checkout` takes no per-submodule
+  selector, and trading the declarative key for an imperative `git submodule update --init <path>`
+  step to save about a second is not worth it.
+- **CI resolves the SHA pinned here, never upstream tip.** So the key neither lifts nor weakens the
+  v1.2 hold above. A pin far behind upstream is fine: GitHub serves arbitrary SHAs, so the shallow
+  submodule fetch resolves it.
+
+The coupling accepted in exchange: an upstream force-push that garbage-collects a pinned SHA fails
+the job **at checkout**, an error that looks nothing like a test failure. If CI dies before the
+`Install uv` step, read the checkout log before the test output.
