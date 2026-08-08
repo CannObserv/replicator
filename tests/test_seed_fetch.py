@@ -445,9 +445,27 @@ async def test_a_run_publishes_and_closes_the_client_it_opened(fake_redis, owned
     assert owned_client == [True]
 
 
-async def test_a_refused_target_publishes_nothing_and_still_closes(fake_redis, owned_client):
-    """The guard fires before the first XADD, not after a partial run."""
-    code = await run(seed_args("--topic", streams.CONTENT_FETCH, URL))
+@pytest.mark.parametrize(
+    "argv",
+    [
+        pytest.param(["--topic", streams.CONTENT_FETCH], id="no-production-opt-in"),
+        pytest.param(
+            ["--topic", streams.CONTENT_FETCH, "--production"], id="placeholder-domain-key"
+        ),
+        pytest.param(
+            ["--topic", streams.CONTENT_FETCH, "--production", "--info-source-id", " "],
+            id="blank-domain-key",
+        ),
+    ],
+)
+async def test_a_refused_target_publishes_nothing_and_still_closes(fake_redis, owned_client, argv):
+    """The guard fires before the first XADD, not after a partial run.
+
+    Parametrized over all three refusal causes (CR #18) because the guard grew a
+    fourth argument, and the wiring from ``args.info_source_id`` into the call is
+    exactly the plumbing a unit test of the guard alone cannot see.
+    """
+    code = await run(seed_args(*argv, URL))
 
     assert code == 2
     assert await fake_redis.xlen(streams.CONTENT_FETCH) == 0

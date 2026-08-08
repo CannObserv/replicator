@@ -24,9 +24,9 @@ usable non-interactively.
 Every command carries an ``info_source_id``, required on the wire since co-core
 0.8.0 and echoed onto both facts (#28). It defaults to a placeholder no issuer's
 InfoSource table contains, so the facts a scratch run produces are recognizably
-synthetic — and for that same reason the live target additionally refuses the
-default, since a real fetch broadcasts that value to the cluster. Name one with
-``--info-source-id``.
+synthetic — and for that same reason the live target refuses both that default
+and a blank, since a real fetch broadcasts whatever is passed to the cluster.
+Name one with ``--info-source-id``.
 
 ``--watch`` tails the fact stream so a human can see the loop close without
 hand-writing ``XRANGE``. It accepts **either** outcome — ``blob_available`` or,
@@ -41,11 +41,11 @@ facts rather than production's.
 Exit codes: ``0`` published (and, under ``--watch``, every command produced a
 blob) · ``1`` the run did not complete — publishing failed, watching failed, a
 command was closed by a ``fetch_failed``, or no fact ever arrived · ``2`` the
-target was refused, whether for the missing ``--production`` opt-in or for the
-placeholder ``info_source_id``. Commands are reported on stdout as they land, so
-a non-zero exit never hides a command it saw land — a connection lost between the ``XADD``
-and its reply is the one gap, and the "N of M" count on stderr is what marks that
-boundary as fuzzy.
+target was refused — a missing ``--production`` opt-in, or a placeholder or blank
+``info_source_id`` alongside one. Commands are reported on stdout as they land,
+so a non-zero exit never hides a command it saw land; a connection lost between
+the ``XADD`` and its reply is the one gap, and the "N of M" count on stderr is
+what marks that boundary as fuzzy.
 """
 
 import argparse
@@ -93,8 +93,9 @@ class ProductionTargetError(RuntimeError):
     """The requested target is the live command stream and something was left implicit.
 
     Either the ``--production`` opt-in is missing, or it was given while
-    ``info_source_id`` was left at the placeholder — one exit code, because both
-    mean the same thing: a real fetch was about to happen on an assumption.
+    ``info_source_id`` was left at the placeholder or blank — one exit code,
+    because all of them mean the same thing: a real fetch was about to happen on
+    an assumption.
     """
 
 
@@ -435,8 +436,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=SEED_INFO_SOURCE_ID,
         dest="info_source_id",
         help=(
-            "domain key echoed onto both facts, required on the wire since co-core 0.8.0 "
-            f"(default: {SEED_INFO_SOURCE_ID!r}, which no issuer's InfoSource table contains)"
+            "domain key echoed onto both facts, required on the wire since co-core 0.8.0; "
+            "a real value is required with --production, which refuses both the default "
+            f"and a blank (default: {SEED_INFO_SOURCE_ID!r}, which no issuer's "
+            "InfoSource table contains)"
         ),
     )
     parser.add_argument(

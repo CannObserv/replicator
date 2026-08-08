@@ -179,30 +179,6 @@ def _docstring_nodes(tree: ast.AST) -> set[int]:
     return skip
 
 
-def _walk_pruning_calls(node: ast.AST) -> list[ast.AST]:
-    """``node``'s subtree, stopping at every nested ``Call``.
-
-    Used only by the positional-argument check, and it is what keeps that check
-    from flagging the emit path itself. ``_publish(pub, topic,
-    BlobAvailableEvent(info_source_id=...), command=command)`` passes a *call* as
-    its third positional argument, and scanning that argument's whole subtree
-    would reach the legitimate keyword echo nested inside it.
-
-    Pruning loses nothing: the outer ``ast.walk`` visits every nested ``Call`` in
-    its own right, so each call's positional arguments are still checked — just
-    against that call rather than against its enclosing one.
-    """
-    found: list[ast.AST] = []
-    stack: list[ast.AST] = [node]
-    while stack:
-        current = stack.pop()
-        found.append(current)
-        stack.extend(
-            child for child in ast.iter_child_nodes(current) if not isinstance(child, ast.Call)
-        )
-    return found
-
-
 def _surface_of(nodes: list[ast.AST], skip: set[int]) -> set[str]:
     """Identifiers and non-docstring string literals across ``nodes``."""
     surface: set[str] = set()
@@ -246,76 +222,6 @@ def _domain_hits(tree: ast.AST) -> set[str]:
     return _tokens_in(_vocabulary_surface(tree))
 
 
-def _argument_hits(argument: ast.AST) -> set[str]:
-    """Domain tokens in one call argument, not counting nested calls.
-
-    A call passed *as* an argument contributes nothing here — it is visited on
-    its own turn by the enclosing walk, which is what keeps a legitimate nested
-    keyword echo from being read as its caller's read. That is what makes the
-    emit path's ``_publish(pub, topic, Event(info_source_id=…), command=…)``
-    clean at both levels.
-    """
-    if isinstance(argument, ast.Call):
-        return set()
-    return _tokens_in(_surface_of(_walk_pruning_calls(argument), set()))
-
-
-def _interpreting_hits(tree: ast.AST) -> set[str]:
-    """Domain tokens appearing where the code is *reading* the value, not carrying it.
-
-    A verbatim echo is three shapes and no more: an annotated field declaration,
-    an attribute read, and a **keyword** argument. Every other position implies
-    the value meant something to Replicator —
-
-    - ``Compare`` / ``BoolOp`` and the test of an ``If`` / ``While`` / ``IfExp``:
-      a branch on the domain.
-    - ``Subscript`` and a ``Dict`` **key**: a lookup keyed by it, or the table
-      being built for one — a routing map, a per-source counter, a policy cache.
-    - ``Call`` arguments: positional (``registry.get(id)``, ``seen.add(id)``,
-      ``Path(root, id)``) and every keyword **except** ``info_source_id=``, which
-      is exactly the echo — ``BlobAvailableEvent(info_source_id=…)`` — and
-      flagging it would force the allowlist to be deleted rather than obeyed.
-      Exempting keywords wholesale was CR #11's hole: ``client.get(name=id)``
-      reads the value under a different parameter name, and redis-py's async API
-      is keyword-friendly enough that this is how it would really be written.
-    - ``BinOp`` and ``JoinedStr``: concatenation and f-strings. Every use anyone
-      has proposed for one builds either a Redis key or a filesystem path, which
-      is domain *state* under another name.
-
-    The first four of these were added in CR #1, after a probe found the original
-    scan caught three of nine realistic violations while the charter cited it as
-    the guard that made the vocabulary carve-out safe. A test the charter cites
-    and that does not hold is worse than no test.
-
-    Scoped to the whole of ``src/``, not to the allowlist, so a module that is
-    not permitted to name the token at all still cannot interpret it in
-    prose-shaped ways the other scan would miss.
-    """
-    hits: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Compare | ast.BoolOp | ast.Subscript | ast.JoinedStr | ast.BinOp):
-            hits |= _domain_hits(node)
-        elif isinstance(node, ast.If | ast.While | ast.IfExp):
-            hits |= _domain_hits(node.test)
-        elif isinstance(node, ast.Match):
-            hits |= _domain_hits(node.subject)
-        elif isinstance(node, ast.Dict):
-            for key in node.keys:
-                # ``{**other}`` has a None key and spreads a mapping rather than
-                # naming one, so there is nothing to read here.
-                if key is not None:
-                    hits |= _domain_hits(key)
-        elif isinstance(node, ast.Call):
-            for argument in node.args:
-                hits |= _argument_hits(argument)
-            for keyword in node.keywords:
-                # ``keyword.arg`` is None for ``**mapping``, which names nothing
-                # and so is never the echo.
-                if keyword.arg != ECHOED_NAME:
-                    hits |= _argument_hits(keyword.value)
-    return hits
-
-
 def _unechoed_domain_names(tree: ast.AST) -> set[str]:
     """Names in ``tree`` that carry ``ECHOED_TOKEN`` but are not the echoed field.
 
@@ -323,15 +229,95 @@ def _unechoed_domain_names(tree: ast.AST) -> set[str]:
     ``info_source_cache`` all contain the token, and a substring exemption would
     admit every one of them into an allowlisted module — a per-InfoSource map
     arriving under cover of the field that earned the carve-out (CR #2).
-
-    ``info_source_id`` itself is excluded, as is anything that merely *contains*
-    it in a longer name, which would be a different field wearing its prefix.
     """
     return {
         text
         for text in _vocabulary_surface(tree)
         if ECHOED_TOKEN in text.lower() and text.lower() != ECHOED_NAME
     }
+
+
+def _parents(tree: ast.AST) -> dict[int, ast.AST]:
+    """Each node's parent, by id. ``ast`` does not record them and the scan needs them."""
+    parent: dict[int, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parent[id(child)] = node
+    return parent
+
+
+def _is_echoed_value(node: ast.AST, parent: dict[int, ast.AST]) -> bool:
+    """Whether this occurrence is the value of an ``info_source_id=`` keyword.
+
+    ``Event(info_source_id=command.info_source_id)`` — the one position from
+    which the value can only travel onward, because a keyword argument named for
+    the field it fills cannot also be a lookup key or a branch.
+    """
+    context = parent.get(id(node))
+    return isinstance(context, ast.keyword) and context.arg == ECHOED_NAME
+
+
+def _echo_violations(tree: ast.AST) -> list[str]:
+    """Every occurrence of the echoed name that is **not** one of its legal shapes.
+
+    Inverted from the deny-list this replaces (CR #16). That one enumerated the
+    positions in which reading the value was forbidden — ``Compare``,
+    ``Subscript``, ``BinOp``, positional call arguments, and so on — and three
+    consecutive review rounds found positions it had not enumerated: six in the
+    first (dict keys, ``.get()``, concatenation, path building, …), one in the
+    second (keyword arguments under a different parameter name), two in the third
+    (``assert`` and a comprehension filter). Each fix was correct and each left
+    the next gap unknown until somebody probed again, while the charter cited the
+    scan as *the* guard making the vocabulary carve-out safe. A deny-list can only
+    ever be as complete as its last probe.
+
+    So this asks the opposite question. A verbatim echo has exactly four legal
+    shapes and no more:
+
+    1. an annotated field declaration — ``info_source_id: str``;
+    2. a parameter declaration — a function that carries the value through;
+    3. the keyword itself — ``info_source_id=``;
+    4. the value of that keyword — ``…=command.info_source_id``.
+
+    Everything else is flagged, including shapes nobody has thought of yet: a
+    subscript, a branch, an f-string, a set element, a comparison, a string
+    literal spelling the name as a dict key or log field. Exhaustive by
+    construction, so it needs no further enumeration.
+
+    Only ``ECHOED_NAME`` is in scope, because it is the only domain name allowed
+    to appear in ``src/`` at all — every other token in ``DOMAIN_TOKENS`` is
+    refused outright by ``test_no_module_names_a_domain_concept``, in every
+    position, which is a strictly stronger rule than this one.
+    """
+    parent = _parents(tree)
+    skip = _docstring_nodes(tree)
+    violations: list[str] = []
+    for node in ast.walk(tree):
+        # Shapes 1-3: declarations. Their *uses* are still checked below, so
+        # allowing a parameter here cannot smuggle a lookup past the scan.
+        if isinstance(node, ast.arg) and node.arg == ECHOED_NAME:
+            continue
+        if isinstance(node, ast.keyword) and node.arg == ECHOED_NAME:
+            continue
+        if isinstance(node, ast.Name) and node.id == ECHOED_NAME:
+            context = parent.get(id(node))
+            if isinstance(context, ast.AnnAssign) and context.target is node:
+                continue
+            if not _is_echoed_value(node, parent):
+                violations.append(f"line {node.lineno}: {ECHOED_NAME} used as a bare name")
+        elif isinstance(node, ast.Attribute) and node.attr == ECHOED_NAME:
+            if not _is_echoed_value(node, parent):
+                violations.append(f"line {node.lineno}: .{ECHOED_NAME} read outside the echo")
+        elif (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and id(node) not in skip
+            and ECHOED_TOKEN in node.value.lower()
+        ):
+            # A string literal spelling it is a dict key or a log field — the
+            # form a reviewer skims past, per the vocabulary scan's own note.
+            violations.append(f"line {node.lineno}: {ECHOED_TOKEN!r} in a string literal")
+    return violations
 
 
 def test_no_module_names_a_domain_concept():
@@ -374,9 +360,9 @@ def test_the_echoed_domain_key_is_never_interpreted():
     assert files, f"no modules found under {SRC} — the scan is a no-op"
 
     offenders = {
-        path.relative_to(REPO).as_posix(): sorted(hits)
+        path.relative_to(REPO).as_posix(): violations
         for path in files
-        if (hits := _interpreting_hits(_parse(path)))
+        if (violations := _echo_violations(_parse(path)))
     }
     assert not offenders
 
@@ -452,10 +438,24 @@ def test_the_vocabulary_detector_ignores_prose(source):
         pytest.param("v = client.get(name=command.info_source_id)", id="keyword-lookup"),
         pytest.param("await redis.set(name=command.info_source_id, value=1)", id="keyword-setter"),
         pytest.param('f(**{"info_source_id": command.info_source_id})', id="splatted-mapping"),
+        # CR #15: two more branch positions the deny-list had not enumerated.
+        # Under the inverted scan they need no rule of their own — they are simply
+        # not one of the four legal shapes.
+        pytest.param("assert command.info_source_id", id="assert"),
+        pytest.param("xs = [p for p in ps if p.info_source_id]", id="comprehension-filter"),
+        # Shapes nobody enumerated, kept as evidence that the inversion holds
+        # without being told about them.
+        pytest.param("seen = {command.info_source_id}", id="set-literal"),
+        pytest.param("del table[command.info_source_id]", id="delete"),
+        pytest.param("raise KeyError(command.info_source_id)", id="raise-argument"),
+        pytest.param('log("...", extra={"info_source_id": x})', id="log-field"),
+        pytest.param("x = command.info_source_id", id="bound-to-a-local"),
     ],
 )
-def test_the_interpretation_detector_sees_a_planted_read(source):
-    assert _interpreting_hits(ast.parse(source))
+def test_the_echo_detector_sees_a_planted_read(source):
+    """Every one of these is *not* one of the four legal shapes, which is the only
+    question the inverted scan asks."""
+    assert _echo_violations(ast.parse(source))
 
 
 @pytest.mark.parametrize(
@@ -463,7 +463,12 @@ def test_the_interpretation_detector_sees_a_planted_read(source):
     [
         pytest.param("info_source_id: str", id="field-declaration"),
         pytest.param("Event(info_source_id=command.info_source_id)", id="keyword-echo"),
-        pytest.param("x = command.info_source_id", id="plain-read"),
+        # A helper that carries the value through: the parameter declares it, and
+        # the only thing done with it is fill the keyword named for it.
+        pytest.param(
+            "def build(info_source_id):\n    return Event(info_source_id=info_source_id)",
+            id="carried-through-a-parameter",
+        ),
         # The emit path in full: a model built inside a positional argument, whose
         # own keyword is the echo. Both halves must stay clean.
         pytest.param(
@@ -472,10 +477,16 @@ def test_the_interpretation_detector_sees_a_planted_read(source):
         ),
     ],
 )
-def test_the_interpretation_detector_passes_a_verbatim_echo(source):
-    """The three shapes the emit path actually uses. A detector that flagged these
-    would force the allowlist to be deleted rather than obeyed."""
-    assert not _interpreting_hits(ast.parse(source))
+def test_the_echo_detector_passes_a_verbatim_echo(source):
+    """The four legal shapes. A detector that flagged these would force the
+    allowlist to be deleted rather than obeyed.
+
+    ``x = command.info_source_id`` is deliberately **not** here: binding the value
+    to a local is the first half of doing something with it, and under the
+    inverted rule a change that needs one has to argue with this test rather than
+    slip past it.
+    """
+    assert not _echo_violations(ast.parse(source))
 
 
 @pytest.mark.parametrize(

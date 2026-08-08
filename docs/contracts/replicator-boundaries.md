@@ -293,12 +293,11 @@ it**: delete every line mentioning it and the byte path behaves identically. So 
 it is freight.
 
 **The rule governs payload *shapes*, not producer-owned token vocabularies.**
-[`src/core/errors.py::FailureReason`](../../src/core/errors.py) is a locally-defined `StrEnum`
-of `fetch_failed` `reason` tokens and stays local by design: co-core types that field as a
-plain `str` rather than a `Literal` precisely so a producer adding a token cannot crash an
-older `extra="ignore"` consumer, which puts the vocabulary on the producer. Defining a wire
-*model* here would be the violation; owning the tokens Replicator itself emits is the
-contract working as intended.
+[`src/core/errors.py::FailureReason`](../../src/core/errors.py) is a local `StrEnum` of
+`fetch_failed` `reason` tokens and stays local by design: co-core types that field as a plain `str`
+rather than a `Literal` precisely so a producer adding a token cannot crash an older consumer, which
+puts the vocabulary on the producer. Defining a wire *model* here would be the violation; owning the
+tokens Replicator emits is the contract working.
 
 ## Known violation, tracked
 
@@ -333,7 +332,7 @@ is failing a PR, not documenting an intention.
 |---|---|
 | No database | no persistence distribution in `uv.lock` (sqlalchemy, asyncpg, psycopg, alembic, …); no `sqlite3` / `shelve` / `dbm` / `pickle` import in `src/` |
 | No domain vocabulary | AST scan of `src/`: `info_source`, `info_item`, `watched_item`, `tenant`, `aspect` appear in no identifier and no string literal — exact `info_source_id` exempted in the three emit-path modules only |
-| The echoed key is never interpreted | AST scan of `src/`: no domain token in a comparison, branch test, subscript, dict key, positional call argument, concatenation, or f-string |
+| The echoed key is never interpreted | AST scan of `src/`: every `info_source_id` occurrence is a field declaration, a parameter, the `info_source_id=` keyword, or that keyword's value; all else fails |
 | Ingress is read-only | recursive route walk: every path in the allowlist, every method in `{GET, HEAD}` |
 | The deployed process has no ingress | `src/worker/` imports no server framework; the unit runs `src.worker.main` with no `uvicorn` and no `--port` |
 | No locally-defined wire models | no class in `src/` declares an `event_type` field — every wire payload comes from co-core |
@@ -347,27 +346,26 @@ would undo:
 **The vocabulary scan is the load-bearing one, and it is AST-based for a reason.** It reads
 identifiers and string literals only, skipping comments and docstrings. The grep this replaced
 matched `both tasks watch one stop event` in a docstring, and a test whose first tripper is an
-English sentence gets deleted rather than heeded. The bare verb `watch` is
-deliberately absent from the token list; `watched_item`, the domain noun, is not. String
-literals are in scope alongside identifiers because domain leakage arrives as a dict key or a
-log field (`detail={"info_source_id": ...}`) at least as often as it arrives as an attribute.
+English sentence gets deleted rather than heeded. The bare verb `watch` is deliberately absent from
+the token list; `watched_item`, the domain noun, is not. String literals are in scope because domain
+leakage arrives as a dict key or log field as often as an attribute.
 
 **The `info_source` exemption is a carve-out, and a second scan is what makes it one.** The wire
 requires naming the field to copy it, so it is allowed in exactly `handler.py`, `reporter.py` and
-`loop.py`, and only as the exact identifier — an `info_source_policy` map cannot ride in behind it.
-The second scan holds the real invariant, forbidding the *value* wherever the code would be reading
-it: naming it is mechanics, keying on it is a domain model arriving one defensible commit at a
-time. Two further assertions guard the allowlist itself — it can never name `src/core/config.py`,
-`src/storage/` or `src/api/`, and every entry must still be a file.
+`loop.py`, and only as the exact identifier — no `info_source_policy` map rides in behind it.
+The second scan holds the real invariant as an **allow-list**: the four shapes a verbatim echo can
+take, everything else refused. It began as a deny-list of reading positions; three review rounds each
+found ones it had not enumerated, so it now asks the opposite question and is exhaustive. Naming the field is mechanics; keying on it is a domain model one commit at a time.
+Two assertions guard the allowlist itself: it can never name config, storage or the API, and every
+entry must be a file.
 
-**The `event_type` check is an AST check on class bodies, not a grep.** `event_type` appears
-twice in `src/worker/loop.py` legitimately — once in a comment, once reading a co-core model's
-own field. A grep would cry wolf on both.
+**The `event_type` check is an AST check on class bodies, not a grep.** `event_type` appears twice
+in `src/worker/loop.py` legitimately — once in a comment, once reading a co-core model's own field.
+A grep would cry wolf on both.
 
-**The detectors are themselves tested.** Each scan has cases running it against synthetic
-violating source, and each corpus scan asserts its own file list is non-empty. A structural
-test that quietly walks zero files passes forever while enforcing nothing — which is worse
-than no test, because this document then cites it.
+**The detectors are themselves tested.** Each scan runs against synthetic violating source, and
+each corpus scan asserts its own file list is non-empty. A structural test that quietly walks zero
+files passes forever while enforcing nothing — worse than no test, because this document cites it.
 
 ## Refs
 
