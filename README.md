@@ -30,9 +30,9 @@ The founding design lives in
 first — it is the normative issuer contract and its permanent home, with the refusal list, failure
 taxonomy and trust posture in its companion
 [`content-fetch-issuer-reference.md`](docs/contracts/content-fetch-issuer-reference.md).
-Publish through co-core's `to_wire`, never hand-rolled fields; and because the wire carries no
-domain identity, correlation is entirely the issuer's job. Most ways of getting either wrong fail
-silently.
+Publish through co-core's `to_wire`, never hand-rolled fields. The wire carries one domain key —
+`info_source_id`, echoed onto both facts and read by nothing here — but correlation is still
+entirely the issuer's job, on `command_id`. Most ways of getting either wrong fail silently.
 
 ## Shape
 
@@ -107,14 +107,15 @@ see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for what each one is and why.
 Nothing in the cluster issues `content.fetch` commands until the Watcher cutover, so
 `scripts/seed_fetch.py` is the issuer. The target is never defaulted — `--redis-url` and
 `--topic` are both required, and db 0 + `content.fetch` (the one pair the running worker
-consumes, and therefore actually fetches over the network) additionally needs `--production`:
+consumes, and therefore actually fetches over the network) additionally needs `--production`
+**and** a real `--info-source-id`, since the facts it publishes echo that value cluster-wide:
 
 ```bash
 # Fetches the local /health app — a target we control, so the smoke test costs
 # nobody else a request. Start it first (see Dev server below).
 uv run python -m scripts.seed_fetch \
   --redis-url redis://localhost:6379/0 --topic content.fetch \
-  --production --watch http://localhost:8041/health
+  --production --info-source-id isrc-01J9ZK7Q --watch http://localhost:8041/health
 ```
 
 `--watch` tails the fact stream until each command has an outcome — a `blob_available`, or a
