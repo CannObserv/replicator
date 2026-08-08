@@ -246,12 +246,14 @@ def _domain_hits(tree: ast.AST) -> set[str]:
     return _tokens_in(_vocabulary_surface(tree))
 
 
-def _positional_hits(argument: ast.AST) -> set[str]:
-    """Domain tokens in a positional call argument, not counting nested calls.
+def _argument_hits(argument: ast.AST) -> set[str]:
+    """Domain tokens in one call argument, not counting nested calls.
 
     A call passed *as* an argument contributes nothing here — it is visited on
     its own turn by the enclosing walk, which is what keeps a legitimate nested
-    keyword echo from being read as its caller's positional read.
+    keyword echo from being read as its caller's read. That is what makes the
+    emit path's ``_publish(pub, topic, Event(info_source_id=…), command=…)``
+    clean at both levels.
     """
     if isinstance(argument, ast.Call):
         return set()
@@ -269,10 +271,13 @@ def _interpreting_hits(tree: ast.AST) -> set[str]:
       a branch on the domain.
     - ``Subscript`` and a ``Dict`` **key**: a lookup keyed by it, or the table
       being built for one — a routing map, a per-source counter, a policy cache.
-    - positional ``Call`` arguments: ``registry.get(id)``, ``seen.add(id)``,
-      ``Path(root, id)``. Keyword arguments are exempt because that is exactly
-      the echo — ``BlobAvailableEvent(info_source_id=command.info_source_id)`` —
-      and flagging it would force the allowlist to be deleted rather than obeyed.
+    - ``Call`` arguments: positional (``registry.get(id)``, ``seen.add(id)``,
+      ``Path(root, id)``) and every keyword **except** ``info_source_id=``, which
+      is exactly the echo — ``BlobAvailableEvent(info_source_id=…)`` — and
+      flagging it would force the allowlist to be deleted rather than obeyed.
+      Exempting keywords wholesale was CR #11's hole: ``client.get(name=id)``
+      reads the value under a different parameter name, and redis-py's async API
+      is keyword-friendly enough that this is how it would really be written.
     - ``BinOp`` and ``JoinedStr``: concatenation and f-strings. Every use anyone
       has proposed for one builds either a Redis key or a filesystem path, which
       is domain *state* under another name.
@@ -302,7 +307,12 @@ def _interpreting_hits(tree: ast.AST) -> set[str]:
                     hits |= _domain_hits(key)
         elif isinstance(node, ast.Call):
             for argument in node.args:
-                hits |= _positional_hits(argument)
+                hits |= _argument_hits(argument)
+            for keyword in node.keywords:
+                # ``keyword.arg`` is None for ``**mapping``, which names nothing
+                # and so is never the echo.
+                if keyword.arg != ECHOED_NAME:
+                    hits |= _argument_hits(keyword.value)
     return hits
 
 
@@ -437,6 +447,11 @@ def test_the_vocabulary_detector_ignores_prose(source):
         pytest.param('key = "replicator:" + command.info_source_id', id="concatenation"),
         pytest.param("p = Path(root, command.info_source_id)", id="path-building"),
         pytest.param("counts[host] += weights[command.info_source_id]", id="nested-lookup"),
+        # CR #11: the same hole reached by keyword syntax. redis-py's async API is
+        # keyword-friendly enough that this is how it would actually get written.
+        pytest.param("v = client.get(name=command.info_source_id)", id="keyword-lookup"),
+        pytest.param("await redis.set(name=command.info_source_id, value=1)", id="keyword-setter"),
+        pytest.param('f(**{"info_source_id": command.info_source_id})', id="splatted-mapping"),
     ],
 )
 def test_the_interpretation_detector_sees_a_planted_read(source):
@@ -449,6 +464,12 @@ def test_the_interpretation_detector_sees_a_planted_read(source):
         pytest.param("info_source_id: str", id="field-declaration"),
         pytest.param("Event(info_source_id=command.info_source_id)", id="keyword-echo"),
         pytest.param("x = command.info_source_id", id="plain-read"),
+        # The emit path in full: a model built inside a positional argument, whose
+        # own keyword is the echo. Both halves must stay clean.
+        pytest.param(
+            "_publish(pub, topic, Event(info_source_id=command.info_source_id), command=command)",
+            id="emit-path",
+        ),
     ],
 )
 def test_the_interpretation_detector_passes_a_verbatim_echo(source):

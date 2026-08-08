@@ -80,7 +80,7 @@ In `/etc/replicator/.env` (read by the service):
 - `GOOGLE_APPLICATION_CREDENTIALS` — SA key for the wheelhouse mirror (`/etc/replicator/co-pypi-reader.json`)
 - `REPLICATOR_REDIS_URL` — change-bus client URL; default `redis://localhost:6379/0`
 - `REPLICATOR_BLOB_DIR` — temp-storage root for fetched bytes; default `blobs`. Resolved to an absolute path at store construction — `file://` URIs require it
-- `REPLICATOR_BLOB_TTL_SECONDS` — how long a blob survives after it was **last referenced**; default `604800` (7 days). Measured from mtime, which the store refreshes on its short-circuit. The number is a published commitment to archiver (archiver#118), not a local tuning knob — raise it if a `content.blobs` consumer says it needs longer
+- `REPLICATOR_BLOB_TTL_SECONDS` — how long a blob survives after it was **last referenced**; default `604800` (7 days), accepted range `0 < n ≤ 315360000` (10 years). Measured from mtime, which the store refreshes on its short-circuit, and published on each fact as `blob_expires_at`. The number is a published commitment to archiver (archiver#118), not a local tuning knob — raise it if a `content.blobs` consumer says it needs longer. **Out of range fails at startup**, not at the first fetch: the horizon is arithmetic, and an absurd value would raise mid-handler *after* the bytes were stored, orphaning them (#28)
 - `REPLICATOR_BLOB_SWEEP_INTERVAL_SECONDS` — how often the tree is walked; default `900`. Also the staleness bound on the measured byte total the ceiling reads
 - `REPLICATOR_BLOB_TEMP_GRACE_SECONDS` — how long a `.tmp` may live before the sweep treats it as debris; default `3600`. Deliberately unrelated to the TTL and far shorter — see **Retention**
   in [STORAGE.md](STORAGE.md)

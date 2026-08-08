@@ -226,6 +226,16 @@ def guard_production_target(topic: str, *, db: int, production: bool, info_sourc
             f"Pass --info-source-id naming the InfoSource these fetches are for, rather than "
             f"announcing {SEED_INFO_SOURCE_ID!r} to the cluster."
         )
+    # co-core sets no ``min_length``, so a blank id publishes cleanly and names
+    # nothing — the same shape as the blank ``command_id`` MUST-1 refuses, and
+    # refused for the same reason. The *worker* deliberately does not check this
+    # (reading the value would be interpretation); the harness is a producer, so
+    # that reasoning does not carry over to it.
+    if not info_source_id.strip():
+        raise ProductionTargetError(
+            f"{topic} on db {db} publishes real facts, and a blank info_source_id names "
+            f"nothing. Pass --info-source-id with the InfoSource these fetches are for."
+        )
 
 
 def resolve_blobs_topic(topic: str, override: str | None) -> str:

@@ -182,6 +182,16 @@ def test_the_placeholder_domain_key_is_refused_on_the_live_target():
         )
 
 
+@pytest.mark.parametrize("value", ["", "   "], ids=["empty", "whitespace"])
+def test_a_blank_domain_key_is_refused_on_the_live_target(value):
+    """CR #13: co-core sets no ``min_length``, so a blank id publishes cleanly and
+    names nothing. The worker must not refuse it — reading the value is
+    interpretation — but the harness is a *producer*, so the argument does not
+    carry over: MUST-1's "an empty id is not an id" applies here by analogy."""
+    with pytest.raises(ProductionTargetError):
+        guard_production_target(streams.CONTENT_FETCH, db=0, production=True, info_source_id=value)
+
+
 def test_the_placeholder_is_fine_anywhere_the_guard_does_not_bite():
     """Same conjunction as the target guard: a scratch run reaches no consumer,
     so inventing an id there is exactly what the placeholder is for."""
