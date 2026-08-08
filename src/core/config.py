@@ -59,8 +59,19 @@ class Settings(BaseSettings):
     # (archiver#118). Seven days is deliberately far above any plausible answer
     # rather than a measured figure, so the open question is a confirmation
     # rather than a blocker. Raise it if a consumer says it needs longer.
+    #
+    # Bounded since #28 made it arithmetic rather than only a comparison: the
+    # handler publishes ``stored_at + blob_ttl_seconds`` as blob_expires_at, and
+    # an unbounded float makes that addition raise OverflowError *after* the
+    # bytes are stored — not a transient error, so the command walks the delivery
+    # ceiling into the DLQ and leaves its blob behind as an orphan. The ceiling is
+    # ten years: far past any retention anyone would ask for, and far short of
+    # what datetime arithmetic refuses (CR #7).
     blob_ttl_seconds: float = Field(
-        default=7 * 24 * 60 * 60, validation_alias="REPLICATOR_BLOB_TTL_SECONDS"
+        default=7 * 24 * 60 * 60,
+        gt=0,
+        le=10 * 365 * 24 * 60 * 60,
+        validation_alias="REPLICATOR_BLOB_TTL_SECONDS",
     )
 
     # How often the sweep walks the tree. Also the staleness bound on the

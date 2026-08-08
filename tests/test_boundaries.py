@@ -134,12 +134,19 @@ def test_the_import_detector_sees_a_planted_import():
 # scan to identifiers is what lets the domain noun stay.
 DOMAIN_TOKENS = frozenset({"info_source", "info_item", "watched_item", "tenant", "aspect"})
 
-# The one carve-out, and it is a *word*, not a waiver (#28). co-core 0.8.0 makes
-# ``info_source_id`` required on the command and on both facts, so Replicator
-# must name it to copy it across. What the charter still forbids is
+# The one carve-out, and it is one *field* wide, not one word wide (#28). co-core
+# 0.8.0 makes ``info_source_id`` required on the command and on both facts, so
+# Replicator must name it to copy it across. What the charter still forbids is
 # *understanding* it — see ``test_the_echoed_domain_key_is_never_interpreted``,
 # which is the assertion that makes this allowlist safe to have written.
+#
+# ECHOED_TOKEN is the DOMAIN_TOKENS entry the exemption suppresses;
+# ECHOED_NAME is the only identifier it may be suppressed *for*. The two are
+# separate because the token scan matches substrings: exempting the token alone
+# would let ``info_source_policy`` or ``info_sources`` into an allowlisted module
+# under cover of the field that earned the carve-out (CR #2).
 ECHOED_TOKEN = "info_source"
+ECHOED_NAME = "info_source_id"
 
 # Exactly the three modules on the emit path: the two publishers, and the report
 # dataclass that carries the value between them. Deliberately not a directory
@@ -172,17 +179,34 @@ def _docstring_nodes(tree: ast.AST) -> set[int]:
     return skip
 
 
-def _vocabulary_surface(tree: ast.AST) -> set[str]:
-    """Every identifier and non-docstring string literal in ``tree``.
+def _walk_pruning_calls(node: ast.AST) -> list[ast.AST]:
+    """``node``'s subtree, stopping at every nested ``Call``.
 
-    String literals are in scope alongside identifiers because domain leakage
-    arrives as a dict key or a log field (``detail={"info_source_id": ...}``) at
-    least as often as it arrives as an attribute — and that form is the one a
-    reviewer skims past.
+    Used only by the positional-argument check, and it is what keeps that check
+    from flagging the emit path itself. ``_publish(pub, topic,
+    BlobAvailableEvent(info_source_id=...), command=command)`` passes a *call* as
+    its third positional argument, and scanning that argument's whole subtree
+    would reach the legitimate keyword echo nested inside it.
+
+    Pruning loses nothing: the outer ``ast.walk`` visits every nested ``Call`` in
+    its own right, so each call's positional arguments are still checked — just
+    against that call rather than against its enclosing one.
     """
-    skip = _docstring_nodes(tree)
+    found: list[ast.AST] = []
+    stack: list[ast.AST] = [node]
+    while stack:
+        current = stack.pop()
+        found.append(current)
+        stack.extend(
+            child for child in ast.iter_child_nodes(current) if not isinstance(child, ast.Call)
+        )
+    return found
+
+
+def _surface_of(nodes: list[ast.AST], skip: set[int]) -> set[str]:
+    """Identifiers and non-docstring string literals across ``nodes``."""
     surface: set[str] = set()
-    for node in ast.walk(tree):
+    for node in nodes:
         if isinstance(node, ast.Name):
             surface.add(node.id)
         elif isinstance(node, ast.Attribute):
@@ -200,40 +224,104 @@ def _vocabulary_surface(tree: ast.AST) -> set[str]:
     return surface
 
 
+def _vocabulary_surface(tree: ast.AST) -> set[str]:
+    """Every identifier and non-docstring string literal in ``tree``.
+
+    String literals are in scope alongside identifiers because domain leakage
+    arrives as a dict key or a log field (``detail={"info_source_id": ...}``) at
+    least as often as it arrives as an attribute — and that form is the one a
+    reviewer skims past.
+    """
+    return _surface_of(list(ast.walk(tree)), _docstring_nodes(tree))
+
+
+def _tokens_in(surface: set[str]) -> set[str]:
+    """Which ``DOMAIN_TOKENS`` appear anywhere in ``surface``."""
+    lowered = [text.lower() for text in surface]
+    return {token for token in DOMAIN_TOKENS if any(token in text for text in lowered)}
+
+
 def _domain_hits(tree: ast.AST) -> set[str]:
     """Tokens from ``DOMAIN_TOKENS`` appearing anywhere in the vocabulary surface."""
-    lowered = [text.lower() for text in _vocabulary_surface(tree)]
-    return {token for token in DOMAIN_TOKENS if any(token in text for text in lowered)}
+    return _tokens_in(_vocabulary_surface(tree))
+
+
+def _positional_hits(argument: ast.AST) -> set[str]:
+    """Domain tokens in a positional call argument, not counting nested calls.
+
+    A call passed *as* an argument contributes nothing here — it is visited on
+    its own turn by the enclosing walk, which is what keeps a legitimate nested
+    keyword echo from being read as its caller's positional read.
+    """
+    if isinstance(argument, ast.Call):
+        return set()
+    return _tokens_in(_surface_of(_walk_pruning_calls(argument), set()))
 
 
 def _interpreting_hits(tree: ast.AST) -> set[str]:
     """Domain tokens appearing where the code is *reading* the value, not carrying it.
 
     A verbatim echo is three shapes and no more: an annotated field declaration,
-    an attribute read, and a keyword argument. Every other position implies the
-    value meant something to Replicator —
+    an attribute read, and a **keyword** argument. Every other position implies
+    the value meant something to Replicator —
 
     - ``Compare`` / ``BoolOp`` and the test of an ``If`` / ``While`` / ``IfExp``:
       a branch on the domain.
-    - ``Subscript``: a lookup keyed by it — a routing table, a per-source counter,
-      a policy map.
-    - ``JoinedStr``: an f-string. Every use anyone has proposed for one builds
-      either a Redis key or a filesystem path, which is domain *state* under
-      another name.
+    - ``Subscript`` and a ``Dict`` **key**: a lookup keyed by it, or the table
+      being built for one — a routing map, a per-source counter, a policy cache.
+    - positional ``Call`` arguments: ``registry.get(id)``, ``seen.add(id)``,
+      ``Path(root, id)``. Keyword arguments are exempt because that is exactly
+      the echo — ``BlobAvailableEvent(info_source_id=command.info_source_id)`` —
+      and flagging it would force the allowlist to be deleted rather than obeyed.
+    - ``BinOp`` and ``JoinedStr``: concatenation and f-strings. Every use anyone
+      has proposed for one builds either a Redis key or a filesystem path, which
+      is domain *state* under another name.
+
+    The first four of these were added in CR #1, after a probe found the original
+    scan caught three of nine realistic violations while the charter cited it as
+    the guard that made the vocabulary carve-out safe. A test the charter cites
+    and that does not hold is worse than no test.
 
     Scoped to the whole of ``src/``, not to the allowlist, so a module that is
-    not permitted to name the token at all still cannot interpret it in prose-shaped
-    ways the other scan would miss.
+    not permitted to name the token at all still cannot interpret it in
+    prose-shaped ways the other scan would miss.
     """
     hits: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Compare | ast.BoolOp | ast.Subscript | ast.JoinedStr):
+        if isinstance(node, ast.Compare | ast.BoolOp | ast.Subscript | ast.JoinedStr | ast.BinOp):
             hits |= _domain_hits(node)
         elif isinstance(node, ast.If | ast.While | ast.IfExp):
             hits |= _domain_hits(node.test)
         elif isinstance(node, ast.Match):
             hits |= _domain_hits(node.subject)
+        elif isinstance(node, ast.Dict):
+            for key in node.keys:
+                # ``{**other}`` has a None key and spreads a mapping rather than
+                # naming one, so there is nothing to read here.
+                if key is not None:
+                    hits |= _domain_hits(key)
+        elif isinstance(node, ast.Call):
+            for argument in node.args:
+                hits |= _positional_hits(argument)
     return hits
+
+
+def _unechoed_domain_names(tree: ast.AST) -> set[str]:
+    """Names in ``tree`` that carry ``ECHOED_TOKEN`` but are not the echoed field.
+
+    The exemption is for one field. ``info_source_policy``, ``info_sources`` and
+    ``info_source_cache`` all contain the token, and a substring exemption would
+    admit every one of them into an allowlisted module — a per-InfoSource map
+    arriving under cover of the field that earned the carve-out (CR #2).
+
+    ``info_source_id`` itself is excluded, as is anything that merely *contains*
+    it in a longer name, which would be a different field wearing its prefix.
+    """
+    return {
+        text
+        for text in _vocabulary_surface(tree)
+        if ECHOED_TOKEN in text.lower() and text.lower() != ECHOED_NAME
+    }
 
 
 def test_no_module_names_a_domain_concept():
@@ -243,9 +331,10 @@ def test_no_module_names_a_domain_concept():
     reliably catches, because it always arrives looking reasonable: one optional
     field, one small settings table, and Replicator has a domain model.
 
-    ``ECHOED_TOKEN`` is exempted **only** in ``DOMAIN_ECHO_MODULES``, and only
-    when it is the sole hit: an allowlisted module that also named a tenant or a
-    watched item is offending on that, not on the echo.
+    ``ECHOED_TOKEN`` is exempted **only** in ``DOMAIN_ECHO_MODULES``, only when
+    every name carrying it is exactly ``ECHOED_NAME``, and only for itself: an
+    allowlisted module that also named a tenant or a watched item is offending on
+    that, not on the echo.
     """
     files = _python_files(SRC)
     assert files, f"no modules found under {SRC} — the scan is a no-op"
@@ -253,8 +342,9 @@ def test_no_module_names_a_domain_concept():
     offenders = {}
     for path in files:
         name = path.relative_to(REPO).as_posix()
-        hits = _domain_hits(_parse(path))
-        if name in DOMAIN_ECHO_MODULES:
+        tree = _parse(path)
+        hits = _domain_hits(tree)
+        if name in DOMAIN_ECHO_MODULES and not _unechoed_domain_names(tree):
             hits -= {ECHOED_TOKEN}
         if hits:
             offenders[name] = sorted(hits)
@@ -332,12 +422,21 @@ def test_the_vocabulary_detector_ignores_prose(source):
     "source",
     [
         pytest.param('if command.info_source_id == "x": ...', id="branch"),
+        pytest.param("if command.info_source_id: ...", id="bare-truthiness"),
         pytest.param("policy = table[command.info_source_id]", id="lookup"),
         pytest.param('key = f"replicator:{command.info_source_id}"', id="key-building"),
         pytest.param("ok = enabled and command.info_source_id", id="bool-op"),
         pytest.param(
             "match command.info_source_id:\n    case _:\n        pass", id="match-subject"
         ),
+        # The six CR #1 found missing. Each is a way the echoed value becomes
+        # state: a table keyed by it, a lookup through one, a Redis key, a path.
+        pytest.param("routes = {command.info_source_id: handler}", id="dict-literal-key"),
+        pytest.param("policy = registry.get(command.info_source_id)", id="get-lookup"),
+        pytest.param("seen.add(command.info_source_id)", id="membership-call"),
+        pytest.param('key = "replicator:" + command.info_source_id', id="concatenation"),
+        pytest.param("p = Path(root, command.info_source_id)", id="path-building"),
+        pytest.param("counts[host] += weights[command.info_source_id]", id="nested-lookup"),
     ],
 )
 def test_the_interpretation_detector_sees_a_planted_read(source):
@@ -356,6 +455,36 @@ def test_the_interpretation_detector_passes_a_verbatim_echo(source):
     """The three shapes the emit path actually uses. A detector that flagged these
     would force the allowlist to be deleted rather than obeyed."""
     assert not _interpreting_hits(ast.parse(source))
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param("self.info_source_policy = {}", id="policy-map"),
+        pytest.param("for x in self.info_sources: pass", id="collection"),
+        pytest.param("def f(info_source_url): ...", id="adjacent-field"),
+        pytest.param('cache = {"info_source_cache": 1}', id="string-literal"),
+    ],
+)
+def test_the_exemption_detector_sees_a_name_that_is_not_the_echoed_field(source):
+    """CR #2: the carve-out is one field wide.
+
+    Each of these contains ``info_source`` and would have been exempt under a
+    substring-only exemption — including inside an allowlisted module, where the
+    interpretation scan does not reach a bare assignment or a ``for`` target.
+    """
+    assert _unechoed_domain_names(ast.parse(source))
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param("info_source_id: str", id="field-declaration"),
+        pytest.param("Event(info_source_id=command.info_source_id)", id="keyword-echo"),
+    ],
+)
+def test_the_exemption_detector_passes_the_echoed_field(source):
+    assert not _unechoed_domain_names(ast.parse(source))
 
 
 # --------------------------------------------------------------------------

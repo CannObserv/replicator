@@ -35,17 +35,18 @@ remediation.
 
 Any proposed capability, field, or setting runs these in order:
 
-1. **Does it need durable per-resource history?** → **issuer.** Replicator's state must be
-   exactly one of: content-addressed on disk (rebuildable by re-fetch), in-memory derived
-   (rebuildable by replay), or in the broker (PEL, dedupe keys). State outside those three
-   *is* a database, whatever it is called.
+1. **Does it need durable per-resource history?** → **issuer.** Replicator's state must be exactly
+   one of: content-addressed on disk (rebuildable by re-fetch), in-memory derived (rebuildable by
+   replay), or in the broker (PEL, dedupe keys). State outside those three *is* a database,
+   whatever it is called.
 2. **Does it need cross-command coordination over a resource only the fetcher can see?**
-   (a host's tolerance, the disk, a connection pool, a browser pool) → **Replicator.** Nobody
-   else can see it, and N issuers being polite independently is a fiction.
-3. **Can it be expressed without domain vocabulary?** If it needs the words InfoSource,
-   InfoItem, WatchedItem, aspect, tenant → **issuer**, always.
+   (a host's tolerance, the disk, a connection pool, a browser pool) → **Replicator.** Nobody else
+   can see it, and N issuers being polite independently is a fiction.
+3. **Can it be expressed without domain vocabulary?** If Replicator has to *read* the words
+   InfoSource, InfoItem, WatchedItem, aspect, tenant → **issuer**, always. Carrying one unread is
+   the one exception — see **Reviewing a proposed payload field**.
 
-Tests 1 and 2 can both fire. When they do:
+Tests 1 and 2 can both fire:
 
 > **Mechanism to Replicator. Policy to the issuer. Config travels over the bus.**
 
@@ -233,23 +234,20 @@ than fetching unpaced on the way out. `src/worker/pacing.py`, `handler.py::_pace
 
 ### The fallback default (was the interim, #12 → #19)
 
-`REPLICATOR_MIN_HOST_INTERVAL_SECONDS`, default **1.0 s** — Watcher's own
-`DEFAULT_MIN_INTERVAL`, chosen precisely because it invents nothing. #12 shipped it as one
-number for every origin, standing in for a stream that did not exist. #19 gave it its permanent
-job: it is what a host with **no explicit policy** resolves to — unknown, revoked, or not yet
-replayed — and never "unlimited", because a boot replay cannot tell a consumer whether the set
-it received is whole.
+`REPLICATOR_MIN_HOST_INTERVAL_SECONDS`, default **1.0 s** — Watcher's own `DEFAULT_MIN_INTERVAL`,
+chosen precisely because it invents nothing. #12 shipped it as one number for every origin, standing
+in for a stream that did not exist; #19 gave it its permanent job as what a host with **no explicit
+policy** resolves to — unknown, revoked, or not yet replayed — and never "unlimited", because a boot
+replay cannot tell a consumer whether the set it received is whole.
 
-**`0` no longer disables pacing outright.** It is the fallback for unpublished hosts only; a
-host with a policy is still paced by it. The alternative would let a local env var veto a value
-the issuer published, which inverts the ownership split this whole document settles. An
-operator who wants no politeness at all now has to say so per host, through the producer that
-owns the numbers.
+**`0` no longer disables pacing outright.** It is the fallback for unpublished hosts only; a host
+with a policy is still paced by it. The alternative would let a local env var veto a value the
+issuer published, inverting the ownership split this document settles. An operator wanting no
+politeness at all says so per host, through the producer that owns the numbers.
 
 Consistent with the charter on both halves: enforcement is mechanism (test 2 — nobody but the
-fetcher can see a host's tolerance across commands), and a fallback number is not policy in the
-sense test 3 cares about — it names no domain concept, and the per-host table it defers to is
-the producer's. **Two in-memory maps** now, with different bounding rules and deliberately so:
+fetcher sees a host's tolerance across commands), and a fallback number is not policy in the sense
+test 3 cares about — it names no domain concept, and the table it defers to is the producer's. **Two in-memory maps** now, with different bounding rules and deliberately so:
 the pacer's host → last-request map is consumer-derived and pruned to `MAX_TRACKED_HOSTS`,
 while the policy map is bounded by what the producer publishes and is **never pruned** —
 dropping an entry to honour a local limit would silently loosen a host's spacing, the exact
@@ -257,32 +255,24 @@ failure the stream exists to remove. Both are derived, rebuildable by replay, an
 domain vocabulary: the second of the three permitted state shapes, twice.
 
 **Boot ordering is part of the design, not an implementation detail.** `replay()` runs
-synchronously before the consume loop starts. Started as a peer task, the worker would fetch
-its opening commands against an empty map and pace every host at the fallback — safe only
-because the fallback is meant to be the stricter number, and that is the one assumption not
-worth spending on startup ordering. A failed replay is absorbed rather than fatal: the cursor
-advances only over messages that decoded, so the tail resumes from the same place and drains
-the rest, while failing the boot would turn a policy-stream hiccup into a total fetch outage.
-The rebuilt host count is logged, because an empty map and a working one are otherwise
-indistinguishable from outside.
+synchronously before the consume loop starts, or the worker's opening commands are paced against
+an empty map — safe only because the fallback is the stricter number, and that is the one
+assumption not worth spending on startup ordering. Mechanism, including why a failed replay is
+absorbed rather than fatal: [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 **Known limitation, still open after #19: the host asked for is not always the host
-reached.** httpx follows redirects inside the driver, so a URL that 301s elsewhere is paced
-under the name the command carried and not at all under the name that served it. A corpus where
-several watched URLs funnel into one portal or CDN therefore hits that host at N times the
-intended rate — the failure politeness exists to prevent. `FetchResult.final_url` is available
-where the fix would go, but recording the landing host too breaks "one request, one record",
-which wants its own decision. #19 did **not** resolve it: per-host numbers make the fix more
-defensible — the landing host would be paced under its own published policy rather than under a
-guess — without making it automatic. Tracked as its own gap rather than left as a promissory
-note against a stream that has now shipped, and recorded here for the same reason `blob_uri` is:
-an unwritten gap and a decorative charter are the same thing to a reader.
+reached.** httpx follows redirects inside the driver, so a URL that 301s elsewhere is paced under
+the name the command carried, never under the name that served it — and a corpus funnelling into
+one portal or CDN hits it at N times the intended rate, the failure politeness exists to prevent.
+The fix would read `FetchResult.final_url`, but recording the landing host breaks "one request, one
+record" and wants its own decision. #19 made it more defensible without making it automatic.
+Recorded here for the same reason `blob_uri` is: an unwritten gap and a decorative charter are the
+same thing to a reader.
 
-**The stream is a precondition of the Phase 4 cutover, not a follow-on to it.** Watcher's
-limiter (`src/core/rate_limiter.py::acquire_for_domain`, fed by 429s its own fetch path
-observes) is load-bearing today and stops functioning the moment that fetch path becomes a
-publish path — it does not fail, it silently becomes decorative, pacing command publication
-rather than origin requests. #12's default closed that window on the consumer side and #19
+**The stream is a precondition of the Phase 4 cutover, not a follow-on to it.** Watcher's limiter
+(`src/core/rate_limiter.py::acquire_for_domain`, fed by 429s its own fetch path observes) is
+load-bearing today and stops functioning the moment that fetch path becomes a publish path — it does
+not fail, it silently becomes decorative, pacing publication rather than origin requests. #12's default closed that window on the consumer side and #19
 supplies the numbers; **what remains is issuer-side** — Watcher publishing its `Domain` rows
 onto this stream, tracked at
 [CannObserv/watcher#245](https://github.com/CannObserv/watcher/issues/245). Until it does,
@@ -297,11 +287,10 @@ domain-agnosticism is the property the whole issuer contract is built on; it ero
 field at a time.
 
 **`info_source_id` is the settled exception, and its shape is the precedent (cannobserv#300,
-#28).** Required on all three payloads, copied across verbatim. What made it acceptable is not that
-the field is small — it is that Replicator **never reads it**: delete every line mentioning it and
-the byte path behaves identically. So the question is really *does Replicator have to understand
-this to act on it?* If yes it fails whatever it is called — a `jurisdiction` used to pick a fetch
-strategy fails though nothing named it a domain object. If no it is freight.
+#28).** What made it acceptable is not that the field is small — it is that Replicator **never reads
+it**: delete every line mentioning it and the byte path behaves identically. So the real question is
+*does Replicator have to understand this to act on it?* If yes it fails whatever it is called; if no
+it is freight.
 
 **The rule governs payload *shapes*, not producer-owned token vocabularies.**
 [`src/core/errors.py::FailureReason`](../../src/core/errors.py) is a locally-defined `StrEnum`
@@ -343,8 +332,8 @@ is failing a PR, not documenting an intention.
 | Invariant | Test |
 |---|---|
 | No database | no persistence distribution in `uv.lock` (sqlalchemy, asyncpg, psycopg, alembic, …); no `sqlite3` / `shelve` / `dbm` / `pickle` import in `src/` |
-| No domain vocabulary | AST scan of `src/`: `info_source`, `info_item`, `watched_item`, `tenant`, `aspect` appear in no identifier and no string literal — `info_source` exempted in the three emit-path modules only |
-| The echoed key is never interpreted | AST scan of `src/`: no domain token in a `Compare`, `BoolOp`, `Subscript`, f-string, or the test of an `if` / `while` / `match` |
+| No domain vocabulary | AST scan of `src/`: `info_source`, `info_item`, `watched_item`, `tenant`, `aspect` appear in no identifier and no string literal — exact `info_source_id` exempted in the three emit-path modules only |
+| The echoed key is never interpreted | AST scan of `src/`: no domain token in a comparison, branch test, subscript, dict key, positional call argument, concatenation, or f-string |
 | Ingress is read-only | recursive route walk: every path in the allowlist, every method in `{GET, HEAD}` |
 | The deployed process has no ingress | `src/worker/` imports no server framework; the unit runs `src.worker.main` with no `uvicorn` and no `--port` |
 | No locally-defined wire models | no class in `src/` declares an `event_type` field — every wire payload comes from co-core |
@@ -357,20 +346,19 @@ would undo:
 
 **The vocabulary scan is the load-bearing one, and it is AST-based for a reason.** It reads
 identifiers and string literals only, skipping comments and docstrings. The grep this replaced
-matched `both tasks watch one stop event` in a docstring — and a test whose first tripper is an
-English sentence is a test that gets deleted rather than heeded. The bare verb `watch` is
+matched `both tasks watch one stop event` in a docstring, and a test whose first tripper is an
+English sentence gets deleted rather than heeded. The bare verb `watch` is
 deliberately absent from the token list; `watched_item`, the domain noun, is not. String
 literals are in scope alongside identifiers because domain leakage arrives as a dict key or a
 log field (`detail={"info_source_id": ...}`) at least as often as it arrives as an attribute.
 
 **The `info_source` exemption is a carve-out, and a second scan is what makes it one.** The wire
-requires naming the field to copy it, so the token is allowed in exactly `handler.py`,
-`reporter.py` and `loop.py` — a list, not a `src/worker/` glob, since the pacer, the sweep and the
-policy reader have no business naming a domain object either. The second scan holds the real
-invariant, forbidding the *value* in any position that implies reading it. Naming it is mechanics;
-keying on it is a domain model arriving one defensible commit at a time. Two assertions guard the
-allowlist itself — it can never name `src/core/config.py`, `src/storage/` or `src/api/`, and every
-entry must still be a file.
+requires naming the field to copy it, so it is allowed in exactly `handler.py`, `reporter.py` and
+`loop.py`, and only as the exact identifier — an `info_source_policy` map cannot ride in behind it.
+The second scan holds the real invariant, forbidding the *value* wherever the code would be reading
+it: naming it is mechanics, keying on it is a domain model arriving one defensible commit at a
+time. Two further assertions guard the allowlist itself — it can never name `src/core/config.py`,
+`src/storage/` or `src/api/`, and every entry must still be a file.
 
 **The `event_type` check is an AST check on class bodies, not a grep.** `event_type` appears
 twice in `src/worker/loop.py` legitimately — once in a comment, once reading a co-core model's

@@ -21,6 +21,13 @@ actually reaches the running service (db 0 *and* ``content.fetch``) additionally
 requires ``--production``. A flag rather than a prompt: the script has to stay
 usable non-interactively.
 
+Every command carries an ``info_source_id``, required on the wire since co-core
+0.8.0 and echoed onto both facts (#28). It defaults to a placeholder no issuer's
+InfoSource table contains, so the facts a scratch run produces are recognizably
+synthetic — and for that same reason the live target additionally refuses the
+default, since a real fetch broadcasts that value to the cluster. Name one with
+``--info-source-id``.
+
 ``--watch`` tails the fact stream so a human can see the loop close without
 hand-writing ``XRANGE``. It accepts **either** outcome — ``blob_available`` or,
 since #9, ``fetch_failed`` — because a watch that recognized only success would
@@ -34,8 +41,9 @@ facts rather than production's.
 Exit codes: ``0`` published (and, under ``--watch``, every command produced a
 blob) · ``1`` the run did not complete — publishing failed, watching failed, a
 command was closed by a ``fetch_failed``, or no fact ever arrived · ``2`` the
-target was refused. Commands are reported on stdout as they land, so a non-zero
-exit never hides a command it saw land — a connection lost between the ``XADD``
+target was refused, whether for the missing ``--production`` opt-in or for the
+placeholder ``info_source_id``. Commands are reported on stdout as they land, so
+a non-zero exit never hides a command it saw land — a connection lost between the ``XADD``
 and its reply is the one gap, and the "N of M" count on stderr is what marks that
 boundary as fuzzy.
 """
@@ -82,7 +90,12 @@ Fact = BlobAvailableEvent | FetchFailedEvent
 
 
 class ProductionTargetError(RuntimeError):
-    """The requested target is the live command stream and no opt-in was given."""
+    """The requested target is the live command stream and something was left implicit.
+
+    Either the ``--production`` opt-in is missing, or it was given while
+    ``info_source_id`` was left at the placeholder — one exit code, because both
+    mean the same thing: a real fetch was about to happen on an assumption.
+    """
 
 
 @dataclass(frozen=True)
@@ -181,20 +194,38 @@ def resolve_db(client: Redis) -> int:
     return int(client.connection_pool.connection_kwargs.get("db") or 0)
 
 
-def guard_production_target(topic: str, *, db: int, production: bool) -> None:
-    """Refuse the live command stream unless the caller opted in.
+def guard_production_target(topic: str, *, db: int, production: bool, info_source_id: str) -> None:
+    """Refuse the live command stream unless the caller opted in, and meant it twice.
 
     The gate is the *conjunction*, because that is what determines reach:
     ``content.fetch`` on a scratch database has no consumer, and a scratch topic
     on db 0 is not polled by anything. Only both together put bytes through the
     running service.
+
+    Two refusals behind that one gate. ``--production`` is the first: the worker
+    will fetch these URLs for real. The placeholder ``info_source_id`` is the
+    second (CR #8) — a real fetch publishes real facts to the real
+    ``content.blobs``, and every one of them echoes this value. Left at the
+    default they would name an InfoSource that exists in no issuer's table, on a
+    broadcast stream nothing trims. Refused here rather than defaulted away,
+    because the harness cannot know which InfoSource an operator meant.
+
+    Both checks sit inside the same conjunction on purpose: a scratch run reaches
+    no consumer, so inventing an id there is exactly what the placeholder is for.
     """
-    if not (db == 0 and topic == streams.CONTENT_FETCH) or production:
+    if not (db == 0 and topic == streams.CONTENT_FETCH):
         return
-    raise ProductionTargetError(
-        f"{topic} on db {db} is the live command stream — the running worker will fetch "
-        f"these URLs for real. Pass --production to mean it."
-    )
+    if not production:
+        raise ProductionTargetError(
+            f"{topic} on db {db} is the live command stream — the running worker will fetch "
+            f"these URLs for real. Pass --production to mean it."
+        )
+    if info_source_id == SEED_INFO_SOURCE_ID:
+        raise ProductionTargetError(
+            f"{topic} on db {db} publishes real facts, and every one echoes info_source_id. "
+            f"Pass --info-source-id naming the InfoSource these fetches are for, rather than "
+            f"announcing {SEED_INFO_SOURCE_ID!r} to the cluster."
+        )
 
 
 def resolve_blobs_topic(topic: str, override: str | None) -> str:
@@ -468,7 +499,12 @@ async def _seed(client: Redis, args: argparse.Namespace) -> int:
     published yet (CR #15).
     """
     try:
-        guard_production_target(args.topic, db=resolve_db(client), production=args.production)
+        guard_production_target(
+            args.topic,
+            db=resolve_db(client),
+            production=args.production,
+            info_source_id=args.info_source_id,
+        )
     except ProductionTargetError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

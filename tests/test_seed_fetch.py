@@ -24,6 +24,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from ulid import ULID
 
 from scripts.seed_fetch import (
+    SEED_INFO_SOURCE_ID,
     ProductionTargetError,
     SeedResult,
     _report_facts,
@@ -160,21 +161,45 @@ async def test_publishing_preserves_the_order_the_urls_were_given(fake_redis):
 def test_the_live_command_stream_on_the_live_database_is_refused():
     """The one combination the running service picks up: db 0 + content.fetch."""
     with pytest.raises(ProductionTargetError):
-        guard_production_target(streams.CONTENT_FETCH, db=0, production=False)
+        guard_production_target(
+            streams.CONTENT_FETCH, db=0, production=False, info_source_id="isrc-real"
+        )
 
 
 def test_the_live_target_is_allowed_with_an_explicit_opt_in():
-    guard_production_target(streams.CONTENT_FETCH, db=0, production=True)
+    guard_production_target(
+        streams.CONTENT_FETCH, db=0, production=True, info_source_id="isrc-real"
+    )
+
+
+def test_the_placeholder_domain_key_is_refused_on_the_live_target():
+    """CR #8: --production opts into a real fetch, and its facts go to the real
+    content.blobs. A fact naming an InfoSource that cannot exist is not something
+    the harness should be able to publish there by omission."""
+    with pytest.raises(ProductionTargetError):
+        guard_production_target(
+            streams.CONTENT_FETCH, db=0, production=True, info_source_id=SEED_INFO_SOURCE_ID
+        )
+
+
+def test_the_placeholder_is_fine_anywhere_the_guard_does_not_bite():
+    """Same conjunction as the target guard: a scratch run reaches no consumer,
+    so inventing an id there is exactly what the placeholder is for."""
+    guard_production_target(
+        streams.CONTENT_FETCH, db=15, production=False, info_source_id=SEED_INFO_SOURCE_ID
+    )
 
 
 def test_the_command_stream_on_a_scratch_database_is_allowed():
     """No worker is polling db 15 — that stream reaches nothing."""
-    guard_production_target(streams.CONTENT_FETCH, db=15, production=False)
+    guard_production_target(
+        streams.CONTENT_FETCH, db=15, production=False, info_source_id="isrc-real"
+    )
 
 
 def test_a_scratch_stream_on_the_live_database_is_allowed():
     """Nothing consumes ``replicator.itest.*``; the guard is about reach, not db."""
-    guard_production_target(TOPIC, db=0, production=False)
+    guard_production_target(TOPIC, db=0, production=False, info_source_id="isrc-real")
 
 
 @pytest.mark.parametrize(
@@ -564,6 +589,38 @@ async def test_published_commands_carry_the_request_options(fake_redis):
     (command,) = await decoded_commands(fake_redis)
     assert command.headers == {"User-Agent": "watcher/0.1.0"}
     assert command.timeout_seconds == 2.5
+
+
+async def test_published_commands_carry_the_domain_key(fake_redis):
+    """CR #5: the flag crosses three functions before it reaches the wire.
+
+    ``build_command`` -> ``publish`` -> the frame, each with a default that would
+    silently substitute the placeholder if an argument were dropped — and a seed
+    run would then report success while publishing a synthetic id.
+    """
+    await publish(fake_redis, TOPIC, [URL], info_source_id="isrc-real")
+
+    (command,) = await decoded_commands(fake_redis)
+    assert command.info_source_id == "isrc-real"
+
+
+async def test_a_command_defaults_to_the_placeholder_domain_key(fake_redis):
+    """The harness is not an issuer and has nothing real to name here."""
+    await publish(fake_redis, TOPIC, [URL])
+
+    (command,) = await decoded_commands(fake_redis)
+    assert command.info_source_id == SEED_INFO_SOURCE_ID
+
+
+async def test_the_domain_key_flag_reaches_a_published_command(fake_redis, owned_client):
+    """End to end through argparse, since the flag is plumbed by hand from
+    ``args`` into ``publish`` and a missed wiring is invisible below that."""
+    args = seed_args("--topic", TOPIC, "--info-source-id", "isrc-from-the-cli", URL)
+
+    assert await run(args) == 0
+
+    (command,) = await decoded_commands(fake_redis)
+    assert command.info_source_id == "isrc-from-the-cli"
 
 
 async def test_a_command_without_options_carries_neither_field(fake_redis):
