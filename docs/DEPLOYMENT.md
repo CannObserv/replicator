@@ -41,6 +41,24 @@ The **redis-py client** resolves `>=5,<8` transitively via `co-core-aio[bus]`. D
 
 The copy is deliberate, for the same reason `/etc/replicator/.env` is not read from the repo: the live unit must survive a repo reset, a worktree switch, or a branch checkout that happens to be mid-edit.
 
+### The co-core 0.8.0 cutover is a two-repo deploy, streams flushed between (#28)
+
+`schema_version` stays 1, and that is a decision rather than an oversight: bumping to 2 would imply
+a v1 consumers must branch on, when the correct operation is to discard the v1 messages. The wire
+is pre-production, so it is discardable.
+
+**Flushing is a prerequisite step, not cleanup.** `content.fetch`, `content.blobs`, and **both
+`.dlq` streams** — a v1 dead-letter cannot be replayed under 0.8.0, so leaving it is leaving a trap
+for whoever triages next. Add `replicator:cmd:*` if any `command_id` will be reused across the
+flush. **Not** `content.fetch-policy`: it is a groupless state stream, and flushing it leaves every
+worker with an empty policy map until the next republish.
+
+**Ship with [CannObserv/watcher#252](https://github.com/CannObserv/watcher/issues/252).** Required
+fields mean a half-deployed cluster does not degrade, it dead-letters: a Replicator on 0.8.0 fails
+`from_wire` on any command from a Watcher still on 0.7.x, and that failure destroys the
+`command_id` correlator before any fact can name it. The two may be worked in parallel; they must
+land together.
+
 **Dev server workflow** (the `/health` app, port 8041 so a future live service stays up):
 
 ```bash
@@ -62,7 +80,7 @@ In `/etc/replicator/.env` (read by the service):
 - `GOOGLE_APPLICATION_CREDENTIALS` — SA key for the wheelhouse mirror (`/etc/replicator/co-pypi-reader.json`)
 - `REPLICATOR_REDIS_URL` — change-bus client URL; default `redis://localhost:6379/0`
 - `REPLICATOR_BLOB_DIR` — temp-storage root for fetched bytes; default `blobs`. Resolved to an absolute path at store construction — `file://` URIs require it
-- `REPLICATOR_BLOB_TTL_SECONDS` — how long a blob survives after it was **last referenced**; default `604800` (7 days). Measured from mtime, which the store refreshes on its short-circuit. The number is a published commitment to archiver (archiver#118), not a local tuning knob — raise it if a `content.blobs` consumer says it needs longer
+- `REPLICATOR_BLOB_TTL_SECONDS` — how long a blob survives after it was **last referenced**; default `604800` (7 days), accepted range `0 < n ≤ 315360000` (10 years). Measured from mtime, which the store refreshes on its short-circuit, and published on each fact as `blob_expires_at`. The number is a published commitment to archiver (archiver#118), not a local tuning knob — raise it if a `content.blobs` consumer says it needs longer. **Out of range fails at startup**, not at the first fetch: the horizon is arithmetic, and an absurd value would raise mid-handler *after* the bytes were stored, orphaning them (#28)
 - `REPLICATOR_BLOB_SWEEP_INTERVAL_SECONDS` — how often the tree is walked; default `900`. Also the staleness bound on the measured byte total the ceiling reads
 - `REPLICATOR_BLOB_TEMP_GRACE_SECONDS` — how long a `.tmp` may live before the sweep treats it as debris; default `3600`. Deliberately unrelated to the TTL and far shorter — see **Retention**
   in [STORAGE.md](STORAGE.md)

@@ -9,7 +9,7 @@ message pending for the next reclaim.
 import asyncio
 import math
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import NamedTuple, Protocol
 
 import httpx
@@ -256,6 +256,13 @@ def build_handler(
         # new write goes uncounted. Both drifts are bounded by the sweep
         # interval, after which observe() replaces the estimate outright.
         is_new = not store.exists(fingerprint)
+        # Read *before* the store, so the horizon published below can only be
+        # earlier than the blob's real one. store() stamps the mtime the sweep
+        # measures against, and mtime >= stored_at by however long the write
+        # takes; deriving the horizon from a clock read afterwards would put the
+        # announced expiry past the real one, which is the direction that leaves
+        # a consumer holding a dead blob_uri.
+        stored_at = datetime.now(UTC)
         blob_uri = store.store(result.content, fingerprint, media_type)
         if is_new:
             usage.add(len(result.content))
@@ -270,6 +277,21 @@ def build_handler(
                 media_type=media_type,
                 url=command.url,
                 command_id=command.command_id,
+                # Copied across, never read (#28). The value is opaque to the
+                # byte path — nothing here parses it, branches on it, keys on it,
+                # or stores it — so the only way to get it wrong is to transform
+                # it. tests/test_boundaries.py holds that line mechanically.
+                info_source_id=command.info_source_id,
+                # When these bytes stop being retrievable at blob_uri
+                # (cannobserv#301). Published because the TTL clock runs from the
+                # last fetch *reference* — store() touches the mtime on its
+                # content-addressed short-circuit — and no consumer can observe
+                # that event. The alternative was every consumer re-deriving the
+                # horizon from the contract's MUST-7 TTL, hard-coding a retention
+                # policy this service owns and starting the clock in the wrong
+                # place. The real reap is later still: the sweep only runs every
+                # blob_sweep_interval_seconds, so this errs early in both terms.
+                blob_expires_at=stored_at + timedelta(seconds=settings.blob_ttl_seconds),
                 # The metadata a broadcast consumer cannot recover once fetching
                 # lives here rather than in Watcher (cannobserv#271). Every one
                 # is optional, and None means "nobody said" — never a stand-in

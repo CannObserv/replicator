@@ -61,6 +61,10 @@ def build_failure_reporter(
             occurred_at=datetime.now(UTC),
             command_id=failure.command_id,
             url=failure.url,
+            # Copied across, never read (#28). Replicator holds no domain state
+            # and this does not change that: the value is opaque here, and the
+            # only thing that could go wrong with it is transforming it.
+            info_source_id=failure.info_source_id,
             reason=failure.reason,
             # Every fact Replicator emits today closes its command; see the
             # module docstring and FailureReport.

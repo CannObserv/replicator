@@ -21,6 +21,13 @@ actually reaches the running service (db 0 *and* ``content.fetch``) additionally
 requires ``--production``. A flag rather than a prompt: the script has to stay
 usable non-interactively.
 
+Every command carries an ``info_source_id``, required on the wire since co-core
+0.8.0 and echoed onto both facts (#28). It defaults to a placeholder no issuer's
+InfoSource table contains, so the facts a scratch run produces are recognizably
+synthetic — and for that same reason the live target refuses both that default
+and a blank, since a real fetch broadcasts whatever is passed to the cluster.
+Name one with ``--info-source-id``.
+
 ``--watch`` tails the fact stream so a human can see the loop close without
 hand-writing ``XRANGE``. It accepts **either** outcome — ``blob_available`` or,
 since #9, ``fetch_failed`` — because a watch that recognized only success would
@@ -34,10 +41,11 @@ facts rather than production's.
 Exit codes: ``0`` published (and, under ``--watch``, every command produced a
 blob) · ``1`` the run did not complete — publishing failed, watching failed, a
 command was closed by a ``fetch_failed``, or no fact ever arrived · ``2`` the
-target was refused. Commands are reported on stdout as they land, so a non-zero
-exit never hides a command it saw land — a connection lost between the ``XADD``
-and its reply is the one gap, and the "N of M" count on stderr is what marks that
-boundary as fuzzy.
+target was refused — a missing ``--production`` opt-in, or a placeholder or blank
+``info_source_id`` alongside one. Commands are reported on stdout as they land,
+so a non-zero exit never hides a command it saw land; a connection lost between
+the ``XADD`` and its reply is the one gap, and the "N of M" count on stderr is
+what marks that boundary as fuzzy.
 """
 
 import argparse
@@ -70,13 +78,25 @@ IDLE_SLEEP_SECONDS = 0.05
 
 DEFAULT_WATCH_TIMEOUT_SECONDS = 30.0
 
+# The domain key every seeded command carries unless the operator names one
+# (#28). Deliberately not id-shaped: no issuer's InfoSource table can contain
+# this, so a fact that reaches a real consumer is recognizably from the harness
+# rather than plausibly from a real fetch.
+SEED_INFO_SOURCE_ID = "seed-harness-not-a-real-info-source"
+
 # Either outcome of a command. ``content.blobs`` has carried both since #9, so
 # "the fact for this command_id" is no longer synonymous with "the blob".
 Fact = BlobAvailableEvent | FetchFailedEvent
 
 
 class ProductionTargetError(RuntimeError):
-    """The requested target is the live command stream and no opt-in was given."""
+    """The requested target is the live command stream and something was left implicit.
+
+    Either the ``--production`` opt-in is missing, or it was given while
+    ``info_source_id`` was left at the placeholder or blank — one exit code,
+    because all of them mean the same thing: a real fetch was about to happen on
+    an assumption.
+    """
 
 
 @dataclass(frozen=True)
@@ -92,6 +112,7 @@ def build_command(
     url: str,
     headers: dict[str, str] | None = None,
     timeout_seconds: float | None = None,
+    info_source_id: str = SEED_INFO_SOURCE_ID,
 ) -> ContentFetchCommand:
     """Mint a command for one URL.
 
@@ -106,6 +127,13 @@ def build_command(
     ``headers`` / ``timeout_seconds`` apply to every URL in the run and default
     to ``None`` — the omitted-field shape, which is the worker's pre-#11
     behaviour exactly.
+
+    ``info_source_id`` is required by co-core 0.8.0 and has no omitted shape, so
+    it defaults to a value that is deliberately **not** a real InfoSource id
+    (#28). The harness is not an issuer: it holds no domain state and has nothing
+    to name here. A recognizable placeholder makes the facts a seed run produces
+    identifiable as synthetic; pass ``--info-source-id`` when the point of the
+    run is to watch a real issuer's correlation work end to end.
     """
     return ContentFetchCommand(
         occurred_at=datetime.now(UTC),
@@ -113,6 +141,7 @@ def build_command(
         url=url,
         headers=headers,
         timeout_seconds=timeout_seconds,
+        info_source_id=info_source_id,
     )
 
 
@@ -166,20 +195,48 @@ def resolve_db(client: Redis) -> int:
     return int(client.connection_pool.connection_kwargs.get("db") or 0)
 
 
-def guard_production_target(topic: str, *, db: int, production: bool) -> None:
-    """Refuse the live command stream unless the caller opted in.
+def guard_production_target(topic: str, *, db: int, production: bool, info_source_id: str) -> None:
+    """Refuse the live command stream unless the caller opted in, and meant it twice.
 
     The gate is the *conjunction*, because that is what determines reach:
     ``content.fetch`` on a scratch database has no consumer, and a scratch topic
     on db 0 is not polled by anything. Only both together put bytes through the
     running service.
+
+    Two refusals behind that one gate. ``--production`` is the first: the worker
+    will fetch these URLs for real. The placeholder ``info_source_id`` is the
+    second (CR #8) — a real fetch publishes real facts to the real
+    ``content.blobs``, and every one of them echoes this value. Left at the
+    default they would name an InfoSource that exists in no issuer's table, on a
+    broadcast stream nothing trims. Refused here rather than defaulted away,
+    because the harness cannot know which InfoSource an operator meant.
+
+    Both checks sit inside the same conjunction on purpose: a scratch run reaches
+    no consumer, so inventing an id there is exactly what the placeholder is for.
     """
-    if not (db == 0 and topic == streams.CONTENT_FETCH) or production:
+    if not (db == 0 and topic == streams.CONTENT_FETCH):
         return
-    raise ProductionTargetError(
-        f"{topic} on db {db} is the live command stream — the running worker will fetch "
-        f"these URLs for real. Pass --production to mean it."
-    )
+    if not production:
+        raise ProductionTargetError(
+            f"{topic} on db {db} is the live command stream — the running worker will fetch "
+            f"these URLs for real. Pass --production to mean it."
+        )
+    if info_source_id == SEED_INFO_SOURCE_ID:
+        raise ProductionTargetError(
+            f"{topic} on db {db} publishes real facts, and every one echoes info_source_id. "
+            f"Pass --info-source-id naming the InfoSource these fetches are for, rather than "
+            f"announcing {SEED_INFO_SOURCE_ID!r} to the cluster."
+        )
+    # co-core sets no ``min_length``, so a blank id publishes cleanly and names
+    # nothing — the same shape as the blank ``command_id`` MUST-1 refuses, and
+    # refused for the same reason. The *worker* deliberately does not check this
+    # (reading the value would be interpretation); the harness is a producer, so
+    # that reasoning does not carry over to it.
+    if not info_source_id.strip():
+        raise ProductionTargetError(
+            f"{topic} on db {db} publishes real facts, and a blank info_source_id names "
+            f"nothing. Pass --info-source-id with the InfoSource these fetches are for."
+        )
 
 
 def resolve_blobs_topic(topic: str, override: str | None) -> str:
@@ -204,6 +261,7 @@ async def publish(
     on_published: Callable[[SeedResult], None] | None = None,
     headers: dict[str, str] | None = None,
     timeout_seconds: float | None = None,
+    info_source_id: str = SEED_INFO_SOURCE_ID,
 ) -> list[SeedResult]:
     """XADD one command per URL, in the order given.
 
@@ -219,7 +277,7 @@ async def publish(
     publisher = AsyncBusPublisher(client)
     results = []
     for url in urls:
-        command = build_command(url, headers, timeout_seconds)
+        command = build_command(url, headers, timeout_seconds, info_source_id)
         result = await publisher.execute(BusPublish(topic, to_wire(command)))
         published = SeedResult(command.command_id, url, result.bus_message_id)
         results.append(published)
@@ -374,6 +432,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="request header to attach to every command; repeatable (#11)",
     )
     parser.add_argument(
+        "--info-source-id",
+        default=SEED_INFO_SOURCE_ID,
+        dest="info_source_id",
+        help=(
+            "domain key echoed onto both facts, required on the wire since co-core 0.8.0; "
+            "a real value is required with --production, which refuses both the default "
+            f"and a blank (default: {SEED_INFO_SOURCE_ID!r}, which no issuer's "
+            "InfoSource table contains)"
+        ),
+    )
+    parser.add_argument(
         "--timeout",
         type=float,
         default=None,
@@ -396,6 +465,7 @@ def _print_dry_run(
     urls: list[str],
     headers: dict[str, str] | None = None,
     timeout_seconds: float | None = None,
+    info_source_id: str = SEED_INFO_SOURCE_ID,
 ) -> None:
     """Show the wire frames without publishing them.
 
@@ -405,7 +475,7 @@ def _print_dry_run(
     travel, after this script's own stripping.
     """
     for url in urls:
-        command = build_command(url, headers, timeout_seconds)
+        command = build_command(url, headers, timeout_seconds, info_source_id)
         print(f"would publish to {topic}: {to_wire(command)}")
 
 
@@ -442,7 +512,12 @@ async def _seed(client: Redis, args: argparse.Namespace) -> int:
     published yet (CR #15).
     """
     try:
-        guard_production_target(args.topic, db=resolve_db(client), production=args.production)
+        guard_production_target(
+            args.topic,
+            db=resolve_db(client),
+            production=args.production,
+            info_source_id=args.info_source_id,
+        )
     except ProductionTargetError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -482,6 +557,7 @@ async def _seed(client: Redis, args: argparse.Namespace) -> int:
             on_published=report,
             headers=args.headers,
             timeout_seconds=args.timeout_seconds,
+            info_source_id=args.info_source_id,
         )
     except (RedisError, OSError) as exc:
         print(
@@ -559,7 +635,9 @@ def main(argv: list[str] | None = None) -> int:
     """Parse arguments and run; the dry run never opens a connection."""
     args = build_parser().parse_args(argv)
     if args.dry_run:
-        _print_dry_run(args.topic, args.urls, args.headers, args.timeout_seconds)
+        _print_dry_run(
+            args.topic, args.urls, args.headers, args.timeout_seconds, args.info_source_id
+        )
         return 0
     return asyncio.run(run(args))
 

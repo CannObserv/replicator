@@ -79,6 +79,10 @@ async def test_a_foreign_payload_type_is_dead_lettered(fake_redis, consumer, set
                 size_bytes=1,
                 media_type="text/html",
                 url="https://example.test/a",
+                # Both required since co-core 0.8.0 (#28), so a foreign
+                # payload can no longer be built without them either.
+                command_id="cmd-that-actually-succeeded",
+                info_source_id="isrc-of-that-other-command",
             )
         ),
     )

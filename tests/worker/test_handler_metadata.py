@@ -12,12 +12,19 @@ value that merely looks like a default. A handler that substituted
 ``command.url`` for a missing ``final_url``, or the normalized
 ``application/octet-stream`` for a missing ``Content-Type``, would pass a
 type check and destroy the only thing these fields are for.
+
+``blob_expires_at`` (cannobserv#301, populated by #28) is the one field here that
+describes the **store** rather than the fetch. It is grouped with the others
+because it answers the same question — what can a consumer not recover on its
+own — and its tests assert a *direction* rather than a value: the announced
+horizon must never fall later than the blob's real one.
 """
 
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from src.core.config import get_settings
 from src.worker.handler import MAX_HEADER_VALUE_LENGTH
 from tests.worker.conftest import URL, FakeFetcher, command, fetch_result, published_facts
 
@@ -225,3 +232,54 @@ async def test_an_oversized_content_type_still_normalizes_to_a_media_type(handle
     (fact,) = await published_facts(fake_redis)
     assert fact.content_type_raw is None
     assert fact.media_type == "application/octet-stream"
+
+
+async def test_the_blob_lifetime_is_announced(handler, fake_redis):
+    """A consumer cannot observe the TTL clock, so the fact carries the horizon.
+
+    Its start point is the *last fetch reference* (``LocalBlobStore.store``
+    ``os.utime``s on the content-addressed short-circuit), which is an event no
+    consumer sees. Deriving it from the issuer contract's MUST-7 TTL instead
+    would hard-code a retention policy the fetcher owns and start the clock in
+    the wrong place (cannobserv#301).
+    """
+    await handler()(command())
+
+    (fact,) = await published_facts(fake_redis)
+    assert fact.blob_expires_at is not None
+    assert fact.blob_expires_at.tzinfo is not None
+
+
+async def test_the_announced_horizon_never_outlives_the_real_one(handler, fake_redis):
+    """The direction is the whole guarantee, and it is one-way.
+
+    The blob's real expiry is its mtime plus the TTL, and the mtime is stamped
+    *inside* ``store`` — after the handler reads the clock it derives this field
+    from. Any drift therefore lands with the announced horizon **earlier** than
+    the real one, so a consumer that re-fetches on it is early rather than
+    holding a dead ``blob_uri``. Deriving from ``occurred_at`` instead (stamped
+    after the store returns) would invert exactly this, by microseconds and in
+    the direction that lies.
+    """
+    ttl = timedelta(seconds=get_settings().blob_ttl_seconds)
+
+    await handler()(command())
+
+    (fact,) = await published_facts(fake_redis)
+    assert fact.fetched_at is not None
+    assert fact.blob_expires_at is not None
+    assert fact.fetched_at + ttl <= fact.blob_expires_at
+    assert fact.blob_expires_at <= datetime.now(UTC) + ttl
+
+
+async def test_the_horizon_tracks_the_configured_ttl(handler, fake_redis, monkeypatch):
+    """Not a constant: an operator who shortens retention must not leave every
+    consumer holding a seven-day promise the sweep will not keep."""
+    monkeypatch.setenv("REPLICATOR_BLOB_TTL_SECONDS", "60")
+    get_settings.cache_clear()
+
+    await handler()(command())
+
+    (fact,) = await published_facts(fake_redis)
+    assert fact.blob_expires_at is not None
+    assert fact.blob_expires_at <= datetime.now(UTC) + timedelta(seconds=60)

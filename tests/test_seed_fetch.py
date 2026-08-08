@@ -9,7 +9,7 @@ fields, so a producer-side envelope change breaks these tests instead of leaving
 the script quietly publishing something the worker cannot decode.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from co_core.pure.adapters.bus import streams
@@ -24,6 +24,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from ulid import ULID
 
 from scripts.seed_fetch import (
+    SEED_INFO_SOURCE_ID,
     ProductionTargetError,
     SeedResult,
     _report_facts,
@@ -41,6 +42,9 @@ from scripts.seed_fetch import (
 TOPIC = "replicator.itest.fetch"
 BLOBS = "replicator.itest.blobs"
 URL = "https://example.test/a"
+# The domain key the sample facts echo. Unlike the harness's own default, so
+# a helper that quietly substituted SEED_INFO_SOURCE_ID would be visible.
+INFO_SOURCE_ID = "isrc-sample"
 
 
 async def decoded_commands(client, topic: str = TOPIC) -> list[ContentFetchCommand]:
@@ -60,10 +64,10 @@ async def decoded_commands(client, topic: str = TOPIC) -> list[ContentFetchComma
 def fact_fields(command_id: str) -> dict[str, str]:
     """The wire frame the worker's handler publishes for a handled command.
 
-    Carries the enriched fetch metadata (#10) as well, because the claim in that
-    first line is what the helper is for: a sample missing six of the fields the
-    handler actually sends is a quietly wrong model of the wire, and the watch
-    output is read against it.
+    Carries the enriched fetch metadata (#10) and the blob lifetime (#28) as
+    well, because the claim in that first line is what the helper is for: a sample
+    missing fields the handler actually sends is a quietly wrong model of the
+    wire, and the watch output is read against it.
     """
     return to_wire(
         BlobAvailableEvent(
@@ -74,12 +78,14 @@ def fact_fields(command_id: str) -> dict[str, str]:
             media_type="text/html",
             url=URL,
             command_id=command_id,
+            info_source_id=INFO_SOURCE_ID,
             final_url=URL,
             status_code=200,
             fetched_at=datetime.now(UTC),
             content_type_raw="text/html; charset=utf-8",
             etag='W/"abc-123"',
             last_modified="Wed, 21 Oct 2015 07:28:00 GMT",
+            blob_expires_at=datetime.now(UTC) + timedelta(days=7),
         )
     )
 
@@ -98,6 +104,7 @@ async def add_failure(client, command_id: str, topic: str = BLOBS) -> bytes:
                 occurred_at=datetime.now(UTC),
                 command_id=command_id,
                 url=URL,
+                info_source_id=INFO_SOURCE_ID,
                 reason="http_status",
                 terminal=True,
                 status_code=404,
@@ -154,21 +161,55 @@ async def test_publishing_preserves_the_order_the_urls_were_given(fake_redis):
 def test_the_live_command_stream_on_the_live_database_is_refused():
     """The one combination the running service picks up: db 0 + content.fetch."""
     with pytest.raises(ProductionTargetError):
-        guard_production_target(streams.CONTENT_FETCH, db=0, production=False)
+        guard_production_target(
+            streams.CONTENT_FETCH, db=0, production=False, info_source_id="isrc-real"
+        )
 
 
 def test_the_live_target_is_allowed_with_an_explicit_opt_in():
-    guard_production_target(streams.CONTENT_FETCH, db=0, production=True)
+    guard_production_target(
+        streams.CONTENT_FETCH, db=0, production=True, info_source_id="isrc-real"
+    )
+
+
+def test_the_placeholder_domain_key_is_refused_on_the_live_target():
+    """CR #8: --production opts into a real fetch, and its facts go to the real
+    content.blobs. A fact naming an InfoSource that cannot exist is not something
+    the harness should be able to publish there by omission."""
+    with pytest.raises(ProductionTargetError):
+        guard_production_target(
+            streams.CONTENT_FETCH, db=0, production=True, info_source_id=SEED_INFO_SOURCE_ID
+        )
+
+
+@pytest.mark.parametrize("value", ["", "   "], ids=["empty", "whitespace"])
+def test_a_blank_domain_key_is_refused_on_the_live_target(value):
+    """CR #13: co-core sets no ``min_length``, so a blank id publishes cleanly and
+    names nothing. The worker must not refuse it — reading the value is
+    interpretation — but the harness is a *producer*, so the argument does not
+    carry over: MUST-1's "an empty id is not an id" applies here by analogy."""
+    with pytest.raises(ProductionTargetError):
+        guard_production_target(streams.CONTENT_FETCH, db=0, production=True, info_source_id=value)
+
+
+def test_the_placeholder_is_fine_anywhere_the_guard_does_not_bite():
+    """Same conjunction as the target guard: a scratch run reaches no consumer,
+    so inventing an id there is exactly what the placeholder is for."""
+    guard_production_target(
+        streams.CONTENT_FETCH, db=15, production=False, info_source_id=SEED_INFO_SOURCE_ID
+    )
 
 
 def test_the_command_stream_on_a_scratch_database_is_allowed():
     """No worker is polling db 15 — that stream reaches nothing."""
-    guard_production_target(streams.CONTENT_FETCH, db=15, production=False)
+    guard_production_target(
+        streams.CONTENT_FETCH, db=15, production=False, info_source_id="isrc-real"
+    )
 
 
 def test_a_scratch_stream_on_the_live_database_is_allowed():
     """Nothing consumes ``replicator.itest.*``; the guard is about reach, not db."""
-    guard_production_target(TOPIC, db=0, production=False)
+    guard_production_target(TOPIC, db=0, production=False, info_source_id="isrc-real")
 
 
 @pytest.mark.parametrize(
@@ -404,9 +445,27 @@ async def test_a_run_publishes_and_closes_the_client_it_opened(fake_redis, owned
     assert owned_client == [True]
 
 
-async def test_a_refused_target_publishes_nothing_and_still_closes(fake_redis, owned_client):
-    """The guard fires before the first XADD, not after a partial run."""
-    code = await run(seed_args("--topic", streams.CONTENT_FETCH, URL))
+@pytest.mark.parametrize(
+    "argv",
+    [
+        pytest.param(["--topic", streams.CONTENT_FETCH], id="no-production-opt-in"),
+        pytest.param(
+            ["--topic", streams.CONTENT_FETCH, "--production"], id="placeholder-domain-key"
+        ),
+        pytest.param(
+            ["--topic", streams.CONTENT_FETCH, "--production", "--info-source-id", " "],
+            id="blank-domain-key",
+        ),
+    ],
+)
+async def test_a_refused_target_publishes_nothing_and_still_closes(fake_redis, owned_client, argv):
+    """The guard fires before the first XADD, not after a partial run.
+
+    Parametrized over all three refusal causes (CR #18) because the guard grew a
+    fourth argument, and the wiring from ``args.info_source_id`` into the call is
+    exactly the plumbing a unit test of the guard alone cannot see.
+    """
+    code = await run(seed_args(*argv, URL))
 
     assert code == 2
     assert await fake_redis.xlen(streams.CONTENT_FETCH) == 0
@@ -558,6 +617,38 @@ async def test_published_commands_carry_the_request_options(fake_redis):
     (command,) = await decoded_commands(fake_redis)
     assert command.headers == {"User-Agent": "watcher/0.1.0"}
     assert command.timeout_seconds == 2.5
+
+
+async def test_published_commands_carry_the_domain_key(fake_redis):
+    """CR #5: the flag crosses three functions before it reaches the wire.
+
+    ``build_command`` -> ``publish`` -> the frame, each with a default that would
+    silently substitute the placeholder if an argument were dropped — and a seed
+    run would then report success while publishing a synthetic id.
+    """
+    await publish(fake_redis, TOPIC, [URL], info_source_id="isrc-real")
+
+    (command,) = await decoded_commands(fake_redis)
+    assert command.info_source_id == "isrc-real"
+
+
+async def test_a_command_defaults_to_the_placeholder_domain_key(fake_redis):
+    """The harness is not an issuer and has nothing real to name here."""
+    await publish(fake_redis, TOPIC, [URL])
+
+    (command,) = await decoded_commands(fake_redis)
+    assert command.info_source_id == SEED_INFO_SOURCE_ID
+
+
+async def test_the_domain_key_flag_reaches_a_published_command(fake_redis, owned_client):
+    """End to end through argparse, since the flag is plumbed by hand from
+    ``args`` into ``publish`` and a missed wiring is invisible below that."""
+    args = seed_args("--topic", TOPIC, "--info-source-id", "isrc-from-the-cli", URL)
+
+    assert await run(args) == 0
+
+    (command,) = await decoded_commands(fake_redis)
+    assert command.info_source_id == "isrc-from-the-cli"
 
 
 async def test_a_command_without_options_carries_neither_field(fake_redis):

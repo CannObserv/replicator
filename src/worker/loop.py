@@ -88,10 +88,16 @@ class FailureReport:
     ``reason`` comes from the handler where the handler knows it
     (``PermanentFetchError.reason``) and from the loop where only the loop does —
     an unrecognized ``schema_version``, a foreign payload, the delivery ceiling.
+
+    ``info_source_id`` is carried, never consulted (#28). It is required rather
+    than defaulted because co-core requires it on the fact: a report built
+    without one could not be published at all, so a default here would only move
+    the failure from this constructor to the reporter's.
     """
 
     command_id: str
     url: str
+    info_source_id: str
     reason: FailureReason
     status_code: int | None = None
     attempts: int | None = None
@@ -185,15 +191,20 @@ async def process_message(
             reason="unsupported schema_version",
             detail={"command_id": command.command_id, "schema_version": command.schema_version},
             reporter=reporter,
-            # Reading two fields off a version this worker does not support is
+            # Reading three fields off a version this worker does not support is
             # the destructuring the contract warns issuers about — done knowingly
-            # and only here: command_id and url are the v1 baseline, and a fact
-            # naming neither could not close anything. If a future version moves
-            # them, this branch is where it breaks — and ``_close`` refuses a
-            # report with no correlator rather than publishing an empty one.
+            # and only here: command_id, url and info_source_id are the v1
+            # baseline, and a fact naming none of them could not close anything.
+            # All three are *required* on the command since co-core 0.8.0, so a
+            # frame that decoded at all has them; a frame missing one never
+            # reaches this branch, having failed ``from_wire`` outright. If a
+            # future version moves them, this branch is where it breaks — and
+            # ``_close`` refuses a report with no correlator rather than
+            # publishing an empty one.
             report=FailureReport(
                 command_id=command.command_id,
                 url=command.url,
+                info_source_id=command.info_source_id,
                 reason=FailureReason.UNSUPPORTED_SCHEMA_VERSION,
                 detail=f"schema_version={command.schema_version}",
             ),
@@ -249,6 +260,7 @@ async def process_message(
             report=FailureReport(
                 command_id=command.command_id,
                 url=command.url,
+                info_source_id=command.info_source_id,
                 reason=exc.reason,
                 status_code=exc.status_code,
                 detail=str(exc),
@@ -319,6 +331,7 @@ async def _handle_unclassified(
             report=FailureReport(
                 command_id=command.command_id,
                 url=command.url,
+                info_source_id=command.info_source_id,
                 reason=FailureReason.HANDLER_ERROR,
                 attempts=attempts,
                 detail=error,

@@ -51,19 +51,27 @@ uv run python -m scripts.seed_fetch \
   https://example.test/a https://example.test/b
 
 # The live loop. --production is required for db 0 + content.fetch, because the
-# running service will fetch these URLs for real. --watch tails the fact stream
-# until each command has an outcome — blob_available, or a fetch_failed naming
-# the reason. Exit 1 if a command failed or no fact ever arrived.
+# running service will fetch these URLs for real — and so is a real
+# --info-source-id, because the facts it publishes echo that value onto the
+# cluster's own content.blobs. --watch tails the fact stream until each command
+# has an outcome — blob_available, or a fetch_failed naming the reason. Exit 1 if
+# a command failed or no fact ever arrived; exit 2 if either opt-in is missing.
 # The target below is the local /health app — start it first (see API, below).
 uv run python -m scripts.seed_fetch \
   --redis-url redis://localhost:6379/0 --topic content.fetch \
-  --production --watch http://localhost:8041/health
+  --production --info-source-id isrc-01J9ZK7Q --watch http://localhost:8041/health
 ```
 
 `--watch` reads `content.blobs` for `content.fetch` and `<topic>.blobs` otherwise, so the
 scratch invocation above watches its own facts rather than production's. `--blobs-topic`
 overrides that. One stream, both outcomes: an issuer needs a single consumer group to see
 whether its command produced bytes or a reason.
+
+`--info-source-id` sets the domain key the command carries and both facts echo, required on the
+wire since co-core 0.8.0 (#28). It defaults to `seed-harness-not-a-real-info-source`, which no
+issuer's InfoSource table contains — so a fact a seed run puts on a scratch stream is recognizably
+synthetic. **The live target refuses that default, and a blank value**, exiting 2: a real fetch
+broadcasts whatever is passed here to the cluster, so it has to name a real InfoSource.
 
 `--header` and `--timeout` set the command's per-fetch request options (#11). They apply to
 every URL in the run, and omitting them is the pre-#11 wire exactly.

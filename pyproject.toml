@@ -7,13 +7,14 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
-    # Floor is 0.7.5, not 0.7: the enriched BlobAvailableEvent fields landed in
-    # 0.7.3 and FetchResult.final_url in 0.7.5, and the event model is
-    # extra="ignore" — on an older wheel the enriched kwargs construct cleanly
-    # and are silently discarded. Without the floor a version skew publishes
-    # facts that look right and carry nothing (#10, cannobserv#271/#279).
-    "co-core[extract]>=0.7.7,<0.8",
-    "co-core-aio[bus]>=0.7.7,<0.8",
+    # Floor is 0.8.0, and this one fails *loudly* rather than silently. The
+    # earlier floors (0.7.5's enriched fields, 0.7.7's AsyncBusTailReader) guarded
+    # against extra="ignore" quietly discarding kwargs an older wheel had no field
+    # for; 0.8.0 makes info_source_id **required** on ContentFetchCommand,
+    # BlobAvailableEvent and FetchFailedEvent, so a skew is a ValidationError at
+    # construction, not a fact that looks right and carries nothing (#28).
+    "co-core[extract]>=0.8.0,<0.9",
+    "co-core-aio[bus]>=0.8.0,<0.9",
     "fastapi>=0.126.0,<1",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.5.0,<3",

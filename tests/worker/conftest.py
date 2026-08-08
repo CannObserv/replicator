@@ -39,6 +39,12 @@ BODY = b"<html>hello</html>"
 # target is visible rather than tautological.
 URL = "https://example.test/a"
 
+# The domain key the facts echo (#28). Deliberately unlike the default
+# ``command_id`` in both prefix and shape: the two travel together on every fact,
+# and an emit site that read the wrong attribute would be invisible if the tests
+# gave them similar-looking values.
+INFO_SOURCE_ID = "isrc-01JQ8Z"
+
 
 def fetch_result(
     content: bytes = BODY,
@@ -152,11 +158,15 @@ def command(
     url: str = URL,
     headers: dict[str, str] | None = None,
     timeout_seconds: float | None = None,
+    info_source_id: str = INFO_SOURCE_ID,
 ) -> ContentFetchCommand:
     """A decoded ``content.fetch`` command, as the handler receives it.
 
     ``headers`` / ``timeout_seconds`` default to ``None`` — the omitted-field
     shape, which the contract says must behave exactly as it did before #11.
+
+    ``info_source_id`` has no ``None`` shape to default to: co-core 0.8.0 makes it
+    required, so every command the worker can ever decode carries one (#28).
     """
     return ContentFetchCommand(
         occurred_at=datetime.now(UTC),
@@ -164,6 +174,7 @@ def command(
         url=url,
         headers=headers,
         timeout_seconds=timeout_seconds,
+        info_source_id=info_source_id,
     )
 
 
@@ -210,9 +221,10 @@ def make_command(
     url: str = URL,
     headers: dict[str, str] | None = None,
     timeout_seconds: float | None = None,
+    info_source_id: str = INFO_SOURCE_ID,
 ) -> dict[str, str]:
     """A well-formed ``content.fetch`` wire frame."""
-    return to_wire(command(command_id, url, headers, timeout_seconds))
+    return to_wire(command(command_id, url, headers, timeout_seconds, info_source_id))
 
 
 @pytest.fixture

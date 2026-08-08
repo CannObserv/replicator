@@ -18,6 +18,7 @@ from tests.worker.conftest import decoded_facts
 REPORT = FailureReport(
     command_id="cmd-1",
     url="https://example.test/a",
+    info_source_id="isrc-01JQ8Z",
     reason=FailureReason.HTTP_STATUS,
     status_code=404,
 )
@@ -45,6 +46,28 @@ async def test_a_report_becomes_a_fetch_failed_fact(reporter, fake_redis):
     assert fact.status_code == 404
 
 
+async def test_the_domain_key_is_echoed_verbatim_onto_the_failure_fact(reporter, fake_redis):
+    """#28: the failure fact carries the domain key too, for the same reason the
+    success fact does — an issuer closing a pending entry should not have to
+    reach for its private ``command_id -> domain`` map to know *what* failed.
+
+    Asserted on a value distinct from ``command_id``, so a reporter reading the
+    wrong attribute off the report fails rather than matching by coincidence.
+    """
+    await reporter()(
+        FailureReport(
+            command_id="cmd-1",
+            url="https://example.test/a",
+            info_source_id="isrc-elsewhere",
+            reason=FailureReason.HTTP_STATUS,
+        )
+    )
+
+    (fact,) = await decoded_facts(fake_redis, streams.CONTENT_BLOBS)
+    assert fact.info_source_id == "isrc-elsewhere"
+    assert fact.command_id == "cmd-1"
+
+
 async def test_every_fact_replicator_emits_today_is_terminal(reporter, fake_redis):
     """A report *is* a closure — the loop only builds one when it stops retrying.
 
@@ -64,7 +87,9 @@ async def test_the_reason_lands_on_the_wire_as_its_token(reporter, fake_redis):
     Watcher branches on this string. A repr leaking into it would be a wire break
     that no local assertion on the enum itself would catch.
     """
-    await reporter()(FailureReport(command_id="c", url="u", reason=FailureReason.TOO_LARGE))
+    await reporter()(
+        FailureReport(command_id="c", url="u", info_source_id="i", reason=FailureReason.TOO_LARGE)
+    )
 
     entry = (await fake_redis.xrange(streams.CONTENT_BLOBS))[0][1]
     assert b'"reason":"too_large"' in entry[b"payload"]
@@ -87,7 +112,11 @@ async def test_the_envelope_key_is_per_emission_not_per_command(reporter, fake_r
 
 async def test_absent_context_is_omitted_rather_than_guessed(reporter, fake_redis):
     """No HTTP exchange, no status; not on the ceiling path, no attempt count."""
-    await reporter()(FailureReport(command_id="c", url="u", reason=FailureReason.NOT_FETCHABLE))
+    await reporter()(
+        FailureReport(
+            command_id="c", url="u", info_source_id="i", reason=FailureReason.NOT_FETCHABLE
+        )
+    )
 
     (fact,) = await decoded_facts(fake_redis, streams.CONTENT_BLOBS)
     assert fact.status_code is None
@@ -97,7 +126,12 @@ async def test_absent_context_is_omitted_rather_than_guessed(reporter, fake_redi
 async def test_the_ceiling_path_reports_how_many_attempts_it_took(reporter, fake_redis):
     await reporter()(
         FailureReport(
-            command_id="c", url="u", reason=FailureReason.HANDLER_ERROR, attempts=5, detail="boom"
+            command_id="c",
+            url="u",
+            info_source_id="i",
+            reason=FailureReason.HANDLER_ERROR,
+            attempts=5,
+            detail="boom",
         )
     )
 

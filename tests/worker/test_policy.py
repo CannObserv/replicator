@@ -195,6 +195,7 @@ def test_a_payload_from_another_stream_is_ignored(caplog):
     foreign = BlobAvailableEvent(
         occurred_at=now(),
         command_id="c1",
+        info_source_id="isrc-1",
         url="https://slow.test/a",
         blob_uri="file:///tmp/x.bin",
         content_fingerprint="f" * 64,

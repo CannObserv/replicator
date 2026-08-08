@@ -126,3 +126,22 @@ def test_an_out_of_range_pacing_interval_fails_at_startup(monkeypatch, value):
 
     with pytest.raises(ValidationError):
         Settings()
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "1e30"], ids=["zero", "negative", "absurd"])
+def test_an_out_of_range_blob_ttl_fails_at_startup(monkeypatch, value):
+    """The TTL is arithmetic now, so an absurd value is a crash rather than a knob (CR #7).
+
+    Since #28 the handler publishes ``stored_at + blob_ttl_seconds``. An
+    unbounded float makes that addition raise ``OverflowError`` — *after* the
+    bytes are on disk, and not a transient error, so the command burns the
+    delivery ceiling and dead-letters while its blob stays behind as an orphan.
+    A config typo should not be able to manufacture those.
+
+    Zero and negative are refused for a plainer reason: they expire every blob
+    the moment it is written, which the sweep would carry out.
+    """
+    monkeypatch.setenv("REPLICATOR_BLOB_TTL_SECONDS", value)
+
+    with pytest.raises(ValidationError):
+        Settings()
