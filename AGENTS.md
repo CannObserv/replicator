@@ -54,9 +54,7 @@ SocratiCode is the preferred semantic-search tool for this repo. Code is indexed
 
 **Cross-repo search.** `SOCRATICODE_LINKED_PROJECTS` (in `.claude/settings.local.json`, gitignored) links the archiver, watcher, and notifier checkouts, so `codebase_search` spans the cluster. Use it for the co-core contracts, the parent integration strategy, and the producer-side outbox precedent — all of which live in archiver, not here. Linked projects contribute results only once they are themselves indexed.
 
-Prefetch query — run via `ToolSearch` at session start:
-
-`select:mcp__plugin_socraticode_socraticode__codebase_search,mcp__plugin_socraticode_socraticode__codebase_symbol,mcp__plugin_socraticode_socraticode__codebase_symbols,mcp__plugin_socraticode_socraticode__codebase_flow,mcp__plugin_socraticode_socraticode__codebase_impact,mcp__plugin_socraticode_socraticode__codebase_graph_query,mcp__plugin_socraticode_socraticode__codebase_status,mcp__plugin_socraticode_socraticode__codebase_context,mcp__plugin_socraticode_socraticode__codebase_context_search`
+Prefetch query — the `SessionStart` hook in `.claude/settings.json` prints the exact `select:` argument every session. Run it via `ToolSearch` before broad exploration; it is not repeated here.
 <!-- END socraticode-policy -->
 
 ## Project Layout
