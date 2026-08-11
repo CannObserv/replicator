@@ -260,9 +260,12 @@ Two properties an issuer can rely on: a refused command is refused **before** an
 and header **values never reach the journal** — only names are logged, so an `Authorization` an
 issuer attaches is not re-exposed one layer down.
 
-Relatedly: nothing but the seed script writes to `content.fetch` today, and `seed_fetch.py`
-requires `--production` for the one target the live worker consumes. A frame on that stream is
-fetched for real.
+Relatedly: only `seed_fetch.py` writes to `content.fetch` today, and it requires `--production` for
+the one target the live worker consumes — a frame there is fetched for real.
+
+**`content.replicate` does not inherit this section.** A write is bounded by nothing a read is, so
+the argument — and an earlier escalation trigger — is made again in
+[`content-replicate-issuer-contract.md`](content-replicate-issuer-contract.md) (#34).
 ---
 
 ## Version history
@@ -273,9 +276,8 @@ the tz-aware `occurred_at` in cannobserv#273, both shipped in **co-core v0.7.2**
 cannobserv#272, shipped in **v0.7.3** and **v0.7.5**. **v0.8.0** required `info_source_id` on all
 three payloads and `command_id` on `blob_available`, re-keyed `blob_available` to
 `content_fingerprint:command_id` (cannobserv#300), and added `blob_expires_at` (cannobserv#301).
-Replicator requires **co-core ≥ 0.8.0**.
-Founding rationale:
-[`docs/plans/2026-06-25-replicator-mvp-design.md`](../plans/2026-06-25-replicator-mvp-design.md).
+The required floor and the founding rationale are stated in
+[the contract's header](content-fetch-issuer-contract.md).
 ---
 
 ## What the envelope key is for
