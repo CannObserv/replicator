@@ -4,7 +4,7 @@
 provider writer and no credential-resolution surface. This document is written *before*
 [cannobserv#303](https://github.com/CannObserv/cannobserv/issues/303) cuts the models, deliberately:
 the trust model decides whether the payload grows a credential field, and that is not a contract to
-re-cut after two adopters have built (#34). The sections marked **⚙** become assertions about this
+re-cut after two adopters have built (#34). Passages marked **⚙** become assertions about this
 repo's code when #29 lands; until then they are obligations on the implementation, not claims about
 it.
 
@@ -36,7 +36,9 @@ removes that bound, so the conclusion is reached again rather than inherited:
 | Credentials | none, or issuer-supplied `headers` | **the operator's**, selected by an alias the message names |
 | Blast radius | one request from our VM; bytes in temp storage | objects in our GCS bucket / Drive / archive.org item |
 | Self-healing | yes — the TTL sweep reclaims it | **no** — a durable artifact is the point |
-| Reversible | yes | gcs/gdrive yes; **`ia` items cannot be deleted at all** (IAS3: "DELETE bucket is not allowed") |
+| Reversible | yes | gcs/gdrive yes; **`ia` items cannot be deleted at all** ([IAS3](https://archive.org/developers/ias3.html): "DELETE bucket is not allowed") |
+
+Every archive.org claim below is read from that [IAS3 API documentation](https://archive.org/developers/ias3.html) — cited because T4 and T5 rest on it, and because it corrects the intuition rather than confirming it.
 
 The conclusion is the same — one localhost broker on one trusted VM, therefore proportionate — but
 the **escalation trigger is not**, and that is the whole reason this section exists rather than a
@@ -100,10 +102,11 @@ override it:
 | `gdrive` | base folder id | traversal resolves under it, never above |
 | `ia` | identifier prefix + allowed collections | identifier starts with the prefix; archive.org's namespace is global and unrooted, so a **prefix** is the only containment there is |
 
-**This is where the current schema leaks.** `providers/gdrive/v1.json` carries `folder_id` and
-`providers/ia/v1.json` carries `collection` — both are *destination containers named by the message*.
-`providers/gcs/v1.json` correctly carries none (bucket is injected at runtime by
-`StorageConfig.provider(...)`). ⚙ Replicator treats those two as **selectors validated against the
+**This is where the current schema leaks.** In **archiver**,
+[`src/core/rep_spec_schema/providers/gdrive/v1.json`](https://github.com/CannObserv/archiver/blob/main/src/core/rep_spec_schema/providers/gdrive/v1.json)
+carries `folder_id` and its `ia` sibling carries `collection` — both are *destination containers
+named by the message*. The `gcs` sibling correctly carries none: the bucket is injected at runtime by
+**cannobserv**'s `StorageConfig.provider(...)`. ⚙ Replicator treats those two as **selectors validated against the
 alias's allowed set**, never as authority. Worth raising on cannobserv#303: gcs got this right and
 the other two did not, and the asymmetry is invisible until something writes.
 
@@ -141,7 +144,7 @@ rule above applies to `ia` as much as to the others.
 | Provider | Create-if-absent primitive |
 |---|---|
 | `gcs` | `ifGenerationMatch=0` — atomic. On 412, compare md5 to choose row two or row three |
-| `gdrive` | `get_files_by_name(name, parent_id)` then compare `md5Checksum` — the adapter method already exists |
+| `gdrive` | `get_files_by_name(name, parent_id)` then compare `md5Checksum` — the method already exists on cannobserv's `GoogleDriveAdapter` |
 | `ia` | `upload(..., checksum=True)` skips when the remote md5 matches. Unreliable while tasks are pending on the item ([jjjake/internetarchive#289](https://github.com/jjjake/internetarchive/issues/289)), so pair it with `x-archive-keep-old-version:1` as the recoverable-overwrite backstop |
 
 **If Wayback semantics are wanted, that is a fourth provider, not a mode of `ia`.** Save Page Now
@@ -206,17 +209,20 @@ loses on three concrete grounds:
 
 - **Failure locality.** A `required_fields` entry with no value in the bag is an Archiver *data*
   problem. Archiver already detects it synchronously at assignment
-  (`assign_rep_spec` validates `rep_fields` against `required_fields`, returning errors to the
-  caller). Moving the render to Replicator converts that into a failure fact arriving asynchronously
-  on a different service, where the remedy is not.
+  (archiver's `src/core/tools/assign_rep_spec.py` validates `rep_fields` against `required_fields`,
+  returning errors to the caller). Moving the render to Replicator converts that into a failure fact
+  arriving asynchronously on a different service, where the remedy is not.
 - **Provenance.** `InfoItemRepSpec` is effective-dated and asserts "item X replicated under spec R,
   producing the artifact at `public_url`" — which is why an assigned RepSpec's document is *frozen*
-  (`update_rep_spec` tier 3: "the artefact in the provider bucket was written under the old
-  `path_template` and nothing records what it was"). A rendered path on the wire records exactly what
-  was used, at the moment it was used. A template re-rendered downstream does not.
-- **One normalizer, not two.** `cannobserv.storage` already produces this value with zero I/O, and
-  slug derivation lives inside it (`util.normalize_string`, the `<raw>` + `<raw>_slug` rule codified
-  in `docs/STORAGE_VARS.md`). A second implementation here would not fail loudly when it drifted —
+  (archiver's `src/core/tools/update_rep_spec.py`, tier 3: "the artefact in the provider bucket was
+  written under the old `path_template` and nothing records what it was"). A rendered path on the
+  wire records exactly what was used, at the moment it was used. A template re-rendered downstream
+  does not.
+- **One normalizer, not two.** The `cannobserv.storage` package already produces this value with zero
+  I/O, and slug derivation lives inside it (`util.normalize_string`, the `<raw>` + `<raw>_slug` rule
+  codified in **cannobserv**'s `docs/STORAGE_VARS.md` — not this repo's
+  [docs/STORAGE.md](../STORAGE.md), which is the blob tree). A second implementation here would not
+  fail loudly when it drifted —
   it would write to a *different path*, silently, which is the worst available failure.
 
 **Also rejected — the template lives in host config per alias, values come from the message.** The
@@ -234,7 +240,8 @@ rendered destination, and `object_options`. It does **not** carry `path_template
 simplification of the payload as currently sketched, not an addition.
 
 **Consequence for the shared library.** If the render is hoisted out of Archiver, hoist the
-**renderer**, not the schema — `cannobserv.storage`'s `format_map` + required-namespace pre-check is
+**renderer**, not the schema — `cannobserv.storage`'s `format_map` + required-namespace pre-check (in
+its `storage/provider.py`) is
 the piece with years of use behind it. The RepSpec schema can be published as a standard on its own
 timeline; it has no reason to become a Replicator dependency, and under this decision it never does.
 

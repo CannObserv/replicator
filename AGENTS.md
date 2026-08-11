@@ -144,10 +144,11 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
 - **Nothing but the seed script writes to `content.fetch`.** `scripts/seed_fetch.py`
   requires `--production` for the one combination the live worker consumes — a
   frame there is fetched for real.
-- **Two normative contracts bound the wire and the roadmap**, both under
-  `docs/contracts/` and linked from sibling repos. The issuer contract splits
-  into a read-through half and a lookup half (`-contract` / `-reference`, #24);
-  both are normative. `tests/test_boundaries.py` enforces eight charter
+- **Three normative contracts bound the wire and the roadmap**, all under
+  `docs/contracts/` and linked from sibling repos: the `content.fetch` issuer
+  contract, the boundaries charter, and — settled ahead of its code — the
+  `content.replicate` one (#34). The fetch contract splits into a read-through
+  half and a lookup half (`-contract` / `-reference`, #24); both are normative. `tests/test_boundaries.py` enforces eight charter
   invariants in CI; change a charter and its tests together.
 
 Blob paths, modes, and the retention sweep: [docs/STORAGE.md](docs/STORAGE.md).

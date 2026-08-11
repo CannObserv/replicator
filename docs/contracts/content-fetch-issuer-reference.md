@@ -62,6 +62,7 @@ own fingerprints.
 remains the sole dedupe key and the sole correlator. Two commands differing only in options are two
 fetch occasions (MUST-1 unchanged); a *redelivery* carrying different options is still the same
 command and is still deduped.
+
 ---
 
 ## The enriched `blob_available` fields
@@ -124,6 +125,7 @@ are the whole value of the six:
 > own records and send the request unconditionally. (#17 recommends `reason="not_modified"` on the
 > existing fact rather than a new event type, so an issuer branching on `terminal` first is already
 > forward-compatible with it.)
+
 ---
 
 ## Failure taxonomy: what happens, and what the issuer sees
@@ -159,6 +161,7 @@ The "nothing" rows are not one problem, and the reaper is not the answer to all 
   handled* — the first delivery ran and published its fact, so the issuer's entry is already
   closed. Reaping and re-issuing there sends the origin a second request for work that
   succeeded. The fix is MUST-1: mint a fresh id per fetch occasion and the row cannot occur.
+
 ---
 
 ## Reading the failure fact
@@ -183,6 +186,7 @@ broadcast and nothing trims it, so a fact per reclaim during an origin outage is
 growth on a stream nobody prunes. The cost is stated plainly in MUST-6: a retrying command is
 still invisible for as long as it retries. If an issuer needs the in-flight signal, say so on
 its tracker rather than inferring one from silence.
+
 ---
 
 ## The four silent conditions
@@ -214,6 +218,7 @@ produces nothing *yet*:
   `REPLICATOR_CLAIM_MIN_IDLE_MS` cadence (default 60 s), and over
   `REPLICATOR_BLOB_MAX_TOTAL_BYTES` the command parks in the PEL until a retention sweep frees
   space. A command can legitimately be in flight for a long time.
+
 ---
 
 ## Reading the DLQ
@@ -234,6 +239,7 @@ to match on.
 
 Inspection commands live in [`docs/COMMANDS.md`](../COMMANDS.md). Monitoring the DLQ on
 Replicator's side remains an operator responsibility, not a bus-level one.
+
 ---
 
 ## Provenance and trust
@@ -267,6 +273,7 @@ fetched for real.
 **`content.replicate` does not inherit this section.** A write is bounded by nothing a read is, so
 the argument — and an earlier escalation trigger — is made again in
 [`content-replicate-issuer-contract.md`](content-replicate-issuer-contract.md) (#34).
+
 ---
 
 ## Version history
@@ -280,6 +287,7 @@ three payloads and `command_id` on `blob_available`, re-keyed `blob_available` t
 Replicator requires **co-core ≥ 0.8.0**.
 Founding rationale:
 [`docs/plans/2026-06-25-replicator-mvp-design.md`](../plans/2026-06-25-replicator-mvp-design.md).
+
 ---
 
 ## What the envelope key is for
@@ -290,6 +298,7 @@ entry correlatable without parsing JSON (see
 [MUST-6](content-fetch-issuer-contract.md#6-handle-fetch_failed-and-keep-a-reaper-anyway)), and it
 is what a future partitioned consumer
 would shard on.
+
 ---
 
 ## Pacing at the deployed defaults

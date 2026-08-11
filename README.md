@@ -34,6 +34,11 @@ Publish through co-core's `to_wire`, never hand-rolled fields. The wire carries 
 `info_source_id`, echoed onto both facts and read by nothing here — but correlation is still
 entirely the issuer's job, on `command_id`. Most ways of getting either wrong fail silently.
 
+**Issuing `content.replicate`?** That loop is not built yet, but its contract is —
+[`docs/contracts/content-replicate-issuer-contract.md`](docs/contracts/content-replicate-issuer-contract.md)
+settles the trust model and the issuer obligations ahead of the code, because a write to a permanent
+store is bounded by nothing a read is (#34).
+
 ## Shape
 
 **Worker-first.** The primary process is a bus consumer (a `co-core-aio` consumer group on the
