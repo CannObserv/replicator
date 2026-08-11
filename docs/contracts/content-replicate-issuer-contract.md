@@ -1,0 +1,341 @@
+# The `content.replicate` issuer contract
+
+**Status: settled ahead of the code.** Nothing here describes shipped behaviour — `src/` has no
+provider writer and no credential-resolution surface. This document is written *before*
+[cannobserv#303](https://github.com/CannObserv/cannobserv/issues/303) cuts the models, deliberately:
+the trust model decides whether the payload grows a credential field, and that is not a contract to
+re-cut after two adopters have built (#34). Passages marked **⚙** become assertions about this
+repo's code when #29 lands; until then they are obligations on the implementation, not claims about
+it.
+
+**Audience:** Archiver, the sole issuer ([archiver#137](https://github.com/CannObserv/archiver/issues/137) step 5).
+
+**Companion.** This states only the **deltas** from
+[`content-fetch-issuer-contract.md`](content-fetch-issuer-contract.md) and its
+[reference](content-fetch-issuer-reference.md). Both remain normative here. The MUST verdict table
+below says which of the seven fetch obligations apply verbatim — read the deep document for any row
+that does not say *no analogue*, because a thin delta doc whose reader never opens the deep one is
+the failure mode this shape trades against.
+
+**Sibling.** [`replicator-boundaries.md`](replicator-boundaries.md) settles what Replicator may
+become. Its three tests decide the destination-authority question below, and it is the reason the
+RepSpec's *resolution* half never reaches this service.
+
+---
+
+## Why this is not the fetch capability widened
+
+[Provenance and trust](content-fetch-issuer-reference.md#provenance-and-trust) settles `content.fetch`
+as an unauthenticated capability whose integrity rests entirely on bus access control, and settles it
+well. Its load-bearing sentence is that the damage is bounded by what a **read** can do. Replication
+removes that bound, so the conclusion is reached again rather than inherited:
+
+| | `content.fetch` | `content.replicate` |
+|---|---|---|
+| Direction | **read** an arbitrary origin | **write** our own permanent stores |
+| Credentials | none, or issuer-supplied `headers` | **the operator's**, selected by an alias the message names |
+| Blast radius | one request from our VM; bytes in temp storage | objects in our GCS bucket / Drive / archive.org item |
+| Self-healing | yes — the TTL sweep reclaims it | **no** — a durable artifact is the point |
+| Reversible | yes | gcs/gdrive yes; **`ia` items cannot be deleted at all** ([IAS3](https://archive.org/developers/ias3.html): "DELETE bucket is not allowed") |
+
+Every archive.org claim below is read from that [IAS3 API documentation](https://archive.org/developers/ias3.html) — cited because T4 and T5 rest on it, and because it corrects the intuition rather than confirming it.
+
+The conclusion is the same — one localhost broker on one trusted VM, therefore proportionate — but
+the **escalation trigger is not**, and that is the whole reason this section exists rather than a
+cross-reference.
+
+---
+
+## The trust model
+
+### T1 — No credential ever travels
+
+`credentials_alias` is a **selector, not a secret**. It names a binding that exists on the host or it
+names nothing. All three providers resolve locally:
+
+| Provider | Local resolution |
+|---|---|
+| `gcs` | ADC — a service-account key at `GOOGLE_APPLICATION_CREDENTIALS`, the mechanism this VM already uses for the wheelhouse mirror |
+| `gdrive` | service account, plus a Shared Drive membership **or** domain-wide delegation. A bare SA owns no usable My Drive quota, so the alias binding is a provisioning precondition, not just a key file |
+| `ia` | an archive.org keypair, sent as `Authorization: LOW <accesskey>:<secret>` (IAS3). Read from host config or `IA_ACCESS_KEY`/`IA_SECRET_KEY` — never from the message |
+
+**Therefore the co-core payload does not grow a credential field**, and cannobserv#303 open question 1
+is answered *no secret is forced onto the wire*. ⚙ When a provider lands that cannot resolve locally,
+it is refused rather than accommodated — see the escalation triggers.
+
+Two properties the issuer can rely on, mirroring the fetch guarantees: a refused command is refused
+**before** any credential is touched, and no credential value reaches the journal.
+
+### T2 — The alias namespace is a capability namespace
+
+There is no issuer identity on the frame, so any bus writer can name any alias, and an alias is
+therefore **all-or-nothing**. Under one localhost broker with one writer that is proportionate — the
+same argument the fetch document makes, and it survives the change of direction only because the set
+of writers is one.
+
+⚙ It is bounded anyway, the cheap way, exactly as the request-options refusal table bounds `headers`:
+**an alias resolves only if the operator provisioned it on this host.** The provisioned set is a fact
+about *this host* and lives in env-referenced host config, where a command cannot reach it — the
+[config taxonomy](replicator-boundaries.md#config-taxonomy)'s first row. An unprovisioned alias is a
+terminal refusal before any provider client is constructed. That converts "any writer names any
+alias" into "any writer names any alias the operator already stood up," which is a smaller set than
+the schema's `{"type": "string", "minLength": 1}`.
+
+This is the cheap part, taken because it is cheap. It is **not** a substitute for the trust model.
+
+### T3 — Destination authority: the issuer renders, the host contains
+
+Two halves, and they are separate decisions.
+
+**The rendered path comes from the issuer.** The RepSpec's `path_template` and `required_fields` are
+resolved by Archiver against the InfoItem's `rep_fields` bag, and the **rendered** destination
+travels. Replicator receives strings; it never interpolates, never sees a `{ns.field}` placeholder,
+and never learns the vocabulary those placeholders are drawn from. Rationale, alternatives, and what
+this costs: [**Why the issuer renders**](#why-the-issuer-renders) below.
+
+**The container comes from the host.** ⚙ The alias binds the destination root, and the message cannot
+override it:
+
+| Provider | Host-bound root | Containment check |
+|---|---|---|
+| `gcs` | bucket (+ optional prefix) | rendered key is under the prefix |
+| `gdrive` | base folder id | traversal resolves under it, never above |
+| `ia` | identifier prefix + allowed collections | identifier starts with the prefix; archive.org's namespace is global and unrooted, so a **prefix** is the only containment there is |
+
+**This is where the current schema leaks.** In **archiver**,
+[`src/core/rep_spec_schema/providers/gdrive/v1.json`](https://github.com/CannObserv/archiver/blob/main/src/core/rep_spec_schema/providers/gdrive/v1.json)
+carries `folder_id` and its `ia` sibling carries `collection` — both are *destination containers
+named by the message*. The `gcs` sibling correctly carries none: the bucket is injected at runtime by
+**cannobserv**'s `StorageConfig.provider(...)`. ⚙ Replicator treats those two as **selectors validated against the
+alias's allowed set**, never as authority. Worth raising on cannobserv#303: gcs got this right and
+the other two did not, and the asymmetry is invisible until something writes.
+
+⚙ On top of containment, the rendered path is refused for traversal segments (`..`), a leading `/` or
+a drive qualifier, backslashes, NUL or control characters, empty segments, and any form that is not
+already normalized — checked after percent-decoding, and checked on the rendered string rather than
+on a template. For `content.fetch` this surface did not exist: blob paths are content-addressed off
+the fingerprint ([`src/storage/local.py`](../../src/storage/local.py)), so no message value ever
+reached a path. Replication is the first time one does.
+
+### T4 — Overwrite: a redelivery must never destroy an artifact
+
+Delivery is at-least-once, so the same command *will* arrive twice. This is where the idempotency
+question and the trust question are one question.
+
+⚙ **The rule:**
+
+| At the destination | Action |
+|---|---|
+| absent | write, emit `replication_complete` |
+| present, bytes match | **no-op** — re-emit the same fact with the same `public_url` |
+| present, bytes differ | terminal `destination_conflict`. Do not overwrite |
+
+Make the rendered path deterministic from the occasion — the RepSpec assignment, the revision, and
+the content fingerprint — so a redelivery targets the same key with the same bytes and lands in row
+two. This is a property of *path design*, available because the issuer renders (T3): Archiver knows
+the revision timestamp; Replicator does not.
+
+**Per-provider mechanics, and one correction worth recording.** The intuition that `ia` is inherently
+append-only describes the **Wayback Machine** — captures keyed URL+timestamp, unoverwritable, and
+worth wanting. It is not what `ia` means here: the RepSpec's `collection`/`mediatype`/`license` are
+archive.org **item** fields, and per IAS3 a PUT to an existing key **overwrites by default**. So the
+rule above applies to `ia` as much as to the others.
+
+| Provider | Create-if-absent primitive |
+|---|---|
+| `gcs` | `ifGenerationMatch=0` — atomic. On 412, compare md5 to choose row two or row three |
+| `gdrive` | `get_files_by_name(name, parent_id)` then compare `md5Checksum` — the method already exists on cannobserv's `GoogleDriveAdapter` |
+| `ia` | `upload(..., checksum=True)` skips when the remote md5 matches. Unreliable while tasks are pending on the item ([jjjake/internetarchive#289](https://github.com/jjjake/internetarchive/issues/289)), so pair it with `x-archive-keep-old-version:1` as the recoverable-overwrite backstop |
+
+**If Wayback semantics are wanted, that is a fourth provider, not a mode of `ia`.** Save Page Now
+takes a URL and fetches the origin itself — it consumes no blob, needs no `blob_uri`, and its
+`public_url` is timestamped per capture, so a redelivery yields a *different* citable URL unless
+deduped by its own window parameter. Every row of this table would differ. Out of scope here; named
+so the `ia` sub-schema is not stretched to cover it later.
+
+### T5 — `ia` is public and permanent
+
+A replication to archive.org publishes under the organization's identity, and an item cannot be
+deleted — IAS3 permits file DELETE and forbids bucket DELETE. A defensible "yes, broker access is the
+gate" would be acceptable; the answer here is **yes, plus one host-side gate**, because the cost is
+one setting and the failure is unretractable.
+
+⚙ The gate is already built by T2: no provisioned `ia` alias on this host means every `ia` command is
+a terminal refusal. Enabling IA replication is therefore an explicit operator act on the VM, not a
+consequence of a message arriving. First cut writes into a dedicated collection.
+
+### T6 — The completion fact selects a registry value
+
+Archiver writes `public_url` onto `info_item_rep_specs` from `replication_complete`
+([archiver#143](https://github.com/CannObserv/archiver/issues/143)). This is the first time an
+unauthenticated bus fact chooses a **user-visible, citable URL** in the registry. The answer is bus
+access control, same as everything else — a new consequence, not a new mechanism.
+
+⚙ One promise worth making now rather than retrofitting: **`public_url` is derived from the provider's
+response, never echoed from the command.** A bus writer can influence *where* bytes land, bounded by
+T3; it cannot dictate the URL that reaches the registry. The registry value therefore always names an
+object we actually wrote.
+
+### Escalation triggers — this capability's own
+
+The fetch document's trigger is "the moment the bus spans hosts or tenants." Replication's fire
+**earlier**, and there are three:
+
+1. **A second service gains write access to `content.replicate`.** All-or-nothing aliases stop being
+   proportionate the moment more than one writer exists, because the operator loses the ability to
+   say *which* writer may use *which* alias. That needs issuer identity on the frame — signed
+   envelopes or a per-issuer credential — and it does not exist today.
+2. **The broker leaves localhost, or the worker fleet shards across hosts.** Alias resolution becomes
+   remote at that point. The answer is workload identity — a per-host service account with its own
+   IAM binding — **not** a credential on the wire. Stated explicitly because "just put a token in the
+   payload" is the shape this failure mode reliably takes, and T1 is the line it crosses.
+3. **A provider is proposed that cannot resolve its credential locally.** Refuse the provider; do not
+   widen the payload.
+
+None of the three is met today. Message signing and per-alias grants are the conversation when one
+is, and not before.
+
+---
+
+## Why the issuer renders
+
+The decision in T3, its alternatives, and what it costs.
+
+**Rejected — the wire carries `path_template` + the `rep_fields` bag, and Replicator renders.** This
+is what cannobserv#303 currently implies. It survives the letter of
+[charter test 3](replicator-boundaries.md#the-three-tests) by the `info_source_id` precedent — blind
+`format_map` substitution is mechanical, not interpretation — but it spends that precedent, and it
+loses on three concrete grounds:
+
+- **Failure locality.** A `required_fields` entry with no value in the bag is an Archiver *data*
+  problem. Archiver already detects it synchronously at assignment
+  (archiver's `src/core/tools/assign_rep_spec.py` validates `rep_fields` against `required_fields`,
+  returning errors to the caller). Moving the render to Replicator converts that into a failure fact
+  arriving asynchronously on a different service, where the remedy is not.
+- **Provenance.** `InfoItemRepSpec` is effective-dated and asserts "item X replicated under spec R,
+  producing the artifact at `public_url`" — which is why an assigned RepSpec's document is *frozen*
+  (archiver's `src/core/tools/update_rep_spec.py`, tier 3: "the artefact in the provider bucket was
+  written under the old `path_template` and nothing records what it was"). A rendered path on the
+  wire records exactly what was used, at the moment it was used. A template re-rendered downstream
+  does not.
+- **One normalizer, not two.** The `cannobserv.storage` package already produces this value with zero
+  I/O, and slug derivation lives inside it (`util.normalize_string`, the `<raw>` + `<raw>_slug` rule
+  codified in **cannobserv**'s `docs/STORAGE_VARS.md` — not this repo's
+  [docs/STORAGE.md](../STORAGE.md), which is the blob tree). A second implementation here would not
+  fail loudly when it drifted —
+  it would write to a *different path*, silently, which is the worst available failure.
+
+**Also rejected — the template lives in host config per alias, values come from the message.** The
+strongest containment posture: the operator fixes the layout and the message only fills variables.
+Rejected because it duplicates layout knowledge on every host and desynchronizes the moment a RepSpec
+adds a location shape. T3's containment check retains the part of this that matters.
+
+**What the chosen shape costs, stated plainly.** Replicator stops being able to enforce layout
+*policy* — its only lever is the alias root, and within that root the issuer decides everything.
+Accepted: the root is the boundary that bounds blast radius; the layout inside it does not.
+
+**Consequences for cannobserv#303.** The command carries `provider`, `credentials_alias`, the
+rendered destination, and `object_options`. It does **not** carry `path_template` or
+`required_fields` — the resolution half of the RepSpec document stays issuer-side. That is a
+simplification of the payload as currently sketched, not an addition.
+
+**Consequence for the shared library.** If the render is hoisted out of Archiver, hoist the
+**renderer**, not the schema — `cannobserv.storage`'s `format_map` + required-namespace pre-check (in
+its `storage/provider.py`) is
+the piece with years of use behind it. The RepSpec schema can be published as a standard on its own
+timeline; it has no reason to become a Replicator dependency, and under this decision it never does.
+
+---
+
+## What the issuer MUST do
+
+Verdicts on the seven fetch obligations. A row that is not *no analogue* is read in the deep
+document, not summarized here.
+
+| Fetch MUST | Verdict for replicate |
+|---|---|
+| **1** — fresh `command_id` per *occasion*, never per resource | **verbatim.** Same dedupe key, same TTL, same TTL-bounded intermittency. A `command_id` derived from `(rep_spec_id, info_item_id)` breaks re-replication of a changed item exactly as a URL-derived id breaks re-fetch |
+| **2** — persist `command_id → domain` before publishing | **verbatim** |
+| **3** — correlate on `command_id` only | **adapts.** `url` has no analogue; the trap it warns against does: the **destination path is not a key** either. Two RepSpecs can render one path, and one RepSpec renders many over time |
+| **4** — correlation is idempotent, one command can yield many facts | **verbatim**, and load-bearing here: T4's no-op row deliberately re-emits a fact for an artifact already written |
+| **5** — do not dedupe facts on `content_fingerprint` | **no analogue** |
+| **6** — handle the failure fact, keep a reaper anyway | **verbatim.** Non-terminal failures are still silent; a command can still close without a fact |
+| **7** — copy the bytes before the blob expires | **inverts.** For fetch this is the consumer's obligation; for replicate it is the issuer's *scheduling* obligation. Issue while the blob lives — the clock runs from last **fetch** reference, not last read — and handle `blob_expired` as terminal. `blob_expires_at` on the `blob_available` fact is the value to schedule against. [#7](https://github.com/CannObserv/replicator/issues/7) changes this calculus |
+
+⚙ **R1 — render, do not delegate.** Resolve `path_template` against `rep_fields` before publishing,
+and publish the result. A command carrying an unrendered template is refused.
+
+⚙ **R2 — make the destination deterministic per occasion.** T4's no-op row only works if a redelivery
+renders the same key. Include the discriminator that makes each replication occasion distinct — the
+revision, its timestamp, or the fingerprint — rather than relying on a provider to be append-only.
+
+⚙ **R3 — do not treat `public_url` as stable across occasions.** Each replication occasion yields its
+own artifact and its own URL; the registry row records which.
+
+---
+
+## What Replicator refuses
+
+⚙ All refusals are terminal, all happen before any credential is touched, and each carries a `reason`
+token on the failure fact. Following the precedent in
+[`src/core/errors.py`](../../src/core/errors.py), the vocabulary is producer-owned — co-core types
+`reason` as a plain `str` — so **none of these needs a contract change**.
+
+| Condition | `reason` |
+|---|---|
+| the alias is not provisioned on this host | `alias_unknown` |
+| the provider is not enabled on this host (T5) | `provider_disabled` |
+| the rendered path escapes the alias root, or `object_options` names a container the alias does not allow | `invalid_destination` |
+| the destination exists with different bytes | `destination_conflict` |
+| the blob is gone | `blob_expired` |
+
+`invalid_destination` covers both the path guard and the container guard for the reason
+`invalid_request_options` covers two fields on the fetch side: the issuer's remedy is identical
+either way — fix the spec and re-issue under a fresh `command_id` — and `detail` carries which guard
+refused it. `alias_unknown` and `provider_disabled` stay separate because their remedies are not the
+same one (fix the spec; act on the host).
+
+---
+
+## Charter check
+
+⚙ **No new vocabulary invariant, and no exemption.** #34's Q7 asks about a collision between
+`required_fields`' dotted domain keys (`^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`, e.g. `info_item.slug`)
+and the no-domain-vocabulary scan, which bans those words in `src/` as identifiers *and* as string
+literals. Under T3 the collision does not arise: the dotted keys never reach this service. Recorded
+as a **consequence of the render decision** — adopting the rejected alternative reopens it, and would
+require the render path to treat every key as opaque with no prefix ever special-cased.
+
+⚙ **One new invariant when the code lands: the alias is a key, never a value.** An AST scan asserting
+every `credentials_alias` occurrence is a lookup key or a resolver argument — the mirror of the
+existing scan that keeps `info_source_id` echoed and never interpreted — plus the assertion that no
+payload field feeds a provider client's credential.
+
+**Unaffected:** *no locally-defined wire models* (Replicator declares none; under T3 the RepSpec
+resolution half does not travel, so there is nothing here tempted to model it), *no database* (alias
+bindings are host config read into memory — no per-resource history, rebuildable from the file), and
+*ingress is read-only* (no new surface).
+
+---
+
+## Deliberately open
+
+Settled in a cannobserv `docs/plans/` design doc alongside #303, not here:
+
+- **Fan-out** — one command per (revision, RepSpec) with independent `command_id`s, or one command
+  carrying a list. Per-spec is probably right, for MUST-1's reason.
+- **Blob lifetime** — whether an expired blob terminates or triggers a re-issued fetch, and how that
+  sequences against [#7](https://github.com/CannObserv/replicator/issues/7).
+
+---
+
+## Where the rest of the contract lives
+
+- [`content-fetch-issuer-contract.md`](content-fetch-issuer-contract.md) and its
+  [reference](content-fetch-issuer-reference.md) — **both normative here.** The frame, the MUSTs in
+  full, the failure taxonomy, the silent conditions, the DLQ, and the fetch trust model this document
+  departs from.
+- [`replicator-boundaries.md`](replicator-boundaries.md) — the three tests, the config taxonomy, and
+  the payload-field review question (#12).
+- [cannobserv#303](https://github.com/CannObserv/cannobserv/issues/303) — the models. Open question 1
+  is answered by **T1**.

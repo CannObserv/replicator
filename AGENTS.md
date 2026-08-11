@@ -54,9 +54,7 @@ SocratiCode is the preferred semantic-search tool for this repo. Code is indexed
 
 **Cross-repo search.** `SOCRATICODE_LINKED_PROJECTS` (in `.claude/settings.local.json`, gitignored) links the archiver, watcher, and notifier checkouts, so `codebase_search` spans the cluster. Use it for the co-core contracts, the parent integration strategy, and the producer-side outbox precedent — all of which live in archiver, not here. Linked projects contribute results only once they are themselves indexed.
 
-Prefetch query — run via `ToolSearch` at session start:
-
-`select:mcp__plugin_socraticode_socraticode__codebase_search,mcp__plugin_socraticode_socraticode__codebase_symbol,mcp__plugin_socraticode_socraticode__codebase_symbols,mcp__plugin_socraticode_socraticode__codebase_flow,mcp__plugin_socraticode_socraticode__codebase_impact,mcp__plugin_socraticode_socraticode__codebase_graph_query,mcp__plugin_socraticode_socraticode__codebase_status,mcp__plugin_socraticode_socraticode__codebase_context,mcp__plugin_socraticode_socraticode__codebase_context_search`
+Prefetch query — the `SessionStart` hook in `.claude/settings.json` prints the exact `select:` argument every session. Run it via `ToolSearch` before broad exploration; it is not repeated here.
 <!-- END socraticode-policy -->
 
 ## Project Layout
@@ -146,10 +144,11 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
 - **Nothing but the seed script writes to `content.fetch`.** `scripts/seed_fetch.py`
   requires `--production` for the one combination the live worker consumes — a
   frame there is fetched for real.
-- **Two normative contracts bound the wire and the roadmap**, both under
-  `docs/contracts/` and linked from sibling repos. The issuer contract splits
-  into a read-through half and a lookup half (`-contract` / `-reference`, #24);
-  both are normative. `tests/test_boundaries.py` enforces eight charter
+- **Three normative contracts bound the wire and the roadmap**, all under
+  `docs/contracts/` and linked from sibling repos: the `content.fetch` issuer
+  contract, the boundaries charter, and — settled ahead of its code — the
+  `content.replicate` one (#34). The fetch contract splits into a read-through
+  half and a lookup half (`-contract` / `-reference`, #24); both are normative. `tests/test_boundaries.py` enforces eight charter
   invariants in CI; change a charter and its tests together.
 
 Blob paths, modes, and the retention sweep: [docs/STORAGE.md](docs/STORAGE.md).
@@ -235,3 +234,4 @@ are deliberately not JSON: [docs/STYLE.md](docs/STYLE.md).
 - [docs/contracts/content-fetch-issuer-contract.md](docs/contracts/content-fetch-issuer-contract.md) — what a `content.fetch` producer must do; normative, linked from issuer repos
 - [docs/contracts/content-fetch-issuer-reference.md](docs/contracts/content-fetch-issuer-reference.md) — its lookup half: the refusal list, the failure taxonomy, the silent conditions, trust posture
 - [docs/contracts/replicator-boundaries.md](docs/contracts/replicator-boundaries.md) — what Replicator may become; run its three tests against any proposed capability
+- [docs/contracts/content-replicate-issuer-contract.md](docs/contracts/content-replicate-issuer-contract.md) — the replicate trust model and issuer obligations, settled ahead of the code (#34)
