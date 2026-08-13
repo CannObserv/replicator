@@ -41,6 +41,15 @@ logger = get_logger(__name__)
 # delegation before a binding means anything, and ``ia`` is gated on T5's
 # deliberate operator act — neither is a line in this tuple, both are their own
 # work (#29).
+#
+# **Availability is a code decision; provisioning is an operator one** (CR #25).
+# T5 asks that enabling ``ia`` be an explicit act on the host, and an env-driven
+# provider list would satisfy that literally — one variable and a public,
+# undeletable item is reachable. Keeping the list here is stricter than the
+# contract requires and deliberately so: adding a provider means adding its
+# writer, its containment rule and its tests in the same change, which is the
+# review an irreversible destination should get. The operator still decides
+# *whether* any of it is reachable, by provisioning an alias or not.
 KNOWN_PROVIDERS = ("gcs",)
 
 
@@ -89,6 +98,18 @@ class AliasTable:
         return tuple(sorted(self.bindings))
 
 
+def _empty() -> AliasTable:
+    """The nothing-provisioned table.
+
+    One constructor rather than four literals (CR #23): every early return in
+    ``load_alias_table`` builds one of these, and a fifth added later must get the
+    immutable mapping without having to remember to. The original ``frozen=True``
+    claim came untrue in exactly this way — by being asserted in one place and
+    constructed in several.
+    """
+    return AliasTable(MappingProxyType({}))
+
+
 def load_alias_table(path: Path | None) -> AliasTable:
     """Read the alias table, failing **closed** at every step.
 
@@ -111,12 +132,12 @@ def load_alias_table(path: Path | None) -> AliasTable:
     the same channel every other replicate problem reaches the operator by.
     """
     if path is None:
-        return AliasTable(MappingProxyType({}))
+        return _empty()
     try:
         raw = json.loads(Path(path).read_text())
     except FileNotFoundError:
         logger.info("no alias table on this host — replication is not provisioned")
-        return AliasTable(MappingProxyType({}))
+        return _empty()
     except Exception as exc:
         logger.error(
             "alias table is unreadable",
@@ -126,13 +147,13 @@ def load_alias_table(path: Path | None) -> AliasTable:
                 "detail": "nothing is provisioned; every replicate command will be refused",
             },
         )
-        return AliasTable(MappingProxyType({}))
+        return _empty()
     if not isinstance(raw, dict):
         logger.error(
             "alias table is unreadable",
             extra={"path": str(path), "detail": "expected an object of alias -> binding"},
         )
-        return AliasTable(MappingProxyType({}))
+        return _empty()
 
     bindings: dict[str, AliasBinding] = {}
     for alias, entry in raw.items():

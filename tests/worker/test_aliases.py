@@ -236,3 +236,34 @@ def test_an_empty_table_is_not_an_error(tmp_path):
 
     assert isinstance(table, AliasTable)
     assert table.provisioned == ()
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        pytest.param(lambda tmp: None, id="unset-path"),
+        pytest.param(lambda tmp: tmp / "absent.json", id="missing-file"),
+        pytest.param(lambda tmp: _write(tmp, "{not json"), id="unreadable"),
+        pytest.param(lambda tmp: _write(tmp, "[]"), id="not-a-table"),
+        pytest.param(lambda tmp: _write(tmp, json.dumps({})), id="empty-table"),
+        pytest.param(lambda tmp: _write(tmp, json.dumps({"primary": GCS})), id="populated"),
+    ],
+)
+def test_every_construction_path_returns_an_immutable_table(tmp_path, make):
+    """CR #23: the immutability test pinned one path, and there are six.
+
+    ``load_alias_table`` returns early four separate times before the populated
+    case, each building its own table. A fifth early return with a bare ``{}``
+    would leave one path mutable with every existing test still green — which is
+    exactly how the original ``frozen=True`` claim came to be untrue.
+    """
+    table = load_alias_table(make(tmp_path))
+
+    with pytest.raises(TypeError):
+        table.bindings["smuggled"] = AliasBinding(alias="s", provider="gcs", bucket="b")
+
+
+def _write(tmp_path, text: str):
+    path = tmp_path / "aliases.json"
+    path.write_text(text)
+    return path

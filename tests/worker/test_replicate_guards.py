@@ -197,6 +197,8 @@ def test_a_binding_with_no_prefix_roots_at_the_bucket():
         pytest.param(" lead.pdf", id="leading-whitespace"),
         pytest.param("trail.pdf ", id="trailing-whitespace"),
         pytest.param("100%.pdf", id="bare-percent"),
+        pytest.param("bad%zz.pdf", id="malformed-escape"),
+        pytest.param("trailing%", id="trailing-percent"),
     ],
 )
 def test_a_destination_that_is_not_already_normalized_is_refused(destination):
@@ -233,3 +235,42 @@ def test_a_prefix_lookalike_cannot_escape_the_root():
         validate_destination("../reps-other/r.pdf", binding=sneaky)
 
     assert caught.value.reason is ReplicateReason.INVALID_DESTINATION
+
+
+@pytest.mark.parametrize(
+    "destination",
+    [
+        pytest.param("sp%20ace.pdf", id="valid-escape"),
+        pytest.param("bad%zz.pdf", id="malformed-escape"),
+        pytest.param("trailing%", id="trailing-percent"),
+        pytest.param("100%.pdf", id="literal-percent"),
+    ],
+)
+def test_every_percent_is_refused_by_the_same_rule(destination):
+    """CR #22: the stated rule and the enforcing code must be the same rule.
+
+    ``unquote`` only rewrites well-formed ``%XX``; a malformed or trailing
+    ``%`` passes straight through it, so the first version refused those by the
+    *character allow-list* while the docstring said "percent-encoding is refused
+    outright". Both outcomes were right and the reasons disagreed, which is the
+    kind of drift the next reader inherits. Now one check owns all of them, and
+    the refusal says so.
+    """
+    with pytest.raises(PermanentReplicateError) as caught:
+        validate_destination(destination, binding=GCS_ROOT)
+
+    assert caught.value.reason is ReplicateReason.INVALID_DESTINATION
+    assert "percent" in str(caught.value)
+
+
+def test_a_long_disallowed_segment_is_bounded_in_the_refusal(binding=GCS_ROOT):
+    """CR #24: the refusal message becomes the fact's ``detail`` and a dlq_reason.
+
+    Both are places the logging bound was introduced to protect, and the segment
+    was being embedded whole — so a multi-kilobyte destination reached the wire
+    and the DLQ entry in full.
+    """
+    with pytest.raises(PermanentReplicateError) as caught:
+        validate_destination("!" * 5000 + ".pdf", binding=binding)
+
+    assert len(str(caught.value)) < 500

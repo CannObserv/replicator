@@ -24,7 +24,7 @@ scan lost three times: they are only ever as complete as the last probe.
 import re
 import string
 from collections.abc import Awaitable, Callable
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
 
 from co_core.pure.models.changes import ContentReplicateCommand
 
@@ -150,22 +150,28 @@ def validate_destination(destination: str, *, binding: AliasBinding) -> str:
     redelivery target a different key and defeat the no-op that stops a
     redelivery from destroying an artifact.
 
-    **Percent-encoding is refused outright, not decoded** (CR #16). The first cut
-    decoded and then checked, which is the obvious way to catch ``%2e%2e`` — and
-    it silently *repaired* a mid-path ``%2F`` into a separator, so
-    ``a/b%2Fc.pdf`` landed at ``a/b/c.pdf``. That breaks the "refused, never
-    repaired" rule this function is built on, using the very decode the traversal
-    check needed. Under T3 the issuer renders, so a rendered path has no business
-    carrying escapes at all; refusing them makes the traversal question moot
-    rather than answering it, and "how many rounds do we decode" stops being a
-    question anyone has to have an opinion about.
+    **Any ``%`` is refused, not decoded** (CR #16, #22). The first cut decoded and
+    then checked, which is the obvious way to catch ``%2e%2e`` — and it silently
+    *repaired* a mid-path ``%2F`` into a separator, so ``a/b%2Fc.pdf`` landed at
+    ``a/b/c.pdf``. That breaks the "refused, never repaired" rule this function is
+    built on, using the very decode the traversal check needed. Under T3 the
+    issuer renders, so a rendered path has no business carrying escapes at all;
+    refusing them makes the traversal question moot rather than answering it, and
+    "how many rounds do we decode" stops being a question anyone needs an opinion
+    about.
+
+    The test is on the character, not on ``unquote``: ``unquote`` only rewrites
+    well-formed ``%XX``, so ``%zz`` and a trailing ``%`` pass through it
+    unchanged and would have been refused by the segment allow-list instead —
+    the right outcome reached by a rule the docstring did not describe (CR #22).
+    One check now owns every ``%``, and the refusal says which rule refused it.
 
     Checked on the rendered string, because T3 puts the render on the issuer — a
     surviving ``{ns.field}`` means the issuer skipped R1, and the brace is
     refused as an ordinary disallowed character rather than recognised as a
     placeholder, because this service never learns that vocabulary.
     """
-    if unquote(destination) != destination:
+    if "%" in destination:
         raise _refuse(
             "destination carries percent-encoding; send the rendered path",
             ReplicateReason.INVALID_DESTINATION,
@@ -205,7 +211,15 @@ def _why_bad_destination(rendered: str) -> str | None:
             return "it has a relative segment"
         bad = {char for char in segment if char not in _ALLOWED_IN_SEGMENT}
         if bad:
-            return f"segment {segment!r} has disallowed characters {sorted(bad)!r}"
+            # Bounded like every other message-derived value (CR #24). This string
+            # does not only reach the journal: it becomes the failure fact's
+            # `detail` on the wire and the `dlq_reason` on the DLQ entry, so an
+            # unbounded segment would reach two places the bound exists to
+            # protect. The character set is the actionable part anyway.
+            return (
+                f"segment {segment[:_LOGGED_VALUE_CHARS]!r} has "
+                f"disallowed characters {sorted(bad)[:8]!r}"
+            )
     return None
 
 
