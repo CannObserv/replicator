@@ -63,8 +63,8 @@ Prefetch query — the `SessionStart` hook in `.claude/settings.json` prints the
 (`handler.py`), the failure fact (`reporter.py`), the retention sweep, the pacer,
 and the `content.fetch-policy` reader behind their own seams. `src/storage/` is
 the content-addressed temp store behind the `BlobStore` protocol; `src/api/` is
-the dev-only `/health` app; `src/core/` holds config, logging, and the handler's
-failure vocabulary. `tests/` mirrors `src/`. Every module with the job it owns:
+the dev-only `/health` app; `src/core/` holds config, logging, and the consume
+path's failure vocabulary. `tests/` mirrors `src/`. Every module with the job it owns:
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Infrastructure
