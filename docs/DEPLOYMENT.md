@@ -59,6 +59,19 @@ fields mean a half-deployed cluster does not degrade, it dead-letters: a Replica
 `command_id` correlator before any fact can name it. The two may be worked in parallel; they must
 land together.
 
+### The dedupe keys gain a stream segment (#29) — no action, but know why
+
+Keys move from `replicator:cmd:<id>` to `replicator:cmd:fetch:<id>`, so a second command stream can
+never dedupe a command against the other stream's. **Nothing to do at deploy time.** Old-format keys
+are simply never read again and expire on their own `REPLICATOR_DEDUPE_TTL_SECONDS`; a command that
+was already handled and is redelivered across the restart re-runs its handler instead of
+short-circuiting.
+
+That re-run is safe by the same property the key's set-after-success ordering already relies on:
+storage is content-addressed, so re-storing identical bytes is a no-op that republishes the fact,
+and the key is a cheap short-circuit rather than the correctness mechanism. Flush `replicator:cmd:*`
+only if you would rather not pay the handful of re-fetches.
+
 **Dev server workflow** (the `/health` app, port 8041 so a future live service stays up):
 
 ```bash
@@ -96,6 +109,6 @@ In `/etc/replicator/.env` (read by the service):
 - `REPLICATOR_MAX_DELIVERY_ATTEMPTS` — delivery ceiling for *unclassified* failures before DLQ; default `5`. Counted from XPENDING's delivery counter, which only advances on a reclaim ⇒ a bound in time, not retries
 - `REPLICATOR_ERROR_BACKOFF_BASE_SECONDS` / `REPLICATOR_ERROR_BACKOFF_MAX_SECONDS` — backoff for a poll *cycle* that raised (broker outage); defaults `1.0` / `30.0`, escalating `base * 2**(n-1)`
 - `REPLICATOR_MAX_CONSECUTIVE_CYCLE_FAILURES` — consecutive failed cycles before the worker exits so the unit restarts; default `20` (~8 min at the default backoff). Paired with the unit's `StartLimitIntervalSec=3600` / `StartLimitBurst=3`
-- `REPLICATOR_DEDUPE_TTL_SECONDS` — lifetime of the `replicator:cmd:<command_id>` dedupe key; default `86400`
+- `REPLICATOR_DEDUPE_TTL_SECONDS` — lifetime of the `replicator:cmd:<stream>:<command_id>` dedupe key; default `86400`
 - `REPLICATOR_LOG_LEVEL` — default `INFO`. Governs the **root** logger only, which is the whole tree for the worker. Under the dev server's `--log-config`, uvicorn's own `uvicorn` / `uvicorn.access` / `uvicorn.error` loggers are pinned `INFO` by `src/core/log_config.json` and do not follow it (nor did they under uvicorn's built-in config), so setting `WARNING` will not silence access lines; root itself is `INFO` from boot until the lifespan's `configure_logging()` applies this value
 - `BUILD_ID` — git SHA stamped by the systemd unit's `ExecStartPre`; defaults to `"dev"` outside systemd

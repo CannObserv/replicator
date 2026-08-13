@@ -12,7 +12,7 @@ import asyncio
 
 from co_core.pure.models.changes import ContentFetchCommand
 
-from src.worker.loop import Outcome, poll_once, process_batch, process_message
+from src.worker.loop import FETCH_SPEC, Outcome, poll_once, process_batch, process_message
 from tests.worker.conftest import (
     GROUP,
     TOPIC,
@@ -39,6 +39,7 @@ async def test_a_well_formed_command_is_dispatched_and_acked(fake_redis, consume
         handler=handler,
         settings=settings,
         reporter=collected_reports(),
+        spec=FETCH_SPEC,
     )
 
     assert outcome is Outcome.ACKED
@@ -111,6 +112,7 @@ async def test_the_loop_stops_between_messages_in_one_batch(fake_redis, consumer
         settings=settings,
         handler=handler,
         reporter=collected_reports(),
+        spec=FETCH_SPEC,
         stop=stop,
     )
 

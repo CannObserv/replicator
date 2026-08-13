@@ -33,7 +33,7 @@ from co_core.pure.models.changes import (
 
 from src.core.errors import FailureReason, PermanentFetchError
 from src.worker.loop import (
-    DEDUPE_KEY_PREFIX,
+    FETCH_SPEC,
     Outcome,
     dead_letter_anomaly,
     poll_once,
@@ -42,6 +42,7 @@ from src.worker.loop import (
 from tests.worker.conftest import (
     GROUP,
     TOPIC,
+    URL,
     collected_reports,
     decoded_facts,
     make_command,
@@ -186,7 +187,7 @@ async def test_a_transient_failure_announces_nothing(fake_redis, consumer, setti
 
 async def test_a_deduped_command_announces_nothing(fake_redis, consumer, settings):
     """A duplicate is not a failure — the first delivery already produced the fact."""
-    await fake_redis.set("replicator:cmd:cmd-dupe", "seen")
+    await fake_redis.set(FETCH_SPEC.dedupe_key("cmd-dupe"), "seen")
     await fake_redis.xadd(TOPIC, make_command(command_id="cmd-dupe"))
     reports = collected_reports()
 
@@ -253,10 +254,10 @@ async def test_a_blank_command_id_is_refused_before_anything_can_use_it(
     """CR #6: a command with no correlator is malformed, and caught as such.
 
     Not merely unannounceable. Left to run it would fetch, publish a
-    ``blob_available`` no issuer can match, and take out the dedupe key
-    ``replicator:cmd:`` — under which *every* later blank-id command is a silent
-    no-op. That is MUST-1's failure mode reached from a direction MUST-1 does not
-    describe, and it is silent on both sides.
+    ``blob_available`` no issuer can match, and take out the empty-id dedupe key
+    ``replicator:cmd:fetch:`` — under which *every* later blank-id command on this
+    stream is a silent no-op. That is MUST-1's failure mode reached from a
+    direction MUST-1 does not describe, and it is silent on both sides.
     """
     await fake_redis.xadd(TOPIC, blank_id_command())
     reports = collected_reports()
@@ -268,10 +269,33 @@ async def test_a_blank_command_id_is_refused_before_anything_can_use_it(
 
     assert outcome is Outcome.DEAD_LETTERED
     # No fact: there is no command_id to key one on. No dedupe key either — the
-    # bare prefix is the collision this guard exists to prevent.
+    # stream's empty-id key is the collision this guard exists to prevent.
     assert reports.reports == []
-    assert await fake_redis.exists(f"{DEDUPE_KEY_PREFIX}") == 0
+    assert await fake_redis.exists(FETCH_SPEC.dedupe_key("")) == 0
     assert await dlq_reasons(fake_redis) == ["command_id is blank"]
+
+
+async def test_a_blank_command_id_still_says_which_frame_it_was(
+    fake_redis, consumer, settings, caplog
+):
+    """CR #1: the correlator is what is missing, so the journal needs the rest.
+
+    A blank ``command_id`` is the one dead-letter with nothing to correlate on,
+    which makes it the one where the *other* identifying field is load-bearing —
+    for fetch, the URL. The spec supplies it, because what identifies a frame is
+    per stream: replicate would name its destination, and the loop knows neither.
+    """
+    await fake_redis.xadd(TOPIC, blank_id_command())
+
+    message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
+    with caplog.at_level("WARNING", logger="src.worker.loop"):
+        await process_one(fake_redis, consumer, settings, message, unreachable_handler)
+
+    record = next(r for r in caplog.records if r.message == "dead-lettered a frame")
+    assert record.url == URL
+    # The stream is already its own field on the line; repeating it in `detail`
+    # would displace the identifier this test exists for.
+    assert record.stream == streams.CONTENT_FETCH
 
 
 async def test_two_blank_command_ids_are_two_dead_letters_not_one_silent_drop(
@@ -438,6 +462,7 @@ async def test_the_loop_publishes_a_real_fact_end_to_end(fake_redis, consumer, s
         handler=handler,
         settings=settings,
         reporter=build_failure_reporter(client=fake_redis),
+        spec=FETCH_SPEC,
     )
 
     (fact,) = await decoded_facts(fake_redis, streams.CONTENT_BLOBS)

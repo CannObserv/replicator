@@ -292,6 +292,15 @@ it**: delete every line mentioning it and the byte path behaves identically. So 
 *does Replicator have to understand this to act on it?* If yes it fails whatever it is called; if no
 it is freight.
 
+**`info_item_rep_spec_id` is the second exception, granted on the same terms (#29,
+cannobserv#303).** Required on `ContentReplicateCommand` and both replicate facts since co-core
+0.9.4, and it carries the `info_item` token no exemption covered — so the vocabulary scan would have
+failed the moment #29's code landed. It passes the freight test: the assignment *row* id, opaque
+here, carried so Archiver can write `public_url` back to the right row. The adjacent `info_item_id` —
+the real domain key — stays refused, and the scan enforces that distinction rather than trusting it.
+[The replicate contract](content-replicate-issuer-contract.md#charter-check) predicted no exemption
+would be needed; the field arrived after that reasoning was done.
+
 **The rule governs payload *shapes*, not producer-owned token vocabularies.**
 [`src/core/errors.py::FailureReason`](../../src/core/errors.py) is a local `StrEnum` of
 `fetch_failed` `reason` tokens and stays local by design: co-core types that field as a plain `str`
@@ -331,8 +340,8 @@ is failing a PR, not documenting an intention.
 | Invariant | Test |
 |---|---|
 | No database | no persistence distribution in `uv.lock` (sqlalchemy, asyncpg, psycopg, alembic, …); no `sqlite3` / `shelve` / `dbm` / `pickle` import in `src/` |
-| No domain vocabulary | AST scan of `src/`: `info_source`, `info_item`, `watched_item`, `tenant`, `aspect` appear in no identifier and no string literal — exact `info_source_id` exempted in the three emit-path modules only |
-| The echoed key is never interpreted | AST scan of `src/`: every `info_source_id` occurrence is a field declaration, a parameter, the `info_source_id=` keyword, or that keyword's value; all else fails |
+| No domain vocabulary | AST scan of `src/`: `info_source`, `info_item`, `watched_item`, `tenant`, `aspect` appear in no identifier and no string literal — exact `info_source_id` and `info_item_rep_spec_id` exempted in the emit-path modules only, per token |
+| The echoed keys are never interpreted | AST scan of `src/`: every occurrence of either echoed field is a field declaration, a parameter, the keyword named for **itself**, or that keyword's value; all else fails |
 | Ingress is read-only | recursive route walk: every path in the allowlist, every method in `{GET, HEAD}` |
 | The deployed process has no ingress | `src/worker/` imports no server framework; the unit runs `src.worker.main` with no `uvicorn` and no `--port` |
 | No locally-defined wire models | no class in `src/` declares an `event_type` field — every wire payload comes from co-core |
@@ -350,14 +359,20 @@ English sentence gets deleted rather than heeded. The bare verb `watch` is delib
 the token list; `watched_item`, the domain noun, is not. String literals are in scope because domain
 leakage arrives as a dict key or log field as often as an attribute.
 
-**The `info_source` exemption is a carve-out, and a second scan is what makes it one.** The wire
-requires naming the field to copy it, so it is allowed in exactly `handler.py`, `reporter.py` and
-`loop.py`, and only as the exact identifier — no `info_source_policy` map rides in behind it.
-The second scan holds the real invariant as an **allow-list**: the four shapes a verbatim echo can
-take, everything else refused. It began as a deny-list of reading positions; three review rounds each
-found ones it had not enumerated, so it now asks the opposite question and is exhaustive. Naming the field is mechanics; keying on it is a domain model one commit at a time.
-Two assertions guard the allowlist itself: it can never name config, storage or the API, and every
-entry must be a file.
+**The exemptions are carve-outs, and a second scan is what makes them ones.** The wire requires
+naming each field to copy it, so each is allowed in exactly `handler.py`, `reporter.py` and
+`loop.py`, and only as the exact identifier — no `info_source_policy` map or `info_items` collection
+rides in behind one. The second scan holds the real invariant as an **allow-list**: the four shapes a
+verbatim echo can take, everything else refused. It began as a deny-list of reading positions; three
+review rounds each found ones it had not enumerated, so it now asks the opposite question and is
+exhaustive. Naming a field is mechanics; keying on it is a domain model one commit at a time. Two
+assertions guard the allowlist itself: it can never name config, storage or the API, and every entry
+must be a file.
+
+Two properties only matter once there is more than one carve-out, so neither is visible while `src/`
+is clean and both are pinned by their own tests: the exemption arithmetic is **per token**, and a
+keyword counts as an echo only when named for **that** field — `info_source_id=…info_item_rep_spec_id`
+is deciding what a value means, not carrying it.
 
 **The `event_type` check is an AST check on class bodies, not a grep.** `event_type` appears twice
 in `src/worker/loop.py` legitimately — once in a comment, once reading a co-core model's own field.

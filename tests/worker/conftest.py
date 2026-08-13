@@ -24,7 +24,7 @@ from src.core.config import get_settings
 from src.storage.local import LocalBlobStore
 from src.storage.sweeper import BlobUsage
 from src.worker.handler import build_handler
-from src.worker.loop import FailureReport, process_message, run_loop
+from src.worker.loop import FETCH_SPEC, FailureReport, process_message, run_loop
 from src.worker.main import build_consumer
 
 TOPIC = streams.CONTENT_FETCH
@@ -288,11 +288,19 @@ class collected_reports:
         self.reports.append(report)
 
 
-async def process_one(fake_redis, consumer, settings, message, handler, reporter=None):
+async def process_one(
+    fake_redis, consumer, settings, message, handler, reporter=None, spec=FETCH_SPEC
+):
     """``process_message`` with the fixture wiring filled in.
 
     ``reporter`` defaults to a discarding one so the loop tests that predate #9
     stay about what they were about. Tests that assert on the fact pass a spy.
+
+    ``spec`` defaults to the fetch stream because that is what every test in this
+    package is about; a replicate loop test overrides it. The default lives here
+    rather than on ``process_message`` deliberately — a production call site that
+    forgot to say which stream it was consuming would otherwise silently consume
+    the wrong one (#29).
     """
     return await process_message(
         message,
@@ -302,11 +310,19 @@ async def process_one(fake_redis, consumer, settings, message, handler, reporter
         handler=handler,
         settings=settings,
         reporter=reporter if reporter is not None else collected_reports(),
+        spec=spec,
     )
 
 
 async def drive_loop(
-    fake_redis, consumer, settings, handler, stop, deadline: float = 5, reporter=None
+    fake_redis,
+    consumer,
+    settings,
+    handler,
+    stop,
+    deadline: float = 5,
+    reporter=None,
+    spec=FETCH_SPEC,
 ):
     """Run the loop to completion under a deadline, with the fixture wiring.
 
@@ -323,6 +339,7 @@ async def drive_loop(
             handler=handler,
             stop=stop,
             reporter=reporter if reporter is not None else collected_reports(),
+            spec=spec,
         )
 
 

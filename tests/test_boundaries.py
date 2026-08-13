@@ -134,19 +134,30 @@ def test_the_import_detector_sees_a_planted_import():
 # scan to identifiers is what lets the domain noun stay.
 DOMAIN_TOKENS = frozenset({"info_source", "info_item", "watched_item", "tenant", "aspect"})
 
-# The one carve-out, and it is one *field* wide, not one word wide (#28). co-core
-# 0.8.0 makes ``info_source_id`` required on the command and on both facts, so
-# Replicator must name it to copy it across. What the charter still forbids is
-# *understanding* it — see ``test_the_echoed_domain_key_is_never_interpreted``,
-# which is the assertion that makes this allowlist safe to have written.
+# The carve-outs, each one *field* wide rather than one word wide (#28, #29). A
+# key maps a ``DOMAIN_TOKENS`` entry the exemption suppresses to the single
+# identifier it may be suppressed *for*. The two halves are separate because the
+# token scan matches substrings: exempting the token alone would let
+# ``info_source_policy`` or ``info_sources`` into an allowlisted module under
+# cover of the field that earned the carve-out (CR #2).
 #
-# ECHOED_TOKEN is the DOMAIN_TOKENS entry the exemption suppresses;
-# ECHOED_NAME is the only identifier it may be suppressed *for*. The two are
-# separate because the token scan matches substrings: exempting the token alone
-# would let ``info_source_policy`` or ``info_sources`` into an allowlisted module
-# under cover of the field that earned the carve-out (CR #2).
-ECHOED_TOKEN = "info_source"
-ECHOED_NAME = "info_source_id"
+# ``info_source_id`` — co-core 0.8.0 makes it required on ``content.fetch``'s
+# command and on both its facts.
+#
+# ``info_item_rep_spec_id`` — co-core 0.9.4 makes it required on
+# ``ContentReplicateCommand`` and on both replicate facts (#29). It carries the
+# ``info_item`` token, which no exemption previously covered, so the replicate
+# emit path could not name it at all. Granted on exactly ``info_source_id``'s
+# terms and no wider: this is the assignment *row* id, opaque here, and the
+# adjacent ``info_item_id`` — the real domain key — stays refused.
+#
+# What the charter still forbids in both cases is *understanding* the value —
+# see ``test_the_echoed_domain_key_is_never_interpreted``, which is the assertion
+# that makes this allowlist safe to have written. Adding an entry here is the
+# moment the charter is being edited, and it belongs in
+# ``docs/contracts/replicator-boundaries.md`` in the same change.
+ECHOED_FIELDS = {"info_source": "info_source_id", "info_item": "info_item_rep_spec_id"}
+ECHOED_NAMES = frozenset(ECHOED_FIELDS.values())
 
 # Exactly the three modules on the emit path: the two publishers, and the report
 # dataclass that carries the value between them. Deliberately not a directory
@@ -222,19 +233,42 @@ def _domain_hits(tree: ast.AST) -> set[str]:
     return _tokens_in(_vocabulary_surface(tree))
 
 
-def _unechoed_domain_names(tree: ast.AST) -> set[str]:
-    """Names in ``tree`` that carry ``ECHOED_TOKEN`` but are not the echoed field.
+def _unechoed_names_for(tree: ast.AST, token: str) -> set[str]:
+    """Names in ``tree`` that carry ``token`` but are not the field it is exempt for.
 
-    The exemption is for one field. ``info_source_policy``, ``info_sources`` and
-    ``info_source_cache`` all contain the token, and a substring exemption would
-    admit every one of them into an allowlisted module — a per-InfoSource map
-    arriving under cover of the field that earned the carve-out (CR #2).
+    Each exemption is for one field. ``info_source_policy``, ``info_sources`` and
+    ``info_source_cache`` all contain their token, as do ``info_items`` and
+    ``info_item_id``, and a substring exemption would admit every one of them
+    into an allowlisted module — a per-InfoSource map, or a table keyed by the
+    real InfoItem id, arriving under cover of the field that earned the carve-out
+    (CR #2).
     """
+    echoed = ECHOED_FIELDS[token]
     return {
         text
         for text in _vocabulary_surface(tree)
-        if ECHOED_TOKEN in text.lower() and text.lower() != ECHOED_NAME
+        if token in text.lower() and text.lower() != echoed
     }
+
+
+def _unechoed_domain_names(tree: ast.AST) -> set[str]:
+    """Every such name, across all the carve-outs."""
+    return set().union(*(_unechoed_names_for(tree, token) for token in ECHOED_FIELDS))
+
+
+def _exempted_hits(module: str, tree: ast.AST) -> set[str]:
+    """``module``'s domain-token hits, after whatever its allowlisting subtracts.
+
+    The arithmetic is **per token**, which is the whole of what generalizing from
+    one carve-out to two decided. A token is suppressed only inside an
+    allowlisted module and only when every name carrying it is exactly the field
+    that earned it, so one abused token cannot ride in behind a well-behaved one
+    and an abused token does not suppress the report of its innocent neighbour.
+    """
+    hits = _domain_hits(tree)
+    if module not in DOMAIN_ECHO_MODULES:
+        return hits
+    return hits - {token for token in ECHOED_FIELDS if not _unechoed_names_for(tree, token)}
 
 
 def _parents(tree: ast.AST) -> dict[int, ast.AST]:
@@ -246,15 +280,21 @@ def _parents(tree: ast.AST) -> dict[int, ast.AST]:
     return parent
 
 
-def _is_echoed_value(node: ast.AST, parent: dict[int, ast.AST]) -> bool:
-    """Whether this occurrence is the value of an ``info_source_id=`` keyword.
+def _is_echoed_value(node: ast.AST, parent: dict[int, ast.AST], name: str) -> bool:
+    """Whether this occurrence is the value of the keyword named for ``name`` itself.
 
     ``Event(info_source_id=command.info_source_id)`` — the one position from
     which the value can only travel onward, because a keyword argument named for
     the field it fills cannot also be a lookup key or a branch.
+
+    The keyword must be named for **this** field, not merely for some echoed
+    field. ``Event(info_source_id=command.info_item_rep_spec_id)`` is not an echo
+    at all: it reads one correlator to populate another, which is deciding what
+    the value means. A membership test over ``ECHOED_NAMES`` would pass it, and
+    that hole opens the moment there is more than one carve-out.
     """
     context = parent.get(id(node))
-    return isinstance(context, ast.keyword) and context.arg == ECHOED_NAME
+    return isinstance(context, ast.keyword) and context.arg == name
 
 
 def _echo_violations(tree: ast.AST) -> list[str]:
@@ -295,28 +335,28 @@ def _echo_violations(tree: ast.AST) -> list[str]:
     for node in ast.walk(tree):
         # Shapes 1-3: declarations. Their *uses* are still checked below, so
         # allowing a parameter here cannot smuggle a lookup past the scan.
-        if isinstance(node, ast.arg) and node.arg == ECHOED_NAME:
+        if isinstance(node, ast.arg) and node.arg in ECHOED_NAMES:
             continue
-        if isinstance(node, ast.keyword) and node.arg == ECHOED_NAME:
+        if isinstance(node, ast.keyword) and node.arg in ECHOED_NAMES:
             continue
-        if isinstance(node, ast.Name) and node.id == ECHOED_NAME:
+        if isinstance(node, ast.Name) and node.id in ECHOED_NAMES:
             context = parent.get(id(node))
             if isinstance(context, ast.AnnAssign) and context.target is node:
                 continue
-            if not _is_echoed_value(node, parent):
-                violations.append(f"line {node.lineno}: {ECHOED_NAME} used as a bare name")
-        elif isinstance(node, ast.Attribute) and node.attr == ECHOED_NAME:
-            if not _is_echoed_value(node, parent):
-                violations.append(f"line {node.lineno}: .{ECHOED_NAME} read outside the echo")
+            if not _is_echoed_value(node, parent, node.id):
+                violations.append(f"line {node.lineno}: {node.id} used as a bare name")
+        elif isinstance(node, ast.Attribute) and node.attr in ECHOED_NAMES:
+            if not _is_echoed_value(node, parent, node.attr):
+                violations.append(f"line {node.lineno}: .{node.attr} read outside the echo")
         elif (
             isinstance(node, ast.Constant)
             and isinstance(node.value, str)
             and id(node) not in skip
-            and ECHOED_TOKEN in node.value.lower()
+            and (spelled := _tokens_in({node.value}) & set(ECHOED_FIELDS))
         ):
-            # A string literal spelling it is a dict key or a log field — the
+            # A string literal spelling one is a dict key or a log field — the
             # form a reviewer skims past, per the vocabulary scan's own note.
-            violations.append(f"line {node.lineno}: {ECHOED_TOKEN!r} in a string literal")
+            violations.append(f"line {node.lineno}: {sorted(spelled)} in a string literal")
     return violations
 
 
@@ -327,10 +367,12 @@ def test_no_module_names_a_domain_concept():
     reliably catches, because it always arrives looking reasonable: one optional
     field, one small settings table, and Replicator has a domain model.
 
-    ``ECHOED_TOKEN`` is exempted **only** in ``DOMAIN_ECHO_MODULES``, only when
-    every name carrying it is exactly ``ECHOED_NAME``, and only for itself: an
-    allowlisted module that also named a tenant or a watched item is offending on
-    that, not on the echo.
+    An ``ECHOED_FIELDS`` token is exempted **only** in ``DOMAIN_ECHO_MODULES``,
+    only when every name carrying it is exactly the field it is exempt for, and
+    only for itself: an allowlisted module that also named a tenant or a watched
+    item is offending on that, not on the echo. ``_exempted_hits`` owns that
+    arithmetic and is pinned separately by
+    ``test_the_exemption_arithmetic_is_per_token``.
     """
     files = _python_files(SRC)
     assert files, f"no modules found under {SRC} — the scan is a no-op"
@@ -338,11 +380,7 @@ def test_no_module_names_a_domain_concept():
     offenders = {}
     for path in files:
         name = path.relative_to(REPO).as_posix()
-        tree = _parse(path)
-        hits = _domain_hits(tree)
-        if name in DOMAIN_ECHO_MODULES and not _unechoed_domain_names(tree):
-            hits -= {ECHOED_TOKEN}
-        if hits:
+        if hits := _exempted_hits(name, _parse(path)):
             offenders[name] = sorted(hits)
     assert not offenders
 
@@ -450,6 +488,21 @@ def test_the_vocabulary_detector_ignores_prose(source):
         pytest.param("raise KeyError(command.info_source_id)", id="raise-argument"),
         pytest.param('log("...", extra={"info_source_id": x})', id="log-field"),
         pytest.param("x = command.info_source_id", id="bound-to-a-local"),
+        # The second carve-out (#29) is policed by the same four shapes. co-core
+        # 0.9.4 makes info_item_rep_spec_id required on ContentReplicateCommand
+        # and on both replicate facts, so it earns a carve-out on exactly the
+        # terms info_source_id did — and inherits every one of these refusals.
+        pytest.param("if command.info_item_rep_spec_id: ...", id="replicate-branch"),
+        pytest.param("row = table[command.info_item_rep_spec_id]", id="replicate-lookup"),
+        pytest.param('k = f"rep:{command.info_item_rep_spec_id}"', id="replicate-key-building"),
+        pytest.param("x = command.info_item_rep_spec_id", id="replicate-bound-to-a-local"),
+        # Cross-wiring: each echoed field may fill only the keyword named for
+        # itself. Reading one to populate the other is not carrying a value
+        # through, it is deciding what it means — and a keyword-position
+        # membership test would wave it past.
+        pytest.param(
+            "Event(info_source_id=command.info_item_rep_spec_id)", id="cross-wired-keyword"
+        ),
     ],
 )
 def test_the_echo_detector_sees_a_planted_read(source):
@@ -475,6 +528,18 @@ def test_the_echo_detector_sees_a_planted_read(source):
             "_publish(pub, topic, Event(info_source_id=command.info_source_id), command=command)",
             id="emit-path",
         ),
+        # The second carve-out, in the same four shapes (#29).
+        pytest.param("info_item_rep_spec_id: str", id="replicate-field-declaration"),
+        pytest.param(
+            "Event(info_item_rep_spec_id=command.info_item_rep_spec_id)",
+            id="replicate-keyword-echo",
+        ),
+        # Both echoes on one model, which is what the replicate facts actually
+        # look like: three correlators copied across, none of them read.
+        pytest.param(
+            "Event(info_item_rep_spec_id=c.info_item_rep_spec_id, info_source_id=c.info_source_id)",
+            id="replicate-emit-path",
+        ),
     ],
 )
 def test_the_echo_detector_passes_a_verbatim_echo(source):
@@ -496,12 +561,21 @@ def test_the_echo_detector_passes_a_verbatim_echo(source):
         pytest.param("for x in self.info_sources: pass", id="collection"),
         pytest.param("def f(info_source_url): ...", id="adjacent-field"),
         pytest.param('cache = {"info_source_cache": 1}', id="string-literal"),
+        # The second carve-out is one field wide on exactly the same terms (#29).
+        # ``info_item_id`` is the dangerous one: it is the real domain key the
+        # assignment row points at, one underscore-separated step from the field
+        # that earned the exemption, and holding a table of them is precisely the
+        # domain model the charter refuses.
+        pytest.param("def f(info_item_id): ...", id="replicate-adjacent-field"),
+        pytest.param("for x in self.info_items: pass", id="replicate-collection"),
+        pytest.param("self.info_item_cache = {}", id="replicate-cache"),
+        pytest.param('d = {"info_item_slug": 1}', id="replicate-string-literal"),
     ],
 )
 def test_the_exemption_detector_sees_a_name_that_is_not_the_echoed_field(source):
-    """CR #2: the carve-out is one field wide.
+    """CR #2: each carve-out is one field wide.
 
-    Each of these contains ``info_source`` and would have been exempt under a
+    Each of these contains an exempted *token* and would have been exempt under a
     substring-only exemption — including inside an allowlisted module, where the
     interpretation scan does not reach a bare assignment or a ``for`` target.
     """
@@ -513,10 +587,67 @@ def test_the_exemption_detector_sees_a_name_that_is_not_the_echoed_field(source)
     [
         pytest.param("info_source_id: str", id="field-declaration"),
         pytest.param("Event(info_source_id=command.info_source_id)", id="keyword-echo"),
+        pytest.param("info_item_rep_spec_id: str", id="replicate-field-declaration"),
+        pytest.param(
+            "Event(info_item_rep_spec_id=command.info_item_rep_spec_id)",
+            id="replicate-keyword-echo",
+        ),
     ],
 )
 def test_the_exemption_detector_passes_the_echoed_field(source):
     assert not _unechoed_domain_names(ast.parse(source))
+
+
+@pytest.mark.parametrize(
+    ("module", "source", "expected"),
+    [
+        # An allowlisted module echoing both fields is clean: each token is
+        # suppressed by the field that earned it.
+        pytest.param(
+            "src/worker/reporter.py",
+            "Event(info_item_rep_spec_id=c.info_item_rep_spec_id, info_source_id=c.info_source_id)",
+            set(),
+            id="both-echoes-in-an-allowlisted-module",
+        ),
+        # The same source outside the allowlist keeps both hits. The carve-out is
+        # a property of the module, not of the spelling.
+        pytest.param(
+            "src/worker/pacing.py",
+            "Event(info_item_rep_spec_id=c.info_item_rep_spec_id, info_source_id=c.info_source_id)",
+            {"info_item", "info_source"},
+            id="the-same-echo-outside-the-allowlist",
+        ),
+        # Each carve-out stands or falls **on its own**. A module smuggling an
+        # ``info_items`` collection loses the ``info_item`` exemption and keeps
+        # the ``info_source`` one, so the offender report names the token that is
+        # actually being abused rather than both.
+        pytest.param(
+            "src/worker/loop.py",
+            "self.info_items = {}\nEvent(info_source_id=c.info_source_id)",
+            {"info_item"},
+            id="one-abused-token-does-not-forfeit-the-other",
+        ),
+        # An unrelated domain token is never exempt anywhere.
+        pytest.param(
+            "src/worker/handler.py",
+            "tenant = 1",
+            {"tenant"},
+            id="an-unexempted-token-in-an-allowlisted-module",
+        ),
+    ],
+)
+def test_the_exemption_arithmetic_is_per_token(module, source, expected):
+    """What the allowlist actually subtracts, asserted directly (#29).
+
+    Before the second carve-out this arithmetic was a single ``hits -= {TOKEN}``
+    inline in the module scan, and with one exemption there was nothing to get
+    wrong. With two there is: suppressing the whole exempted set whenever *any*
+    echoed field is clean would let an abused token ride in behind a well-behaved
+    one, and suppressing nothing when any is abused would misreport which token
+    is the problem. Neither shows up in the real-source scan while ``src/`` is
+    clean, which is exactly why it is pinned here.
+    """
+    assert _exempted_hits(module, ast.parse(source)) == expected
 
 
 # --------------------------------------------------------------------------

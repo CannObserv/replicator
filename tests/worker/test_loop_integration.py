@@ -46,6 +46,7 @@ from src.storage.local import LocalBlobStore
 from src.worker.handler import build_handler
 from src.worker.loop import (
     DEDUPE_KEY_PREFIX,
+    FETCH_SPEC,
     Outcome,
     claim_once,
     dead_letter_anomaly,
@@ -198,13 +199,14 @@ async def seed_and_consume(
             # fetch_failed on the real content.blobs during a test would tell an
             # issuer that a command it is waiting on has failed.
             reporter=build_failure_reporter(client=real_redis, blobs_topic=blobs_topic),
+            spec=FETCH_SPEC,
             stop=stop,
         )
     )
 
     start_id = await last_id(real_redis, blobs_topic)
     (seeded,) = await publish(real_redis, scratch_topic, [url])
-    dedupe_keys.append(f"{DEDUPE_KEY_PREFIX}{seeded.command_id}")
+    dedupe_keys.append(FETCH_SPEC.dedupe_key(seeded.command_id))
     try:
         return await watch_for_facts(
             real_redis,
@@ -438,6 +440,7 @@ async def test_a_permanently_failing_command_publishes_a_fact_and_dead_letters(
             settings=settings,
             handler=handler,
             reporter=build_failure_reporter(client=real_redis, blobs_topic=scratch_blobs_topic),
+            spec=FETCH_SPEC,
             stop=stop,
         )
     )
@@ -466,7 +469,7 @@ async def test_a_permanently_failing_command_publishes_a_fact_and_dead_letters(
     assert (await real_redis.xpending(scratch_topic, GROUP))["pending"] == 0
     # Nothing was stored, and no dedupe key was written for a command that failed.
     assert list(tmp_path.iterdir()) == []
-    assert not await real_redis.exists(f"{DEDUPE_KEY_PREFIX}{seeded.command_id}")
+    assert not await real_redis.exists(FETCH_SPEC.dedupe_key(seeded.command_id))
 
 
 async def test_an_end_to_end_run_only_creates_predictable_keys(

@@ -117,6 +117,27 @@ on a template. For `content.fetch` this surface did not exist: blob paths are co
 the fingerprint ([`src/storage/local.py`](../../src/storage/local.py)), so no message value ever
 reached a path. Replication is the first time one does.
 
+### T3a — the *source* is a path too, and it is the sharper half (#29)
+
+The paragraph above stated the read side has no such surface. That is half the picture: replication
+is the first time a message value reaches a path **in both directions**, because
+`ContentReplicateCommand.blob_uri` is issuer-supplied and serving the command means resolving it to
+local bytes. Nothing in `src/` consumes one today — it is produced only, and
+[`BlobStore`](../../src/storage/base.py) has no URI-resolving method (`open()` / `exists()` take a
+fingerprint). The resolver is new code, and its obvious implementation — parse the URI, read the path
+— is a read-side traversal on a service whose destinations include a **public, undeletable**
+archive.org item: `file:///etc/replicator/co-pypi-reader.json` would publish this VM's GCS reader key
+permanently. Bus access control answers it as everywhere else, and T5's reasoning applies on top —
+one guard against an unretractable failure.
+
+⚙ **The rule: never resolve `blob_uri` as a path.** Extract the fingerprint, validate it as 64
+lowercase hex, rebuild through the store's content-addressed mapping. Traversal-proof by
+construction rather than by enumerating what to reject — the inversion `tests/test_boundaries.py`'s
+echo scan reached after three rounds of an incomplete deny-list. Anything else is a terminal
+`invalid_source`. This also keeps [#7](https://github.com/CannObserv/replicator/issues/7) honest: the
+scheme is deliberately "the consumer's business", so an object-store backend re-states this guard
+rather than inheriting a path-shaped one.
+
 ### T4 — Overwrite: a redelivery must never destroy an artifact
 
 Delivery is at-least-once, so the same command *will* arrive twice. This is where the idempotency
@@ -288,6 +309,7 @@ token on the failure fact. Following the precedent in
 | the rendered path escapes the alias root, or `object_options` names a container the alias does not allow | `invalid_destination` |
 | the destination exists with different bytes | `destination_conflict` |
 | the blob is gone | `blob_expired` |
+| `blob_uri` is not a reference this store minted (T3a) | `invalid_source` |
 
 `invalid_destination` covers both the path guard and the container guard for the reason
 `invalid_request_options` covers two fields on the fetch side: the issuer's remedy is identical
@@ -295,16 +317,38 @@ either way — fix the spec and re-issue under a fresh `command_id` — and `det
 refused it. `alias_unknown` and `provider_disabled` stay separate because their remedies are not the
 same one (fix the spec; act on the host).
 
+`invalid_source` stays separate by the same test: not `blob_expired` (the bytes were never named, so
+re-fetching fixes nothing) and not `invalid_destination` (the remedy is a bug in the issuer's
+plumbing, not a bad RepSpec). It is a sixth token where co-core 0.9.4's `ReplicationFailedEvent`
+docstring registers five, so that docstring needs a matching entry —
+[cannobserv#330](https://github.com/CannObserv/cannobserv/issues/330). `reason` is a plain `str`, so nothing on the wire breaks meanwhile; the cost is a
+consumer-facing registry one row short, the drift that docstring asks to be kept in step.
+
 ---
 
 ## Charter check
 
-⚙ **No new vocabulary invariant, and no exemption.** #34's Q7 asks about a collision between
+⚙ **No new vocabulary invariant from `required_fields`.** #34's Q7 asks about a collision between
 `required_fields`' dotted domain keys (`^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`, e.g. `info_item.slug`)
 and the no-domain-vocabulary scan, which bans those words in `src/` as identifiers *and* as string
-literals. Under T3 the collision does not arise: the dotted keys never reach this service. Recorded
+literals. Under T3 that collision does not arise: the dotted keys never reach this service. Recorded
 as a **consequence of the render decision** — adopting the rejected alternative reopens it, and would
 require the render path to treat every key as opaque with no prefix ever special-cased.
+
+⚙ **A second exemption is needed anyway, and this document predicted otherwise (#29).** The sentence
+above originally read "no new vocabulary invariant, **and no exemption**". The first half holds; the
+second does not. co-core 0.9.4 makes `info_item_rep_spec_id` required on `ContentReplicateCommand`
+and on **both** replicate facts, and it carries the `info_item` token — so the vocabulary scan fails
+the moment the emit path names it, which no implementation style avoids because the model requires
+the field. The prediction was not wrong about what it examined; the field entered the payload after
+#34 was settled, which is the standing hazard of settling a contract ahead of the models it
+describes.
+
+Granted on exactly `info_source_id`'s terms and no wider, with the arithmetic and the cross-wiring
+rule pinned by their own tests. The charter is the authoritative record:
+[**replicator-boundaries.md**](replicator-boundaries.md#reviewing-a-proposed-payload-field). Note
+what stays refused — `info_item_id`, the *real* domain key, is one underscore-separated step away and
+holding a table of them is precisely the domain model the charter exists to prevent.
 
 ⚙ **One new invariant when the code lands: the alias is a key, never a value.** An AST scan asserting
 every `credentials_alias` occurrence is a lookup key or a resolver argument — the mirror of the

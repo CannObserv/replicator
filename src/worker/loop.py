@@ -1,20 +1,35 @@
-"""The ``content.fetch`` consume path: poll -> dispatch -> ack.
+"""The command consume path: poll -> dispatch -> ack.
 
 Split from ``main`` so each outcome is unit-testable without driving the loop:
 ``process_message`` decides the fate of one message, ``poll_once`` sources them,
 and ``run_loop`` owns only cadence and shutdown.
 
-The byte path (fetch, fingerprint, temp-store, ``blob_available``) lives behind
-the ``Handler`` seam in ``src.worker.handler`` — this module stays ignorant of
-what a handler does, and decides only what its success or failure means.
+The work itself lives behind the ``Handler`` seam — for ``content.fetch`` that is
+the byte path in ``src.worker.handler`` (fetch, fingerprint, temp-store,
+``blob_available``). This module stays ignorant of what a handler does, and
+decides only what its success or failure means.
+
+**One loop, N command streams (#29).** Everything here is the same decision for
+every command stream: read one at a time, refuse a foreign payload, branch on
+``schema_version`` before destructuring, dedupe on ``command_id``, ack after the
+handler, retry the transient and dead-letter the deterministic, and publish the
+failure fact before the dead-letter. What differs per stream — which payload type
+is its command, what its dedupe keys are namespaced under, what to call it in the
+journal, and how to build its failure report — is injected as a ``CommandSpec``.
+So ``content.replicate`` is another ``run_loop`` with another spec, not a second
+copy of this file with the four differences edited in and the other nine
+invariants free to drift.
 """
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Protocol
 
 from co_core.effects.bus import BusMessage
+from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
 from co_core.pure.models.changes import ContentFetchCommand
 from co_core_aio.bus import AsyncBusConsumer
@@ -24,7 +39,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from src.core.config import Settings
-from src.core.errors import FailureReason, PermanentFetchError, TransientFetchError
+from src.core.errors import FailureReason, PermanentError, TransientError
 from src.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -36,6 +51,14 @@ SUPPORTED_SCHEMA_VERSION = 1
 
 # Namespace for the command dedupe keys. Redis, not an in-memory set: the point
 # is to survive the restart that redelivery follows.
+#
+# **Per stream, not per worker.** Each ``CommandSpec`` appends its own segment,
+# so a ``content.replicate`` command can never dedupe against a ``content.fetch``
+# one (#29). Issuer-assigned ids make a collision unlikely rather than
+# impossible, and the failure it would cause is the worst shape available: the
+# second command acks having done nothing, silently, which is MUST-1's failure
+# mode reached from a direction MUST-1 does not describe — the same hazard the
+# blank-``command_id`` guard below already refuses.
 DEDUPE_KEY_PREFIX = "replicator:cmd:"
 
 # Handler failures that are *transient* (broker or origin down / slow / loading)
@@ -49,7 +72,7 @@ DEDUPE_KEY_PREFIX = "replicator:cmd:"
 # ever wraps them in its own error type, a real outage would fall through to the
 # ceiling and the cliff reopens — this tuple must then track that wrapper.
 _TRANSIENT_ERRORS: tuple[type[Exception], ...] = (
-    TransientFetchError,
+    TransientError,
     ConnectionError,  # builtin
     TimeoutError,  # builtin (asyncio.TimeoutError since 3.11)
     RedisConnectionError,
@@ -71,7 +94,7 @@ MAX_POISON_SKIPS = 10
 
 # The consume-path handler seam. Raising signals failure; the loop — not the
 # handler — decides whether that means retry or dead-letter.
-Handler = Callable[[ContentFetchCommand], Awaitable[None]]
+type Handler[C: Command] = Callable[[C], Awaitable[None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,13 +127,135 @@ class FailureReport:
     detail: str | None = None
 
 
+class Command(Protocol):
+    """The only two fields the loop reads off a command, whatever stream it came from.
+
+    Everything else — a URL, a destination, a blob reference — is the handler's
+    business. Keeping this pair as the whole of the loop's knowledge is what
+    makes "which stream is this?" a property of the injected ``CommandSpec``
+    rather than a branch in here.
+    """
+
+    @property
+    def command_id(self) -> str: ...
+
+    @property
+    def schema_version(self) -> int: ...
+
+
+class Report(Protocol):
+    """The one thing the loop requires of any command stream's failure report.
+
+    ``_close`` refuses a report with no correlator, and that guard has to hold
+    for every stream — so ``command_id`` is the whole of the shared shape.
+    Everything else a fact carries (``url`` and ``status_code`` for fetch,
+    ``info_item_rep_spec_id`` and ``source_revision_id`` for replicate) belongs
+    to that stream's own report type and its own reporter.
+
+    Deliberately **not** one dataclass with every stream's fields optional: the
+    replicate fact models no ``status_code`` at all, so a shared superset would
+    put a field on the wire path that one of its two producers can never fill,
+    and "which of these are meaningful here" would be knowledge held nowhere.
+
+    ``reason`` rides along because the correlator guard logs it, and a refusal
+    the journal cannot explain is the failure that guard exists to make visible.
+    Typed ``str`` rather than ``FailureReason``: co-core types the field that way
+    on both facts precisely so each producer owns its own token vocabulary, and
+    ``FailureReason`` is a ``StrEnum``, so the fetch report satisfies this as it
+    stands.
+    """
+
+    @property
+    def command_id(self) -> str: ...
+
+    @property
+    def reason(self) -> str: ...
+
+
 # The failure-fact seam, parallel to ``Handler`` and injected the same way. This
 # module stays ignorant of ``content.blobs`` and of how a fact is published —
 # ``src.worker.reporter`` owns that, exactly as ``src.worker.handler`` owns the
 # byte path. The alternative (publishing inline here) would thread a topic
 # through poll_once / claim_once / dead_letter_anomaly and cost a live-broker
 # test its scratch stream.
-FailureReporter = Callable[[FailureReport], Awaitable[None]]
+type FailureReporter[R: Report] = Callable[[R], Awaitable[None]]
+
+
+class ReportBuilder[C: Command, R: Report](Protocol):
+    """How one command stream turns a command plus a cause into its own report.
+
+    The loop knows *that* it is closing a command and *why*; it does not know
+    what that stream's failure fact is shaped like. Passing the builder in is
+    what lets ``process_message`` close a command on a stream whose fact it has
+    never heard of — and keeps the fetch report's ``url`` from becoming an
+    ``Optional`` that replicate would always leave empty.
+
+    ``reason`` is ``str``, not ``FailureReason`` (CR #5). The token vocabulary is
+    **producer-owned per stream** — that is the whole premise this seam rests on,
+    and co-core types the field ``str`` on both facts for exactly that reason.
+    ``FailureReason`` holds fetch's tokens plus the two the *loop* owns
+    (``unsupported_schema_version``, ``handler_error``), which every stream emits;
+    replicate's (``alias_unknown``, ``invalid_destination``, …) live with
+    replicate. Annotating this ``FailureReason`` would have forced the second
+    stream either to widen the fetch enum or to fight the type. ``StrEnum``
+    members satisfy ``str``, so the loop's own two pass unchanged.
+    """
+
+    def __call__(
+        self,
+        command: C,
+        *,
+        reason: str,
+        status_code: int | None = None,
+        attempts: int | None = None,
+        detail: str | None = None,
+    ) -> R: ...
+
+
+@dataclass(frozen=True, slots=True)
+class CommandSpec[C: Command, R: Report]:
+    """Everything the loop needs to know about one command stream.
+
+    Bundled into one object rather than threaded as four parameters because they
+    have to agree with each other: a spec whose ``command_type`` and
+    ``build_report`` disagreed would decode a command and then fail to describe
+    it, at the exact moment it is trying to report a failure.
+
+    ``label`` reaches the journal only. ``dedupe_segment`` reaches Redis, so it
+    is the one field where a collision is a correctness bug rather than a
+    confusing log line — see ``DEDUPE_KEY_PREFIX``. Two specs sharing a segment
+    would dedupe each other's commands, so ``test_loop_spec.py`` asserts they are
+    distinct; nothing in the type system can (CR #8).
+
+    ``describe`` names a frame in the journal when the correlator cannot. It is
+    per stream because what identifies a command is: fetch has a URL, replicate
+    has a destination, and the loop knows neither (CR #1).
+    """
+
+    command_type: type[C]
+    label: str
+    dedupe_segment: str
+    build_report: ReportBuilder[C, R]
+    describe: Callable[[C], dict[str, object]]
+
+    def dedupe_key(self, command_id: str) -> str:
+        """The Redis key under which this stream remembers a handled command."""
+        return f"{DEDUPE_KEY_PREFIX}{self.dedupe_segment}:{command_id}"
+
+
+FETCH_SPEC: CommandSpec[ContentFetchCommand, FailureReport] = CommandSpec(
+    command_type=ContentFetchCommand,
+    label=streams.CONTENT_FETCH,
+    dedupe_segment="fetch",
+    build_report=lambda command, **cause: FailureReport(
+        command_id=command.command_id,
+        url=command.url,
+        # Copied across, never read (#28).
+        info_source_id=command.info_source_id,
+        **cause,
+    ),
+    describe=lambda command: {"url": command.url},
+)
 
 # How long an idle poll parks before looking again. On a live broker the
 # blocking XREADGROUP is the real wait and this adds ~50ms per idle tick; it is
@@ -130,6 +275,59 @@ ERROR_BACKOFF_MAX_SHIFT = 5
 ERROR_LOG_EVERY = 15
 
 
+def _report_or_none[C: Command, R: Report](
+    spec: CommandSpec[C, R],
+    command: C,
+    *,
+    reason: str,
+    status_code: int | None = None,
+    attempts: int | None = None,
+    detail: str | None = None,
+) -> R | None:
+    """Build this stream's failure report, degrading to no-fact if the spec is broken.
+
+    Unguarded, a raising ``build_report`` is the worst failure this module has
+    (CR #2). It is called from inside ``_handle_unclassified`` too — which is
+    where the delivery ceiling lives — so the raise escapes ``process_message``
+    before anything is dead-lettered, leaves the entry in the PEL, and comes
+    straight back via ``claim_stale``. The ceiling can never fire, because the
+    ceiling is the code that is failing. One programming error in one spec
+    becomes a permanent jam on that stream with no DLQ entry to triage from, and
+    `run_loop` can only back off and eventually exit into the same jam.
+
+    Degrading is the right trade rather than a defensive reflex: the frame still
+    dead-letters, which is the outcome that unblocks the stream, and a command
+    closing without a fact is a condition contract MUST-6 already requires
+    issuers to keep a reaper for. The alternative — a correct-looking guard that
+    re-raises — buys nothing the caller could act on.
+
+    The cause is spelled out rather than forwarded as ``**kwargs`` so this
+    signature and ``ReportBuilder``'s are checkable against each other. A
+    ``**kwargs`` passthrough type-checks as ``object`` and would have hidden
+    exactly the kind of mismatch this function exists to survive.
+    """
+    # ``Exception``, never ``BaseException`` — the same line the handler ``try``
+    # in ``process_message`` holds (CR #11). ``asyncio.CancelledError`` is a
+    # ``BaseException``, so shutdown propagates through here untouched; widening
+    # this would swallow a SIGTERM mid-dead-letter and hang the wind-down inside
+    # a function whose whole purpose is to never be the thing that blocks.
+    try:
+        return spec.build_report(
+            command, reason=reason, status_code=status_code, attempts=attempts, detail=detail
+        )
+    except Exception as exc:
+        logger.error(
+            "could not build a failure report",
+            extra={
+                "stream": spec.label,
+                "error": f"{type(exc).__name__}: {exc}",
+                "detail": "the frame still dead-letters; the issuer's reaper is the backstop",
+            },
+            exc_info=exc,
+        )
+        return None
+
+
 class Outcome(StrEnum):
     """What ``process_message`` did with one message."""
 
@@ -139,15 +337,16 @@ class Outcome(StrEnum):
     RETRY = "retry"
 
 
-async def process_message(
+async def process_message[C: Command, R: Report](
     message: BusMessage,
     *,
     client: Redis,
     consumer: AsyncBusConsumer,
     group: str,
-    handler: Handler,
+    handler: Handler[C],
     settings: Settings,
-    reporter: FailureReporter,
+    reporter: FailureReporter[R],
+    spec: CommandSpec[C, R],
 ) -> Outcome:
     """Dispatch one decoded message and decide its fate.
 
@@ -163,17 +362,25 @@ async def process_message(
     ``reporter`` is required rather than optional: every path that closes a
     command without a blob must announce it, and a default would make "no fact"
     the outcome of forgetting to wire one — the exact silence #9 exists to end.
+
+    ``spec`` carries the only things here that differ per command stream: which
+    payload type is this stream's command, what its dedupe keys are namespaced
+    under, what to call it in the journal, and how to build its failure report.
+    Everything else in this function — the ordering, the guards, and which
+    outcome each one produces — is the same decision for every stream, which is
+    why there is one of these rather than two loops (#29).
     """
     command = message.payload
     # from_wire's event_type -> model table is global, so a fact XADDed to the
     # command stream decodes cleanly into the wrong type rather than raising.
-    if not isinstance(command, ContentFetchCommand):
+    if not isinstance(command, spec.command_type):
         return await _close(
             consumer,
             message.message_id,
             dict(message.fields),
-            reason="payload is not a content.fetch command",
+            reason=f"payload is not a {spec.label} command",
             detail={"event_type": command.event_type},
+            label=spec.label,
             reporter=reporter,
             # DLQ-only, never announced (CR #1). Most of the payload union has no
             # command_id at all, and the members that do carry *somebody else's* —
@@ -190,30 +397,30 @@ async def process_message(
             dict(message.fields),
             reason="unsupported schema_version",
             detail={"command_id": command.command_id, "schema_version": command.schema_version},
+            label=spec.label,
             reporter=reporter,
-            # Reading three fields off a version this worker does not support is
-            # the destructuring the contract warns issuers about — done knowingly
-            # and only here: command_id, url and info_source_id are the v1
-            # baseline, and a fact naming none of them could not close anything.
-            # All three are *required* on the command since co-core 0.8.0, so a
-            # frame that decoded at all has them; a frame missing one never
-            # reaches this branch, having failed ``from_wire`` outright. If a
-            # future version moves them, this branch is where it breaks — and
-            # ``_close`` refuses a report with no correlator rather than
-            # publishing an empty one.
-            report=FailureReport(
-                command_id=command.command_id,
-                url=command.url,
-                info_source_id=command.info_source_id,
+            # Reading the correlator fields off a version this worker does not
+            # support is the destructuring the contract warns issuers about —
+            # done knowingly, and pushed into ``spec.build_report`` so each
+            # stream names its own v1 baseline. For fetch that is command_id,
+            # url and info_source_id; a fact naming none of them could not close
+            # anything. Every one is *required* on its command, so a frame that
+            # decoded at all has them, and a frame missing one never reaches this
+            # branch, having failed ``from_wire`` outright. If a future version
+            # moves them, this is where it breaks — and ``_close`` refuses a
+            # report with no correlator rather than publishing an empty one.
+            report=_report_or_none(
+                spec,
+                command,
                 reason=FailureReason.UNSUPPORTED_SCHEMA_VERSION,
                 detail=f"schema_version={command.schema_version}",
             ),
         )
     # A command with no correlator is malformed, and is refused before anything
-    # can use it (CR #6). Left to run it would fetch, publish a blob_available no
-    # issuer can match, and take the dedupe key ``replicator:cmd:`` — under which
-    # every *later* blank-id command is a silent no-op, MUST-1's failure mode
-    # reached from a direction MUST-1 does not describe.
+    # can use it (CR #6). Left to run it would do the work, publish a success fact
+    # no issuer can match, and take the empty-id dedupe key — under which every
+    # *later* blank-id command is a silent no-op, MUST-1's failure mode reached
+    # from a direction MUST-1 does not describe.
     #
     # After the schema_version branch, not before: reading command_id is
     # destructuring, and the contract's rule is to branch on the version first.
@@ -227,12 +434,17 @@ async def process_message(
             message.message_id,
             dict(message.fields),
             reason="command_id is blank",
-            detail={"url": command.url},
+            # The one dead-letter with nothing to correlate on, which is what
+            # makes the stream's own identifier load-bearing here (CR #1). Not
+            # ``spec.label`` — ``_dead_letter`` already puts that on the line,
+            # and repeating it would displace the identifier rather than add one.
+            detail=spec.describe(command),
+            label=spec.label,
             reporter=reporter,
             report=None,
         )
 
-    dedupe_key = f"{DEDUPE_KEY_PREFIX}{command.command_id}"
+    dedupe_key = spec.dedupe_key(command.command_id)
     if await client.exists(dedupe_key):
         await consumer.ack(message.message_id)
         logger.info(
@@ -245,22 +457,22 @@ async def process_message(
     # these handlers untouched — it is not a message failure.
     try:
         await handler(command)
-    except PermanentFetchError as exc:
+    except PermanentError as exc:
         return await _close(
             consumer,
             message.message_id,
             dict(message.fields),
             reason="handler reported a permanent failure",
             detail={"command_id": command.command_id, "error": str(exc)},
+            label=spec.label,
             reporter=reporter,
-            # The handler classified this, not the loop: three unrelated
+            # The handler classified this, not the loop: several unrelated
             # conditions (a 4xx, an unfetchable scheme, an oversized body) raise
             # one exception type, and recovering which from str(exc) would be a
             # wire contract resting on a message format.
-            report=FailureReport(
-                command_id=command.command_id,
-                url=command.url,
-                info_source_id=command.info_source_id,
+            report=_report_or_none(
+                spec,
+                command,
                 reason=exc.reason,
                 status_code=exc.status_code,
                 detail=str(exc),
@@ -286,6 +498,7 @@ async def process_message(
             command=command,
             exc=exc,
             reporter=reporter,
+            spec=spec,
         )
 
     # Written *after* the handler, deliberately. Marking first would turn a crash
@@ -299,16 +512,17 @@ async def process_message(
     return Outcome.ACKED
 
 
-async def _handle_unclassified(
+async def _handle_unclassified[C: Command, R: Report](
     message: BusMessage,
     *,
     client: Redis,
     consumer: AsyncBusConsumer,
     group: str,
     settings: Settings,
-    command: ContentFetchCommand,
+    command: C,
     exc: Exception,
-    reporter: FailureReporter,
+    reporter: FailureReporter[R],
+    spec: CommandSpec[C, R],
 ) -> Outcome:
     """Retry a failure the loop could not classify, up to the delivery ceiling.
 
@@ -327,11 +541,11 @@ async def _handle_unclassified(
             dict(message.fields),
             reason="unclassified failure hit the delivery ceiling",
             detail={"command_id": command.command_id, "attempts": attempts, "error": error},
+            label=spec.label,
             reporter=reporter,
-            report=FailureReport(
-                command_id=command.command_id,
-                url=command.url,
-                info_source_id=command.info_source_id,
+            report=_report_or_none(
+                spec,
+                command,
                 reason=FailureReason.HANDLER_ERROR,
                 attempts=attempts,
                 detail=error,
@@ -373,15 +587,16 @@ async def _delivery_count(client: Redis, message: BusMessage, *, group: str) -> 
     return int(entries[0]["times_delivered"])
 
 
-async def _close(
+async def _close[R: Report](
     consumer: AsyncBusConsumer,
     message_id: str,
     fields: dict[str, str],
     *,
+    label: str,
     reason: str,
     detail: dict[str, object] | None = None,
-    reporter: FailureReporter,
-    report: FailureReport | None,
+    reporter: FailureReporter[R],
+    report: R | None,
 ) -> Outcome:
     """Announce the failure, then dead-letter it. Fact **before** ack, always.
 
@@ -398,8 +613,9 @@ async def _close(
     issuer's reaper as the backstop for them.
 
     **A correlator-less report is refused here rather than at the call sites.**
-    ``FetchFailedEvent.command_id`` is required and *is* the event, so a fact
-    naming no command closes nothing and only adds noise to a broadcast stream.
+    ``Report.command_id`` is the one field every stream's fact requires and *is*
+    the event — ``FetchFailedEvent``'s is the shipped example — so a fact naming
+    no command closes nothing and only adds noise to a broadcast stream.
     Enforced at this one choke point so the invariant holds for every report path
     there is and every one added later; it is logged because otherwise a
     malformed command would be indistinguishable in the journal from an ordinary
@@ -427,7 +643,38 @@ async def _close(
                     },
                     exc_info=exc,
                 )
-    return await _dead_letter(consumer, message_id, fields, reason=reason, detail=detail)
+    return await _dead_letter(
+        consumer, message_id, fields, label=label, reason=reason, detail=detail
+    )
+
+
+# Field names ``logging`` will not let an ``extra`` dict carry: every attribute a
+# ``LogRecord`` already owns, plus the two the formatter adds later. Derived from
+# an actual record rather than hardcoded, so it tracks the interpreter — 3.12
+# added ``taskName``, and a list written from memory would have missed it.
+_RESERVED_LOG_FIELDS = frozenset(vars(logging.LogRecord("", 0, "", 0, "", None, None))) | {
+    "message",
+    "asctime",
+}
+
+
+def _loggable(detail: dict[str, object]) -> tuple[dict[str, object], list[str]]:
+    """Split ``detail`` into what a log ``extra`` can carry and what it cannot.
+
+    ``logging.makeRecord`` raises ``KeyError`` on a key a ``LogRecord`` already
+    owns, so a ``detail`` naming ``module`` or ``name`` would raise *inside* the
+    dead-letter — after the DLQ write, before the log line — leaving a frame that
+    is neither acked nor announced. That is CR #2's permanent jam reached through
+    a different door, and ``CommandSpec.describe`` is the seam that opens it: it
+    is the one place a stream author chooses arbitrary field names (CR #14).
+
+    Filtered rather than renamed, and the dropped names are returned so the
+    caller can put them on the record — a silently vanishing diagnostic is what
+    CR #1 was about, and this must not reintroduce it one field at a time.
+    """
+    safe = {key: value for key, value in detail.items() if key not in _RESERVED_LOG_FIELDS}
+    dropped = sorted(key for key in detail if key in _RESERVED_LOG_FIELDS)
+    return safe, dropped
 
 
 async def _dead_letter(
@@ -435,6 +682,7 @@ async def _dead_letter(
     message_id: str,
     fields: dict[str, str],
     *,
+    label: str,
     reason: str,
     detail: dict[str, object] | None = None,
 ) -> Outcome:
@@ -445,14 +693,27 @@ async def _dead_letter(
     timestamp to learn which of the five routes sent it there is avoidable work.
     Consumers use ``extra="ignore"`` models, so the added envelope keys cannot
     break a replay tool that re-reads the original ``payload``.
+
+    ``label`` says which stream, and is a parameter because ``AsyncBusConsumer``
+    keeps its topic private — so with two command streams sharing this function,
+    a hardcoded name would mislabel half the dead-letters in the journal, and
+    the operator's first triage question is exactly which stream jammed.
     """
     dlq_id = await consumer.dead_letter(
         message_id,
         {**fields, "dlq_reason": reason, "dlq_original_id": message_id},
     )
+    safe, dropped = _loggable(detail or {})
     logger.warning(
-        "dead-lettered a content.fetch frame",
-        extra={"reason": reason, "message_id": message_id, "dlq_id": dlq_id, **(detail or {})},
+        "dead-lettered a frame",
+        extra={
+            "stream": label,
+            "reason": reason,
+            "message_id": message_id,
+            "dlq_id": dlq_id,
+            **safe,
+            **({"dropped_detail_keys": dropped} if dropped else {}),
+        },
     )
     return Outcome.DEAD_LETTERED
 
@@ -484,6 +745,10 @@ async def dead_letter_anomaly(
         consumer,
         exc.message_id,
         fields,
+        # The anomaly carries the topic even though the consumer does not expose
+        # it, so this route needs no CommandSpec — which is what lets poll_once
+        # and claim_once stay stream-agnostic.
+        label=exc.topic,
         reason="frame failed to decode",
         detail={"anomaly": type(exc).__name__, "recovered_fields": bool(raw)},
     )
@@ -556,15 +821,16 @@ async def poll_once(
         return []
 
 
-async def process_batch(
+async def process_batch[C: Command, R: Report](
     messages: list[BusMessage],
     *,
     client: Redis,
     consumer: AsyncBusConsumer,
     group: str,
     settings: Settings,
-    handler: Handler,
-    reporter: FailureReporter,
+    handler: Handler[C],
+    reporter: FailureReporter[R],
+    spec: CommandSpec[C, R],
     stop: asyncio.Event,
 ) -> None:
     """Dispatch a polled batch, stopping between messages once asked to.
@@ -584,19 +850,21 @@ async def process_batch(
             handler=handler,
             settings=settings,
             reporter=reporter,
+            spec=spec,
         )
         if stop.is_set():
             break
 
 
-async def run_loop(
+async def run_loop[C: Command, R: Report](
     *,
     client: Redis,
     consumer: AsyncBusConsumer,
     group: str,
     settings: Settings,
-    handler: Handler,
-    reporter: FailureReporter,
+    handler: Handler[C],
+    reporter: FailureReporter[R],
+    spec: CommandSpec[C, R],
     stop: asyncio.Event,
 ) -> None:
     """Poll and dispatch until ``stop`` is set.
@@ -624,6 +892,7 @@ async def run_loop(
                 settings=settings,
                 handler=handler,
                 reporter=reporter,
+                spec=spec,
                 stop=stop,
             )
         except Exception as exc:
