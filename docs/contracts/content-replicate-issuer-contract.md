@@ -320,8 +320,8 @@ same one (fix the spec; act on the host).
 `invalid_source` stays separate by the same test: not `blob_expired` (the bytes were never named, so
 re-fetching fixes nothing) and not `invalid_destination` (the remedy is a bug in the issuer's
 plumbing, not a bad RepSpec). It is a sixth token where co-core 0.9.4's `ReplicationFailedEvent`
-docstring registers five, so **that docstring needs a matching entry** — a cannobserv issue, not an
-edit from here. `reason` is a plain `str`, so nothing on the wire breaks meanwhile; the cost is a
+docstring registers five, so that docstring needs a matching entry —
+[cannobserv#330](https://github.com/CannObserv/cannobserv/issues/330). `reason` is a plain `str`, so nothing on the wire breaks meanwhile; the cost is a
 consumer-facing registry one row short, the drift that docstring asks to be kept in step.
 
 ---
