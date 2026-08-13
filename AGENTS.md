@@ -31,7 +31,7 @@ Python ≥3.12, uv, pytest, ruff. `ty` is available as a **non-gating** type che
 uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
 ```
 
-Auth is ADC: on the VM the SA key at `GOOGLE_APPLICATION_CREDENTIALS` (`/etc/replicator/co-pypi-reader.json`), in CI a keyless WIF token. Pin the current minor — `>=0.9.4,<0.10`. The **patch** floor is load-bearing, not tidiness: the change-bus payloads are `extra="ignore"`, so on an older wheel a model constructed with fields it does not have yet succeeds and silently discards them. Raise the floor with every co-core feature the code starts depending on, or a version skew publishes facts that look right and carry nothing (#10). Both floors since then fail *loudly* instead: 0.8.0 makes `info_source_id` required on all three fetch payloads, so a skew is a ValidationError at construction (#19, #28); 0.9.4 cuts the replicate contracts, so a skew is an ImportError at module load and never reaches a running worker (#29).
+Auth is ADC: on the VM the SA key at `GOOGLE_APPLICATION_CREDENTIALS` (`/etc/replicator/co-pypi-reader.json`), in CI a keyless WIF token. Pin the current minor — `>=0.9.4,<0.10`. The **patch** floor is load-bearing, not tidiness: the change-bus payloads are `extra="ignore"`, so on an older wheel a model constructed with fields it does not have yet succeeds and silently discards them. Raise the floor with every co-core feature the code starts depending on, or a version skew publishes facts that look right and carry nothing (#10). Both floors since fail *loudly* instead: 0.8.0 requires `info_source_id` on all three fetch payloads, so a skew is a ValidationError at construction (#19, #28); 0.9.4 cuts the replicate contracts, so it is an ImportError at load and never reaches a running worker (#29).
 
 <!-- BEGIN socraticode-policy -->
 ## Code Exploration Policy
@@ -117,8 +117,9 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
   are keyed per *occurrence* (`content_fingerprint:command_id`,
   `command_id:occurred_at`), so nothing an issuer waits on can collapse — storage
   identity and correlation identity are not interchangeable. `info_source_id`
-  rides both and is **echoed, never read**: the `tests/test_boundaries.py`
-  carve-out is one field wide, and widening it edits the charter (#28).
+  rides both and is **echoed, never read**, as is replicate's
+  `info_item_rep_spec_id`: each `test_boundaries.py` carve-out is one field
+  wide, and adding one edits the charter (#28, #29).
 - **Store, then publish — never the reverse.** A fact pointing at bytes that are
   not there is unrepairable by the consumer; stored bytes with no fact repair
   themselves on the reclaim.
