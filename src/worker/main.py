@@ -30,7 +30,7 @@ from src.core.logging import configure_logging, get_logger
 from src.storage.local import LocalBlobStore, ensure_directory
 from src.storage.sweeper import BlobUsage
 from src.worker.handler import build_handler
-from src.worker.loop import run_loop
+from src.worker.loop import FETCH_SPEC, run_loop
 from src.worker.policy import (
     FetchPolicyMap,
     build_policy_reader,
@@ -356,6 +356,11 @@ async def run(
                 # closes a pending entry off one consumer group either way (#9,
                 # co-core cannobserv#270).
                 reporter=build_failure_reporter(client=client),
+                # Which command stream this loop is: the payload type it accepts,
+                # its dedupe namespace, its journal label, and how it builds a
+                # failure report. A second loop over content.replicate is another
+                # run_loop with another spec, not another module (#29).
+                spec=FETCH_SPEC,
                 stop=stop,
             ),
             run_sweeper(root=blob_dir, settings=settings, usage=usage, stop=stop),

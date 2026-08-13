@@ -33,7 +33,7 @@ from co_core.pure.models.changes import (
 
 from src.core.errors import FailureReason, PermanentFetchError
 from src.worker.loop import (
-    DEDUPE_KEY_PREFIX,
+    FETCH_SPEC,
     Outcome,
     dead_letter_anomaly,
     poll_once,
@@ -186,7 +186,7 @@ async def test_a_transient_failure_announces_nothing(fake_redis, consumer, setti
 
 async def test_a_deduped_command_announces_nothing(fake_redis, consumer, settings):
     """A duplicate is not a failure — the first delivery already produced the fact."""
-    await fake_redis.set("replicator:cmd:cmd-dupe", "seen")
+    await fake_redis.set(FETCH_SPEC.dedupe_key("cmd-dupe"), "seen")
     await fake_redis.xadd(TOPIC, make_command(command_id="cmd-dupe"))
     reports = collected_reports()
 
@@ -270,7 +270,7 @@ async def test_a_blank_command_id_is_refused_before_anything_can_use_it(
     # No fact: there is no command_id to key one on. No dedupe key either — the
     # bare prefix is the collision this guard exists to prevent.
     assert reports.reports == []
-    assert await fake_redis.exists(f"{DEDUPE_KEY_PREFIX}") == 0
+    assert await fake_redis.exists(FETCH_SPEC.dedupe_key("")) == 0
     assert await dlq_reasons(fake_redis) == ["command_id is blank"]
 
 
@@ -438,6 +438,7 @@ async def test_the_loop_publishes_a_real_fact_end_to_end(fake_redis, consumer, s
         handler=handler,
         settings=settings,
         reporter=build_failure_reporter(client=fake_redis),
+        spec=FETCH_SPEC,
     )
 
     (fact,) = await decoded_facts(fake_redis, streams.CONTENT_BLOBS)

@@ -68,10 +68,10 @@ class FailureReason(StrEnum):
 
 
 class HandlerError(RuntimeError):
-    """Base for failures a ``content.fetch`` handler reports deliberately."""
+    """Base for failures a command handler reports deliberately."""
 
 
-class TransientFetchError(HandlerError):
+class TransientError(HandlerError):
     """The work may succeed later: leave the message unacked for redelivery.
 
     Exempt from the delivery ceiling — a long-but-genuine outage must never
@@ -83,16 +83,18 @@ class TransientFetchError(HandlerError):
     """
 
 
-class PermanentFetchError(HandlerError):
+class PermanentError(HandlerError):
     """The work will never succeed for this command: dead-letter it now.
 
     Retrying a deterministically bad command only burns the ceiling and delays
     the operator seeing it in ``<topic>.dlq``.
 
-    ``reason`` is required. It is what the ``fetch_failed`` fact reports, and a
-    default would quietly relabel a specific failure as a generic one on the
-    wire — the sort of drift no test notices and every consumer inherits.
-    ``status_code`` is set only where there was one (``HTTP_STATUS``).
+    ``reason`` is required. It is what the failure fact reports, and a default
+    would quietly relabel a specific failure as a generic one on the wire — the
+    sort of drift no test notices and every consumer inherits. ``status_code``
+    is set only where there was one (``HTTP_STATUS``); a command stream whose
+    failure fact models no status leaves it ``None``, which is why the loop
+    passes it through rather than requiring it.
     """
 
     def __init__(
@@ -101,3 +103,16 @@ class PermanentFetchError(HandlerError):
         super().__init__(message)
         self.reason = reason
         self.status_code = status_code
+
+
+# The per-stream leaves. The loop catches the **bases** above, so a second
+# command stream reports failure in its own vocabulary without the retry-or-not
+# decision learning that it exists (#29). Kept as distinct types rather than
+# collapsed into the bases because the raise sites are what a reader greps for:
+# ``PermanentFetchError`` in the byte path says which handler is speaking.
+class TransientFetchError(TransientError):
+    """A ``content.fetch`` handler's transient failure."""
+
+
+class PermanentFetchError(PermanentError):
+    """A ``content.fetch`` handler's permanent failure."""

@@ -17,7 +17,7 @@ from src.core.errors import FailureReason, PermanentFetchError, TransientFetchEr
 from src.storage.local import LocalBlobStore
 from src.storage.sweeper import BlobUsage
 from src.worker.handler import build_handler
-from src.worker.loop import DEDUPE_KEY_PREFIX, Outcome, _delivery_count, poll_once
+from src.worker.loop import FETCH_SPEC, Outcome, _delivery_count, poll_once
 from tests.worker.conftest import GROUP, TOPIC, FakeFetcher, make_command, process_one
 
 
@@ -35,7 +35,7 @@ async def test_a_transient_failure_leaves_the_message_pending(fake_redis, consum
     pending = await fake_redis.xpending(TOPIC, GROUP)
     assert pending["pending"] == 1
     assert await fake_redis.xlen(dlq_name(TOPIC)) == 0
-    assert not await fake_redis.exists(f"{DEDUPE_KEY_PREFIX}cmd-transient")
+    assert not await fake_redis.exists(FETCH_SPEC.dedupe_key("cmd-transient"))
 
 
 async def test_a_redis_connection_error_counts_as_transient(fake_redis, consumer, settings):

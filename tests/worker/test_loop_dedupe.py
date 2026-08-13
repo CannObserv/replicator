@@ -8,7 +8,7 @@ import json
 
 from co_core.pure.models.changes import ContentFetchCommand
 
-from src.worker.loop import DEDUPE_KEY_PREFIX, Outcome, poll_once
+from src.worker.loop import FETCH_SPEC, Outcome, poll_once
 from tests.worker.conftest import (
     GROUP,
     TOPIC,
@@ -49,7 +49,7 @@ async def test_the_dedupe_key_carries_the_configured_ttl(fake_redis, consumer, s
     message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
     await process_one(fake_redis, consumer, settings, message, noop_handler)
 
-    ttl = await fake_redis.ttl(f"{DEDUPE_KEY_PREFIX}cmd-ttl")
+    ttl = await fake_redis.ttl(FETCH_SPEC.dedupe_key("cmd-ttl"))
     assert 0 < ttl <= settings.dedupe_ttl_seconds
 
 
@@ -64,7 +64,7 @@ async def test_a_failed_handler_leaves_no_dedupe_key(fake_redis, consumer, setti
     outcome = await process_one(fake_redis, consumer, settings, message, handler)
 
     assert outcome is Outcome.RETRY
-    assert not await fake_redis.exists(f"{DEDUPE_KEY_PREFIX}cmd-boom")
+    assert not await fake_redis.exists(FETCH_SPEC.dedupe_key("cmd-boom"))
 
 
 async def test_a_dead_lettered_command_leaves_no_dedupe_key(fake_redis, consumer, settings):
@@ -78,7 +78,7 @@ async def test_a_dead_lettered_command_leaves_no_dedupe_key(fake_redis, consumer
     message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
     await process_one(fake_redis, consumer, settings, message, unreachable_handler)
 
-    assert not await fake_redis.exists(f"{DEDUPE_KEY_PREFIX}cmd-future-2")
+    assert not await fake_redis.exists(FETCH_SPEC.dedupe_key("cmd-future-2"))
 
 
 async def test_request_options_are_not_part_of_the_command_identity(fake_redis, consumer, settings):

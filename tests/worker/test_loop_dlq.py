@@ -15,7 +15,7 @@ from co_core.pure.adapters.bus.streams import dlq_name
 from co_core.pure.models.changes import BlobAvailableEvent, ContentFetchCommand
 
 from src.core.errors import FailureReason, PermanentFetchError
-from src.worker.loop import Outcome, dead_letter_anomaly, poll_once, process_message
+from src.worker.loop import FETCH_SPEC, Outcome, dead_letter_anomaly, poll_once, process_message
 from tests.worker.conftest import (
     GROUP,
     TOPIC,
@@ -130,6 +130,7 @@ async def test_dead_lettered_frames_carry_their_reason(fake_redis, consumer, set
         settings=settings,
         handler=handler,
         reporter=collected_reports(),
+        spec=FETCH_SPEC,
     )
 
     entry = (await fake_redis.xrange(dlq_name(TOPIC)))[0][1]
