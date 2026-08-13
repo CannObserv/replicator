@@ -78,15 +78,15 @@ wheels = [
 
 [[package]]
 name = "co-core"
-version = "0.8.0"
+version = "0.9.4"
 source = { registry = ".wheelhouse" }
 dependencies = [
     { name = "dateparser" },
     { name = "pydantic" },
 ]
-sdist = { path = "co_core-0.8.0.tar.gz" }
+sdist = { path = "co_core-0.9.4.tar.gz" }
 wheels = [
-    { path = "co_core-0.8.0-py3-none-any.whl" },
+    { path = "co_core-0.9.4-py3-none-any.whl" },
 ]
 
 [package.optional-dependencies]
@@ -100,15 +100,15 @@ extract = [
 
 [[package]]
 name = "co-core-aio"
-version = "0.8.0"
+version = "0.9.4"
 source = { registry = ".wheelhouse" }
 dependencies = [
     { name = "co-core" },
     { name = "httpx" },
 ]
-sdist = { path = "co_core_aio-0.8.0.tar.gz" }
+sdist = { path = "co_core_aio-0.9.4.tar.gz" }
 wheels = [
-    { path = "co_core_aio-0.8.0-py3-none-any.whl" },
+    { path = "co_core_aio-0.9.4-py3-none-any.whl" },
 ]
 
 [package.optional-dependencies]
@@ -934,8 +934,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "co-core", extras = ["extract"], specifier = ">=0.8.0,<0.9" },
-    { name = "co-core-aio", extras = ["bus"], specifier = ">=0.8.0,<0.9" },
+    { name = "co-core", extras = ["extract"], specifier = ">=0.9.4,<0.10" },
+    { name = "co-core-aio", extras = ["bus"], specifier = ">=0.9.4,<0.10" },
     { name = "fastapi", specifier = ">=0.126.0,<1" },
     { name = "pydantic", specifier = ">=2.9,<3" },
     { name = "pydantic-settings", specifier = ">=2.5.0,<3" },
