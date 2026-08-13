@@ -22,6 +22,7 @@ invariants free to drift.
 """
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -305,6 +306,11 @@ def _report_or_none[C: Command, R: Report](
     ``**kwargs`` passthrough type-checks as ``object`` and would have hidden
     exactly the kind of mismatch this function exists to survive.
     """
+    # ``Exception``, never ``BaseException`` — the same line the handler ``try``
+    # in ``process_message`` holds (CR #11). ``asyncio.CancelledError`` is a
+    # ``BaseException``, so shutdown propagates through here untouched; widening
+    # this would swallow a SIGTERM mid-dead-letter and hang the wind-down inside
+    # a function whose whole purpose is to never be the thing that blocks.
     try:
         return spec.build_report(
             command, reason=reason, status_code=status_code, attempts=attempts, detail=detail
@@ -642,6 +648,35 @@ async def _close[R: Report](
     )
 
 
+# Field names ``logging`` will not let an ``extra`` dict carry: every attribute a
+# ``LogRecord`` already owns, plus the two the formatter adds later. Derived from
+# an actual record rather than hardcoded, so it tracks the interpreter — 3.12
+# added ``taskName``, and a list written from memory would have missed it.
+_RESERVED_LOG_FIELDS = frozenset(vars(logging.LogRecord("", 0, "", 0, "", None, None))) | {
+    "message",
+    "asctime",
+}
+
+
+def _loggable(detail: dict[str, object]) -> tuple[dict[str, object], list[str]]:
+    """Split ``detail`` into what a log ``extra`` can carry and what it cannot.
+
+    ``logging.makeRecord`` raises ``KeyError`` on a key a ``LogRecord`` already
+    owns, so a ``detail`` naming ``module`` or ``name`` would raise *inside* the
+    dead-letter — after the DLQ write, before the log line — leaving a frame that
+    is neither acked nor announced. That is CR #2's permanent jam reached through
+    a different door, and ``CommandSpec.describe`` is the seam that opens it: it
+    is the one place a stream author chooses arbitrary field names (CR #14).
+
+    Filtered rather than renamed, and the dropped names are returned so the
+    caller can put them on the record — a silently vanishing diagnostic is what
+    CR #1 was about, and this must not reintroduce it one field at a time.
+    """
+    safe = {key: value for key, value in detail.items() if key not in _RESERVED_LOG_FIELDS}
+    dropped = sorted(key for key in detail if key in _RESERVED_LOG_FIELDS)
+    return safe, dropped
+
+
 async def _dead_letter(
     consumer: AsyncBusConsumer,
     message_id: str,
@@ -668,6 +703,7 @@ async def _dead_letter(
         message_id,
         {**fields, "dlq_reason": reason, "dlq_original_id": message_id},
     )
+    safe, dropped = _loggable(detail or {})
     logger.warning(
         "dead-lettered a frame",
         extra={
@@ -675,7 +711,8 @@ async def _dead_letter(
             "reason": reason,
             "message_id": message_id,
             "dlq_id": dlq_id,
-            **(detail or {}),
+            **safe,
+            **({"dropped_detail_keys": dropped} if dropped else {}),
         },
     )
     return Outcome.DEAD_LETTERED

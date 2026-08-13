@@ -4,6 +4,12 @@
 to do with a message. The ``reason`` they now carry is what the loop puts on the
 ``fetch_failed`` fact, so it is the handler — the only thing that knows which of
 three permanent conditions fired — that has to name it.
+
+Since #29 there are two layers: the loop catches ``PermanentError`` /
+``TransientError`` so a second command stream needs nothing from it, and the
+``*FetchError`` leaves narrow the vocabulary back to ``FailureReason``. Both
+layers are tested — the base's contract is what a replicate handler will rely
+on, and it has no other coverage (CR #12).
 """
 
 import pytest
@@ -11,7 +17,9 @@ import pytest
 from src.core.errors import (
     FailureReason,
     HandlerError,
+    PermanentError,
     PermanentFetchError,
+    TransientError,
     TransientFetchError,
 )
 
@@ -34,6 +42,46 @@ def test_the_reason_is_required():
     """A raise site that does not classify itself would emit an unlabelled fact."""
     with pytest.raises(TypeError):
         PermanentFetchError("unclassified")  # type: ignore[call-arg]
+
+
+def test_the_reason_is_required_on_the_base_too():
+    """CR #12: the leaf narrows the type, so it cannot speak for the base.
+
+    ``PermanentFetchError`` declares its own ``__init__`` purely to require a
+    ``FailureReason``, which means the test above exercises *that* signature and
+    says nothing about ``PermanentError``'s. A replicate handler raises the base,
+    so a change making ``reason`` optional there would reach the wire as an
+    unlabelled fact with every existing test still green.
+    """
+    with pytest.raises(TypeError):
+        PermanentError("unclassified")  # type: ignore[call-arg]
+
+
+def test_the_base_accepts_a_token_that_is_not_one_of_fetchs():
+    """The vocabulary is producer-owned per stream (CR #5).
+
+    The point of typing the base's ``reason`` as ``str`` is that replicate's
+    refusals — settled in ``docs/contracts/content-replicate-issuer-contract.md``
+    — are deliberately not ``FailureReason`` members. If this ever has to import
+    an enum to pass, the split has been undone.
+    """
+    exc = PermanentError("the alias is not provisioned here", reason="alias_unknown")
+
+    assert exc.reason == "alias_unknown"
+    assert exc.status_code is None
+
+
+def test_the_loop_catches_the_bases_not_the_leaves():
+    """What makes a second command stream possible without touching the loop.
+
+    ``src.worker.loop`` catches ``PermanentError`` / ``TransientError``; if the
+    leaves stopped descending from them, fetch failures would fall through to the
+    unclassified path and burn the delivery ceiling instead of dead-lettering.
+    """
+    assert issubclass(PermanentFetchError, PermanentError)
+    assert issubclass(TransientFetchError, TransientError)
+    assert issubclass(PermanentError, HandlerError)
+    assert issubclass(TransientError, HandlerError)
 
 
 def test_the_reason_tokens_are_the_wire_tokens():

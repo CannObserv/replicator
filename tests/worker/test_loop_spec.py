@@ -75,6 +75,11 @@ REPLICATE_SPEC: CommandSpec[ContentReplicateCommand, ReplicateReport] = CommandS
 )
 
 
+def _raising_builder(command, **cause):
+    """A spec whose report builder is broken — see the dead-letter test below."""
+    raise TypeError("this spec's builder is broken")
+
+
 def make_replicate_command(command_id: str = "rep-1") -> dict[str, str]:
     """A well-formed ``content.replicate`` wire frame, through co-core's own encoder."""
     return to_wire(
@@ -295,5 +300,35 @@ async def test_a_report_builder_that_raises_still_dead_letters_the_frame(
     assert any(r.message == "could not build a failure report" for r in caplog.records)
 
 
-def _raising_builder(command, **cause):
-    raise TypeError("this spec's builder is broken")
+async def test_a_describe_naming_a_log_record_attribute_cannot_break_the_dead_letter(
+    fake_redis, consumer, settings, caplog
+):
+    """CR #14: ``describe`` is the one place a stream author picks log field names.
+
+    ``logging`` raises ``KeyError`` if ``extra`` carries a key a ``LogRecord``
+    already owns — ``module``, ``name``, ``process`` and eighteen others. That
+    would fire *inside* the dead-letter, on the blank-``command_id`` path, so the
+    frame would neither dead-letter nor ack: the same permanent jam CR #2 fixed,
+    reached through a different door. The reserved names are filtered rather than
+    trusted, and what was dropped is named so the loss is not silent.
+    """
+    colliding = CommandSpec(
+        command_type=ContentReplicateCommand,
+        label=streams.CONTENT_REPLICATE,
+        dedupe_segment="replicate-colliding",
+        build_report=REPLICATE_SPEC.build_report,
+        describe=lambda command: {"module": "shadowed", "destination": command.destination},
+    )
+    await fake_redis.xadd(TOPIC, make_replicate_command(command_id=""))
+
+    message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
+    with caplog.at_level("WARNING", logger="src.worker.loop"):
+        outcome = await process_one(
+            fake_redis, consumer, settings, message, unreachable_handler, spec=colliding
+        )
+
+    assert outcome is Outcome.DEAD_LETTERED
+    record = next(r for r in caplog.records if r.message == "dead-lettered a frame")
+    assert record.destination == "reports/2026/abcd.pdf"  # the safe key survived
+    assert record.module != "shadowed"  # the reserved one did not shadow it
+    assert record.dropped_detail_keys == ["module"]  # and its loss is on the record
