@@ -26,7 +26,8 @@ from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.envelope import to_wire
 from co_core.pure.models.changes import ContentReplicateCommand
 
-from src.core.errors import FailureReason, PermanentError
+from src.core.errors import PermanentError
+from src.worker import loop
 from src.worker.loop import FETCH_SPEC, CommandSpec, Outcome, poll_once
 from tests.worker.conftest import (
     GROUP,
@@ -48,7 +49,9 @@ class ReplicateReport:
 
     command_id: str
     info_item_rep_spec_id: str
-    reason: FailureReason
+    # ``str``, not ``FailureReason``: the replicate tokens are producer-owned and
+    # deliberately absent from fetch's enum (CR #5, #10).
+    reason: str
     attempts: int | None = None
     detail: str | None = None
     # No ``status_code`` field at all — ``ReplicationFailedEvent`` models none,
@@ -68,6 +71,7 @@ REPLICATE_SPEC: CommandSpec[ContentReplicateCommand, ReplicateReport] = CommandS
         info_item_rep_spec_id=command.info_item_rep_spec_id,
         **cause,
     ),
+    describe=lambda command: {"destination": command.destination},
 )
 
 
@@ -193,7 +197,10 @@ async def test_the_specs_report_builder_is_what_closes_the_command(fake_redis, c
     async def handler(command: ContentReplicateCommand) -> None:
         raise PermanentError(
             "the alias is not provisioned here",
-            reason=FailureReason.INVALID_REQUEST_OPTIONS,
+            # A replicate token, not one of fetch's — this is the vocabulary
+            # split the ``str`` typing exists for, settled in the contract's
+            # "What Replicator refuses" (CR #5, #10).
+            reason="alias_unknown",
             status_code=412,
         )
 
@@ -208,6 +215,7 @@ async def test_the_specs_report_builder_is_what_closes_the_command(fake_redis, c
     assert report.command_id == "rep-refused"
     assert report.info_item_rep_spec_id == "iirs-1"
     assert report.detail == "the alias is not provisioned here"
+    assert report.reason == "alias_unknown"
     assert not hasattr(report, "status_code")
 
 
@@ -222,3 +230,70 @@ def test_each_spec_labels_its_own_stream(spec, expected):
     """The journal line the operator triages a jam from. One hardcoded name would
     have mislabelled half of them once there were two streams."""
     assert spec.label == expected
+
+
+def test_every_spec_defined_here_has_its_own_dedupe_segment():
+    """CR #8: a shared segment reintroduces exactly what the namespacing prevents.
+
+    ``dedupe_segment`` is free text, and two specs sharing one would silently
+    dedupe each other's commands — the failure the per-stream key exists to stop,
+    reached from inside rather than from a colliding ``command_id``. Nothing in
+    the type system says the segments are distinct, so it is asserted, over every
+    spec ``src/worker/loop.py`` exposes plus the local one, so the check grows
+    with the module instead of naming today's two.
+    """
+    specs = [value for value in vars(loop).values() if isinstance(value, CommandSpec)]
+    specs.append(REPLICATE_SPEC)
+    assert len(specs) >= 2, "the uniqueness check is vacuous with fewer than two specs"
+
+    segments = [spec.dedupe_segment for spec in specs]
+    assert len(segments) == len(set(segments)), segments
+
+
+async def test_a_report_builder_that_raises_still_dead_letters_the_frame(
+    fake_redis, consumer, settings, caplog
+):
+    """CR #2: a broken spec must not become an unrecoverable jam.
+
+    The builder is called from inside ``_handle_unclassified`` too, which is
+    where the delivery ceiling lives — so an unguarded raise there means the
+    ceiling can never dead-letter the frame. Left alone it strands the message in
+    the PEL, ``claim_stale`` returns it, and the loop re-raises forever: a
+    programming error in one spec taking down the stream permanently, with no DLQ
+    entry to triage from.
+
+    Degrading to no-fact is the right trade. The frame still dead-letters, and
+    contract MUST-6 already makes the issuer's reaper the backstop for a command
+    that closes without one.
+    """
+    broken = CommandSpec(
+        command_type=ContentReplicateCommand,
+        label=streams.CONTENT_REPLICATE,
+        dedupe_segment="replicate-broken",
+        build_report=_raising_builder,
+        describe=lambda command: {"destination": command.destination},
+    )
+    await_reports: list[object] = []
+
+    async def collect(report: object) -> None:
+        await_reports.append(report)
+
+    async def handler(command: ContentReplicateCommand) -> None:
+        raise PermanentError("refused", reason="alias_unknown")
+
+    await fake_redis.xadd(TOPIC, make_replicate_command(command_id="rep-broken-spec"))
+    message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
+
+    with caplog.at_level("ERROR", logger="src.worker.loop"):
+        outcome = await process_one(
+            fake_redis, consumer, settings, message, handler, reporter=collect, spec=broken
+        )
+
+    assert outcome is Outcome.DEAD_LETTERED
+    assert await_reports == []  # no fact — there was no report to publish
+    assert (await fake_redis.xpending(TOPIC, GROUP))["pending"] == 0  # not stranded
+    assert any(r.message == "could not build a failure report" for r in caplog.records)
+
+
+def _raising_builder(command, **cause):
+    raise TypeError("this spec's builder is broken")

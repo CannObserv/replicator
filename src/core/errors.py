@@ -7,20 +7,25 @@ exception type the byte path might raise (see the transient tuple in
 ``src.worker.loop``, which is the fallback for what it did not anticipate).
 
 Since #9 the vocabulary has a second dimension. *Retry-or-not* is the exception
-type; *why* is the ``reason``, which the loop copies onto the ``fetch_failed``
+type; *why* is the ``reason``, which the loop copies onto the stream's failure
 fact so an issuer can close a pending command with a cause instead of a timeout.
 The distinction matters because three unrelated permanent conditions — a 404, an
 unfetchable scheme, an oversized body — all raise one exception type, and by the
 time ``process_message`` catches it the only thing separating them would be the
 message string. Naming the reason at the raise site is what keeps the loop from
 having to parse it back out.
+
+**Two layers since #29.** ``TransientError`` / ``PermanentError`` are what the
+loop catches, so a second command stream classifies its own failures without the
+retry-or-not decision learning it exists; the ``*FetchError`` leaves are what the
+byte path raises, so a raise site still says which handler is speaking.
 """
 
 from enum import StrEnum
 
 
 class FailureReason(StrEnum):
-    """The ``reason`` token on a ``fetch_failed`` fact.
+    """Reason tokens: ``content.fetch``'s, plus the two the loop owns.
 
     A **wire contract** with every ``content.blobs`` consumer, not a local label:
     co-core deliberately types ``FetchFailedEvent.reason`` as a plain ``str``
@@ -28,6 +33,15 @@ class FailureReason(StrEnum):
     ``extra="ignore"`` consumer — which puts the whole of the compatibility
     burden on this end. Adding a member is additive and safe; renaming one
     changes what Watcher branches on.
+
+    **Not every member belongs to fetch (#29).** ``UNSUPPORTED_SCHEMA_VERSION``
+    and ``HANDLER_ERROR`` are raised by ``src.worker.loop`` rather than by the
+    byte path, so they are emitted for *whatever* stream the loop is running and
+    will reach ``content.artifacts`` as well once replicate lands. The rest are
+    fetch's own. A second stream's refusals (``alias_unknown``,
+    ``invalid_destination``, …) do **not** belong here — the vocabulary is
+    producer-owned per stream, which is why ``ReportBuilder`` types ``reason`` as
+    a plain ``str``.
 
     ``StrEnum`` so ``model_dump_json`` writes the token itself. Mirrors the
     taxonomy in ``docs/contracts/content-fetch-issuer-reference.md``; the two are
@@ -95,11 +109,15 @@ class PermanentError(HandlerError):
     is set only where there was one (``HTTP_STATUS``); a command stream whose
     failure fact models no status leaves it ``None``, which is why the loop
     passes it through rather than requiring it.
+
+    ``reason`` is typed ``str`` **here** because the token vocabulary is
+    producer-owned per stream (CR #5): replicate refuses with ``alias_unknown``
+    and friends, which are deliberately not ``FailureReason`` members. The
+    per-stream leaves narrow it back — see ``PermanentFetchError`` — so a raise
+    site still gets its own vocabulary checked rather than accepting any string.
     """
 
-    def __init__(
-        self, message: str, *, reason: FailureReason, status_code: int | None = None
-    ) -> None:
+    def __init__(self, message: str, *, reason: str, status_code: int | None = None) -> None:
         super().__init__(message)
         self.reason = reason
         self.status_code = status_code
@@ -115,4 +133,15 @@ class TransientFetchError(TransientError):
 
 
 class PermanentFetchError(PermanentError):
-    """A ``content.fetch`` handler's permanent failure."""
+    """A ``content.fetch`` handler's permanent failure.
+
+    Narrows ``reason`` back to ``FailureReason``. The base is permissive so a
+    second stream can carry its own tokens; this leaf is where fetch's raise
+    sites get the enum checked, so a typo'd token is still a type error rather
+    than a string that reaches the wire (CR #5).
+    """
+
+    def __init__(
+        self, message: str, *, reason: FailureReason, status_code: int | None = None
+    ) -> None:
+        super().__init__(message, reason=reason, status_code=status_code)
