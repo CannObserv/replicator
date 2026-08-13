@@ -168,6 +168,15 @@ class LocalBlobStore:
         """Whether these bytes are already stored."""
         return self._path_for(fingerprint).is_file()
 
+    def uri_for(self, fingerprint: str) -> str:
+        """The ``file://`` URI ``store`` would return for these bytes.
+
+        Same derivation as ``store``'s return value — ``_path_for`` then
+        ``as_uri`` — so a caller can compare a URI it was handed against one it
+        derived, rather than parsing the handed one into a path (#29, T3a).
+        """
+        return self._path_for(fingerprint).as_uri()
+
     def open(self, fingerprint: str) -> bytes:
         """Read back the bytes stored under ``fingerprint``."""
         return self._path_for(fingerprint).read_bytes()

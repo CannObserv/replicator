@@ -28,6 +28,20 @@ class BlobStore(Protocol):
         """Whether these bytes are already stored."""
         ...
 
+    def uri_for(self, fingerprint: str) -> str:
+        """The URI this backend *would* announce for ``fingerprint``.
+
+        Exposed for the replicate path (#29, contract T3a). A ``content.replicate``
+        command carries a ``blob_uri`` the issuer got from a ``blob_available``
+        fact, and the consumer has to decide whether that string names a blob
+        **this** store minted. Comparing against a freshly derived URI answers it
+        without ever treating the message's value as a path — which is what keeps
+        a read-side traversal off a service that writes to permanent public
+        stores. ``store`` already returns this value; this is the same derivation
+        without the write.
+        """
+        ...
+
     def open(self, fingerprint: str) -> bytes:
         """Read back the bytes stored under ``fingerprint``."""
         ...

@@ -81,6 +81,68 @@ class FailureReason(StrEnum):
     # spends three MUSTs preventing. The frame dead-letters and stays silent.
 
 
+class ReplicateReason(StrEnum):
+    """The ``reason`` token on a ``replication_failed`` fact (#29).
+
+    Separate from ``FailureReason`` because the vocabulary is **producer-owned
+    per stream**, which is why ``ReportBuilder`` types ``reason`` as a plain
+    ``str``: merging the two would give every fetch consumer a set of tokens it
+    can never see and every replicate consumer the same, and the first token
+    needed by only one of them would reopen the question anyway.
+
+    The two the *loop* owns — ``unsupported_schema_version`` and
+    ``handler_error`` — stay on ``FailureReason`` and are emitted for whichever
+    stream is running, so they reach ``content.artifacts`` too. Only the
+    handler's own refusals live here.
+
+    Normative source: ``docs/contracts/content-replicate-issuer-contract.md``,
+    "What Replicator refuses". co-core registers these in
+    ``ReplicationFailedEvent``'s docstring; the two are edited together, and
+    ``invalid_source`` is the one still awaiting its row there
+    (cannobserv#330).
+    """
+
+    ALIAS_UNKNOWN = "alias_unknown"
+    """The ``credentials_alias`` is not provisioned on this host (T2)."""
+
+    PROVIDER_DISABLED = "provider_disabled"
+    """The ``provider`` is not enabled here (T5).
+
+    Separate from ``ALIAS_UNKNOWN`` because the remedies differ: fix the spec
+    versus act on the host.
+    """
+
+    INVALID_DESTINATION = "invalid_destination"
+    """The rendered ``destination`` escapes the alias root, or ``object_options``
+    names a container the alias does not allow (T3).
+
+    One token for both guards, ``INVALID_REQUEST_OPTIONS``' reasoning: the
+    issuer's remedy is identical either way, and ``detail`` names which refused.
+    """
+
+    INVALID_SOURCE = "invalid_source"
+    """``blob_uri`` is not a reference this store minted (T3a).
+
+    Not ``BLOB_EXPIRED``: the bytes were never named, so re-fetching fixes
+    nothing. Not ``INVALID_DESTINATION``: the fault is in the issuer's plumbing,
+    not the RepSpec.
+    """
+
+    BLOB_EXPIRED = "blob_expired"
+    """The blob is gone. Terminal — the remedy is the issuer's (MUST-7 inverted).
+
+    Replicator has no URL on a replicate command, and issuing a fetch for itself
+    would make the consumer an issuer.
+    """
+
+    DESTINATION_CONFLICT = "destination_conflict"
+    """The destination already holds **different** bytes (T4).
+
+    The one refusal that is *not* pre-credential: learning that a destination
+    holds differing bytes takes an authenticated read.
+    """
+
+
 class HandlerError(RuntimeError):
     """Base for failures a command handler reports deliberately."""
 
@@ -130,6 +192,32 @@ class PermanentError(HandlerError):
 # ``PermanentFetchError`` in the byte path says which handler is speaking.
 class TransientFetchError(TransientError):
     """A ``content.fetch`` handler's transient failure."""
+
+
+class TransientReplicateError(TransientError):
+    """A ``content.replicate`` handler's transient failure.
+
+    A provider 5xx or a broker hiccup: still retrying, and still silent, which is
+    why the replicate contract keeps MUST-6's reaper obligation verbatim.
+    """
+
+
+class PermanentReplicateError(PermanentError):
+    """A ``content.replicate`` handler's permanent failure.
+
+    Narrows ``reason`` to ``ReplicateReason`` for the reason
+    ``PermanentFetchError`` narrows it to ``FailureReason``: the base stays
+    permissive so each stream carries its own tokens, and the leaf is where a
+    raise site gets its own vocabulary checked.
+
+    No ``status_code`` in the signature: ``ReplicationFailedEvent`` models none,
+    because no documented refusal reports a provider's HTTP status as its own
+    outcome — ``destination_conflict`` consumes the 412 rather than reporting it.
+    A provider's status belongs in ``detail`` until a consumer branches on it.
+    """
+
+    def __init__(self, message: str, *, reason: ReplicateReason) -> None:
+        super().__init__(message, reason=reason)
 
 
 class PermanentFetchError(PermanentError):

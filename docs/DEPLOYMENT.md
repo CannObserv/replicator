@@ -110,5 +110,13 @@ In `/etc/replicator/.env` (read by the service):
 - `REPLICATOR_ERROR_BACKOFF_BASE_SECONDS` / `REPLICATOR_ERROR_BACKOFF_MAX_SECONDS` — backoff for a poll *cycle* that raised (broker outage); defaults `1.0` / `30.0`, escalating `base * 2**(n-1)`
 - `REPLICATOR_MAX_CONSECUTIVE_CYCLE_FAILURES` — consecutive failed cycles before the worker exits so the unit restarts; default `20` (~8 min at the default backoff). Paired with the unit's `StartLimitIntervalSec=3600` / `StartLimitBurst=3`
 - `REPLICATOR_DEDUPE_TTL_SECONDS` — lifetime of the `replicator:cmd:<stream>:<command_id>` dedupe key; default `86400`
+- `REPLICATOR_REPLICATE_CONSUMER_GROUP` — the `content.replicate` group; default `replicator.replicate`. Separate from the fetch group because `claim_stale` walks a group's PEL, so a shared name would let recovery on one stream reach into the other's pending entries
+- `REPLICATOR_REPLICATION_ALIASES_FILE` — path to the JSON alias table; **unset by default, and that is the safe posture**. Nothing provisioned means every `content.replicate` command is refused with `alias_unknown`, so enabling replication to a destination is an explicit operator act on the VM rather than a consequence of a message arriving (contract T5 — it matters most for `ia`, whose items cannot be deleted). A *path* rather than the table itself because the provisioned set is host state but is a table, and one variable per alias per field is a shape env does not hold. Format:
+
+  ```json
+  { "primary": { "provider": "gcs", "bucket": "co-artifacts", "prefix": "replications" } }
+  ```
+
+  A binding names **where**, never how to authenticate — the credential is resolved locally from ADC. Fields the binding does not declare are dropped at load, so a key pasted in here never reaches the worker's memory. An unreadable file provisions nothing (logged ERROR); one unusable entry drops only itself (logged WARNING).
 - `REPLICATOR_LOG_LEVEL` — default `INFO`. Governs the **root** logger only, which is the whole tree for the worker. Under the dev server's `--log-config`, uvicorn's own `uvicorn` / `uvicorn.access` / `uvicorn.error` loggers are pinned `INFO` by `src/core/log_config.json` and do not follow it (nor did they under uvicorn's built-in config), so setting `WARNING` will not silence access lines; root itself is `INFO` from boot until the lifespan's `configure_logging()` applies this value
 - `BUILD_ID` — git SHA stamped by the systemd unit's `ExecStartPre`; defaults to `"dev"` outside systemd
