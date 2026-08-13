@@ -21,8 +21,10 @@ archive.org, where an item cannot be deleted at all.
 """
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from src.core.logging import get_logger
@@ -67,9 +69,15 @@ class AliasTable:
     Frozen because there must be no path from the consume loop that adds an
     alias: T2 accepts "any bus writer can name any alias" only because the set of
     resolvable ones is host state a command cannot reach.
+
+    ``frozen=True`` alone does not give that — it stops the attribute being
+    *reassigned* and says nothing about the mapping behind it, so
+    ``table.bindings[x] = ...`` used to succeed (CR #19). ``load_alias_table``
+    wraps the dict in a ``MappingProxyType``, which makes the claim in the
+    paragraph above true rather than merely intended.
     """
 
-    bindings: dict[str, AliasBinding]
+    bindings: Mapping[str, AliasBinding]
 
     def resolve(self, alias: str) -> AliasBinding | None:
         """The binding for ``alias``, or ``None`` if nobody provisioned it here."""
@@ -103,12 +111,12 @@ def load_alias_table(path: Path | None) -> AliasTable:
     the same channel every other replicate problem reaches the operator by.
     """
     if path is None:
-        return AliasTable({})
+        return AliasTable(MappingProxyType({}))
     try:
         raw = json.loads(Path(path).read_text())
     except FileNotFoundError:
         logger.info("no alias table on this host — replication is not provisioned")
-        return AliasTable({})
+        return AliasTable(MappingProxyType({}))
     except Exception as exc:
         logger.error(
             "alias table is unreadable",
@@ -118,20 +126,20 @@ def load_alias_table(path: Path | None) -> AliasTable:
                 "detail": "nothing is provisioned; every replicate command will be refused",
             },
         )
-        return AliasTable({})
+        return AliasTable(MappingProxyType({}))
     if not isinstance(raw, dict):
         logger.error(
             "alias table is unreadable",
             extra={"path": str(path), "detail": "expected an object of alias -> binding"},
         )
-        return AliasTable({})
+        return AliasTable(MappingProxyType({}))
 
     bindings: dict[str, AliasBinding] = {}
     for alias, entry in raw.items():
         binding = _binding_or_none(str(alias), entry)
         if binding is not None:
             bindings[str(alias)] = binding
-    table = AliasTable(bindings)
+    table = AliasTable(MappingProxyType(bindings))
     logger.info(
         "alias table loaded",
         extra={"path": str(path), "provisioned": list(table.provisioned)},

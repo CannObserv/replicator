@@ -20,7 +20,7 @@ import pytest
 from src.core.errors import PermanentReplicateError, ReplicateReason
 from src.storage.local import LocalBlobStore
 from src.worker.aliases import AliasBinding
-from src.worker.replicate import resolve_blob, validate_destination
+from src.worker.replicate import locate_blob, read_blob, validate_destination
 
 FINGERPRINT = "a" * 64
 GCS_ROOT = AliasBinding(alias="primary", provider="gcs", bucket="co-artifacts", prefix="reps")
@@ -42,8 +42,31 @@ def stored(store):
 # --------------------------------------------------------------------------
 
 
-def test_a_uri_this_store_minted_resolves_to_its_bytes(store, stored):
-    assert resolve_blob(stored, store=store) == b"artifact bytes"
+def test_a_uri_this_store_minted_locates_its_fingerprint(store, stored):
+    assert locate_blob(stored, store=store) == FINGERPRINT
+
+
+def test_locating_a_blob_reads_none_of_it(store, stored, monkeypatch):
+    """CR #15: the guard answers "is this ours, and is it still here" — no bytes.
+
+    Before the split it read the whole blob so the handler could log its length,
+    then threw it away: a measured 5 MB off disk, synchronously, on the event
+    loop, for a command that writes nothing. With two command loops now sharing
+    that loop, the read stalled the *fetch* path as well.
+
+    The writer will need the bytes; ``read_blob`` is where it gets them, and by
+    then there is something to do with them.
+    """
+    monkeypatch.setattr(
+        LocalBlobStore, "open", lambda self, fp: pytest.fail("the guard must not read the blob")
+    )
+
+    assert locate_blob(stored, store=store) == FINGERPRINT
+
+
+def test_read_blob_returns_the_bytes_for_a_located_fingerprint(store, stored):
+    """The other half of the split, which the first provider writer calls."""
+    assert read_blob(locate_blob(stored, store=store), store=store) == b"artifact bytes"
 
 
 @pytest.mark.parametrize(
@@ -80,7 +103,19 @@ def test_a_uri_this_store_did_not_mint_is_refused(store, stored, blob_uri):
     store is empty — the store *can* serve bytes here, and does not.
     """
     with pytest.raises(PermanentReplicateError) as caught:
-        resolve_blob(blob_uri, store=store)
+        locate_blob(blob_uri, store=store)
+
+    assert caught.value.reason is ReplicateReason.INVALID_SOURCE
+
+
+def test_a_uri_that_will_not_even_parse_is_refused(store):
+    """CR #17: ``urlsplit`` raises on some inputs rather than returning empties.
+
+    A bracketed-IPv6 host with a bad port is the reachable case. Untested until
+    now, which is the shape that reads as covered because the module sits at 95%.
+    """
+    with pytest.raises(PermanentReplicateError) as caught:
+        locate_blob("file://[oops:::1]:notaport/x.bin", store=store)
 
     assert caught.value.reason is ReplicateReason.INVALID_SOURCE
 
@@ -95,7 +130,7 @@ def test_a_wellformed_uri_for_a_blob_that_is_gone_is_expired_not_invalid(store):
     minted = store.uri_for(FINGERPRINT)  # never stored, so the sweep has taken it
 
     with pytest.raises(PermanentReplicateError) as caught:
-        resolve_blob(minted, store=store)
+        locate_blob(minted, store=store)
 
     assert caught.value.reason is ReplicateReason.BLOB_EXPIRED
 
@@ -113,7 +148,7 @@ def test_the_resolver_never_touches_a_path_from_the_message(store, stored, monke
         LocalBlobStore, "open", lambda self, fingerprint: opened.append(fingerprint) or b""
     )
 
-    resolve_blob(stored, store=store)
+    read_blob(locate_blob(stored, store=store), store=store)
 
     assert opened == [FINGERPRINT]
 
@@ -148,11 +183,20 @@ def test_a_binding_with_no_prefix_roots_at_the_bucket():
         pytest.param("./relative.pdf", id="dot-segment"),
         pytest.param("", id="empty"),
         pytest.param("   ", id="whitespace-only"),
-        # Percent-encoded traversal: the guard decodes *before* checking, or this
-        # is the one that gets through.
+        # Percent-encoding is refused outright (CR #16). Under T3 the issuer
+        # renders, so a rendered path has no business carrying escapes at all —
+        # and decoding-then-checking silently *repaired* a mid-path %2F into a
+        # separator, which is the "never repaired" promise broken by the very
+        # decode the traversal check needed.
         pytest.param("%2e%2e/escape.pdf", id="encoded-traversal"),
         pytest.param("a/%2e%2e/%2e%2e/escape.pdf", id="encoded-traversal-mid-path"),
         pytest.param("%2fabsolute.pdf", id="encoded-slash"),
+        pytest.param("a/b%2Fc.pdf", id="encoded-separator-mid-path"),
+        pytest.param("sp%20ace.pdf", id="encoded-space"),
+        pytest.param("%252e%252e/x.pdf", id="double-encoded"),
+        pytest.param(" lead.pdf", id="leading-whitespace"),
+        pytest.param("trail.pdf ", id="trailing-whitespace"),
+        pytest.param("100%.pdf", id="bare-percent"),
     ],
 )
 def test_a_destination_that_is_not_already_normalized_is_refused(destination):

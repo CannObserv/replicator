@@ -145,10 +145,21 @@ async def test_a_failed_publish_is_swallowed_so_the_dead_letter_still_happens(
     assert record.command_id == "rep-1"
 
 
-async def test_the_default_topic_is_content_artifacts():
-    """Not ``content.blobs``. The replicate outcomes are their own stream, and a
-    fact on the wrong one reaches a consumer group that will never match it."""
-    assert streams.CONTENT_ARTIFACTS == "content.artifacts"
+async def test_the_default_topic_is_content_artifacts(fake_redis):
+    """Where a reporter built with no topic actually publishes (CR #21).
+
+    The first version asserted ``streams.CONTENT_ARTIFACTS == "content.artifacts"``
+    — a fact about co-core, which would still have passed if this module's default
+    were changed to ``content.blobs``. What matters is that an unconfigured
+    reporter lands on the replicate stream: a fact on the wrong one reaches a
+    consumer group that will never match it, and nothing raises.
+    """
+    report = build_replicate_reporter(client=fake_redis)  # no artifacts_topic
+
+    await report(a_report())
+
+    assert await fake_redis.xlen(streams.CONTENT_ARTIFACTS) == 1
+    assert await fake_redis.xlen(streams.CONTENT_BLOBS) == 0
 
 
 @pytest.mark.parametrize(

@@ -127,6 +127,61 @@ def test_an_unusable_entry_is_dropped_rather_than_half_provisioned(tmp_path, cap
     assert any(r.message == "ignoring an unusable alias binding" for r in caplog.records)
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        pytest.param("[]", id="a-list"),
+        pytest.param('"just a string"', id="a-scalar"),
+        pytest.param("null", id="null"),
+    ],
+)
+def test_valid_json_that_is_not_a_table_provisions_nothing(tmp_path, caplog, raw):
+    """CR #17: parsing is not the same as being a table.
+
+    ``json.loads`` succeeds on a list or a bare scalar, so the type check is a
+    separate branch from the parse failure above — and it was the untested one.
+    """
+    path = tmp_path / "aliases.json"
+    path.write_text(raw)
+
+    with caplog.at_level("ERROR", logger="src.worker.aliases"):
+        table = load_alias_table(path)
+
+    assert table.provisioned == ()
+    assert any(r.message == "alias table is unreadable" for r in caplog.records)
+
+
+def test_an_empty_alias_name_is_dropped(tmp_path, caplog):
+    """CR #17: an empty key would resolve for a command carrying an empty alias.
+
+    ``AliasTable.resolve("")`` already returns None for an unprovisioned table,
+    but a file with `"": {...}` would have made the empty alias *resolvable* —
+    every command that omitted the field landing on one operator's binding.
+    """
+    path = write_aliases(tmp_path, {"": GCS, "good": GCS})
+
+    with caplog.at_level("WARNING", logger="src.worker.aliases"):
+        table = load_alias_table(path)
+
+    assert table.provisioned == ("good",)
+    assert table.resolve("") is None
+
+
+def test_the_bindings_mapping_cannot_be_mutated_through(tmp_path):
+    """CR #19: frozen stops reassignment, not mutation.
+
+    The class docstring claims there is no path that adds an alias, and the test
+    below only pinned attribute reassignment — so the property it is named for
+    was not the property it checked.
+    """
+    table = load_alias_table(write_aliases(tmp_path, {"primary": GCS}))
+
+    with pytest.raises(TypeError):
+        table.bindings["smuggled"] = AliasBinding(alias="smuggled", provider="gcs", bucket="b")
+
+    assert table.resolve("smuggled") is None
+
+
 def test_the_table_is_a_snapshot_a_command_cannot_reach(tmp_path):
     """The provisioned set is host state, read once, never influenced by a message.
 

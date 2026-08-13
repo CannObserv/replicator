@@ -53,13 +53,19 @@ _FINGERPRINT = re.compile(r"^[0-9a-f]{64}$")
 _ALLOWED_IN_SEGMENT = frozenset(string.ascii_letters + string.digits + "._-+=@,()[]~ ")
 
 
+# How much of a message-derived value reaches the journal. One constant rather
+# than a literal at each site, so the two cannot drift into disagreeing about how
+# much of an untrusted string is safe to record (CR #20).
+_LOGGED_VALUE_CHARS = 120
+
+
 def _refuse(message: str, reason: ReplicateReason) -> PermanentReplicateError:
     """Build the refusal. Every one of these is terminal and pre-credential."""
     return PermanentReplicateError(message, reason=reason)
 
 
-def resolve_blob(blob_uri: str, *, store: BlobStore) -> bytes:
-    """The bytes ``blob_uri`` names, or a terminal refusal (contract T3a).
+def locate_blob(blob_uri: str, *, store: BlobStore) -> str:
+    """The fingerprint ``blob_uri`` names, or a terminal refusal (contract T3a).
 
     **The message's path is never used.** The fingerprint is extracted, validated
     against ``_FINGERPRINT``, and the URI is then compared against one derived
@@ -83,11 +89,32 @@ def resolve_blob(blob_uri: str, *, store: BlobStore) -> bytes:
         # recoverable. `detail` carries the value for the journal; it is bounded
         # because an unbounded message value should not reach a log line whole.
         raise _refuse(
-            f"blob_uri is not a reference this store minted: {blob_uri[:120]!r}",
+            f"blob_uri is not a reference this store minted: {blob_uri[:_LOGGED_VALUE_CHARS]!r}",
             ReplicateReason.INVALID_SOURCE,
         )
     if not store.exists(fingerprint):
         raise _refuse("the blob for this command is no longer stored", ReplicateReason.BLOB_EXPIRED)
+    return fingerprint
+
+
+def read_blob(fingerprint: str, *, store: BlobStore) -> bytes:
+    """The bytes behind a fingerprint ``locate_blob`` already validated.
+
+    Split from the guard (CR #15) so that answering "is this ours, and is it
+    still here" costs no I/O. Before the split the handler read the whole blob so
+    it could log the length — a measured 5 MB off disk, synchronously, on the
+    event loop, for a command that writes nothing. With two command loops sharing
+    that loop, the read stalled the fetch path as well.
+
+    Takes the fingerprint rather than the URI so it cannot be called on an
+    unvalidated value: there is no path to these bytes that does not go through
+    ``locate_blob`` first.
+
+    **The first provider writer must wrap this in ``asyncio.to_thread``.** It is
+    a blocking read and its caller is an async handler; ``src/worker/retention.py``
+    is the precedent. Left unwrapped here because nothing calls it yet, and a
+    thread hop with no reader would be ceremony.
+    """
     return store.open(fingerprint)
 
 
@@ -123,50 +150,54 @@ def validate_destination(destination: str, *, binding: AliasBinding) -> str:
     redelivery target a different key and defeat the no-op that stops a
     redelivery from destroying an artifact.
 
-    Checked **after** percent-decoding and on the rendered string. Decoding first
-    is what catches ``%2e%2e``; a guard that ran before it would pass the one
-    encoding that matters. The string is rendered because T3 puts the render on
-    the issuer, so a surviving ``{ns.field}`` means the issuer skipped R1 — and
-    the brace is refused as an ordinary disallowed character rather than
-    recognised as a placeholder, because this service never learns that
-    vocabulary.
+    **Percent-encoding is refused outright, not decoded** (CR #16). The first cut
+    decoded and then checked, which is the obvious way to catch ``%2e%2e`` — and
+    it silently *repaired* a mid-path ``%2F`` into a separator, so
+    ``a/b%2Fc.pdf`` landed at ``a/b/c.pdf``. That breaks the "refused, never
+    repaired" rule this function is built on, using the very decode the traversal
+    check needed. Under T3 the issuer renders, so a rendered path has no business
+    carrying escapes at all; refusing them makes the traversal question moot
+    rather than answering it, and "how many rounds do we decode" stops being a
+    question anyone has to have an opinion about.
+
+    Checked on the rendered string, because T3 puts the render on the issuer — a
+    surviving ``{ns.field}`` means the issuer skipped R1, and the brace is
+    refused as an ordinary disallowed character rather than recognised as a
+    placeholder, because this service never learns that vocabulary.
     """
-    decoded = unquote(destination)
-    if decoded != destination and unquote(decoded) != decoded:
-        # Double-encoded. Refused rather than decoded again: "how many times do we
-        # decode" has no defensible answer, and one round is what a provider will
-        # do.
+    if unquote(destination) != destination:
         raise _refuse(
-            "destination is multiply percent-encoded", ReplicateReason.INVALID_DESTINATION
+            "destination carries percent-encoding; send the rendered path",
+            ReplicateReason.INVALID_DESTINATION,
         )
-    why = _why_bad_destination(decoded)
+    why = _why_bad_destination(destination)
     if why is not None:
         raise _refuse(
             f"destination is not a usable key: {why}", ReplicateReason.INVALID_DESTINATION
         )
-    return f"{binding.prefix}/{decoded}" if binding.prefix else decoded
+    return f"{binding.prefix}/{destination}" if binding.prefix else destination
 
 
-def _why_bad_destination(decoded: str) -> str | None:
+def _why_bad_destination(rendered: str) -> str | None:
     """Why this rendered path cannot be written, or ``None`` if it can.
 
     Segment-wise rather than by string comparison against the root: a prefix check
     admits ``reps-other`` under root ``reps``, which is the containment bug this
     shape does not have.
     """
-    if not decoded or not decoded.strip():
+    if not rendered or not rendered.strip():
         return "it is empty"
-    if decoded != decoded.strip():
+    if rendered != rendered.strip():
         return "it has leading or trailing whitespace"
-    if decoded.startswith("/"):
+    if rendered.startswith("/"):
         return "it is absolute"
-    if decoded.endswith("/"):
+    if rendered.endswith("/"):
         return "it ends with a separator"
-    if "\\" in decoded:
+    if "\\" in rendered:
         return "it contains a backslash"
-    if re.match(r"^[A-Za-z]:", decoded):
+    if re.match(r"^[A-Za-z]:", rendered):
         return "it carries a drive qualifier"
-    segments = decoded.split("/")
+    segments = rendered.split("/")
     for segment in segments:
         if not segment:
             return "it has an empty segment"
@@ -212,7 +243,10 @@ def build_replicate_handler(*, store: BlobStore, aliases: AliasTable) -> Replica
                 ReplicateReason.PROVIDER_DISABLED,
             )
         key = validate_destination(command.destination, binding=binding)
-        blob = resolve_blob(command.blob_uri, store=store)
+        # Located, not read: the guard answers "is this ours, still here" without
+        # touching the bytes (CR #15). ``read_blob`` is where the writer gets
+        # them, wrapped in a thread by then.
+        locate_blob(command.blob_uri, store=store)
 
         # Everything above is settled; the write is not built. Refusing here is
         # accurate rather than a placeholder — no provider is enabled on any host
@@ -222,8 +256,9 @@ def build_replicate_handler(*, store: BlobStore, aliases: AliasTable) -> Replica
             extra={
                 "command_id": command.command_id,
                 "provider": command.provider,
-                "key": key,
-                "bytes": len(blob),
+                # Bounded like the blob_uri in the refusal above (CR #20): a
+                # message-derived value should not reach the journal whole.
+                "key": key[:_LOGGED_VALUE_CHARS],
                 "detail": "no provider writer is wired yet; refusing rather than dropping",
             },
         )

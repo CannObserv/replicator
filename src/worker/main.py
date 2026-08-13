@@ -345,6 +345,11 @@ async def run(
         # would be individually correct and the ceiling would never fire, with
         # nothing observing the difference until the disk was full.
         usage = BlobUsage()
+        # One store for both command loops, for the reason `usage` is one object:
+        # wired twice, each half would be individually correct and any state a
+        # backend later holds — a client pool, #7's object-store handle — would
+        # silently be two (CR #18).
+        store = LocalBlobStore(blob_dir)
         # Rebuilt from the stream *before* the consume loop starts, not as the
         # first pass of the tail task (#19). Started as a peer, the loop would
         # fetch its opening commands against an empty map and pace every host at
@@ -365,7 +370,7 @@ async def run(
                 settings=settings,
                 handler=build_handler(
                     fetcher=fetcher,
-                    store=LocalBlobStore(blob_dir),
+                    store=store,
                     client=client,
                     settings=settings,
                     usage=usage,
@@ -401,7 +406,7 @@ async def run(
                 consumer=replicate_consumer,
                 group=settings.replicate_consumer_group,
                 settings=settings,
-                handler=build_replicate_handler(store=LocalBlobStore(blob_dir), aliases=aliases),
+                handler=build_replicate_handler(store=store, aliases=aliases),
                 reporter=build_replicate_reporter(client=client),
                 spec=REPLICATE_SPEC,
                 stop=stop,
