@@ -386,5 +386,8 @@ Settled in a cannobserv `docs/plans/` design doc alongside #303, not here:
   departs from.
 - [`replicator-boundaries.md`](replicator-boundaries.md) — the three tests, the config taxonomy, and
   the payload-field review question (#12).
+- [`2026-08-14-why-the-issuer-renders-settled.md`](../plans/2026-08-14-why-the-issuer-renders-settled.md)
+  — historical: T3's rejected alternatives, what the chosen shape costs, and the consequences for
+  cannobserv#303.
 - [cannobserv#303](https://github.com/CannObserv/cannobserv/issues/303) — the models. Open question 1
   is answered by **T1**.

@@ -36,33 +36,37 @@ Auth is ADC: on the VM the SA key at `GOOGLE_APPLICATION_CREDENTIALS` (`/etc/rep
 <!-- BEGIN socraticode-policy -->
 ## Code Exploration Policy
 
-SocratiCode is the preferred semantic-search tool for this repo. Code is indexed into the local Qdrant store + on-disk graph by `codebase_index`; the project's non-code knowledge (design plans, the systemd unit, the command reference) is registered in `.socraticodecontextartifacts.json` and embedded by `codebase_context_index`. Its MCP tools are **deferred** — schemas load only after a `ToolSearch` prefetch.
+SocratiCode is the preferred semantic-search tool here once indexed (local Qdrant
+store + on-disk graph; manifest `.socraticodecontextartifacts.json`). Its MCP tools
+are **deferred** — schemas load only after the `ToolSearch` prefetch the
+`SessionStart` hook in `.claude/settings.json` prints each session.
 
-**The manifest is a source, not the artifact.** Nothing re-embeds it — no hook, no CI step — so editing a `description` there changes what the repo says and not what `codebase_context_search` returns. Re-run `codebase_context_index` in the same change, or the highest-authority answer an agent gets stays the stale one (#19 CR #17).
-
-**Negative rule.** For broad semantic questions ("where is X", "how does Y work", "what depends on Z"), use SocratiCode MCP tools first. Reach for `grep`/`ripgrep` only on exact strings (error messages, log lines, known symbols). Reserve the Explore subagent for path-pattern walks (e.g. "all `*.py` under `src/worker/`"), not semantic search.
+**Negative rule.** Use SocratiCode MCP tools first for semantic questions ("where is
+X", "how does Y work", "what depends on Z"). Reach for `grep`/`rg` only on exact
+strings (error messages, log lines, known symbols). Reserve the Explore subagent for
+path-pattern walks (`*.py` under `src/worker/`), not semantic search.
 
 | Goal | Tool |
 |------|------|
-| Where is X defined / how does Y work / what files touch Z | `codebase_search` |
-| Exact string/regex match (errors, log lines, known symbols) | `grep` / `rg` |
-| Blast radius of changing/deleting a file or function | `codebase_impact` |
-| What does an entry point actually do? | `codebase_flow` |
-| Callers and callees of a function | `codebase_symbol` |
-| Imports/dependents of a file | `codebase_graph_query` |
-| Bus contracts, deploy topology, MVP design rationale, env vars | `codebase_context` / `codebase_context_search` |
+| Where is X defined / how does Y work / what touches Z | `codebase_search` |
+| Exact string or regex (errors, log lines, known symbols) | `grep` / `rg` |
+| Imports/dependents of a file · blast radius of a change | `codebase_graph_query` / `codebase_impact` |
 
-**Cross-repo search.** `SOCRATICODE_LINKED_PROJECTS` (in `.claude/settings.local.json`, gitignored) links the archiver, watcher, and notifier checkouts, so `codebase_search` spans the cluster. Use it for the co-core contracts, the parent integration strategy, and the producer-side outbox precedent — all of which live in archiver, not here. Linked projects contribute results only once they are themselves indexed.
-
-Prefetch query — the `SessionStart` hook in `.claude/settings.json` prints the exact `select:` argument every session. Run it via `ToolSearch` before broad exploration; it is not repeated here.
+Full tool table, prefetch query, per-tool guidance, cross-repo search:
+[docs/SOCRATICODE.md](docs/SOCRATICODE.md).
 <!-- END socraticode-policy -->
+
+## Code Exploration Notes (repo-specific)
+
+**The manifest is a source, not the artifact.** Nothing re-embeds it — no hook, no CI step — so editing a `description` there changes what the repo says and not what `codebase_context_search` returns. Re-run `codebase_context_index` in the same change, or the highest-authority answer an agent gets stays the stale one (#19 CR #17).
 
 ## Project Layout
 
 `src/worker/` is the primary process — the bus consumer, with the byte path, the
 failure fact, the retention sweep, the pacer, and the `content.fetch-policy` reader
 each behind their own seam. `src/storage/` is the content-addressed temp store behind
-the `BlobStore` protocol; `src/api/` is the dev-only `/health` app. `tests/` mirrors
+the `BlobStore` protocol; `src/api/` is the dev-only `/health` app; `src/core/` holds
+config, logging, and the consume path's failure vocabulary. `tests/` mirrors
 `src/`. Every module with the job it owns:
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -154,6 +158,8 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
   `tests/test_boundaries.py` enforces eight charter invariants in CI; change a
   charter and its tests together.
 
+What each stream carries: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The rules
+common to all of them: [docs/CONVENTIONS.md](docs/CONVENTIONS.md).
 Blob paths, modes, and the retention sweep: [docs/STORAGE.md](docs/STORAGE.md).
 Fakeredis's divergences from the live broker, and the keys an integration run may
 touch: [docs/TESTING.md](docs/TESTING.md).
@@ -174,7 +180,7 @@ uv run pytest
 # Run a subset of tests (skip the coverage gate, which measures all of src/)
 uv run pytest --no-cov tests/path/to/test.py
 
-# Integration tests (requires the live VM Redis; --no-cov for the same reason)
+# Integration tests (live VM Redis; --no-cov — these do not exercise all of src/)
 uv run pytest --no-cov -m integration
 
 # Run linter
@@ -234,6 +240,7 @@ are deliberately not JSON: [docs/STYLE.md](docs/STYLE.md).
 - [docs/STYLE.md](docs/STYLE.md) — the logging stack: formatter, installers, and the non-JSON journald lines
 - [docs/COMMANDS.md](docs/COMMANDS.md) — every runnable command, with flags
 - [docs/SKILLS.md](docs/SKILLS.md) — vendored skill inventory and refresh procedure
+- [docs/SOCRATICODE.md](docs/SOCRATICODE.md) — the full tool table, the prefetch query, per-tool gotchas, and cross-repo search
 - [docs/contracts/content-fetch-issuer-contract.md](docs/contracts/content-fetch-issuer-contract.md) — what a `content.fetch` producer must do; normative, linked from issuer repos
 - [docs/contracts/content-fetch-issuer-reference.md](docs/contracts/content-fetch-issuer-reference.md) — its lookup half: the refusal list, the failure taxonomy, the silent conditions, trust posture
 - [docs/contracts/replicator-boundaries.md](docs/contracts/replicator-boundaries.md) — what Replicator may become; run its three tests against any proposed capability
