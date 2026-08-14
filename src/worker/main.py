@@ -23,6 +23,7 @@ from typing import Any
 from co_core.pure.adapters.bus import streams
 from co_core_aio.bus import AsyncBusConsumer
 from co_core_aio.fetch import AsyncFetchDriver
+from co_core_aio.gcs import AsyncGcsDriver
 from redis.asyncio import Redis
 
 from src.core.config import Settings, get_settings
@@ -39,7 +40,7 @@ from src.worker.policy import (
     run_policy_reader,
 )
 from src.worker.replicate import build_replicate_handler
-from src.worker.replicate_reporter import build_replicate_reporter
+from src.worker.replicate_reporter import build_completion_publisher, build_replicate_reporter
 from src.worker.reporter import build_failure_reporter
 from src.worker.retention import run_sweeper
 
@@ -292,6 +293,10 @@ async def run(
     # Constructed inside the try, like the signal handlers: anything opened
     # between here and the try would leak the Redis client if it raised.
     fetcher: AsyncFetchDriver | None = None
+    # Bound before the try for the same reason ``fetcher`` is: the finally block
+    # below iterates it, and a failure between here and its assignment would
+    # raise NameError over the real error.
+    writers: dict[str, AsyncGcsDriver] = {}
     try:
         # One driver for the worker's lifetime, not one per message: it wraps an
         # httpx.AsyncClient whose connection pool is the point, and a per-message
@@ -317,6 +322,17 @@ async def run(
         # replicate command is refused, which is the current state of every host
         # and the safe default (contract T5).
         aliases = load_alias_table(settings.replication_aliases_file)
+        # One driver per provisioned gcs bucket, built **here** and not per
+        # command: ``storage.Client()`` resolves ADC synchronously — key files,
+        # and on a GCE-style host the metadata server — so constructing it inside
+        # the loop would put a blocking credential lookup on the event loop once
+        # per replicate command. Empty on a host with nothing provisioned, which
+        # is every host until an operator writes an alias table.
+        writers = {
+            binding.provider: AsyncGcsDriver(binding.bucket)
+            for binding in aliases.bindings.values()
+            if binding.provider == "gcs"
+        }
         # Default start_id="$" reads only messages added after group creation.
         # The MVP seed harness controls when commands appear, so a backlog drain
         # ("0") is not needed; REPLICATOR_CONSUMER_START_ID flips it once a live
@@ -406,7 +422,14 @@ async def run(
                 consumer=replicate_consumer,
                 group=settings.replicate_consumer_group,
                 settings=settings,
-                handler=build_replicate_handler(store=store, aliases=aliases),
+                handler=build_replicate_handler(
+                    store=store,
+                    aliases=aliases,
+                    writers=writers,
+                    # The success fact is the handler's to publish, exactly as
+                    # blob_available is the byte path's — the loop sees failures.
+                    complete=build_completion_publisher(client=client),
+                ),
                 reporter=build_replicate_reporter(client=client),
                 spec=REPLICATE_SPEC,
                 stop=stop,
@@ -424,6 +447,10 @@ async def run(
             remove_signal_handlers()
         if fetcher is not None:
             await fetcher.aclose()
+        for writer in writers.values():
+            # Ours because we built them: the driver closes the transport it
+            # owns, and a client left open holds an HTTP session past shutdown.
+            await writer.aclose()
         await client.aclose()
 
 

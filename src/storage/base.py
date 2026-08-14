@@ -8,7 +8,7 @@ replication lands satisfies it without importing anything from here.
 and nothing downstream parses it.
 """
 
-from typing import Protocol
+from typing import IO, Protocol
 
 
 class BlobStore(Protocol):
@@ -44,4 +44,19 @@ class BlobStore(Protocol):
 
     def open(self, fingerprint: str) -> bytes:
         """Read back the bytes stored under ``fingerprint``."""
+        ...
+
+    def open_stream(self, fingerprint: str) -> IO[bytes]:
+        """A **seekable binary** handle on these bytes; the caller closes it.
+
+        The shape ``GcsCreateIfAbsent.data`` wants (#29). A path would make the
+        provider copy something already on disk, and ``bytes`` would pull a whole
+        artifact into memory to hand to a driver that streams it anyway — for a
+        service whose only reason to hold the bytes is to pass them on.
+
+        Seekable is a hard requirement rather than a preference: the driver
+        computes the local md5 **only** on the 412 path, after the failed
+        conditional create has already moved the position, so a non-seekable
+        stream fails on exactly the redelivery T4 exists to handle.
+        """
         ...

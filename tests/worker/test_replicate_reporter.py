@@ -27,6 +27,15 @@ from tests.worker.test_loop_spec import make_replicate_command
 ARTIFACTS = "replicator.test.artifacts"
 
 
+async def _unused(command, public_url):  # pragma: no cover - never reached
+    raise AssertionError("every command in this module is refused before the write")
+
+
+class _NeverReached:
+    async def create_if_absent(self, effect):  # pragma: no cover - never reached
+        raise AssertionError("every command in this module is refused before the write")
+
+
 def a_report(**overrides) -> ReplicateFailureReport:
     fields = {
         "command_id": "rep-1",
@@ -184,7 +193,12 @@ async def test_the_loop_closes_a_replicate_command_with_a_real_fact(
     aliases = AliasTable(
         {"primary": AliasBinding(alias="primary", provider="gcs", bucket="b", prefix="reps")}
     )
-    handler = build_replicate_handler(store=LocalBlobStore(tmp_path), aliases=aliases)
+    handler = build_replicate_handler(
+        store=LocalBlobStore(tmp_path),
+        aliases=aliases,
+        writers={"gcs": _NeverReached()},
+        complete=_unused,
+    )
     reporter = build_replicate_reporter(client=fake_redis, artifacts_topic=ARTIFACTS)
 
     await fake_redis.xadd(TOPIC, make_replicate_command(command_id="rep-e2e", **command_kwargs))

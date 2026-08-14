@@ -24,11 +24,18 @@ scan lost three times: they are only ever as complete as the last probe.
 import re
 import string
 from collections.abc import Awaitable, Callable
+from typing import Protocol
 from urllib.parse import urlsplit
 
+from co_core.effects.gcs import GcsCreateIfAbsent, GcsCreateResult
 from co_core.pure.models.changes import ContentReplicateCommand
+from co_core.pure.util.gcs import GcsCreateOutcome
 
-from src.core.errors import PermanentReplicateError, ReplicateReason
+from src.core.errors import (
+    PermanentReplicateError,
+    ReplicateReason,
+    TransientReplicateError,
+)
 from src.core.logging import get_logger
 from src.storage.base import BlobStore
 from src.worker.aliases import AliasBinding, AliasTable
@@ -223,11 +230,53 @@ def _why_bad_destination(rendered: str) -> str | None:
     return None
 
 
+# The provider-write seam. Structurally ``AsyncGcsDriver.create_if_absent``, kept
+# as a Protocol so the handler is testable without a bucket and so a second
+# provider satisfies it without importing anything from here.
+class ConditionalWriter(Protocol):
+    """Write only if absent; never overwrite. The contract's T4 primitive."""
+
+    async def create_if_absent(self, effect: GcsCreateIfAbsent) -> GcsCreateResult: ...
+
+
+# The archiver ``gcs`` sub-schema's fields, and the only keys read out of
+# ``object_options``. co-core models nothing inside that dict, so an issuer may
+# put anything there; forwarding it blindly would turn a typo into a provider
+# error, and reading a fixed set keeps this a pass-through rather than an
+# interpretation — Replicator never learns what a storage class *means*.
+_GCS_OPTIONS = ("cache_control", "content_disposition", "storage_class")
+
+
+# How a create outcome becomes a fact. The contract's T4 table has three rows and
+# this has four: ``INDETERMINATE`` is a 412 whose confirming read found no object,
+# which is a race rather than a conflict — the object can be deleted between the
+# two calls, and an unfinalized resumable upload is invisible as an object, so
+# the two are indistinguishable from here. Closing it terminally would tell an
+# issuer no artifact is coming, about a destination that is empty and would take
+# the next attempt.
+_TERMINAL_OUTCOMES = {GcsCreateOutcome.CONFLICT: ReplicateReason.DESTINATION_CONFLICT}
+
+
 # The handler seam the loop dispatches to, matching ``src.worker.handler``'s.
 type ReplicateHandler = Callable[[ContentReplicateCommand], Awaitable[None]]
 
 
-def build_replicate_handler(*, store: BlobStore, aliases: AliasTable) -> ReplicateHandler:
+# The success-fact seam. It takes the command and the URL rather than a built
+# event, deliberately: constructing ``ReplicationCompleteEvent`` means naming the
+# three correlators, and this module is **not** on the charter's echo allowlist.
+# Keeping the construction in ``replicate_reporter`` — which is — leaves the
+# handler unable to name a domain field even by accident, which is the property
+# ``DOMAIN_ECHO_MODULES`` records by leaving this file out (#29).
+type CompletePublisher = Callable[[ContentReplicateCommand, str | None], Awaitable[None]]
+
+
+def build_replicate_handler(
+    *,
+    store: BlobStore,
+    aliases: AliasTable,
+    writers: dict[str, ConditionalWriter],
+    complete: CompletePublisher,
+) -> ReplicateHandler:
     """Wire the replicate byte path — which today refuses everything, accurately.
 
     Order is the contract's and is load-bearing: the alias resolves first, then
@@ -237,8 +286,14 @@ def build_replicate_handler(*, store: BlobStore, aliases: AliasTable) -> Replica
     offers the issuer, and it holds only if nothing reorders these.
 
     ``destination_conflict`` is the one refusal that cannot join them: learning
-    that a destination holds *differing* bytes takes an authenticated read. It
-    arrives with the first provider.
+    that a destination holds *differing* bytes takes an authenticated read, which
+    is why it is decided from the write's own outcome rather than up here.
+
+    ``writers`` is keyed by provider, and a provider absent from it is refused —
+    so ``gdrive`` and ``ia``, which have no conditional create yet, refuse rather
+    than reaching for something that is not there. ``complete`` publishes the
+    success fact: the handler owns it the way the byte path owns
+    ``blob_available``, because the loop's seam sees failures only.
     """
 
     async def handle(command: ContentReplicateCommand) -> None:
@@ -256,29 +311,93 @@ def build_replicate_handler(*, store: BlobStore, aliases: AliasTable) -> Replica
                 f"the alias is bound to {binding.provider!r}, not {command.provider!r}",
                 ReplicateReason.PROVIDER_DISABLED,
             )
+        writer = writers.get(binding.provider)
+        if writer is None:
+            raise _refuse(
+                f"no {command.provider!r} writer is enabled on this host",
+                ReplicateReason.PROVIDER_DISABLED,
+            )
         key = validate_destination(command.destination, binding=binding)
         # Located, not read: the guard answers "is this ours, still here" without
-        # touching the bytes (CR #15). ``read_blob`` is where the writer gets
-        # them, wrapped in a thread by then.
-        locate_blob(command.blob_uri, store=store)
+        # touching the bytes (CR #15). The stream below is the read, and it is
+        # handed straight to the driver rather than materialized here.
+        fingerprint = locate_blob(command.blob_uri, store=store)
 
-        # Everything above is settled; the write is not built. Refusing here is
-        # accurate rather than a placeholder — no provider is enabled on any host
-        # today — and it keeps the issuer's remedy correct: act on the host.
+        result = await _write(writer, command, key=key, fingerprint=fingerprint, store=store)
+        if result.outcome in _TERMINAL_OUTCOMES:
+            raise _refuse(
+                f"the destination already holds different bytes: {result.detail}",
+                _TERMINAL_OUTCOMES[result.outcome],
+            )
+        if result.outcome is GcsCreateOutcome.INDETERMINATE:
+            # Non-terminal, and the first one this service emits. See
+            # ``_TERMINAL_OUTCOMES`` for why this is not a conflict.
+            raise TransientReplicateError(
+                f"the conditional create could not be resolved: {result.detail}"
+            )
+
+        # Written (or already identical) — publish *after* the object exists, the
+        # same ordering the byte path uses: a fact pointing at an artifact that is
+        # not there is unrepairable by the consumer, while an object with no fact
+        # repairs itself on the redelivery T4 makes safe.
+        #
+        # ``result.public_url`` and not anything off the command (#36): it is
+        # present only where there was a successful write or a confirming read
+        # that found the object.
+        await complete(command, result.public_url)
         logger.info(
-            "replicate command passed every pre-flight guard",
+            "replicated a blob",
             extra={
                 "command_id": command.command_id,
                 "provider": command.provider,
-                # Bounded like the blob_uri in the refusal above (CR #20): a
-                # message-derived value should not reach the journal whole.
+                "outcome": result.outcome.value,
                 "key": key[:_LOGGED_VALUE_CHARS],
-                "detail": "no provider writer is wired yet; refusing rather than dropping",
             },
-        )
-        raise _refuse(
-            f"no {command.provider!r} writer is enabled on this host",
-            ReplicateReason.PROVIDER_DISABLED,
         )
 
     return handle
+
+
+async def _write(
+    writer: ConditionalWriter,
+    command: ContentReplicateCommand,
+    *,
+    key: str,
+    fingerprint: str,
+    store: BlobStore,
+) -> GcsCreateResult:
+    """Hand the blob to the provider, translating provider failure to transient.
+
+    The stream is closed on every path — a leaked handle per failed command is a
+    slow descriptor exhaustion, and the failing paths are the ones that repeat.
+
+    Anything the driver raises other than its own resolved outcomes is
+    **transient**: the driver deliberately lets non-412 provider errors
+    propagate, and a 503 must leave the command open rather than close it. That
+    is the inverse of the fetch path's default, where an unclassified handler
+    error eventually hits the delivery ceiling — here the ceiling still applies,
+    because ``TransientReplicateError`` is exempt from it and a genuinely broken
+    provider surfaces as a stuck PEL rather than as a wrong fact.
+    """
+    options = {
+        name: command.object_options.get(name)
+        for name in _GCS_OPTIONS
+        if isinstance(command.object_options, dict)
+    }
+    with store.open_stream(fingerprint) as data:
+        try:
+            return await writer.create_if_absent(
+                GcsCreateIfAbsent(
+                    blob_name=key,
+                    data=data,
+                    # **As** the command says, never inferred from the
+                    # destination's extension — the reason co-core made this
+                    # field required.
+                    content_type=command.media_type,
+                    **options,
+                )
+            )
+        except Exception as exc:
+            raise TransientReplicateError(
+                f"the provider write failed: {type(exc).__name__}: {exc}"
+            ) from exc
