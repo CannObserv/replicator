@@ -36,7 +36,7 @@ from tests.worker.conftest import now
 from tests.worker.test_loop_spec import make_replicate_command_model
 
 FINGERPRINT = "d" * 64
-BINDING = AliasBinding(alias="primary", provider="gcs", bucket="co-gcs-replication")
+BINDING = AliasBinding(provider="gcs", bucket="co-gcs-replication")
 PUBLIC_URL = "https://storage.googleapis.com/co-gcs-replication/organizations/x/report.pdf"
 
 
@@ -283,8 +283,8 @@ async def test_each_alias_reaches_its_own_bucket_and_no_other(store, blob_uri):
     ``validate_destination``; nothing downstream re-checks the bucket, because by
     then it is baked into the driver.
     """
-    public = AliasBinding(alias="public", provider="gcs", bucket="co-gcs-replication")
-    private = AliasBinding(alias="private", provider="gcs", bucket="co-gcs-internal")
+    public = AliasBinding(provider="gcs", bucket="co-gcs-replication")
+    private = AliasBinding(provider="gcs", bucket="co-gcs-internal")
     to_public = FakeGcs(result(GcsCreateOutcome.WROTE, public_url=PUBLIC_URL))
     to_private = FakeGcs(result(GcsCreateOutcome.WROTE, public_url=PUBLIC_URL))
 
@@ -308,7 +308,7 @@ async def test_an_alias_with_no_writer_of_its_own_is_refused(store, blob_uri):
         aliases=AliasTable(
             {
                 "primary": BINDING,
-                "spare": AliasBinding(alias="spare", provider="gcs", bucket="co-gcs-other"),
+                "spare": AliasBinding(provider="gcs", bucket="co-gcs-other"),
             }
         ),
         writers={"primary": FakeGcs(result(GcsCreateOutcome.WROTE, public_url=PUBLIC_URL))},
@@ -324,7 +324,7 @@ async def test_an_alias_with_no_writer_of_its_own_is_refused(store, blob_uri):
 async def test_a_provider_with_no_writer_is_still_refused(store, blob_uri):
     """``gdrive`` and ``ia`` have no conditional create yet, so an alias bound to
     one must refuse rather than reach for a writer that is not there."""
-    aliases = AliasTable({"drive": AliasBinding(alias="drive", provider="gdrive")})
+    aliases = AliasTable({"drive": AliasBinding(provider="gdrive")})
     handler = build_replicate_handler(
         store=store, aliases=aliases, writers={}, complete=Completions()
     )

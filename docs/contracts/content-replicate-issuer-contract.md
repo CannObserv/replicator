@@ -337,7 +337,7 @@ token on the failure fact. Following the precedent in
 | Condition | `reason` |
 |---|---|
 | the alias is not provisioned on this host | `alias_unknown` |
-| the provider is not enabled on this host (T5) | `provider_disabled` |
+| the provider is not enabled on this host (T5), or the host's credential cannot write there | `provider_disabled` |
 | the rendered path escapes the alias root, or `object_options` names a container the alias does not allow | `invalid_destination` |
 | the destination exists with different bytes | `destination_conflict` |
 | the blob is gone | `blob_expired` |
@@ -348,6 +348,16 @@ token on the failure fact. Following the precedent in
 either way — fix the spec and re-issue under a fresh `command_id` — and `detail` carries which guard
 refused it. `alias_unknown` and `provider_disabled` stay separate because their remedies are not the
 same one (fix the spec; act on the host).
+
+**A provider 4xx closes the command, and it mostly lands on `provider_disabled`.** The write itself
+can fail in ways no pre-flight guard can see — the host's credential lacks create permission on the
+bound bucket (403), the bucket named by the binding no longer exists (404), the provider rejects an
+`object_options` value outright (400). The first two are refused `provider_disabled`, which widens
+that row past its original T5 reading of "nobody turned it on": the observable state is now "this
+host cannot write there", and the remedy is the same operator act either way. A 400 is
+`invalid_destination`, because what the provider rejected came off the command. **Everything else —
+5xx, 429, 408, and any failure carrying no status at all — leaves the command open**, because T4
+makes retrying the write safe; those publish no fact while they retry, which is MUST-6's case.
 
 `invalid_source` stays separate by the same test: not `blob_expired` (the bytes were never named, so
 re-fetching fixes nothing) and not `invalid_destination` (the remedy is a bug in the issuer's

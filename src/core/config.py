@@ -19,6 +19,12 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Also the default of ``build_replicate_handler``'s ``write_timeout_seconds``,
+# imported from there rather than repeated (CR #43): one number with two
+# spellings drifts into two numbers, and the handler's default is what a
+# directly-constructed handler gets while this field is what the worker gets.
+DEFAULT_WRITE_TIMEOUT_SECONDS = 120
+
 
 def _default_consumer_name() -> str:
     """Identify this worker within the consumer group.
@@ -181,7 +187,9 @@ class Settings(BaseSettings):
     # write side that window is also how long a large blob has to reach a
     # permanent store over whatever link this host has.
     replicate_write_timeout_seconds: int = Field(
-        default=120, gt=0, validation_alias="REPLICATOR_REPLICATE_WRITE_TIMEOUT_SECONDS"
+        default=DEFAULT_WRITE_TIMEOUT_SECONDS,
+        gt=0,
+        validation_alias="REPLICATOR_REPLICATE_WRITE_TIMEOUT_SECONDS",
     )
 
     consumer_start_id: str = Field(default="$", validation_alias="REPLICATOR_CONSUMER_START_ID")

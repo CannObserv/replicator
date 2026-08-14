@@ -21,7 +21,7 @@ from src.worker.replicate import build_replicate_handler
 from tests.worker.test_loop_spec import make_replicate_command_model
 
 FINGERPRINT = "b" * 64
-BINDING = AliasBinding(alias="primary", provider="gcs", bucket="co-artifacts", prefix="reps")
+BINDING = AliasBinding(provider="gcs", bucket="co-artifacts", prefix="reps")
 
 
 async def _unused(command, public_url):  # pragma: no cover - never reached

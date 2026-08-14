@@ -63,9 +63,7 @@ def test_a_binding_is_resolved_by_name(tmp_path):
 
     binding = table.resolve("primary")
 
-    assert binding == AliasBinding(
-        alias="primary", provider="gcs", bucket="co-artifacts", prefix="replications"
-    )
+    assert binding == AliasBinding(provider="gcs", bucket="co-artifacts", prefix="replications")
     assert table.provisioned == ("primary",)
 
 
@@ -177,7 +175,7 @@ def test_the_bindings_mapping_cannot_be_mutated_through(tmp_path):
     table = load_alias_table(write_aliases(tmp_path, {"primary": GCS}))
 
     with pytest.raises(TypeError):
-        table.bindings["smuggled"] = AliasBinding(alias="smuggled", provider="gcs", bucket="b")
+        table.bindings["smuggled"] = AliasBinding(provider="gcs", bucket="b")
 
     assert table.resolve("smuggled") is None
 
@@ -260,7 +258,7 @@ def test_every_construction_path_returns_an_immutable_table(tmp_path, make):
     table = load_alias_table(make(tmp_path))
 
     with pytest.raises(TypeError):
-        table.bindings["smuggled"] = AliasBinding(alias="s", provider="gcs", bucket="b")
+        table.bindings["smuggled"] = AliasBinding(provider="gcs", bucket="b")
 
 
 def _write(tmp_path, text: str):

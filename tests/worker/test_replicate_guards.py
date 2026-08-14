@@ -25,7 +25,7 @@ from src.worker.aliases import AliasBinding
 from src.worker.replicate import locate_blob, validate_destination
 
 FINGERPRINT = "a" * 64
-GCS_ROOT = AliasBinding(alias="primary", provider="gcs", bucket="co-artifacts", prefix="reps")
+GCS_ROOT = AliasBinding(provider="gcs", bucket="co-artifacts", prefix="reps")
 
 
 @pytest.fixture
@@ -164,7 +164,7 @@ def test_a_rendered_path_under_the_alias_root_is_accepted():
 
 
 def test_a_binding_with_no_prefix_roots_at_the_bucket():
-    flat = AliasBinding(alias="flat", provider="gcs", bucket="b")
+    flat = AliasBinding(provider="gcs", bucket="b")
 
     assert validate_destination("2026/report.pdf", binding=flat) == "2026/report.pdf"
 
@@ -228,7 +228,7 @@ def test_the_check_runs_on_the_rendered_string_not_on_a_template():
 def test_a_prefix_lookalike_cannot_escape_the_root():
     """``reps`` must not admit ``reps-other``. String-prefix containment checks
     fail exactly here, which is why the join is segment-wise."""
-    sneaky = AliasBinding(alias="p", provider="gcs", bucket="b", prefix="reps")
+    sneaky = AliasBinding(provider="gcs", bucket="b", prefix="reps")
 
     assert validate_destination("2026/r.pdf", binding=sneaky).startswith("reps/")
 

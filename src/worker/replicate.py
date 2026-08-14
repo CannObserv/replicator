@@ -35,6 +35,7 @@ from co_core.effects.gcs import GcsCreateIfAbsent, GcsCreateResult
 from co_core.pure.models.changes import ContentReplicateCommand
 from co_core.pure.util.gcs import GcsCreateOutcome
 
+from src.core.config import DEFAULT_WRITE_TIMEOUT_SECONDS
 from src.core.errors import (
     PermanentReplicateError,
     ReplicateReason,
@@ -230,14 +231,6 @@ class ConditionalWriter(Protocol):
 _GCS_OPTIONS = ("cache_control", "content_disposition", "storage_class")
 
 
-# How long a single conditional create may run. Surfaced as a setting rather
-# than inherited from the SDK's 120s default (CR #38), for the reason the fetch
-# path surfaces its own timeout: a hung write holds a PEL entry for the whole
-# window, and the operator who has to change that number should not need a code
-# change to do it.
-DEFAULT_WRITE_TIMEOUT_SECONDS = 120
-
-
 # HTTP statuses that mean "come back later" rather than "this is wrong" (CR #27).
 # Everything else in 4xx closes the command; everything in 5xx, and everything
 # with no status at all, leaves it open.
@@ -304,10 +297,13 @@ def build_replicate_handler(
                 f"the alias is bound to {binding.provider!r}, not {command.provider!r}",
                 ReplicateReason.PROVIDER_DISABLED,
             )
-        # ``binding.alias`` and not ``command.credentials_alias``: the same string
-        # by construction, but taking it from the resolved binding means the only
-        # value that ever selects a driver came out of host config.
-        writer = writers.get(binding.alias)
+        # The same string that resolved the binding, looked up in a second table
+        # keyed identically (CR #39). Taking it from ``binding.alias`` instead
+        # looked more host-derived and was not — it made one key derivable two
+        # ways, so a table built outside ``load_alias_table`` could disable a
+        # binding whose driver had built fine. The alias is still only ever a
+        # *key*: two lookups, no branch on its value.
+        writer = writers.get(command.credentials_alias)
         if writer is None:
             raise _refuse(
                 f"no {command.provider!r} writer is enabled on this host",
@@ -404,10 +400,11 @@ async def _write(
     The stream is closed on every path — a leaked handle per failed command is a
     slow descriptor exhaustion, and the failing paths are the ones that repeat.
 
-    ``ValueError`` is deliberately **not** caught: it is the driver's own guard
-    against a non-seekable or text-mode stream, which is a bug on this side of
-    the seam rather than a provider condition. It reaches
-    ``_handle_unclassified``, where the delivery ceiling can see it (CR #27).
+    ``ValueError`` is deliberately **excluded from the classification below**:
+    it is the driver's own guard against a non-seekable or text-mode stream,
+    which is a bug on this side of the seam rather than a provider condition, so
+    it is re-raised untouched and reaches ``_handle_unclassified`` where the
+    delivery ceiling can see it (CR #27, #44).
     """
     # Hoisted out of the comprehension (CR #35): the test is on
     # ``object_options`` as a whole, not on each name, and written as a filter it
@@ -482,12 +479,7 @@ def _classify_provider_failure(exc: Exception) -> Exception:
     class in api_core at all.
     """
     status = getattr(exc, "code", None)
-    terminal = (
-        isinstance(status, int)
-        and not isinstance(status, bool)
-        and 400 <= status < 500
-        and status not in _RETRYABLE_STATUSES
-    )
+    terminal = isinstance(status, int) and 400 <= status < 500 and status not in _RETRYABLE_STATUSES
     if not terminal:
         return TransientReplicateError(f"the provider write failed: {type(exc).__name__}: {exc}")
     reason = (

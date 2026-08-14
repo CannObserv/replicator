@@ -191,9 +191,7 @@ async def test_the_loop_closes_a_replicate_command_with_a_real_fact(
     stream is ``terminal``, because the outcomes that are not terminal publish
     nothing at all and stay pending instead (CR #28).
     """
-    aliases = AliasTable(
-        {"primary": AliasBinding(alias="primary", provider="gcs", bucket="b", prefix="reps")}
-    )
+    aliases = AliasTable({"primary": AliasBinding(provider="gcs", bucket="b", prefix="reps")})
     handler = build_replicate_handler(
         store=LocalBlobStore(tmp_path),
         aliases=aliases,

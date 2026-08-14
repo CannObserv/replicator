@@ -176,14 +176,14 @@ async def test_one_unbuildable_driver_does_not_cost_the_others(monkeypatch, alia
     assert list(wired["writers"]) == ["public"]
 
 
-async def test_a_binding_for_a_provider_with_no_driver_builds_nothing(monkeypatch, wired, tmp_path):
+async def test_a_binding_for_a_provider_with_no_driver_builds_nothing():
     """``gdrive`` and ``ia`` have no conditional create, so there is nothing to
     build for them — and building nothing is what makes the handler's refusal
     ``provider_disabled`` rather than a crash. Constructed directly because
     ``load_alias_table`` will not admit a provider outside ``KNOWN_PROVIDERS``;
     the guard has to hold anyway, since that tuple is what grows first when a
     provider lands."""
-    table = AliasTable({"drive": AliasBinding(alias="drive", provider="gdrive")})
+    table = AliasTable({"drive": AliasBinding(provider="gdrive")})
 
     assert build_writers(table) == {}
     assert StubDriver.built == []
