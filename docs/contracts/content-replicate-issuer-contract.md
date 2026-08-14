@@ -357,7 +357,11 @@ that row past its original T5 reading of "nobody turned it on": the observable s
 host cannot write there", and the remedy is the same operator act either way. A 400 is
 `invalid_destination`, because what the provider rejected came off the command. **Everything else —
 5xx, 429, 408, and any failure carrying no status at all — leaves the command open**, because T4
-makes retrying the write safe; those publish no fact while they retry, which is MUST-6's case.
+makes retrying the write safe. Those publish no fact at all while they retry, and the retry is
+**unbounded**: a transient failure is exempt from the delivery ceiling, so a permanently-broken
+provider retries until an operator intervenes rather than eventually dead-lettering into a fact.
+That is precisely the silence MUST-6's reaper exists for — do not wait on a fact that may never
+come.
 
 `invalid_source` stays separate by the same test: not `blob_expired` (the bytes were never named, so
 re-fetching fixes nothing) and not `invalid_destination` (the remedy is a bug in the issuer's

@@ -4,7 +4,7 @@ Split from ``test_main.py`` by concern rather than size: everything here is abou
 the window between reading the alias table and entering the loop, where a
 credential is resolved for the first time and a misconfiguration is most likely.
 
-Three properties, and the first is the one that had a bug. A driver **is** a
+The first property here is the one that had a bug. A driver **is** a
 bucket — ``AsyncGcsDriver`` takes one in its constructor and never sees another —
 so the collection of them has to be keyed by whatever selects a bucket. Keying it
 by *provider* collapsed every ``gcs`` binding onto one entry, which meant an alias

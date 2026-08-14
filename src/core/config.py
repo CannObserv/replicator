@@ -20,9 +20,9 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Also the default of ``build_replicate_handler``'s ``write_timeout_seconds``,
-# imported from there rather than repeated (CR #43): one number with two
-# spellings drifts into two numbers, and the handler's default is what a
-# directly-constructed handler gets while this field is what the worker gets.
+# which imports it from here rather than repeating it (CR #43, #46): one number
+# with two spellings drifts into two numbers, and the handler's default is what a
+# directly-constructed handler gets while the field below is what the worker gets.
 DEFAULT_WRITE_TIMEOUT_SECONDS = 120
 
 
