@@ -1,10 +1,9 @@
 # The `content.replicate` issuer contract
 
-**Status: the refusals are shipped; the writers are not.** `src/` now runs a `content.replicate`
-loop that resolves the alias, guards both paths, and closes every command with a real fact — but no
-provider writer exists, so a command surviving every guard is refused `provider_disabled`. Five of
-the six documented refusals are reachable today; `destination_conflict` is not, because it is the
-one that needs an authenticated read.
+**Status: shipped for `gcs`.** `src/` runs a `content.replicate` loop that resolves the alias,
+guards both paths, writes through `AsyncGcsDriver.create_if_absent`, and emits both facts. All six
+refusals are reachable. `gdrive` and `ia` have no conditional create yet and are refused
+`provider_disabled` — the same path a host with no binding takes.
 
 Passages marked **⚙** were obligations on the implementation when this document was settled ahead of
 the code (#34). Most are now claims about it, and the ones still outstanding are marked **⚙ pending**:
@@ -18,9 +17,9 @@ adopters had built.
 | T2 — an alias resolves only if provisioned on this host | shipped (`REPLICATOR_REPLICATION_ALIASES_FILE`) |
 | T3 — containment, and the path guard | shipped for `gcs`; the `gdrive`/`ia` rows arrive with those providers |
 | T3a — resolve by fingerprint, never by path | shipped |
-| T4 — the absent/matching/differing table | **⚙ pending** — needs the writer |
+| T4 — the absent/matching/differing table | shipped for `gcs`, and verified against the live bucket |
 | T5 — `ia` gated on an operator act | shipped by construction: `ia` cannot be provisioned at all yet |
-| T6 — `public_url` derived, never echoed | **⚙ pending** — needs the writer |
+| T6 — `public_url` never echoed from the command | shipped, **reworded** — see below (#36) |
 | Charter — the alias is a key, never a value | shipped, plus a second scan that no payload field feeds a credential parameter |
 
 **Audience:** Archiver, the sole issuer ([archiver#137](https://github.com/CannObserv/archiver/issues/137) step 5).
@@ -207,10 +206,28 @@ Archiver writes `public_url` onto `info_item_rep_specs` from `replication_comple
 unauthenticated bus fact chooses a **user-visible, citable URL** in the registry. The answer is bus
 access control, same as everything else — a new consequence, not a new mechanism.
 
-⚙ One promise worth making now rather than retrofitting: **`public_url` is derived from the provider's
-response, never echoed from the command.** A bus writer can influence *where* bytes land, bounded by
-T3; it cannot dictate the URL that reaches the registry. The registry value therefore always names an
-object we actually wrote.
+**The original wording does not survive contact with `gcs`, and the corrected one is narrower and
+true (#36).** It read: *"`public_url` is derived from the provider's response, never echoed from the
+command."* The second half holds everywhere. The first half does not: `Blob.public_url` is a
+client-side f-string over `api_endpoint + bucket + quoted_name` and never round-trips — it returns a
+well-formed URL for an object that was never written. The verdict is not even uniform across the
+three providers: `gdrive`'s `webViewLink` *is* response-minted (Drive mints the file id), while
+`ia`'s is formatted from the identifier the command named. A promise written at the
+provider-response level would be false for two of the three.
+
+⚙ **What is promised instead, and it is the part that was load-bearing all along:**
+
+1. **`public_url` is never echoed from the command.** Nothing on `ContentReplicateCommand` names a
+   URL, so there is nothing to echo.
+2. **It is present only where the object is known to exist** — a successful write, or a confirming
+   read that found it. `GcsCreateResult.public_url` is `None` on every other path, so a fact
+   carrying a URL is a fact about an object that is there.
+3. **It always names a location inside a container the operator provisioned**, because the root is
+   host-bound to the alias and the key is the rendered `destination` the T3 guards already refused
+   for traversal, absolute forms and control characters.
+
+The threat T6 named — a bus writer dictating the registry's citable URL — is answered by (1) and (3)
+together. Provenance of the string was a proxy for that, and a lossy one.
 
 ### Escalation triggers — this capability's own
 
@@ -320,9 +337,9 @@ token on the failure fact. Following the precedent in
 | Condition | `reason` |
 |---|---|
 | the alias is not provisioned on this host | `alias_unknown` |
-| the provider is not enabled on this host (T5) | `provider_disabled` |
+| the provider is not enabled on this host (T5), or the host's credential cannot write there | `provider_disabled` |
 | the rendered path escapes the alias root, or `object_options` names a container the alias does not allow | `invalid_destination` |
-| the destination exists with different bytes (**⚙ pending** — needs the writer) | `destination_conflict` |
+| the destination exists with different bytes | `destination_conflict` |
 | the blob is gone | `blob_expired` |
 | `blob_uri` is not a reference this store minted (T3a) | `invalid_source` |
 
@@ -331,6 +348,20 @@ token on the failure fact. Following the precedent in
 either way — fix the spec and re-issue under a fresh `command_id` — and `detail` carries which guard
 refused it. `alias_unknown` and `provider_disabled` stay separate because their remedies are not the
 same one (fix the spec; act on the host).
+
+**A provider 4xx closes the command, and it mostly lands on `provider_disabled`.** The write itself
+can fail in ways no pre-flight guard can see — the host's credential lacks create permission on the
+bound bucket (403), the bucket named by the binding no longer exists (404), the provider rejects an
+`object_options` value outright (400). The first two are refused `provider_disabled`, which widens
+that row past its original T5 reading of "nobody turned it on": the observable state is now "this
+host cannot write there", and the remedy is the same operator act either way. A 400 is
+`invalid_destination`, because what the provider rejected came off the command. **Everything else —
+5xx, 429, 408, and any failure carrying no status at all — leaves the command open**, because T4
+makes retrying the write safe. Those publish no fact at all while they retry, and the retry is
+**unbounded**: a transient failure is exempt from the delivery ceiling, so a permanently-broken
+provider retries until an operator intervenes rather than eventually dead-lettering into a fact.
+That is precisely the silence MUST-6's reaper exists for — do not wait on a fact that may never
+come.
 
 `invalid_source` stays separate by the same test: not `blob_expired` (the bytes were never named, so
 re-fetching fixes nothing) and not `invalid_destination` (the remedy is a bug in the issuer's

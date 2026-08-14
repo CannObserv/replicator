@@ -4,6 +4,7 @@ import errno
 import os
 import tempfile
 from pathlib import Path
+from typing import IO
 
 # A sibling service reads these bytes by the ``file://`` URI announced on
 # ``blob_available``, so both the file and every directory above it have to be
@@ -180,6 +181,16 @@ class LocalBlobStore:
     def open(self, fingerprint: str) -> bytes:
         """Read back the bytes stored under ``fingerprint``."""
         return self._path_for(fingerprint).read_bytes()
+
+    def open_stream(self, fingerprint: str) -> IO[bytes]:
+        """A seekable binary handle on the blob; the caller closes it.
+
+        ``"rb"`` explicitly rather than by default: the mode is load-bearing here
+        (the driver refuses a text-mode stream by name), so it should be visible
+        at the one place it is chosen rather than inherited from ``open``'s
+        default and assumed correct by every reader after.
+        """
+        return self._path_for(fingerprint).open("rb")
 
     def _path_for(self, fingerprint: str) -> Path:
         """Shard two levels deep by the fingerprint's first four hex characters.

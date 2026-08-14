@@ -15,15 +15,17 @@ on after three rounds of an incomplete deny-list: enumerate what is allowed, and
 the shapes nobody thought of are refused for free.
 """
 
+import io
+
 import pytest
 
 from src.core.errors import PermanentReplicateError, ReplicateReason
 from src.storage.local import LocalBlobStore
 from src.worker.aliases import AliasBinding
-from src.worker.replicate import locate_blob, read_blob, validate_destination
+from src.worker.replicate import locate_blob, validate_destination
 
 FINGERPRINT = "a" * 64
-GCS_ROOT = AliasBinding(alias="primary", provider="gcs", bucket="co-artifacts", prefix="reps")
+GCS_ROOT = AliasBinding(provider="gcs", bucket="co-artifacts", prefix="reps")
 
 
 @pytest.fixture
@@ -54,19 +56,16 @@ def test_locating_a_blob_reads_none_of_it(store, stored, monkeypatch):
     loop, for a command that writes nothing. With two command loops now sharing
     that loop, the read stalled the *fetch* path as well.
 
-    The writer will need the bytes; ``read_blob`` is where it gets them, and by
-    then there is something to do with them.
+    The writer does need the bytes, and takes them as a stream from
+    ``BlobStore.open_stream`` rather than as a value — so the split holds and
+    neither half materializes an artifact this service only means to pass on.
     """
-    monkeypatch.setattr(
-        LocalBlobStore, "open", lambda self, fp: pytest.fail("the guard must not read the blob")
-    )
+    for method in ("open", "open_stream"):
+        monkeypatch.setattr(
+            LocalBlobStore, method, lambda self, fp: pytest.fail("the guard must not read the blob")
+        )
 
     assert locate_blob(stored, store=store) == FINGERPRINT
-
-
-def test_read_blob_returns_the_bytes_for_a_located_fingerprint(store, stored):
-    """The other half of the split, which the first provider writer calls."""
-    assert read_blob(locate_blob(stored, store=store), store=store) == b"artifact bytes"
 
 
 @pytest.mark.parametrize(
@@ -145,10 +144,12 @@ def test_the_resolver_never_touches_a_path_from_the_message(store, stored, monke
     """
     opened: list[str] = []
     monkeypatch.setattr(
-        LocalBlobStore, "open", lambda self, fingerprint: opened.append(fingerprint) or b""
+        LocalBlobStore,
+        "open_stream",
+        lambda self, fingerprint: opened.append(fingerprint) or io.BytesIO(b""),
     )
 
-    read_blob(locate_blob(stored, store=store), store=store)
+    store.open_stream(locate_blob(stored, store=store))
 
     assert opened == [FINGERPRINT]
 
@@ -163,7 +164,7 @@ def test_a_rendered_path_under_the_alias_root_is_accepted():
 
 
 def test_a_binding_with_no_prefix_roots_at_the_bucket():
-    flat = AliasBinding(alias="flat", provider="gcs", bucket="b")
+    flat = AliasBinding(provider="gcs", bucket="b")
 
     assert validate_destination("2026/report.pdf", binding=flat) == "2026/report.pdf"
 
@@ -227,7 +228,7 @@ def test_the_check_runs_on_the_rendered_string_not_on_a_template():
 def test_a_prefix_lookalike_cannot_escape_the_root():
     """``reps`` must not admit ``reps-other``. String-prefix containment checks
     fail exactly here, which is why the join is segment-wise."""
-    sneaky = AliasBinding(alias="p", provider="gcs", bucket="b", prefix="reps")
+    sneaky = AliasBinding(provider="gcs", bucket="b", prefix="reps")
 
     assert validate_destination("2026/r.pdf", binding=sneaky).startswith("reps/")
 

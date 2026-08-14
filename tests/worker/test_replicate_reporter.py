@@ -12,7 +12,7 @@ import json
 import pytest
 from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.envelope import from_wire
-from co_core.pure.models.changes import ReplicationFailedEvent
+from co_core.pure.models.changes import ReplicationCompleteEvent, ReplicationFailedEvent
 from redis.exceptions import ResponseError
 
 from src.core.errors import ReplicateReason
@@ -20,11 +20,20 @@ from src.storage.local import LocalBlobStore
 from src.worker.aliases import AliasBinding, AliasTable
 from src.worker.loop import REPLICATE_SPEC, Outcome, ReplicateFailureReport, poll_once
 from src.worker.replicate import build_replicate_handler
-from src.worker.replicate_reporter import build_replicate_reporter
+from src.worker.replicate_reporter import build_completion_publisher, build_replicate_reporter
 from tests.worker.conftest import GROUP, TOPIC, process_one
-from tests.worker.test_loop_spec import make_replicate_command
+from tests.worker.test_loop_spec import make_replicate_command, make_replicate_command_model
 
 ARTIFACTS = "replicator.test.artifacts"
+
+
+async def _unused(command, public_url):  # pragma: no cover - never reached
+    raise AssertionError("every command in this module is refused before the write")
+
+
+class _NeverReached:
+    async def create_if_absent(self, effect):  # pragma: no cover - never reached
+        raise AssertionError("every command in this module is refused before the write")
 
 
 def a_report(**overrides) -> ReplicateFailureReport:
@@ -38,7 +47,7 @@ def a_report(**overrides) -> ReplicateFailureReport:
     return ReplicateFailureReport(**{**fields, **overrides})
 
 
-async def facts_on(client, topic) -> list[ReplicationFailedEvent]:
+async def facts_on(client, topic) -> list[ReplicationFailedEvent | ReplicationCompleteEvent]:
     out = []
     for message_id, fields in await client.xrange(topic):
         payload = from_wire(
@@ -176,15 +185,19 @@ async def test_the_loop_closes_a_replicate_command_with_a_real_fact(
 ):
     """End to end: a frame on the command stream, a fact on ``content.artifacts``.
 
-    The whole point of shipping the refusing half — an issuer gets a real,
-    distinguishable reason for every command it sends, before any provider writer
-    exists. Each row is one refusal an issuer will actually see, arriving through
-    the loop rather than from a directly-called handler.
+    An issuer gets a real, distinguishable reason for every command it sends.
+    Each row is one refusal an issuer will actually see, arriving through the
+    loop rather than from a directly-called handler — and every fact on this
+    stream is ``terminal``, because the outcomes that are not terminal publish
+    nothing at all and stay pending instead (CR #28).
     """
-    aliases = AliasTable(
-        {"primary": AliasBinding(alias="primary", provider="gcs", bucket="b", prefix="reps")}
+    aliases = AliasTable({"primary": AliasBinding(provider="gcs", bucket="b", prefix="reps")})
+    handler = build_replicate_handler(
+        store=LocalBlobStore(tmp_path),
+        aliases=aliases,
+        writers={"primary": _NeverReached()},
+        complete=_unused,
     )
-    handler = build_replicate_handler(store=LocalBlobStore(tmp_path), aliases=aliases)
     reporter = build_replicate_reporter(client=fake_redis, artifacts_topic=ARTIFACTS)
 
     await fake_redis.xadd(TOPIC, make_replicate_command(command_id="rep-e2e", **command_kwargs))
@@ -199,3 +212,53 @@ async def test_the_loop_closes_a_replicate_command_with_a_real_fact(
     assert fact.reason == expected
     assert fact.terminal is True
     assert fact.info_item_rep_spec_id == "iirs-1"
+
+
+# --------------------------------------------------------------------------
+# The other outcome: replication_complete, on the same stream
+# --------------------------------------------------------------------------
+
+
+async def test_the_completion_publisher_puts_a_real_fact_on_the_artifacts_stream(fake_redis):
+    """The success half, through the real publisher rather than a test double.
+
+    Every other test in the write path substitutes its own ``complete`` seam, so
+    without this the envelope, the topic and the three echoed correlators were
+    exercised nowhere — the handler could have been publishing a well-formed fact
+    to the wrong stream and nothing would have said so.
+    """
+    publish = build_completion_publisher(client=fake_redis, artifacts_topic=ARTIFACTS)
+    command = make_replicate_command_model(command_id="rep-done", blob_uri="file:///x.bin")
+
+    await publish(command, "https://storage.googleapis.com/b/reps/2026/report.pdf")
+
+    (fact,) = await facts_on(fake_redis, ARTIFACTS)
+    assert isinstance(fact, ReplicationCompleteEvent)
+    assert fact.command_id == "rep-done"
+    assert fact.public_url == "https://storage.googleapis.com/b/reps/2026/report.pdf"
+    # Echoed, never read (#28, #29) — and built in this module rather than in the
+    # handler precisely so ``replicate.py`` never names them.
+    assert fact.info_item_rep_spec_id == "iirs-1"
+    assert fact.source_revision_id == "rev-1"
+    assert fact.info_source_id == "src-1"
+
+
+async def test_a_failed_completion_publish_is_raised_not_swallowed(fake_redis, monkeypatch):
+    """The asymmetry with ``build_replicate_reporter``, and the byte path's reason.
+
+    Swallowing here would orphan an *artifact*: a permanent object in a bucket
+    that no registry row points at, which nothing downstream can discover and no
+    reaper can clean up — ``objectCreator`` cannot delete it either. Raising
+    leaves the command pending, and the redelivery re-runs a write T4 makes a
+    safe no-op, so the fact gets another chance.
+    """
+    publish = build_completion_publisher(client=fake_redis, artifacts_topic=ARTIFACTS)
+    command = make_replicate_command_model(command_id="rep-done", blob_uri="file:///x.bin")
+
+    async def refuse(*args, **kwargs):
+        raise ResponseError("OOM command not allowed when used memory > 'maxmemory'")
+
+    monkeypatch.setattr(fake_redis, "xadd", refuse)
+
+    with pytest.raises(ResponseError):
+        await publish(command, "https://storage.googleapis.com/b/reps/2026/report.pdf")

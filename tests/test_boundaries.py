@@ -692,9 +692,17 @@ def test_the_exemption_arithmetic_is_per_token(module, source, expected):
 ALIAS_NAME = "credentials_alias"
 
 # Where the alias may be named at all. It is one module wide on purpose: the
-# handler resolves it and nothing else has any business seeing it. `aliases.py`
-# is absent deliberately — it deals in *bindings*, and it names the alias only as
-# a dict key on data it read from host config, never off a command.
+# handler is the only place it appears, and `aliases.py` is absent deliberately —
+# it deals in *bindings*, and it names the alias only as a dict key on data it
+# read from host config, never off a command.
+#
+# **The handler uses it for two lookups, not one** (#29 CR #47). It resolves the
+# binding — where bytes may land — and then selects that binding's writer, which
+# is a live `AsyncGcsDriver` holding a credential resolved from ADC at startup.
+# That second lookup is inside T1 rather than an exception to it: the alias
+# selects an object the *host* built, and nothing about the credential comes off
+# the message. Both tables are keyed identically, which is why `binding.alias`
+# was dropped (CR #39) — one key, one derivation.
 ALIAS_MODULES = frozenset({"src/worker/replicate.py"})
 
 # Parameter names that hand a value to a provider client as a credential. A
@@ -712,7 +720,17 @@ LOOKUP_CALLS = frozenset({"resolve", "get"})
 
 
 def _is_lookup(node: ast.AST, parent: dict[int, ast.AST]) -> bool:
-    """Whether this occurrence is naming a binding rather than being a value."""
+    """Whether this occurrence is naming a binding rather than being a value.
+
+    **The receiver is not checked**, and that is a known bound on this scan
+    rather than an oversight (CR #47): `aliases.resolve(...)` and
+    `writers.get(...)` are both legal today, and matching on the receiver's name
+    would pin two local variable names into a charter test. So
+    `anything.get(command.credentials_alias)` passes here — including, one day, a
+    `credential_map`. `CREDENTIAL_PARAMS` is the invariant that catches *that*
+    shape, from the other direction: what matters is not which dict was indexed
+    but whether a payload field reaches a parameter a client reads as a secret.
+    """
     context = parent.get(id(node))
     if isinstance(context, ast.Subscript) and context.slice is node:
         return True

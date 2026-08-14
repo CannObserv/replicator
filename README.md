@@ -34,10 +34,13 @@ Publish through co-core's `to_wire`, never hand-rolled fields. The wire carries 
 `info_source_id`, echoed onto both facts and read by nothing here — but correlation is still
 entirely the issuer's job, on `command_id`. Most ways of getting either wrong fail silently.
 
-**Issuing `content.replicate`?** That loop is not built yet, but its contract is —
+**Issuing `content.replicate`?** That loop runs, and it writes for `gcs` (#29) — read
 [`docs/contracts/content-replicate-issuer-contract.md`](docs/contracts/content-replicate-issuer-contract.md)
-settles the trust model and the issuer obligations ahead of the code, because a write to a permanent
-store is bounded by nothing a read is (#34).
+first. It settled the trust model and the issuer obligations *ahead* of the code, because a write to
+a permanent store is bounded by nothing a read is (#34), and the code has since been built to it.
+Two things bite issuers hardest: the destination is **refused, never repaired** — you render it, and
+a redelivery must render the same string, because under T4 that string is the idempotency key — and
+a command with no fact is a command still being retried, not one that failed.
 
 ## Shape
 

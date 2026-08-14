@@ -23,13 +23,14 @@ from typing import Any
 from co_core.pure.adapters.bus import streams
 from co_core_aio.bus import AsyncBusConsumer
 from co_core_aio.fetch import AsyncFetchDriver
+from co_core_aio.gcs import AsyncGcsDriver
 from redis.asyncio import Redis
 
 from src.core.config import Settings, get_settings
 from src.core.logging import configure_logging, get_logger
 from src.storage.local import LocalBlobStore, ensure_directory
 from src.storage.sweeper import BlobUsage
-from src.worker.aliases import load_alias_table
+from src.worker.aliases import AliasTable, load_alias_table
 from src.worker.handler import build_handler
 from src.worker.loop import FETCH_SPEC, REPLICATE_SPEC, run_loop
 from src.worker.policy import (
@@ -39,7 +40,7 @@ from src.worker.policy import (
     run_policy_reader,
 )
 from src.worker.replicate import build_replicate_handler
-from src.worker.replicate_reporter import build_replicate_reporter
+from src.worker.replicate_reporter import build_completion_publisher, build_replicate_reporter
 from src.worker.reporter import build_failure_reporter
 from src.worker.retention import run_sweeper
 
@@ -133,6 +134,46 @@ def build_consumer(
         group=group or settings.consumer_group,
         consumer=settings.consumer_name,
     )
+
+
+def build_writers(aliases: AliasTable) -> dict[str, AsyncGcsDriver]:
+    """One provider writer per provisioned binding, keyed **by alias** (#29).
+
+    By alias and not by provider (CR #26): ``AsyncGcsDriver`` takes a bucket in
+    its constructor and never sees another, so a driver *is* a bucket and the key
+    has to be whatever selects one. Keyed by provider, two ``gcs`` bindings
+    collapsed onto a single entry — the surviving driver served both aliases, so
+    a command could land in a bucket its binding never named, outside the T3 root
+    the destination guard had just checked. The loser was also dropped on the
+    floor with its HTTP session open, because shutdown iterates this dict.
+
+    **A binding that cannot be built is skipped, not raised** (CR #29).
+    ``storage.Client()`` resolves ADC in the constructor, so an expired key file
+    or a revoked SA raises here — and ``load_alias_table`` promises in as many
+    words that a replicate misconfiguration must not take down a worker whose
+    actual job is ``content.fetch``. Skipping keeps that true: the alias has no
+    writer, so the handler refuses it ``provider_disabled``, which is both
+    accurate and the reason whose remedy is the operator act that fixes it. Per
+    binding rather than all-or-nothing, the same shape ``load_alias_table`` uses
+    for one unusable entry in a readable table.
+    """
+    writers: dict[str, AsyncGcsDriver] = {}
+    for alias, binding in aliases.bindings.items():
+        if binding.provider != "gcs":
+            continue
+        try:
+            writers[alias] = AsyncGcsDriver(binding.bucket)
+        except Exception as exc:
+            logger.error(
+                "could not build a provider writer — this alias will be refused",
+                extra={
+                    "alias": alias,
+                    "provider": binding.provider,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "detail": "commands naming it are refused provider_disabled",
+                },
+            )
+    return writers
 
 
 def install_signal_handlers(stop: asyncio.Event) -> None:
@@ -292,6 +333,10 @@ async def run(
     # Constructed inside the try, like the signal handlers: anything opened
     # between here and the try would leak the Redis client if it raised.
     fetcher: AsyncFetchDriver | None = None
+    # Bound before the try for the same reason ``fetcher`` is: the finally block
+    # below iterates it, and a failure between here and its assignment would
+    # raise NameError over the real error.
+    writers: dict[str, AsyncGcsDriver] = {}
     try:
         # One driver for the worker's lifetime, not one per message: it wraps an
         # httpx.AsyncClient whose connection pool is the point, and a per-message
@@ -317,6 +362,13 @@ async def run(
         # replicate command is refused, which is the current state of every host
         # and the safe default (contract T5).
         aliases = load_alias_table(settings.replication_aliases_file)
+        # One driver per provisioned binding, built **here** and not per command:
+        # ``storage.Client()`` resolves ADC synchronously — key files, and on a
+        # GCE-style host the metadata server — so constructing it inside the loop
+        # would put a blocking credential lookup on the event loop once per
+        # replicate command. Empty on a host with nothing provisioned, which is
+        # every host until an operator writes an alias table.
+        writers = build_writers(aliases)
         # Default start_id="$" reads only messages added after group creation.
         # The MVP seed harness controls when commands appear, so a backlog drain
         # ("0") is not needed; REPLICATOR_CONSUMER_START_ID flips it once a live
@@ -406,7 +458,15 @@ async def run(
                 consumer=replicate_consumer,
                 group=settings.replicate_consumer_group,
                 settings=settings,
-                handler=build_replicate_handler(store=store, aliases=aliases),
+                handler=build_replicate_handler(
+                    store=store,
+                    aliases=aliases,
+                    writers=writers,
+                    # The success fact is the handler's to publish, exactly as
+                    # blob_available is the byte path's — the loop sees failures.
+                    complete=build_completion_publisher(client=client),
+                    write_timeout_seconds=settings.replicate_write_timeout_seconds,
+                ),
                 reporter=build_replicate_reporter(client=client),
                 spec=REPLICATE_SPEC,
                 stop=stop,
@@ -424,6 +484,21 @@ async def run(
             remove_signal_handlers()
         if fetcher is not None:
             await fetcher.aclose()
+        for alias, writer in writers.items():
+            # Ours because we built them: the driver closes the transport it
+            # owns, and a client left open holds an HTTP session past shutdown.
+            #
+            # Guarded per writer (CR #30) because this loop runs *before*
+            # ``client.aclose()``: unguarded, one raising driver skipped every
+            # writer after it and leaked the Redis client too — a shutdown path
+            # where the first failure costs every release that follows it.
+            try:
+                await writer.aclose()
+            except Exception as exc:
+                logger.warning(
+                    "failed to close a provider writer",
+                    extra={"alias": alias, "error": f"{type(exc).__name__}: {exc}"},
+                )
         await client.aclose()
 
 

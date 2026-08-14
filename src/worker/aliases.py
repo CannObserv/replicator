@@ -63,9 +63,15 @@ class AliasBinding:
     T1 says no credential travels on the wire; this is the same rule one step
     further in, where the failure would be a key in a crash dump rather than on
     the bus.
+
+    **The alias name is not a field here** (CR #39). It was, and it made the
+    same key derivable two ways — ``build_writers`` keyed its drivers by the
+    table's key while the handler looked them up by ``binding.alias``. Equal by
+    construction through ``load_alias_table`` and free to disagree through any
+    other, which silently disabled a binding whose driver had built fine. A
+    binding says *where*, the table says *which*; one owner each.
     """
 
-    alias: str
     provider: str
     bucket: str = ""
     prefix: str = ""
@@ -180,7 +186,6 @@ def _binding_or_none(alias: str, entry: Any) -> AliasBinding | None:
         logger.warning("ignoring an unusable alias binding", extra={"alias": alias, "detail": why})
         return None
     return AliasBinding(
-        alias=alias,
         provider=entry["provider"],
         bucket=str(entry.get("bucket", "")),
         prefix=str(entry.get("prefix", "")).strip("/"),

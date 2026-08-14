@@ -19,6 +19,12 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Also the default of ``build_replicate_handler``'s ``write_timeout_seconds``,
+# which imports it from here rather than repeating it (CR #43, #46): one number
+# with two spellings drifts into two numbers, and the handler's default is what a
+# directly-constructed handler gets while the field below is what the worker gets.
+DEFAULT_WRITE_TIMEOUT_SECONDS = 120
+
 
 def _default_consumer_name() -> str:
     """Identify this worker within the consumer group.
@@ -171,6 +177,19 @@ class Settings(BaseSettings):
     # message arriving (T5).
     replication_aliases_file: Path | None = Field(
         default=None, validation_alias="REPLICATOR_REPLICATION_ALIASES_FILE"
+    )
+
+    # How long one conditional create may run before the provider gives up.
+    #
+    # Surfaced rather than inherited (CR #38): the SDK's own default is 120s and
+    # nobody chose it. The number matters for the same reason the fetch timeout
+    # does — a hung write holds its PEL entry for the whole window, and on the
+    # write side that window is also how long a large blob has to reach a
+    # permanent store over whatever link this host has.
+    replicate_write_timeout_seconds: int = Field(
+        default=DEFAULT_WRITE_TIMEOUT_SECONDS,
+        gt=0,
+        validation_alias="REPLICATOR_REPLICATE_WRITE_TIMEOUT_SECONDS",
     )
 
     consumer_start_id: str = Field(default="$", validation_alias="REPLICATOR_CONSUMER_START_ID")
