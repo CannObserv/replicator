@@ -1,12 +1,27 @@
 # The `content.replicate` issuer contract
 
-**Status: settled ahead of the code.** Nothing here describes shipped behaviour — `src/` has no
-provider writer and no credential-resolution surface. This document is written *before*
-[cannobserv#303](https://github.com/CannObserv/cannobserv/issues/303) cuts the models, deliberately:
-the trust model decides whether the payload grows a credential field, and that is not a contract to
-re-cut after two adopters have built (#34). Passages marked **⚙** become assertions about this
-repo's code when #29 lands; until then they are obligations on the implementation, not claims about
-it.
+**Status: the refusals are shipped; the writers are not.** `src/` now runs a `content.replicate`
+loop that resolves the alias, guards both paths, and closes every command with a real fact — but no
+provider writer exists, so a command surviving every guard is refused `provider_disabled`. Five of
+the six documented refusals are reachable today; `destination_conflict` is not, because it is the
+one that needs an authenticated read.
+
+Passages marked **⚙** were obligations on the implementation when this document was settled ahead of
+the code (#34). Most are now claims about it, and the ones still outstanding are marked **⚙ pending**:
+they all sit behind the first provider writer. The original bet stands — the trust model decided
+whether the payload grows a credential field, and that was not a contract to re-cut after two
+adopters had built.
+
+| ⚙ obligation | State |
+|---|---|
+| T1 — no credential travels, and none reaches the journal | shipped; `AliasBinding` has nowhere to hold one, asserted structurally |
+| T2 — an alias resolves only if provisioned on this host | shipped (`REPLICATOR_REPLICATION_ALIASES_FILE`) |
+| T3 — containment, and the path guard | shipped for `gcs`; the `gdrive`/`ia` rows arrive with those providers |
+| T3a — resolve by fingerprint, never by path | shipped |
+| T4 — the absent/matching/differing table | **⚙ pending** — needs the writer |
+| T5 — `ia` gated on an operator act | shipped by construction: `ia` cannot be provisioned at all yet |
+| T6 — `public_url` derived, never echoed | **⚙ pending** — needs the writer |
+| Charter — the alias is a key, never a value | shipped, plus a second scan that no payload field feeds a credential parameter |
 
 **Audience:** Archiver, the sole issuer ([archiver#137](https://github.com/CannObserv/archiver/issues/137) step 5).
 
@@ -307,7 +322,7 @@ token on the failure fact. Following the precedent in
 | the alias is not provisioned on this host | `alias_unknown` |
 | the provider is not enabled on this host (T5) | `provider_disabled` |
 | the rendered path escapes the alias root, or `object_options` names a container the alias does not allow | `invalid_destination` |
-| the destination exists with different bytes | `destination_conflict` |
+| the destination exists with different bytes (**⚙ pending** — needs the writer) | `destination_conflict` |
 | the blob is gone | `blob_expired` |
 | `blob_uri` is not a reference this store minted (T3a) | `invalid_source` |
 

@@ -11,11 +11,21 @@ deps are what the wheelhouse provides), so invoke it in an isolated env:
 
     uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
 
-Authentication is Application Default Credentials. On the VM/deploy that is the
-service-account key at ``GOOGLE_APPLICATION_CREDENTIALS`` (set in
-``/etc/replicator/.env``); in CI it is the ADC file written by
+Authentication is Application Default Credentials **unless
+``REPLICATOR_WHEELHOUSE_CREDENTIALS`` names a key file**, in which case that key
+is used instead. In CI it stays ADC — the file written by
 ``google-github-actions/auth`` (keyless Workload Identity Federation). Either
 way the identity needs only ``roles/storage.objectViewer`` on the bucket.
+
+**Why the override exists (#29).** This script runs as an ``ExecStartPre``, so
+it shares one process environment with the worker — and the worker's ADC is
+about to become the *replication writer*, which needs write on
+``co-gcs-replication`` and has no business reading the package index. One
+identity for both would hand the boot step write access to permanent artifacts
+and hand the worker read access to the wheel index, each for no reason. Pointing
+this script at its own read-only key keeps the two least-privilege, and matches
+the rule AGENTS.md already applies to the repo ``.env``: anything the service
+does not need should not be in reach of the service.
 
 Exit codes: ``0`` success (including a no-op re-run) · ``1`` failure (auth,
 network, or a missing bucket). The unit runs this as a non-fatal
@@ -42,6 +52,9 @@ from pathlib import Path
 # analysis cannot resolve it — that is expected, not a missing dependency.
 from google.cloud import storage  # ty: ignore[unresolved-import]
 
+# A read-only key for the package index. Unset falls back to ADC, which is what
+# CI uses and what a developer with a single gcloud login expects.
+CREDENTIALS = os.environ.get("REPLICATOR_WHEELHOUSE_CREDENTIALS", "")
 BUCKET = os.environ.get("REPLICATOR_WHEELHOUSE_BUCKET", "co-gcs-pypi")
 PREFIX = os.environ.get("REPLICATOR_WHEELHOUSE_PREFIX", "wheels/")
 DEST = Path(__file__).resolve().parent.parent / ".wheelhouse"
@@ -52,7 +65,11 @@ def sync() -> int:
     DEST.mkdir(parents=True, exist_ok=True)
     downloaded = skipped = 0
     try:
-        client = storage.Client()
+        client = (
+            storage.Client.from_service_account_json(CREDENTIALS)
+            if CREDENTIALS
+            else storage.Client()
+        )
         for blob in client.list_blobs(BUCKET, prefix=PREFIX):
             name = blob.name.removeprefix(PREFIX)
             if not name:  # the prefix "directory" placeholder object, if any

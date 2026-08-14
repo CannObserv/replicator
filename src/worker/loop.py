@@ -31,7 +31,7 @@ from typing import Protocol
 from co_core.effects.bus import BusMessage
 from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
-from co_core.pure.models.changes import ContentFetchCommand
+from co_core.pure.models.changes import ContentFetchCommand, ContentReplicateCommand
 from co_core_aio.bus import AsyncBusConsumer
 from redis.asyncio import Redis
 from redis.exceptions import BusyLoadingError
@@ -123,6 +123,34 @@ class FailureReport:
     info_source_id: str
     reason: FailureReason
     status_code: int | None = None
+    attempts: int | None = None
+    detail: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ReplicateFailureReport:
+    """What the loop knows about a replicate command it is closing (#29).
+
+    Defined here beside ``FailureReport`` rather than with its publisher, for the
+    reason that one is: the loop builds these and the reporter consumes them, so
+    the dependency runs one way and ``src.worker.replicate_reporter`` imports
+    from this module without a cycle.
+
+    **No ``status_code``.** ``ReplicationFailedEvent`` models none — no documented
+    refusal reports a provider's HTTP status as its own outcome, since
+    ``destination_conflict`` consumes the 412 rather than reporting it. The loop
+    passes one anyway, because fetch has them, and the spec's builder drops it.
+
+    ``info_item_rep_spec_id`` and ``source_revision_id`` are carried and never
+    consulted, exactly as ``info_source_id`` is. They are required rather than
+    defaulted because co-core requires them on the fact.
+    """
+
+    command_id: str
+    info_item_rep_spec_id: str
+    source_revision_id: str
+    info_source_id: str
+    reason: str
     attempts: int | None = None
     detail: str | None = None
 
@@ -256,6 +284,28 @@ FETCH_SPEC: CommandSpec[ContentFetchCommand, FailureReport] = CommandSpec(
     ),
     describe=lambda command: {"url": command.url},
 )
+
+# The second command stream (#29), beside FETCH_SPEC so the uniqueness assertion
+# in ``test_loop_spec.py`` sees both.
+REPLICATE_SPEC: CommandSpec[ContentReplicateCommand, ReplicateFailureReport] = CommandSpec(
+    command_type=ContentReplicateCommand,
+    label=streams.CONTENT_REPLICATE,
+    dedupe_segment="replicate",
+    # ``status_code`` is bound and discarded: ReplicationFailedEvent models none.
+    # The loop passes every cause it has and each stream decides what its own
+    # fact can say.
+    build_report=lambda command, *, status_code=None, **cause: ReplicateFailureReport(
+        command_id=command.command_id,
+        # Copied across, never read (#28, #29).
+        info_item_rep_spec_id=command.info_item_rep_spec_id,
+        source_revision_id=command.source_revision_id,
+        info_source_id=command.info_source_id,
+        **cause,
+    ),
+    # A replicate command has no URL; what names it is where it was going.
+    describe=lambda command: {"destination": command.destination},
+)
+
 
 # How long an idle poll parks before looking again. On a live broker the
 # blocking XREADGROUP is the real wait and this adds ~50ms per idle tick; it is

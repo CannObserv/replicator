@@ -11,6 +11,7 @@ Owns content fetching, temp storage, and fingerprinting — the network-bound, b
 ```
 content.fetch (command) → fetch → fingerprint → temp-store → blob_available (fact)
                         ↘ closed without bytes ───────────────→ fetch_failed  (fact)
+content.replicate (cmd) → guards → [no writer yet] ─────────→ replication_failed (fact)
 ```
 
 Founding design: `docs/plans/2026-06-25-replicator-mvp-design.md`. Parent strategy lives in archiver (`docs/plans/2026-06-25-observer-cluster-integration-strategy-design.md`); Replicator is its Phase 3.
@@ -137,11 +138,16 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
 - **Consumers must be idempotent; producers own the outbox.** Replicator has no DB
   — its durable record of intent is the consumer group's PEL. Do not add a
   Postgres outbox to the consume path.
-- **Three stream kinds, three sets of rules.** `content.fetch` is the command
-  stream, `content.blobs` carries both outcomes (`blob_available` and
-  `fetch_failed`), and `content.fetch-policy` is read **groupless** — no group, no
-  ack, no DLQ. Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before changing
-  what any of them carries.
+- **Three stream kinds, three sets of rules.** `content.fetch` and
+  `content.replicate` are command streams (one group each, competing consumers);
+  `content.blobs` and `content.artifacts` each carry both outcomes of their
+  command; `content.fetch-policy` is read **groupless** — no group, no ack, no
+  DLQ. Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before changing what any
+  of them carries.
+- **The replicate loop refuses everything today (#29).** No provider writer is
+  wired, so `provider_disabled` is the accurate outcome, not a stub. `blob_uri`
+  is **never resolved as a path** — fingerprint out, compared against
+  `store.uri_for()` — and every refusal happens before any credential is touched.
 - **Nothing but the seed script writes to `content.fetch`.** `scripts/seed_fetch.py`
   requires `--production` for the one combination the live worker consumes — a
   frame there is fetched for real.

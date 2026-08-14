@@ -58,10 +58,14 @@ class ReplicateReport:
     # so a report carrying one would be inventing a value with nowhere to go.
 
 
+# A *third* stream, not a stand-in for the shipped one. src/worker/loop.py now
+# exposes a real REPLICATE_SPEC; keeping a local spec with its own report type is
+# what keeps these tests about the seam being generic rather than about the two
+# specs that happen to exist (#29).
 REPLICATE_SPEC: CommandSpec[ContentReplicateCommand, ReplicateReport] = CommandSpec(
     command_type=ContentReplicateCommand,
     label=streams.CONTENT_REPLICATE,
-    dedupe_segment="replicate",
+    dedupe_segment="replicate-under-test",
     # ``status_code`` is bound and discarded, which is what a per-stream builder
     # is *for*: the loop passes every cause it has, and each stream decides what
     # its own fact can say. A shared report dataclass would have had to carry the
@@ -80,22 +84,30 @@ def _raising_builder(command, **cause):
     raise TypeError("this spec's builder is broken")
 
 
-def make_replicate_command(command_id: str = "rep-1") -> dict[str, str]:
+def make_replicate_command_model(**overrides) -> ContentReplicateCommand:
+    """A well-formed ``ContentReplicateCommand``, overridable field by field.
+
+    Shared with the handler tests, which need the model rather than the frame —
+    one builder so a field co-core adds is added in one place.
+    """
+    fields = {
+        "occurred_at": "2026-08-13T00:00:00.000000Z",
+        "command_id": "rep-1",
+        "blob_uri": "file:///var/lib/replicator/blobs/ab/cd/abcd.bin",
+        "media_type": "application/pdf",
+        "provider": "gcs",
+        "credentials_alias": "primary",
+        "destination": "reports/2026/abcd.pdf",
+        "info_item_rep_spec_id": "iirs-1",
+        "source_revision_id": "rev-1",
+        "info_source_id": "src-1",
+    }
+    return ContentReplicateCommand(**{**fields, **overrides})
+
+
+def make_replicate_command(command_id: str = "rep-1", **overrides) -> dict[str, str]:
     """A well-formed ``content.replicate`` wire frame, through co-core's own encoder."""
-    return to_wire(
-        ContentReplicateCommand(
-            occurred_at="2026-08-13T00:00:00.000000Z",
-            command_id=command_id,
-            blob_uri="file:///var/lib/replicator/blobs/ab/cd/abcd.bin",
-            media_type="application/pdf",
-            provider="gcs",
-            credentials_alias="primary",
-            destination="reports/2026/abcd.pdf",
-            info_item_rep_spec_id="iirs-1",
-            source_revision_id="rev-1",
-            info_source_id="src-1",
-        )
-    )
+    return to_wire(make_replicate_command_model(command_id=command_id, **overrides))
 
 
 async def test_a_replicate_command_is_dispatched_and_acked(fake_redis, consumer, settings):

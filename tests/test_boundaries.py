@@ -159,12 +159,20 @@ DOMAIN_TOKENS = frozenset({"info_source", "info_item", "watched_item", "tenant",
 ECHOED_FIELDS = {"info_source": "info_source_id", "info_item": "info_item_rep_spec_id"}
 ECHOED_NAMES = frozenset(ECHOED_FIELDS.values())
 
-# Exactly the three modules on the emit path: the two publishers, and the report
-# dataclass that carries the value between them. Deliberately not a directory
-# glob — ``src/worker/`` also holds the pacer, the sweep and the policy reader,
-# none of which has any business naming a domain object.
+# Exactly the modules on an emit path: the publishers, and the report dataclasses
+# that carry the values between them. Deliberately not a directory glob —
+# ``src/worker/`` also holds the pacer, the sweep, the policy reader, the alias
+# table and the replicate handler, none of which has any business naming a domain
+# object. That ``replicate.py`` is *absent* is the load-bearing part: the
+# replicate handler decides what to do with a command and must reach none of
+# these fields to do it (#29).
 DOMAIN_ECHO_MODULES = frozenset(
-    {"src/worker/handler.py", "src/worker/reporter.py", "src/worker/loop.py"}
+    {
+        "src/worker/handler.py",
+        "src/worker/reporter.py",
+        "src/worker/loop.py",
+        "src/worker/replicate_reporter.py",
+    }
 )
 
 # Where the echo may never spread, asserted against the allowlist itself rather
@@ -175,18 +183,33 @@ DOMAIN_ECHO_FORBIDDEN = ("src/core/config.py", "src/storage/", "src/api/")
 
 
 def _docstring_nodes(tree: ast.AST) -> set[int]:
-    """Ids of the ``Constant`` nodes that are docstrings, so the scan can skip them."""
+    """Ids of the ``Constant`` nodes that are docstrings, so the scan can skip them.
+
+    Two kinds. The first is the conventional one: a module's, class's or
+    function's leading string. The second is the **attribute docstring** (PEP
+    258) — a bare string statement following an assignment, which is how every
+    member of ``FailureReason`` and ``ReplicateReason`` documents itself. Those
+    are prose by every measure a reader applies and are skipped for the reason
+    the vocabulary scan is AST-based at all: a test whose first tripper is an
+    English sentence gets deleted rather than heeded (#29).
+    """
     skip: set[int] = set()
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+        body = getattr(node, "body", None)
+        if not isinstance(body, list):
             continue
-        first = node.body[0] if node.body else None
-        if (
-            isinstance(first, ast.Expr)
-            and isinstance(first.value, ast.Constant)
-            and isinstance(first.value.value, str)
-        ):
-            skip.add(id(first.value))
+        for index, statement in enumerate(body):
+            if not (
+                isinstance(statement, ast.Expr)
+                and isinstance(statement.value, ast.Constant)
+                and isinstance(statement.value.value, str)
+            ):
+                continue
+            # Position 0 is the classic docstring; anything later counts only
+            # when it follows an assignment, which is what makes it an attribute
+            # docstring rather than a stray expression.
+            if index == 0 or isinstance(body[index - 1], ast.Assign | ast.AnnAssign):
+                skip.add(id(statement.value))
     return skip
 
 
@@ -648,6 +671,203 @@ def test_the_exemption_arithmetic_is_per_token(module, source, expected):
     clean, which is exactly why it is pinned here.
     """
     assert _exempted_hits(module, ast.parse(source)) == expected
+
+
+# --------------------------------------------------------------------------
+# 2b. The alias is a key, never a value (#29)
+# --------------------------------------------------------------------------
+
+# The replicate contract's charter check calls for this one by name: "an AST scan
+# asserting every ``credentials_alias`` occurrence is a lookup key or a resolver
+# argument — the mirror of the existing scan that keeps ``info_source_id`` echoed
+# and never interpreted — plus the assertion that no payload field feeds a
+# provider client's credential."
+#
+# The two halves guard different failures. Reading the alias as a *value* is how
+# Replicator would start deciding what a destination means — the domain model
+# arriving through a field the charter never listed. Feeding a payload field to a
+# credential parameter is T1's line: no secret travels, and the way that gets
+# broken is not a `secret` field appearing on the wire but an existing field
+# being handed to a client that treats it as one.
+ALIAS_NAME = "credentials_alias"
+
+# Where the alias may be named at all. It is one module wide on purpose: the
+# handler resolves it and nothing else has any business seeing it. `aliases.py`
+# is absent deliberately — it deals in *bindings*, and it names the alias only as
+# a dict key on data it read from host config, never off a command.
+ALIAS_MODULES = frozenset({"src/worker/replicate.py"})
+
+# Parameter names that hand a value to a provider client as a credential. A
+# payload field reaching one of these is T1 broken, whatever it is called.
+CREDENTIAL_PARAMS = frozenset(
+    {"credentials", "credential", "token", "key", "secret", "password", "api_key", "access_key"}
+)
+
+
+# Calls that *look up* by alias rather than doing something with it. Named
+# explicitly, because the first cut allowed any call taking the alias positionally
+# — under which ``seen.add(command.credentials_alias)`` was legal, and building a
+# set of seen aliases is exactly the state this invariant exists to prevent.
+LOOKUP_CALLS = frozenset({"resolve", "get"})
+
+
+def _is_lookup(node: ast.AST, parent: dict[int, ast.AST]) -> bool:
+    """Whether this occurrence is naming a binding rather than being a value."""
+    context = parent.get(id(node))
+    if isinstance(context, ast.Subscript) and context.slice is node:
+        return True
+    if isinstance(context, ast.Call) and node in context.args:
+        func = context.func
+        return isinstance(func, ast.Attribute) and func.attr in LOOKUP_CALLS
+    return False
+
+
+def _alias_violations(tree: ast.AST) -> list[str]:
+    """Every ``credentials_alias`` occurrence that is not a lookup or a parameter.
+
+    Inverted like the echo scan, and for the same reason: a deny-list of forbidden
+    positions is only ever as complete as its last probe. The legal shapes are
+
+    1. the argument of a resolver call — ``aliases.resolve(command.credentials_alias)``;
+    2. a parameter or annotated declaration carrying it through.
+
+    Everything else is flagged, including an f-string, a comparison, a subscript,
+    a dict key, or a bare assignment to a local — each of which is a step toward
+    treating the alias as data rather than as a selector.
+    """
+    parent = _parents(tree)
+    skip = _docstring_nodes(tree)
+    violations: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.arg) and node.arg == ALIAS_NAME:
+            continue
+        if isinstance(node, ast.Attribute) and node.attr == ALIAS_NAME:
+            if not _is_lookup(node, parent):
+                violations.append(f"line {node.lineno}: .{ALIAS_NAME} used as a value")
+        elif isinstance(node, ast.Name) and node.id == ALIAS_NAME:
+            context = parent.get(id(node))
+            if isinstance(context, ast.AnnAssign) and context.target is node:
+                continue
+            if not _is_lookup(node, parent):
+                violations.append(f"line {node.lineno}: {ALIAS_NAME} used as a bare name")
+        elif (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and id(node) not in skip
+            and ALIAS_NAME in node.value
+        ):
+            violations.append(f"line {node.lineno}: {ALIAS_NAME!r} in a string literal")
+    return violations
+
+
+def _credential_feeds(tree: ast.AST) -> list[str]:
+    """Every call that hands a *payload* attribute to a credential-shaped keyword.
+
+    ``client(credentials=command.credentials_alias)`` is the shape T1 forbids, and
+    it is the one a well-meaning change makes: the alias is right there, it is
+    called "credentials_alias", and passing it looks like wiring rather than like
+    putting a secret on the wire.
+    """
+    violations: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        for keyword in node.keywords:
+            if keyword.arg in CREDENTIAL_PARAMS and isinstance(keyword.value, ast.Attribute):
+                violations.append(
+                    f"line {node.lineno}: {keyword.arg}= is fed from .{keyword.value.attr}"
+                )
+    return violations
+
+
+def test_the_alias_is_a_key_never_a_value():
+    """The replicate charter check, made mechanical (#29).
+
+    ``credentials_alias`` selects a binding the operator provisioned. The moment
+    it is compared, formatted, or stored, Replicator has started to interpret a
+    payload field — which is charter test 3 failing through a field that is not
+    in ``DOMAIN_TOKENS`` and never will be.
+    """
+    files = _python_files(SRC)
+    assert files, f"no modules found under {SRC} — the scan is a no-op"
+
+    offenders = {}
+    for path in files:
+        name = path.relative_to(REPO).as_posix()
+        violations = _alias_violations(_parse(path))
+        if violations and name not in ALIAS_MODULES:
+            offenders[name] = ["names the alias at all"] + violations
+        elif violations:
+            offenders[name] = violations
+    assert not offenders
+
+
+def test_no_payload_field_feeds_a_credential_parameter():
+    """T1's line, asserted where it would actually be crossed.
+
+    No secret travels on the wire — but the way that guarantee breaks is not a new
+    field on the payload, it is an existing field handed to a client that treats
+    it as one. Scoped to every module because the offending call would live
+    wherever the first provider writer does.
+    """
+    offenders = {
+        path.relative_to(REPO).as_posix(): feeds
+        for path in _python_files(SRC)
+        if (feeds := _credential_feeds(_parse(path)))
+    }
+    assert not offenders
+
+
+def test_the_alias_modules_list_names_files_that_exist():
+    for module in ALIAS_MODULES:
+        assert (REPO / module).is_file(), module
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param('if command.credentials_alias == "primary": ...', id="comparison"),
+        pytest.param('k = f"alias:{command.credentials_alias}"', id="f-string"),
+        pytest.param("seen.add(command.credentials_alias)", id="stored"),
+        pytest.param("alias = command.credentials_alias", id="bound-to-a-local"),
+        pytest.param('d = {"credentials_alias": 1}', id="string-literal"),
+        pytest.param("x = [command.credentials_alias]", id="list-element"),
+    ],
+)
+def test_the_alias_detector_sees_a_planted_read(source):
+    assert _alias_violations(ast.parse(source))
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param("binding = aliases.resolve(command.credentials_alias)", id="resolver-call"),
+        pytest.param("binding = table[command.credentials_alias]", id="subscript-lookup"),
+        pytest.param("def f(credentials_alias): ...", id="parameter"),
+    ],
+)
+def test_the_alias_detector_passes_a_lookup(source):
+    assert not _alias_violations(ast.parse(source))
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param("Client(credentials=command.credentials_alias)", id="alias-as-credential"),
+        pytest.param("Client(token=command.some_field)", id="any-payload-field-as-token"),
+        pytest.param("build(secret=command.credentials_alias)", id="secret-kwarg"),
+    ],
+)
+def test_the_credential_detector_sees_a_planted_feed(source):
+    assert _credential_feeds(ast.parse(source))
+
+
+def test_the_credential_detector_passes_a_host_resolved_credential():
+    """The shape T1 *allows*: the client resolves its own credential locally, and
+    the binding names only where to write."""
+    source = "Client(project=binding.project).bucket(binding.bucket)"
+
+    assert not _credential_feeds(ast.parse(source))
 
 
 # --------------------------------------------------------------------------

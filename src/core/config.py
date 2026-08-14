@@ -150,6 +150,29 @@ class Settings(BaseSettings):
     # this value is inert, and switching to "0" (drain the backlog) additionally
     # needs a manual XGROUP SETID. Kept configurable so the eventual change is a
     # config edit rather than a code change.
+    # The second command stream's group (#29). Separate from consumer_group
+    # because the two streams are separate command queues: one group per stream,
+    # competing consumers within each. Sharing a name across streams would make
+    # `claim_stale` on one reach into the other's PEL.
+    replicate_consumer_group: str = Field(
+        default="replicator.replicate", validation_alias="REPLICATOR_REPLICATE_CONSUMER_GROUP"
+    )
+
+    # Where the alias table lives, or None on a host that does not replicate.
+    #
+    # A *path*, not the table itself: the provisioned set is host state, which
+    # puts it in the charter's env channel, but it is a table and one
+    # REPLICATOR_* variable per alias per field is a shape env does not hold. The
+    # contract's phrase is "env-referenced host config" (T2), and this is that.
+    #
+    # Unset is the safe default and the current state of every host: nothing
+    # provisioned means every replicate command is refused, so enabling
+    # replication is an explicit operator act rather than a consequence of a
+    # message arriving (T5).
+    replication_aliases_file: Path | None = Field(
+        default=None, validation_alias="REPLICATOR_REPLICATION_ALIASES_FILE"
+    )
+
     consumer_start_id: str = Field(default="$", validation_alias="REPLICATOR_CONSUMER_START_ID")
 
     # How long a pending entry must sit untouched before another worker may

@@ -29,14 +29,17 @@ from src.core.config import Settings, get_settings
 from src.core.logging import configure_logging, get_logger
 from src.storage.local import LocalBlobStore, ensure_directory
 from src.storage.sweeper import BlobUsage
+from src.worker.aliases import load_alias_table
 from src.worker.handler import build_handler
-from src.worker.loop import FETCH_SPEC, run_loop
+from src.worker.loop import FETCH_SPEC, REPLICATE_SPEC, run_loop
 from src.worker.policy import (
     FetchPolicyMap,
     build_policy_reader,
     replay_policies,
     run_policy_reader,
 )
+from src.worker.replicate import build_replicate_handler
+from src.worker.replicate_reporter import build_replicate_reporter
 from src.worker.reporter import build_failure_reporter
 from src.worker.retention import run_sweeper
 
@@ -101,7 +104,11 @@ def _unreachable_levels(blob_dir: Path) -> list[tuple[Path, int]]:
 
 
 def build_consumer(
-    client: Redis, settings: Settings, *, topic: str = streams.CONTENT_FETCH
+    client: Redis,
+    settings: Settings,
+    *,
+    topic: str = streams.CONTENT_FETCH,
+    group: str | None = None,
 ) -> AsyncBusConsumer:
     """Wire an ``AsyncBusConsumer`` for the ``content.fetch`` command stream.
 
@@ -114,11 +121,16 @@ def build_consumer(
     because a frame added to the real ``content.fetch`` would be fetched for real
     by the running service. Configuration would make the production stream an
     operator's typo away, and there is no deployment that wants a different one.
+
+    ``group`` defaults to the fetch group and is passed explicitly by the
+    replicate loop (#29). One group per *stream*, never one shared across both:
+    ``claim_stale`` walks a group's PEL, so a shared name would let recovery on
+    one stream reach into the other's pending entries.
     """
     return AsyncBusConsumer(
         client,
         topic=topic,
-        group=settings.consumer_group,
+        group=group or settings.consumer_group,
         consumer=settings.consumer_name,
     )
 
@@ -232,15 +244,16 @@ async def run(
     stop: asyncio.Event | None = None,
     *,
     policy_topic: str = streams.CONTENT_FETCH_POLICY,
+    replicate_topic: str = streams.CONTENT_REPLICATE,
 ) -> None:
     """Connect to the bus, ensure the consumer group, and consume until stopped.
 
     ``stop`` is injectable so tests drive the loop without signals; left unset,
     the process owns its own event and wires SIGTERM/SIGINT to it.
 
-    ``policy_topic`` is a defaulted argument for the same reason ``content.fetch``
-    and ``content.blobs`` are: the only caller that moves it is a live-broker test
-    working on a scratch stream.
+    ``policy_topic`` and ``replicate_topic`` are defaulted arguments for the same
+    reason ``content.fetch`` and ``content.blobs`` are: the only caller that moves
+    them is a live-broker test working on a scratch stream.
     """
     settings = get_settings()
     configure_logging(settings.log_level)
@@ -293,11 +306,23 @@ async def run(
             install_signal_handlers(stop)
 
         consumer = build_consumer(client, settings)
+        # The second command stream (#29). Its own group, its own PEL, its own
+        # dedupe namespace — everything a competing-consumer command stream needs
+        # not to interfere with the first one.
+        replicate_consumer = build_consumer(
+            client, settings, topic=replicate_topic, group=settings.replicate_consumer_group
+        )
+        # Host state, read once at boot: which destinations an operator
+        # provisioned here. Unset means nothing is provisioned and every
+        # replicate command is refused, which is the current state of every host
+        # and the safe default (contract T5).
+        aliases = load_alias_table(settings.replication_aliases_file)
         # Default start_id="$" reads only messages added after group creation.
         # The MVP seed harness controls when commands appear, so a backlog drain
         # ("0") is not needed; REPLICATOR_CONSUMER_START_ID flips it once a live
         # issuer exists — see the setting for the XGROUP SETID caveat.
         await consumer.ensure_group(start_id=settings.consumer_start_id)
+        await replicate_consumer.ensure_group(start_id=settings.consumer_start_id)
         logger.info(
             "worker ready",
             extra={
@@ -309,6 +334,10 @@ async def run(
                 # StartLimitIntervalSec is sized against it, and a config change
                 # that widens it would otherwise be invisible.
                 "worst_case_outage_seconds": settings.worst_case_outage_seconds,
+                # What this host will accept a replicate command for. Empty is
+                # the expected value today and says so plainly, rather than
+                # leaving an operator to infer it from a stream of refusals.
+                "replication_aliases": list(aliases.provisioned),
             },
         )
         # One instance, deliberately shared: the sweep measures the tree and the
@@ -316,6 +345,11 @@ async def run(
         # would be individually correct and the ceiling would never fire, with
         # nothing observing the difference until the disk was full.
         usage = BlobUsage()
+        # One store for both command loops, for the reason `usage` is one object:
+        # wired twice, each half would be individually correct and any state a
+        # backend later holds — a client pool, #7's object-store handle — would
+        # silently be two (CR #18).
+        store = LocalBlobStore(blob_dir)
         # Rebuilt from the stream *before* the consume loop starts, not as the
         # first pass of the tail task (#19). Started as a peer, the loop would
         # fetch its opening commands against an empty map and pace every host at
@@ -336,7 +370,7 @@ async def run(
                 settings=settings,
                 handler=build_handler(
                     fetcher=fetcher,
-                    store=LocalBlobStore(blob_dir),
+                    store=store,
                     client=client,
                     settings=settings,
                     usage=usage,
@@ -361,6 +395,20 @@ async def run(
                 # failure report. A second loop over content.replicate is another
                 # run_loop with another spec, not another module (#29).
                 spec=FETCH_SPEC,
+                stop=stop,
+            ),
+            # The second command loop: same machinery, different spec (#29). It
+            # writes nothing yet — no provider is enabled on any host — so every
+            # command is refused with an accurate reason and a real fact, which
+            # is what lets Archiver build against it before the writers land.
+            run_loop(
+                client=client,
+                consumer=replicate_consumer,
+                group=settings.replicate_consumer_group,
+                settings=settings,
+                handler=build_replicate_handler(store=store, aliases=aliases),
+                reporter=build_replicate_reporter(client=client),
+                spec=REPLICATE_SPEC,
                 stop=stop,
             ),
             run_sweeper(root=blob_dir, settings=settings, usage=usage, stop=stop),
