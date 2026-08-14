@@ -149,7 +149,12 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
   redelivery onto matching bytes is a no-op that re-emits the same `public_url`
   and differing bytes are a terminal conflict. `blob_uri` is **never resolved as
   a path** — fingerprint out, compared against `store.uri_for()` — and every
-  refusal happens before any credential is touched.
+  refusal happens before any credential is touched. Writers are keyed **by alias**:
+  a driver is a bucket, so keying by provider let a command land outside its own
+  binding's root. Provider failures classify by HTTP status — 4xx closes the
+  command, 5xx/408/429 and statusless errors leave it pending — because a
+  transient failure is exempt from the delivery ceiling and publishes no fact at
+  all, so misclassifying one strands the issuer forever (#29 CR #26, #27).
 - **Nothing but the seed script writes to `content.fetch`.** `scripts/seed_fetch.py`
   requires `--production` for the one combination the live worker consumes — a
   frame there is fetched for real.

@@ -173,6 +173,17 @@ class Settings(BaseSettings):
         default=None, validation_alias="REPLICATOR_REPLICATION_ALIASES_FILE"
     )
 
+    # How long one conditional create may run before the provider gives up.
+    #
+    # Surfaced rather than inherited (CR #38): the SDK's own default is 120s and
+    # nobody chose it. The number matters for the same reason the fetch timeout
+    # does — a hung write holds its PEL entry for the whole window, and on the
+    # write side that window is also how long a large blob has to reach a
+    # permanent store over whatever link this host has.
+    replicate_write_timeout_seconds: int = Field(
+        default=120, gt=0, validation_alias="REPLICATOR_REPLICATE_WRITE_TIMEOUT_SECONDS"
+    )
+
     consumer_start_id: str = Field(default="$", validation_alias="REPLICATOR_CONSUMER_START_ID")
 
     # How long a pending entry must sit untouched before another worker may

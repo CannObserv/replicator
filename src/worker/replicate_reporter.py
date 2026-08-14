@@ -68,10 +68,17 @@ def build_replicate_reporter(
             source_revision_id=failure.source_revision_id,
             info_source_id=failure.info_source_id,
             reason=failure.reason,
-            # Every fact Replicator emits today closes its command — the loop
-            # builds a report only where it has stopped retrying. A provider 5xx
-            # will be the first non-terminal one, and it arrives with the first
-            # writer, not before.
+            # Every fact Replicator emits closes its command — the loop builds a
+            # report only where it has stopped retrying, so there is no path here
+            # that could produce a False (CR #28, #34).
+            #
+            # The outcomes that are *not* terminal — a provider 5xx, an
+            # unresolved conditional create — raise ``TransientReplicateError``,
+            # which is exempt from the delivery ceiling: the loop logs, returns
+            # RETRY and leaves the entry pending, publishing **nothing**. So an
+            # issuer's absence of a fact means "still trying", and MUST-6's
+            # reaper is what bounds that. Emitting a `terminal=false` fact
+            # instead is a contract change, not an implementation detail.
             terminal=True,
             attempts=failure.attempts,
             detail=failure.detail,
@@ -123,7 +130,7 @@ def build_completion_publisher(
     """
     publisher = AsyncBusPublisher(client)
 
-    async def publish(command: ContentReplicateCommand, public_url: str | None) -> None:
+    async def publish(command: ContentReplicateCommand, public_url: str) -> None:
         event = ReplicationCompleteEvent(
             occurred_at=datetime.now(UTC),
             command_id=command.command_id,

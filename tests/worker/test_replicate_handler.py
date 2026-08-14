@@ -7,8 +7,9 @@ destination check after a provider client was constructed would still pass every
 per-reason test and would still have broken the contract.
 
 ``destination_conflict`` is absent on purpose. It is the one documented refusal
-that cannot be pre-credential (learning a destination holds *differing* bytes
-takes an authenticated read), and it arrives with the first provider writer.
+that cannot be pre-credential — learning a destination holds *differing* bytes
+takes an authenticated read — so it is decided from the write's own outcome and
+lives with the rest of the write path in ``test_replicate_writer.py``.
 """
 
 import pytest
@@ -33,14 +34,15 @@ class _NeverReached:
     Its presence is what lets these tests reach the destination and source
     guards: the provider check runs *before* them (contract order), so a host
     with no writer would report ``provider_disabled`` for every command and
-    these refusals would be unobservable.
+    these refusals would be unobservable. Keyed by **alias**, because a driver
+    is a bucket and the alias is what names one (CR #26).
     """
 
     async def create_if_absent(self, effect):  # pragma: no cover - never reached
         raise AssertionError("every command in this module is refused before the write")
 
 
-WRITERS = {"gcs": _NeverReached()}
+WRITERS = {"primary": _NeverReached()}
 
 
 @pytest.fixture
