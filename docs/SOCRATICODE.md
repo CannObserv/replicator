@@ -7,6 +7,14 @@ carries the rule; this file carries the table.
 wholesale. Repo-specific exploration notes belong in `AGENTS.md` under
 `## Code Exploration Notes (repo-specific)`, outside the marker pair.
 
+**Requires `init-socraticode` at or after the #115 split** (upstream
+`gregoryfoster/skills@9125148`). `skills-vendor/gregoryfoster-skills` is pinned
+older than that, so a re-run *today* does not write this file at all — it restores
+the pre-split eight-row block into `AGENTS.md` and leaves this file orphaned,
+duplicating what came back. Bump the pin before re-running (#41). The
+`## Code Exploration Notes` section survives either way: the old sweep targets only
+`## Code Exploration Policy`.
+
 ## When to use each tool
 
 | Goal | Tool |
@@ -58,8 +66,16 @@ validation. The `SessionStart` hook in `.claude/settings.json` prints the exact
 
 `codebase_graph_status` reporting `READY` does **not** mean the graph resolved
 anything — `READY` is reachable with a handful of edges across hundreds of files.
-Check yield, not status, before trusting a dependency answer; a low-yield graph
-means those questions go to `grep` instead.
+Check yield, not status:
+
+```bash
+node skills/init-socraticode/scripts/mcp-driver.mjs health-check .
+```
+
+`verdict: "low"` means the graph resolved almost no edges, so `codebase_graph_query`,
+`codebase_impact` and `codebase_flow` answer with an ordinary "no dependency
+information found" rather than an error — which reads as *no dependents*, the
+opposite of the truth. Send dependency questions to `grep` until it is rebuilt.
 
 ## Index scope
 

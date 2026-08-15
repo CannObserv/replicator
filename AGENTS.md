@@ -158,11 +158,12 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
   `tests/test_boundaries.py` enforces eight charter invariants in CI; change a
   charter and its tests together.
 
-What each stream carries: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The rules
-common to all of them: [docs/CONVENTIONS.md](docs/CONVENTIONS.md).
-Blob paths, modes, and the retention sweep: [docs/STORAGE.md](docs/STORAGE.md).
-Fakeredis's divergences from the live broker, and the keys an integration run may
-touch: [docs/TESTING.md](docs/TESTING.md).
+Where the reasoning lives:
+
+- What each stream carries — [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- The rules common to all of them — [docs/CONVENTIONS.md](docs/CONVENTIONS.md)
+- Blob paths, modes, and the retention sweep — [docs/STORAGE.md](docs/STORAGE.md)
+- Fakeredis's divergences, and the keys an integration run may touch — [docs/TESTING.md](docs/TESTING.md)
 
 ## Common Commands
 
