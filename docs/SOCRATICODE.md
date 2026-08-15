@@ -67,22 +67,17 @@ anything — `READY` is reachable with a handful of edges across hundreds of fil
 Check yield, not status:
 
 ```bash
-node skills-vendor/gregoryfoster-skills/skills/init-socraticode/scripts/mcp-driver.mjs \
-  health-check /home/exedev/replicator --probe src/worker/main.py
+node "$SOCRATICODE_DRIVER" health-check . --probe src/worker/main.py
 ```
-
-**Invoke it through `skills-vendor/`, not `skills/`.** The driver only dispatches
-when `process.argv[1]` resolves to its own module path; `skills/init-socraticode`
-is a `managing-skills` symlink, so the two disagree and the script exits 0 having
-printed nothing — a silent no-op that reads as a clean run
-([gregoryfoster/skills#177](https://github.com/gregoryfoster/skills/issues/177)).
 
 `verdict: "low"` means the graph resolved almost no edges, so `codebase_graph_query`,
 `codebase_impact` and `codebase_flow` answer with an ordinary "no dependency
 information found" rather than an error — which reads as *no dependents*, the
 opposite of the truth. Send dependency questions to `grep` until it is rebuilt.
-Last measured **2026-08-15: `ok`** — 172 edges across 73 files (2.36 edges/file),
-85.1% of imports unresolved.
+
+Two ways this check lies on this repo — both in `AGENTS.md` under
+`## Code Exploration Notes (repo-specific)`, because a re-run overwrites this
+file and would take them with it.
 
 ## Index scope
 

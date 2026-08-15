@@ -46,5 +46,9 @@
     "allow": [
       "Read(/home/exedev/.claude/projects/**)"
     ]
+  },
+  "env": {
+    "SOCRATICODE_DRIVER": "skills-vendor/gregoryfoster-skills/skills/init-socraticode/scripts/mcp-driver.mjs",
+    "SOCRATICODE_PROBE_FILE": "src/worker/main.py"
   }
 }

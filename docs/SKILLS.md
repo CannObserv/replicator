@@ -61,6 +61,11 @@ is accepted with a `N: fix + fitness` or bare `N: fitness` directive — without
 directive fails to resolve. The daily auto-refresh hook bumps the submodule pointer but never creates
 per-skill symlinks, so linking a newly published skill stays a manual step (#13).
 
+**The table lists what is linked, which is a subset of what is vendored.** The `3fc7b71` → `2e1cf28`
+bump (#41) published skills this repo has not evaluated — `vendoring-openapi-client` is the one with
+an obvious claim here, since Replicator consumes sibling service APIs. `ls skills-vendor/gregoryfoster-skills/skills/`
+against the table above is the diff; nothing surfaces it automatically, which is the #13 gap.
+
 This submodule tracks upstream on the daily auto-refresh. It was held at `3fc7b71` for nine days;
 that hold has ended — see [The curating-context v1.2 hold (ended)](#the-curating-context-v12-hold-ended).
 
@@ -151,6 +156,37 @@ makes upstream fixes to the script arrive on the normal submodule refresh; a cop
 version was current the day it was installed and drifts silently thereafter — this repo's had, for
 the whole `.skills/doctor.sh` commit path (#16). `readlink .claude/hooks/skills-submodule-update.sh`
 is the check; an empty result means someone re-copied it.
+
+**Two artifacts, and the second is the one that fails.** The symlink alone never runs — Claude Code
+runs what `.claude/settings.json` names. This repo carried the link, tracked and resolving, for nine
+days while the registration was absent, so the skills froze at one commit and `ls .claude/hooks/`
+showed a hook that was right there and did nothing (#39). `tests/test_skills_hook.py` pins both
+halves, the second via `install-refresh.sh --check`, so that state fails CI instead of going
+unnoticed for another nine days.
+
+## The other `.claude/hooks/` entries
+
+| Hook | Event | What it does |
+|---|---|---|
+| `socraticode-reminder.sh` | SessionStart | Prints the `ToolSearch` prefetch string — the `codebase_*` MCP tools are deferred and their schemas do not load without it. Repo-authored (not vendored), so it is a real file, not a symlink. |
+| `socraticode-health.sh` | SessionStart | Once-per-UTC-day SocratiCode infra check: graph yield, `codebase_health`, and a failed last operation. **Reports only — never re-indexes, never edits a file, never starts Docker.** Silent when clean; logs to `.git/socraticode-health.log`. Symlink into the vendored skill for the #16 reason above, against `init-socraticode`'s own instruction to copy it ([skills#179](https://github.com/gregoryfoster/skills/issues/179)). |
+| `context-budget-guard.sh` | PostToolUse | `curating-context`'s write guard: warns when an edit pushes `AGENTS.md` over the token budget. Non-blocking. |
+
+**The health hook lies in two situations, and both look like a healthy report.**
+
+1. *Silently.* `mcp-driver.mjs` only dispatches when `process.argv[1]` resolves to its own module
+   path. `skills/init-socraticode` is a `managing-skills` symlink, so the two disagree and the script
+   **exits 0 having printed nothing** — and the hook's own resolution order tries that symlink
+   *before* the real `skills-vendor/` path, so it takes the broken one every time
+   ([gregoryfoster/skills#177](https://github.com/gregoryfoster/skills/issues/177)). Worked around by
+   `SOCRATICODE_DRIVER` in `.claude/settings.json`, which is candidate 1 in that order. Committed
+   rather than left in `settings.local.json`: the value is a repo-relative path, and a machine-local
+   fix would leave every other checkout reporting clean without measuring anything.
+2. *Falsely.* It measures `.` — the current working directory. Only the main checkout is indexed, so
+   from a worktree it reports `graph is not READY` and yield `UNKNOWN` against a perfectly healthy
+   index ([gregoryfoster/skills#180](https://github.com/gregoryfoster/skills/issues/180)). This repo
+   develops in worktrees by default, so that is the common case, not the edge one. Believe health
+   findings from the main checkout; disregard them anywhere else.
 
 ## The write-guard hook dangles on a submodule-less checkout
 

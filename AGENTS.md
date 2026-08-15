@@ -60,6 +60,8 @@ Full tool table, prefetch query, per-tool guidance, cross-repo search:
 
 **The manifest is a source, not the artifact.** Nothing re-embeds it — no hook, no CI step — so editing a `description` there changes what the repo says and not what `codebase_context_search` returns. Re-run `codebase_context_index` in the same change, or the highest-authority answer an agent gets stays the stale one (#19 CR #17).
 
+**`mcp-driver.mjs` lies twice — silently through the `skills/` symlink (skills#177), falsely from a worktree (skills#180).** Use `"$SOCRATICODE_DRIVER"`; disbelieve health findings outside the main checkout. Both in [docs/SKILLS.md](docs/SKILLS.md).
+
 ## Project Layout
 
 `src/worker/` is the primary process — the bus consumer, with the byte path, the
