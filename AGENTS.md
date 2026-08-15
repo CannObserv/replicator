@@ -15,8 +15,6 @@ content.replicate (cmd) → guards → create-if-absent ────────
                                  ↘ refused / conflict ──────→ replication_failed  (fact)
 ```
 
-Founding design: `docs/plans/2026-06-25-replicator-mvp-design.md`. Parent strategy lives in archiver (`docs/plans/2026-06-25-observer-cluster-integration-strategy-design.md`); Replicator is its Phase 3.
-
 **Worker-first.** Primary process = bus consumer (`src/worker/main.py`), not an HTTP API. The FastAPI app is a `/health` surface only, dev-only until a status endpoint is wanted.
 
 ## Development Methodology
@@ -33,40 +31,43 @@ Python ≥3.12, uv, pytest, ruff. `ty` is available as a **non-gating** type che
 uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
 ```
 
-Auth is ADC: on the VM the SA key at `GOOGLE_APPLICATION_CREDENTIALS` (`/etc/replicator/co-pypi-reader.json`), in CI a keyless WIF token. Pin the current minor — `>=0.9.4,<0.10`. The **patch** floor is load-bearing, not tidiness: the change-bus payloads are `extra="ignore"`, so on an older wheel a model constructed with fields it does not have yet succeeds and silently discards them. Raise the floor with every co-core feature the code starts depending on, or a version skew publishes facts that look right and carry nothing (#10). Both floors since fail *loudly* instead: 0.8.0 requires `info_source_id` on all three fetch payloads, so a skew is a ValidationError at construction (#19, #28); 0.9.4 cuts the replicate contracts, so it is an ImportError at load and never reaches a running worker (#29).
+Auth is ADC: on the VM the SA key at `GOOGLE_APPLICATION_CREDENTIALS` (`/etc/replicator/co-pypi-reader.json`), in CI a keyless WIF token. Pin the current minor — `>=0.9.4,<0.10`. The **patch** floor is load-bearing, not tidiness: the change-bus payloads are `extra="ignore"`, so on an older wheel a model constructed with fields it does not have yet succeeds and silently discards them. Raise the floor with every co-core feature the code starts depending on, or a version skew publishes facts that look right and carry nothing (#10). Both floors since fail *loudly* instead — a ValidationError at construction (0.8.0 requires `info_source_id` on all three fetch payloads, #19/#28) or an ImportError at load, never reaching a running worker (0.9.4 cuts the replicate contracts, #29).
 
 <!-- BEGIN socraticode-policy -->
 ## Code Exploration Policy
 
-SocratiCode is the preferred semantic-search tool for this repo. Code is indexed into the local Qdrant store + on-disk graph by `codebase_index`; the project's non-code knowledge (design plans, the systemd unit, the command reference) is registered in `.socraticodecontextartifacts.json` and embedded by `codebase_context_index`. Its MCP tools are **deferred** — schemas load only after a `ToolSearch` prefetch.
+SocratiCode is the preferred semantic-search tool here once indexed (local Qdrant
+store + on-disk graph; manifest `.socraticodecontextartifacts.json`). Its MCP tools
+are **deferred** — schemas load only after the `ToolSearch` prefetch the
+`SessionStart` hook in `.claude/settings.json` prints each session.
 
-**The manifest is a source, not the artifact.** Nothing re-embeds it — no hook, no CI step — so editing a `description` there changes what the repo says and not what `codebase_context_search` returns. Re-run `codebase_context_index` in the same change, or the highest-authority answer an agent gets stays the stale one (#19 CR #17).
-
-**Negative rule.** For broad semantic questions ("where is X", "how does Y work", "what depends on Z"), use SocratiCode MCP tools first. Reach for `grep`/`ripgrep` only on exact strings (error messages, log lines, known symbols). Reserve the Explore subagent for path-pattern walks (e.g. "all `*.py` under `src/worker/`"), not semantic search.
+**Negative rule.** Use SocratiCode MCP tools first for semantic questions ("where is
+X", "how does Y work", "what depends on Z"). Reach for `grep`/`rg` only on exact
+strings (error messages, log lines, known symbols). Reserve the Explore subagent for
+path-pattern walks (`*.py` under `src/worker/`), not semantic search.
 
 | Goal | Tool |
 |------|------|
-| Where is X defined / how does Y work / what files touch Z | `codebase_search` |
-| Exact string/regex match (errors, log lines, known symbols) | `grep` / `rg` |
-| Blast radius of changing/deleting a file or function | `codebase_impact` |
-| What does an entry point actually do? | `codebase_flow` |
-| Callers and callees of a function | `codebase_symbol` |
-| Imports/dependents of a file | `codebase_graph_query` |
-| Bus contracts, deploy topology, MVP design rationale, env vars | `codebase_context` / `codebase_context_search` |
+| Where is X defined / how does Y work / what touches Z | `codebase_search` |
+| Exact string or regex (errors, log lines, known symbols) | `grep` / `rg` |
+| Imports/dependents of a file · blast radius of a change | `codebase_graph_query` / `codebase_impact` |
 
-**Cross-repo search.** `SOCRATICODE_LINKED_PROJECTS` (in `.claude/settings.local.json`, gitignored) links the archiver, watcher, and notifier checkouts, so `codebase_search` spans the cluster. Use it for the co-core contracts, the parent integration strategy, and the producer-side outbox precedent — all of which live in archiver, not here. Linked projects contribute results only once they are themselves indexed.
-
-Prefetch query — the `SessionStart` hook in `.claude/settings.json` prints the exact `select:` argument every session. Run it via `ToolSearch` before broad exploration; it is not repeated here.
+Full tool table, prefetch query, per-tool guidance, cross-repo search:
+[docs/SOCRATICODE.md](docs/SOCRATICODE.md).
 <!-- END socraticode-policy -->
+
+## Code Exploration Notes (repo-specific)
+
+**The manifest is a source, not the artifact.** Nothing re-embeds it — no hook, no CI step — so editing a `description` there changes what the repo says and not what `codebase_context_search` returns. Re-run `codebase_context_index` in the same change, or the highest-authority answer an agent gets stays the stale one (#19 CR #17).
 
 ## Project Layout
 
-`src/worker/` is the primary process — the bus consumer, with the byte path
-(`handler.py`), the failure fact (`reporter.py`), the retention sweep, the pacer,
-and the `content.fetch-policy` reader behind their own seams. `src/storage/` is
-the content-addressed temp store behind the `BlobStore` protocol; `src/api/` is
-the dev-only `/health` app; `src/core/` holds config, logging, and the consume
-path's failure vocabulary. `tests/` mirrors `src/`. Every module with the job it owns:
+`src/worker/` is the primary process — the bus consumer, with the byte path, the
+failure fact, the retention sweep, the pacer, and the `content.fetch-policy` reader
+each behind their own seam. `src/storage/` is the content-addressed temp store behind
+the `BlobStore` protocol; `src/api/` is the dev-only `/health` app; `src/core/` holds
+config, logging, and the consume path's failure vocabulary. `tests/` mirrors
+`src/`. Every module with the job it owns:
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Infrastructure
@@ -100,11 +101,7 @@ Two env files, with a hard boundary between them:
 
 **The service must never load the repo `.env`.** Those PATs carry org-wide write access the worker has no use for; handing them to a process whose job is fetching public URLs widens the blast radius of any crash dump or subprocess for no benefit. Anything the service genuinely needs belongs in `/etc/replicator/.env`.
 
-For shell commands (dev only), load both:
-
-```bash
-set -a; . /etc/replicator/.env 2>/dev/null; . .env 2>/dev/null; set +a
-```
+For shell commands (dev only), load both — the snippet is under Common Commands.
 
 Replicator-owned settings carry the `REPLICATOR_` prefix so they never collide with a sibling service on the shared VM. `BUILD_ID` is deliberately unprefixed — the systemd unit stamps it generically.
 
@@ -143,31 +140,30 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
   `content.replicate` are command streams (one group each, competing consumers);
   `content.blobs` and `content.artifacts` each carry both outcomes of their
   command; `content.fetch-policy` is read **groupless** — no group, no ack, no
-  DLQ. Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before changing what any
-  of them carries.
+  DLQ.
 - **The replicate loop writes for `gcs` (#29).** T4's create-if-absent, so a
-  redelivery onto matching bytes is a no-op that re-emits the same `public_url`
-  and differing bytes are a terminal conflict. `blob_uri` is **never resolved as
-  a path** — fingerprint out, compared against `store.uri_for()` — and every
-  refusal happens before any credential is touched. Writers are keyed **by alias**:
-  a driver is a bucket, so keying by provider let a command land outside its own
-  binding's root. Provider failures classify by HTTP status — 4xx closes the
-  command, 5xx/408/429 and statusless errors leave it pending — because a
-  transient failure is exempt from the delivery ceiling and publishes no fact at
-  all, so misclassifying one strands the issuer forever (#29 CR #26, #27).
+  redelivery onto matching bytes re-emits the same `public_url` and differing bytes
+  are a terminal conflict. `blob_uri` is **never resolved as a path** — fingerprint
+  out, compared against `store.uri_for()`. Writers are keyed **by alias**, and every
+  refusal happens before any credential is touched. Provider failures classify by
+  HTTP status — 4xx closes the command, 5xx/408/429 and statusless errors leave it
+  pending — because a transient failure is exempt from the delivery ceiling and
+  publishes no fact at all, so misclassifying one strands the issuer forever
+  (#29 CR #26, #27).
 - **Nothing but the seed script writes to `content.fetch`.** `scripts/seed_fetch.py`
   requires `--production` for the one combination the live worker consumes — a
   frame there is fetched for real.
-- **Three normative contracts bound the wire and the roadmap**, all under
-  `docs/contracts/` and linked from sibling repos: the `content.fetch` issuer
-  contract, the boundaries charter, and — settled ahead of its code — the
-  `content.replicate` one (#34). The fetch contract splits into a read-through
-  half and a lookup half (`-contract` / `-reference`, #24); both are normative. `tests/test_boundaries.py` enforces eight charter
-  invariants in CI; change a charter and its tests together.
+- **Three normative contracts bound the wire and the roadmap** — four documents,
+  all under `docs/contracts/`, linked from sibling repos and indexed below.
+  `tests/test_boundaries.py` enforces eight charter invariants in CI; change a
+  charter and its tests together.
 
-Blob paths, modes, and the retention sweep: [docs/STORAGE.md](docs/STORAGE.md).
-Fakeredis's divergences from the live broker, and the keys an integration run may
-touch: [docs/TESTING.md](docs/TESTING.md).
+Where the reasoning lives:
+
+- What each stream carries — [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- The rules common to all of them — [docs/CONVENTIONS.md](docs/CONVENTIONS.md)
+- Blob paths, modes, and the retention sweep — [docs/STORAGE.md](docs/STORAGE.md)
+- Fakeredis's divergences, and the keys an integration run may touch — [docs/TESTING.md](docs/TESTING.md)
 
 ## Common Commands
 
@@ -185,8 +181,7 @@ uv run pytest
 # Run a subset of tests (skip the coverage gate, which measures all of src/)
 uv run pytest --no-cov tests/path/to/test.py
 
-# Run integration tests (requires the live VM Redis; --no-cov because the
-# coverage gate measures all of src/, which these tests do not exercise)
+# Integration tests (live VM Redis; --no-cov — these do not exercise all of src/)
 uv run pytest --no-cov -m integration
 
 # Run linter
@@ -232,19 +227,21 @@ are deliberately not JSON: [docs/STYLE.md](docs/STYLE.md).
 **General:**
 - No inline module imports; all at file top
 - Docstrings for public modules, classes, functions
-- Test structure mirrors source (`src/foo.py` → `tests/test_foo.py`). A module whose tests outgrow one file splits by concern, not by helper: `tests/worker/test_loop_dlq.py`, `test_loop_recovery.py`, … with the shared wiring in that package's `conftest.py`. Concern is the default axis; **environment** is the one exception — tests needing a live broker split off with an `_integration` suffix (`tests/worker/test_main_integration.py`), so the filename says what the marker enforces
+- Test structure mirrors source (`src/foo.py` → `tests/test_foo.py`); splitting rules — by concern, and the `_integration` exception — in [docs/TESTING.md](docs/TESTING.md)
 - Explicit imports only
 - Small, focused functions
 
 ## Detail Docs
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — module-by-module layout and every bus contract's reasoning; read before changing what a stream carries
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — founding design, module-by-module layout, and what each stream carries; read before changing one
+- [docs/CONVENTIONS.md](docs/CONVENTIONS.md) — the co-core/Redis Streams rules common to every stream: idempotency, validation, DLQ, `claim_stale`
 - [docs/STORAGE.md](docs/STORAGE.md) — blob paths and modes, the three populations under `REPLICATOR_BLOB_DIR`, TTL and ceiling semantics
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — VM topology, ports, the systemd unit's lifecycle, and every environment variable the service reads
 - [docs/TESTING.md](docs/TESTING.md) — where fakeredis diverges from the live broker, and which keys an integration run may create
 - [docs/STYLE.md](docs/STYLE.md) — the logging stack: formatter, installers, and the non-JSON journald lines
 - [docs/COMMANDS.md](docs/COMMANDS.md) — every runnable command, with flags
 - [docs/SKILLS.md](docs/SKILLS.md) — vendored skill inventory and refresh procedure
+- [docs/SOCRATICODE.md](docs/SOCRATICODE.md) — the full tool table, the prefetch query, per-tool gotchas, and cross-repo search
 - [docs/contracts/content-fetch-issuer-contract.md](docs/contracts/content-fetch-issuer-contract.md) — what a `content.fetch` producer must do; normative, linked from issuer repos
 - [docs/contracts/content-fetch-issuer-reference.md](docs/contracts/content-fetch-issuer-reference.md) — its lookup half: the refusal list, the failure taxonomy, the silent conditions, trust posture
 - [docs/contracts/replicator-boundaries.md](docs/contracts/replicator-boundaries.md) — what Replicator may become; run its three tests against any proposed capability
