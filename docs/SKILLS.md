@@ -61,8 +61,8 @@ is accepted with a `N: fix + fitness` or bare `N: fitness` directive — without
 directive fails to resolve. The daily auto-refresh hook bumps the submodule pointer but never creates
 per-skill symlinks, so linking a newly published skill stays a manual step (#13).
 
-This submodule is **pinned and its refresh suspended** — see
-[The curating-context v1.2 hold](#the-curating-context-v12-hold) before bumping it.
+This submodule tracks upstream on the daily auto-refresh. It was held at `3fc7b71` for nine days;
+that hold has ended — see [The curating-context v1.2 hold (ended)](#the-curating-context-v12-hold-ended).
 
 ### From `obra-superpowers`
 
@@ -85,38 +85,41 @@ This submodule is **pinned and its refresh suspended** — see
 `docs/plans/` is the default governed by `writing-plans`. Override with a single-line
 `.skills/plans_dir` file at the repo root if a different path is ever wanted.
 
-## The curating-context v1.2 hold
+## The curating-context v1.2 hold (ended)
 
-**`curating-context` is pinned at v1.2 (`3fc7b71`) until the wave-B comparison resolves (#22).** The
+**Released 2026-08-15 (#39, #41). Both of the hold's own conditions were met.** Kept here because the
+suspension it describes is what left this repo's vendored skills frozen for nine days, and the
+mechanism that replaces it is the thing to reach for next time.
+
+`curating-context` was pinned at v1.2 (`3fc7b71`) until the wave-B comparison resolved (#22). The
 twelve cohort repos are the held-out validation split for the skill itself: a proposed change is
-tried on one arm and scored against the other, and Replicator's first curation is this arm's data
-point. Bumping the vendored pointer past v1.2 before that resolves puts two skill versions inside one
-arm and `score-cohort.sh` returns INCONCLUSIVE rather than a verdict.
+tried on one arm and scored against the other, and Replicator's first curation was this arm's data
+point. Bumping past v1.2 mid-comparison would put two skill versions inside one arm and make
+`score-cohort.sh` return INCONCLUSIVE rather than a verdict.
 
-**So the daily auto-refresh is suspended for the duration of the hold.** The hook's `SessionStart`
-entry is removed from `.claude/settings.json`; `.claude/hooks/skills-submodule-update.sh` itself is
-left in place, so restoring the refresh is a one-entry edit and not a re-install. Suspension is
-blunter than the problem — it also stops the `obra-superpowers` refresh and the `.skills/doctor.sh`
-self-heal commit, neither of which has anything to do with the hold — but it is the only remedy a
-consumer repo currently has: `git submodule update --remote --merge -- skills-vendor/` takes no
-per-submodule exclusion, and one submodule carries every `gregoryfoster` skill, so pinning
-`curating-context` alone is not expressible. Tracked upstream as
-[gregoryfoster/skills#100](https://github.com/gregoryfoster/skills/issues/100), which proposes a
-committed pin file the hook consults; restore the `SessionStart` entry when that lands or when the
-hold ends, whichever comes first.
+**The hold suspended the daily auto-refresh**, by removing the hook's `SessionStart` entry from
+`.claude/settings.json` while leaving `.claude/hooks/skills-submodule-update.sh` in place. Suspension
+was blunter than the problem — it also stopped the `obra-superpowers` refresh and the
+`.skills/doctor.sh` self-heal commit, neither of which had anything to do with the hold — but it was
+the only remedy a consumer repo had: `git submodule update --remote --merge -- skills-vendor/` took
+no per-submodule exclusion, and one submodule carries every `gregoryfoster` skill, so pinning
+`curating-context` alone was not expressible.
 
-While the refresh is suspended, updating vendor skills is manual:
+Both release conditions have since landed:
 
-```bash
-git -C skills-vendor/obra-superpowers fetch origin && git -C skills-vendor/obra-superpowers checkout origin/HEAD
-bash .skills/doctor.sh
-git add skills-vendor/obra-superpowers && git commit -m "chore: update skills submodules"
-```
+| Condition | Resolved |
+|---|---|
+| wave-B comparison resolves (#22) | closed 2026-08-06 — this repo's curation shipped as #35/#40 |
+| a committed pin file the hook consults ([gregoryfoster/skills#100](https://github.com/gregoryfoster/skills/issues/100)) | closed 2026-08-11 |
 
-The commit is the step the suspended hook used to perform; without it the new pointer is
-discarded by the next checkout.
-
-Leave `skills-vendor/gregoryfoster-skills` at `3fc7b71` until the hold ends.
+**Never suspend the hook again — write a pin instead.** `.skills/skills-pin` (one
+`<submodule-path> <commit-ish>` per line, resolution order `$SKILLS_PIN_FILE` → `.skills/skills-pin`
+→ no pins) holds a single submodule while the rest keep refreshing. A pinned path is excluded from
+both the update and the auto-commit, and every honoured pin is logged by name in
+`.git/skills-update.log`, so a stale hold is visible rather than silent — which is exactly how this
+one went unnoticed. Removing the `SessionStart` entry has the opposite property: the half that would
+have complained is the half that is gone, so a suspended repo is indistinguishable from a
+half-installed one (#39).
 
 ## Maintenance
 
@@ -129,9 +132,12 @@ git submodule update --init --recursive
 bash .skills/doctor.sh
 
 # Pull upstream skill changes and bump the pointers.
-# SUSPENDED during the v1.2 hold — it would bump gregoryfoster-skills past the pin.
+# Normally unnecessary — the SessionStart hook below does this once per UTC day on main.
 git submodule update --remote --merge
 git add skills-vendor/ && git commit -m "chore: update skill submodules"
+
+# Confirm both halves of the auto-refresh install are present (symlink + registration).
+bash skills-vendor/gregoryfoster-skills/skills/managing-skills/scripts/install-refresh.sh --check
 ```
 
 A `SessionStart` hook (`.claude/hooks/skills-submodule-update.sh`) refreshes `skills-vendor/` at most
@@ -149,14 +155,15 @@ is the check; an empty result means someone re-copied it.
 ## The write-guard hook dangles on a submodule-less checkout
 
 `curating-context` installs `.claude/hooks/context-budget-guard.sh` as a symlink into the
-vendored skill, but `doctor.sh` scans `skills/*` only — `.claude/hooks/*` is outside its heal
-scope. On a checkout where the submodule is not initialized (fresh clone, `git worktree add`,
-shallow CI clone) the hook path dangles and the wired `PostToolUse` command fails with
-`No such file or directory` on **every** `Edit`/`Write`/`MultiEdit`, naming a path that `ls`
-shows as present. Run `bash .skills/doctor.sh` — it initializes the submodule and so heals the
-hook as a side effect, even though it never inspects it. Tracked upstream as
-[gregoryfoster/skills#99](https://github.com/gregoryfoster/skills/issues/99); the guard itself
-is correctly non-blocking once it resolves.
+vendored skill. On a checkout where the submodule is not initialized (fresh clone,
+`git worktree add`, shallow CI clone) the hook path dangles and the wired `PostToolUse` command
+fails with `No such file or directory` on **every** `Edit`/`Write`/`MultiEdit`, naming a path that
+`ls` shows as present. Run `bash .skills/doctor.sh`.
+
+`.claude/hooks/` is now **inside** the doctor's heal scope — it scans `skills/*` and
+`.claude/hooks/*` both ([gregoryfoster/skills#99](https://github.com/gregoryfoster/skills/issues/99),
+closed 2026-08-11), so the hook is diagnosed by name rather than healed as a side effect of
+submodule init. The guard itself is correctly non-blocking once it resolves.
 
 CI is **no longer** one of those submodule-less checkouts — see [Submodules in CI](#submodules-in-ci)
 below. A `git worktree add` still is.
@@ -187,9 +194,9 @@ Three things to know before touching it:
   `obra-superpowers` too, which no test dereferences — `actions/checkout` takes no per-submodule
   selector, and trading the declarative key for an imperative `git submodule update --init <path>`
   step to save about a second is not worth it.
-- **CI resolves the SHA pinned here, never upstream tip.** So the key neither lifts nor weakens the
-  [v1.2 hold](#the-curating-context-v12-hold). A pin far behind upstream is fine: GitHub serves
-  arbitrary SHAs, so the shallow submodule fetch resolves it.
+- **CI resolves the SHA recorded in the gitlink, never upstream tip.** So the key neither lifts nor
+  weakens a [`.skills/skills-pin`](#the-curating-context-v12-hold-ended) hold. A gitlink far behind
+  upstream is fine: GitHub serves arbitrary SHAs, so the shallow submodule fetch resolves it.
 
 The coupling accepted in exchange: an upstream force-push that garbage-collects a pinned SHA fails
 the job **at checkout**, an error that looks nothing like a test failure. If CI dies before the
