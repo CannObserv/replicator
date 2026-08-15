@@ -38,8 +38,8 @@ Auth is ADC: on the VM the SA key at `GOOGLE_APPLICATION_CREDENTIALS` (`/etc/rep
 
 SocratiCode is the preferred semantic-search tool here once indexed (local Qdrant
 store + on-disk graph; manifest `.socraticodecontextartifacts.json`). Its MCP tools
-are **deferred** — schemas load only after the `ToolSearch` prefetch the
-`SessionStart` hook in `.claude/settings.json` prints each session.
+are **deferred** — schemas load only after the `ToolSearch` prefetch that
+`.claude/hooks/socraticode-reminder.sh` prints each session.
 
 **Negative rule.** Use SocratiCode MCP tools first for semantic questions ("where is
 X", "how does Y work", "what depends on Z"). Reach for `grep`/`rg` only on exact
