@@ -154,8 +154,11 @@ any branch if deleted. Logs to `.git/skills-update.log`.
 **The hook is a symlink into the submodule, not a copy** (`managing-skills` Step 1). That is what
 makes upstream fixes to the script arrive on the normal submodule refresh; a copy freezes at whatever
 version was current the day it was installed and drifts silently thereafter — this repo's had, for
-the whole `.skills/doctor.sh` commit path (#16). `readlink .claude/hooks/skills-submodule-update.sh`
-is the check; an empty result means someone re-copied it.
+the whole `.skills/doctor.sh` commit path (#16). This now applies to **two** hooks —
+`skills-submodule-update.sh` and `socraticode-health.sh` — and `tests/test_skills_hook.py`
+parametrizes over both, so a re-copy fails CI rather than waiting to be noticed. `readlink` on either
+is the manual check; an empty result means someone re-copied it. (`socraticode-reminder.sh` is
+repo-authored, has no vendored original, and is correctly a real file.)
 
 **Two artifacts, and the second is the one that fails.** The symlink alone never runs — Claude Code
 runs what `.claude/settings.json` names. This repo carried the link, tracked and resolving, for nine
@@ -187,6 +190,21 @@ unnoticed for another nine days.
    index ([gregoryfoster/skills#180](https://github.com/gregoryfoster/skills/issues/180)). This repo
    develops in worktrees by default, so that is the common case, not the edge one. Believe health
    findings from the main checkout; disregard them anywhere else.
+
+### After an `init-socraticode` re-run, re-apply three things
+
+The skill regenerates `docs/SOCRATICODE.md` **wholesale** and re-copies the health hook, so a re-run
+reverts local corrections without saying so. Check these before committing its output:
+
+| Re-apply | Reverts to | Why it matters |
+|---|---|---|
+| `node "$SOCRATICODE_DRIVER"` in the Graph health block | `node skills/init-socraticode/scripts/mcp-driver.mjs` | The template's path is the one that exits 0 printing nothing (skills#177) — the doc would teach the broken invocation |
+| `.claude/hooks/socraticode-health.sh` as a symlink | a copy (step C) | skills#179; `tests/test_skills_hook.py` fails, so this one is caught |
+| `codebase_context_index` | — | `AGENTS.md` and every doc here are registered artifacts; nothing re-embeds them |
+
+Repo-specific *prose* needs no re-applying — it lives in `AGENTS.md` under
+`## Code Exploration Notes (repo-specific)`, outside the marker pair, which is why it goes there and
+not into the generated file.
 
 ## The write-guard hook dangles on a submodule-less checkout
 

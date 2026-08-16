@@ -1,5 +1,5 @@
-"""The SessionStart skills hook must stay a symlink into the vendored skill,
-and must stay registered in `.claude/settings.json`.
+"""Every vendored `.claude/hooks/` entry must stay a symlink into its skill, and
+the refresh hook must stay registered in `.claude/settings.json`.
 
 `managing-skills` Step 1 prescribes a symlink, not a copy, for one reason: a
 copy freezes at whatever the script was the day it was installed and drifts
@@ -21,9 +21,23 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
-HOOK = ROOT / ".claude" / "hooks" / "skills-submodule-update.sh"
+HOOKS_DIR = ROOT / ".claude" / "hooks"
 SETTINGS = ROOT / ".claude" / "settings.json"
+
+# Every hook whose source of truth is a vendored skill, and must therefore be a
+# symlink rather than a copy. `socraticode-reminder.sh` is deliberately absent:
+# it is repo-authored — no vendored original exists — so a real file is correct
+# there and asserting a link would be wrong.
+#
+# `socraticode-health.sh` is the one under active pressure. `init-socraticode`
+# Phase 3 step C instructs a *copy*, contradicting `managing-skills`' symlink
+# rule, so the next re-run of that skill will silently overwrite the link and
+# restore the #16 drift with nothing failing (skills#179). That is precisely
+# what this test is for.
+VENDORED_HOOKS = ("skills-submodule-update.sh", "socraticode-health.sh")
 INSTALLER = (
     ROOT
     / "skills-vendor"
@@ -35,22 +49,26 @@ INSTALLER = (
 )
 
 
-def test_the_session_start_hook_is_a_symlink_into_the_submodule():
-    assert HOOK.is_symlink(), f"{HOOK.name} is a copy; re-link it into skills-vendor/"
+@pytest.mark.parametrize("name", VENDORED_HOOKS)
+def test_the_vendored_hook_is_a_symlink_into_the_submodule(name):
+    hook = HOOKS_DIR / name
+    assert hook.is_symlink(), f"{name} is a copy; re-link it into skills-vendor/"
 
-    target = Path(os.readlink(HOOK))
+    target = Path(os.readlink(hook))
     assert not target.is_absolute(), "a relative target survives a clone to any path"
     assert target.parts[:2] == ("..", ".."), "the link is resolved from .claude/hooks/"
     assert "skills-vendor" in target.parts
 
 
-def test_the_hook_the_symlink_points_at_actually_exists():
+@pytest.mark.parametrize("name", VENDORED_HOOKS)
+def test_the_hook_the_symlink_points_at_actually_exists(name):
     """A populated submodule is the other half — a dangling link is a silent no-op."""
-    assert HOOK.exists(), (
+    hook = HOOKS_DIR / name
+    assert hook.exists(), (
         "skills-vendor/ is not checked out: run .skills/doctor.sh locally, "
         "or add `submodules: true` to the CI job's actions/checkout (#27)"
     )
-    assert os.access(HOOK, os.X_OK)
+    assert os.access(hook, os.X_OK)
 
 
 def test_the_hook_is_registered_in_settings_json():
