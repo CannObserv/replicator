@@ -20,3 +20,15 @@ states them in one line each; what a *particular* stream carries, and why, is in
 - **`occurred_at` is enforced tz-aware UTC on every payload** since co-core v0.7.2 (cannobserv#273). Naive is rejected fail-loud rather than assumed UTC; aware non-UTC is normalized. Load-bearing beyond tidiness — `isoformat()` is half `fetch_failed`'s envelope key, and a naive value would serialize without an offset. Issuer-visible: a naive `occurred_at` now fails `from_wire` and dead-letters as an anomaly.
 - **`from_wire`'s topic and message_id are keyword-only** — `from_wire(fields, topic=..., message_id=...)`. The founding plan's API table showed them positionally.
 - `sha256` lives at `co_core.pure.util.hashing`, not `co_core.pure.extract` (which carries `simhash`, `Chunk`, and the parsers). Import parsers from submodules — they are not re-exported from `__init__`.
+- **The replicate loop writes for `gcs` (#29).** T4's create-if-absent, so a
+  redelivery onto matching bytes re-emits the same `public_url` and differing bytes
+  are a terminal conflict. `blob_uri` is **never resolved as a path** — fingerprint
+  out, compared against `store.uri_for()`. Writers are keyed **by alias**, and every
+  refusal happens before any credential is touched. Provider failures classify by
+  HTTP status — 4xx closes the command, 5xx/408/429 and statusless errors leave it
+  pending — because a transient failure is exempt from the delivery ceiling and
+  publishes no fact at all, so misclassifying one strands the issuer forever
+  (#29 CR #26, #27).
+  The mechanism in full — the four outcomes, the guard order, why the writers are
+  keyed by alias — is [ARCHITECTURE.md](ARCHITECTURE.md); this bullet is the rule
+  an agent needs before touching the replicate path.

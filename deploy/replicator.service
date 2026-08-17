@@ -28,6 +28,30 @@ StateDirectory=replicator
 # Create runtime dir (runs as root before User= takes effect with + prefix)
 ExecStartPre=+/bin/bash -c 'mkdir -p /run/replicator && chown exedev:exedev /run/replicator'
 
+# Hard guard: "Code committed to main is the deployed code" (AGENTS.md) was an
+# invariant nothing enforced until #37 — a restart while the checkout sat on a
+# feature branch deployed unmerged code. Refuses a non-main or detached HEAD;
+# warns only on a stale, unpushed, or dirty tree. Not '-' prefixed: a guard whose
+# refusal is logged and ignored is not a guard.
+#
+# Placed BEFORE the BUILD_ID stamp on purpose. /run/replicator/build-id outlives a
+# failed start, so stamping the branch SHA first would leave the journal
+# describing code that never ran — the same "looks correct, is not" failure the
+# guard exists to close.
+#
+# REPLICATOR_ALLOW_ANY_CHECKOUT=1 in /etc/replicator/.env bypasses it. That is not
+# the documented way to test a branch on this VM (run the worker directly under a
+# distinct REPLICATOR_CONSUMER_NAME) — it is for testing this unit itself. The
+# override still reaches this step even though the EnvironmentFile= lines appear
+# below it: EnvironmentFile= is a unit-level setting applied to every Exec*
+# process, not a sequential instruction, so its position in the file is not an
+# ordering.
+#
+# The checkout it inspects is WorkingDirectory= (systemd's cwd for every Exec*),
+# which is the same tree the stamp below reads and ExecStart runs from — so the
+# guard cannot end up verifying a different tree than the one that starts.
+ExecStartPre=/bin/bash /home/exedev/replicator/scripts/check_main_checkout.sh
+
 # Write current git SHA to a runtime env file before starting
 ExecStartPre=/bin/bash -c 'echo BUILD_ID=$(git rev-parse --short HEAD) > /run/replicator/build-id'
 

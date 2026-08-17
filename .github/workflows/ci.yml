@@ -10,10 +10,17 @@ on:
 permissions:
   contents: read
 
-# Cancel superseded runs on the same PR; never cancel runs on main (keep
-# CI signal for every commit that lands on the protected branch).
+# Two mechanisms, one per event kind:
+#   - PR runs share a group per branch (`github.head_ref` is non-empty only on
+#     `pull_request`), and `cancel-in-progress` cancels the superseded one.
+#   - Everything else (`push`, `workflow_dispatch`) is keyed on `github.sha`,
+#     unique per commit, so each `main` run sits alone in its own group.
+# The second is not redundant with the first. A group holds at most one
+# *pending* run regardless of `cancel-in-progress`, so under one branch-keyed
+# group a third push evicts the second's queued run before it ever starts —
+# a commit lands on the protected branch with no CI signal at all (#44).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

@@ -1,0 +1,54 @@
+# Seams judged legitimate — check-seams.sh --ack-file default.
+#
+# A back-reference is wrong only if the content it points at moved. Judged
+# 2026-08-17 during the #47 curation, which moved exactly one block (the
+# replicate/gcs bullet, AGENTS.md -> docs/CONVENTIONS.md). Nothing below points
+# at that block: verified with a grep for AGENTS.md mentions co-occurring with
+# replicate/gcs/create-if-absent/alias, which returned only DEPLOYMENT.md's
+# incident narrative — prose about 2026-08-14, not a pointer.
+#
+# One entry per judged line.
+
+# --- back-references describing the AGENTS.md <-> docs relationship itself.
+# Each states the split that this skill maintains, so each is made MORE true by
+# a demotion, not less. They point at the arrangement, never at a given block.
+docs/ARCHITECTURE.md :: keeps the rules needed on nearly every task; the reasoning that makes
+docs/ARCHITECTURE.md :: Reference docs; the Detail Docs index in AGENTS.md is the roster
+docs/ARCHITECTURE.md :: Each rule `AGENTS.md` states in one line, with the reasoning that makes it non-negotiable.
+docs/CONVENTIONS.md :: touches, with the reasoning that makes each one non-negotiable.
+docs/DEPLOYMENT.md :: keeps the two-env-file boundary and the restart
+docs/STYLE.md :: Code style beyond the conventions `AGENTS.md` keeps inline. Today that is the
+
+# --- narrative, not a pointer: the 2026-08-14 branch-deploy incident that #37
+# closes. "AGENTS.md asserted" the main-is-deployed invariant, which it still
+# does, under ## Infrastructure.
+docs/DEPLOYMENT.md :: was an invariant AGENTS.md asserted and nothing enforced
+
+# --- docs/SKILLS.md rows: an inventory of tooling that ACTS on AGENTS.md.
+# These name the file as a target, so they stay true wherever its content sits.
+docs/SKILLS.md :: Curates `AGENTS.md` and its live reference docs against a token budget
+docs/SKILLS.md :: write guard: warns when an edit pushes `AGENTS.md` over
+docs/SKILLS.md :: and every doc here are registered artifacts; nothing re-embeds them
+docs/SKILLS.md :: Repo-specific *prose* needs no re-applying — it lives in `AGENTS.md` under
+
+# --- docs/SOCRATICODE.md: points at two AGENTS.md SECTION HEADINGS, both of
+# which this run left in place (## Code Exploration Policy, ## Code Exploration
+# Notes (repo-specific)). Re-checked against the current headings.
+docs/SOCRATICODE.md :: Detail doc for the `## Code Exploration Policy` block in `AGENTS.md`. That block
+docs/SOCRATICODE.md :: file wholesale. Repo-specific exploration notes belong in `AGENTS.md` under
+docs/SOCRATICODE.md :: `AGENTS.md` → `## Code Exploration Notes (repo-specific)`.
+docs/SOCRATICODE.md :: Two ways this check lies on this repo — both in `AGENTS.md` under
+
+# --- provenance headings: `(#NN)` in a heading makes the anchor slug carry an
+# issue number. An established convention here rather than drift — 8 of the 9
+# predate this branch, across four docs and three contracts. Renaming them is a
+# repo-wide decision with its own dead-anchor risk, not a curation side effect.
+docs/COMMANDS.md :: Politeness — `content.fetch-policy` (#19)
+docs/DEPLOYMENT.md :: The checkout guard — the service refuses to start off `main` (#37)
+docs/DEPLOYMENT.md :: The co-core 0.8.0 cutover is a two-repo deploy, streams flushed between (#28)
+docs/DEPLOYMENT.md :: The dedupe keys gain a stream segment (#29) — no action, but know why
+docs/contracts/content-fetch-issuer-contract.md :: Request options: what Replicator will send, and what it refuses (#11)
+docs/contracts/content-fetch-issuer-reference.md :: Request options: what Replicator will send, and what it refuses (#11)
+docs/contracts/content-replicate-issuer-contract.md :: T3a — the *source* is a path too, and it is the sharper half (#29)
+docs/contracts/replicator-boundaries.md :: The policy stream (shipped, #19)
+docs/contracts/replicator-boundaries.md :: The fallback default (was the interim, #12 → #19)

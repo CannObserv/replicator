@@ -31,7 +31,7 @@ Python ≥3.12, uv, pytest, ruff. `ty` is available as a **non-gating** type che
 uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
 ```
 
-Auth is ADC: on the VM the SA key at `GOOGLE_APPLICATION_CREDENTIALS` (`/etc/replicator/co-pypi-reader.json`), in CI a keyless WIF token. Pin the current minor — `>=0.9.4,<0.10`. The **patch** floor is load-bearing, not tidiness: the change-bus payloads are `extra="ignore"`, so on an older wheel a model constructed with fields it does not have yet succeeds and silently discards them. Raise the floor with every co-core feature the code starts depending on, or a version skew publishes facts that look right and carry nothing (#10). Both floors since fail *loudly* instead — a ValidationError at construction (0.8.0 requires `info_source_id` on all three fetch payloads, #19/#28) or an ImportError at load, never reaching a running worker (0.9.4 cuts the replicate contracts, #29).
+Auth is ADC: on the VM the SA key at `GOOGLE_APPLICATION_CREDENTIALS` (`/etc/replicator/co-pypi-reader.json`), in CI a keyless WIF token. Pin the current minor — `>=0.10,<0.11`. The **patch** floor is load-bearing, not tidiness: the change-bus payloads are `extra="ignore"`, so on an older wheel a model constructed with fields it does not have yet succeeds and silently discards them. Raise the floor with every co-core feature the code starts depending on, or a version skew publishes facts that look right and carry nothing (#10). Both floors since fail *loudly* instead — a ValidationError at construction (0.8.0 requires `info_source_id` on all three fetch payloads, #19/#28) or an ImportError at load, never reaching a running worker (0.9.4 cuts the replicate contracts, #29).
 
 <!-- BEGIN socraticode-policy -->
 ## Code Exploration Policy
@@ -91,8 +91,10 @@ test a branch with `uv run python -m src.worker.main` under a distinct
 `REPLICATOR_CONSUMER_NAME`. **After editing `deploy/replicator.service`, `cp` it to
 `/etc/systemd/system/`** — the installed unit is a copy, not a symlink, so
 `daemon-reload` alone silently re-reads the old file and the mismatch has no
-symptom until a directive matters. Full lifecycle table and the dev-server
-invocation: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+symptom until a directive matters. **Refuses to start off `main`** (#37) —
+`scripts/check_main_checkout.sh`; `REPLICATOR_ALLOW_ANY_CHECKOUT=1` overrides.
+Full lifecycle table and the dev-server invocation:
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Environment Variables
 
@@ -143,21 +145,16 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
   `content.blobs` and `content.artifacts` each carry both outcomes of their
   command; `content.fetch-policy` is read **groupless** — no group, no ack, no
   DLQ.
-- **The replicate loop writes for `gcs` (#29).** T4's create-if-absent, so a
-  redelivery onto matching bytes re-emits the same `public_url` and differing bytes
-  are a terminal conflict. `blob_uri` is **never resolved as a path** — fingerprint
-  out, compared against `store.uri_for()`. Writers are keyed **by alias**, and every
-  refusal happens before any credential is touched. Provider failures classify by
-  HTTP status — 4xx closes the command, 5xx/408/429 and statusless errors leave it
-  pending — because a transient failure is exempt from the delivery ceiling and
-  publishes no fact at all, so misclassifying one strands the issuer forever
-  (#29 CR #26, #27).
+- **The replicate loop writes for `gcs` (#29)** — create-if-absent, `blob_uri`
+  never resolved as a path, writers keyed by alias, refusals before credentials,
+  provider failures classified by HTTP status. Read
+  [docs/CONVENTIONS.md](docs/CONVENTIONS.md) before touching that path.
 - **Nothing but the seed script writes to `content.fetch`.** `scripts/seed_fetch.py`
   requires `--production` for the one combination the live worker consumes — a
   frame there is fetched for real.
 - **Three normative contracts bound the wire and the roadmap** — four documents,
   all under `docs/contracts/`, linked from sibling repos and indexed below.
-  `tests/test_boundaries.py` enforces eight charter invariants in CI; change a
+  `tests/test_boundaries.py` enforces the charter in CI; change a
   charter and its tests together.
 
 Where the reasoning lives:
@@ -219,7 +216,7 @@ logger = get_logger(__name__)
 ```
 Entry points only: `configure_logging()` is called once inside the FastAPI `lifespan` or the worker's `run()`. Never in library modules.
 
-The logging stack — one formatter, two installers, and the two journald lines that
+The logging stack — one formatter, two installers, and the journald lines that
 are deliberately not JSON: [docs/STYLE.md](docs/STYLE.md).
 
 **Date & Time:**
