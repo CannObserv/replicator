@@ -34,7 +34,7 @@ from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
 from co_core.pure.models.changes import ContentFetchCommand, ContentReplicateCommand
 from co_core_aio.bus import AsyncBusConsumer
 from redis.asyncio import Redis
-from redis.exceptions import BusyLoadingError
+from redis.exceptions import BusyLoadingError, OutOfMemoryError
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
@@ -78,6 +78,23 @@ _TRANSIENT_ERRORS: tuple[type[Exception], ...] = (
     RedisConnectionError,
     RedisTimeoutError,
     BusyLoadingError,
+    # A capped broker refusing a write (#20, archiver#129). Listed explicitly
+    # because ``OutOfMemoryError`` subclasses ``ResponseError`` — the type that
+    # otherwise means "this command will never work" — and only this one member of
+    # that family is someone else's incident rather than our bug. The command is
+    # valid, so it must be exempt from the delivery ceiling: the PEL is already the
+    # durable record of intent, ``claim_stale`` re-runs it, and content-addressed
+    # storage makes the re-run a no-op.
+    #
+    # Not cosmetic in either direction. A *flapping* cap classified as
+    # unclassified burns ``times_delivered`` — which only ever advances — without
+    # ever completing the DLQ write, so after the incident any later unclassified
+    # failure dead-letters immediately with none of the grace the ceiling exists to
+    # give. And on the *clearing* edge, a command refused at attempt >= the ceiling
+    # whose DLQ write then succeeds as memory frees is closed with
+    # ``fetch_failed(handler_error)`` for bytes that stored fine and are sitting on
+    # disk — store-then-publish means the OOM lands after the write.
+    OutOfMemoryError,
 )
 
 # Bound on consecutive poison frames stepped over before a reader pauses.

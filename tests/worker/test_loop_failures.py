@@ -12,13 +12,21 @@ import pytest
 from co_core.pure.adapters.bus.streams import dlq_name
 from co_core.pure.models.changes import ContentFetchCommand
 from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import OutOfMemoryError
 
 from src.core.errors import FailureReason, PermanentFetchError, TransientFetchError
 from src.storage.local import LocalBlobStore
 from src.storage.sweeper import BlobUsage
 from src.worker.handler import build_handler
 from src.worker.loop import FETCH_SPEC, Outcome, _delivery_count, poll_once
-from tests.worker.conftest import GROUP, TOPIC, FakeFetcher, make_command, process_one
+from tests.worker.conftest import (
+    GROUP,
+    TOPIC,
+    FakeFetcher,
+    collected_reports,
+    make_command,
+    process_one,
+)
 
 
 async def test_a_transient_failure_leaves_the_message_pending(fake_redis, consumer, settings):
@@ -48,6 +56,65 @@ async def test_a_redis_connection_error_counts_as_transient(fake_redis, consumer
     message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
 
     assert await process_one(fake_redis, consumer, settings, message, handler) is Outcome.RETRY
+
+
+async def test_a_flapping_memory_cap_never_burns_the_delivery_counter(
+    fake_redis, consumer, settings, monkeypatch
+):
+    """#20: a capped broker's OOM is transient, so the ceiling is never consulted.
+
+    ``OutOfMemoryError`` subclasses ``ResponseError``, so before #20 it fell to
+    ``_handle_unclassified``. ``times_delivered`` only ever advances, so an
+    incident that clears would leave the command with its 5-attempt grace already
+    spent — the *next* unrelated handler bug dead-letters on its first failure.
+
+    ``_delivery_count`` is patched to a landmine rather than asserted on after the
+    fact: the counter is the broker's, so "was not consulted" is the only
+    observable form of "was not spent".
+    """
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-oom"))
+
+    async def landmine(*args, **kwargs):
+        raise AssertionError("a transient failure must not read the delivery counter")
+
+    monkeypatch.setattr("src.worker.loop._delivery_count", landmine)
+
+    async def handler(command: ContentFetchCommand) -> None:
+        raise OutOfMemoryError("OOM command not allowed when used memory > 'maxmemory'.")
+
+    message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
+    outcome = await process_one(fake_redis, consumer, settings, message, handler)
+
+    assert outcome is Outcome.RETRY
+    pending = await fake_redis.xpending(TOPIC, GROUP)
+    assert pending["pending"] == 1
+    assert await fake_redis.xlen(dlq_name(TOPIC)) == 0
+    assert not await fake_redis.exists(FETCH_SPEC.dedupe_key("cmd-oom"))
+
+
+async def test_an_oom_at_the_ceiling_does_not_close_a_command_whose_bytes_stored(
+    fake_redis, consumer, settings
+):
+    """#20, the clearing edge: no ``fetch_failed`` for a blob sitting on disk.
+
+    Store-then-publish means an OOM on the ``blob_available`` XADD happens with
+    the bytes already stored. Classified as unclassified at attempt >= the
+    ceiling, the DLQ write succeeds the moment memory frees and the issuer is
+    told its content will never arrive — about content that exists.
+    """
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-oom-at-ceiling"))
+    strict = settings.model_copy(update={"max_delivery_attempts": 1})
+    reports = collected_reports()
+
+    async def handler(command: ContentFetchCommand) -> None:
+        raise OutOfMemoryError("OOM command not allowed when used memory > 'maxmemory'.")
+
+    message = (await poll_once(fake_redis, consumer, strict, group=GROUP))[0]
+    outcome = await process_one(fake_redis, consumer, strict, message, handler, reporter=reports)
+
+    assert outcome is Outcome.RETRY
+    assert await fake_redis.xlen(dlq_name(TOPIC)) == 0
+    assert reports.reports == []
 
 
 async def test_a_permanent_failure_is_dead_lettered(fake_redis, consumer, settings):
