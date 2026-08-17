@@ -221,7 +221,7 @@ logger = get_logger(__name__)
 ```
 Entry points only: `configure_logging()` is called once inside the FastAPI `lifespan` or the worker's `run()`. Never in library modules.
 
-The logging stack — one formatter, two installers, and the two journald lines that
+The logging stack — one formatter, two installers, and the journald lines that
 are deliberately not JSON: [docs/STYLE.md](docs/STYLE.md).
 
 **Date & Time:**

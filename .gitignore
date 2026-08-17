@@ -42,8 +42,15 @@ coverage.xml
 *.swp
 *.swo
 
-# Git worktrees
+# Git worktrees. Two roots, because two things provision them: the
+# using-git-worktrees scripts resolve to <repo>/.worktrees/, and the Claude Code
+# Agent harness (isolation: "worktree") provisions into .claude/worktrees/.
+# Both are ignored so that `git status --porcelain` on the main checkout stays
+# empty while agents run — that emptiness is the orchestrator's tripwire for an
+# agent falling through into the deployment checkout, and a tripwire that fires
+# on every clean run is one nobody reads.
 .worktrees/
+.claude/worktrees/
 
 # Runtime (BUILD_ID stamp target — the systemd unit writes /run/replicator/build-id)
 /run/

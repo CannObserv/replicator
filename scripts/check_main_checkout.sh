@@ -14,6 +14,8 @@
 #   - HEAD is not `main`           -> unshared code, refuse            -> exit 1
 #   - detached HEAD                -> no branch to verify, refuse      -> exit 1
 #   - not a git work tree          -> cannot verify anything, refuse   -> exit 1
+#   - dubiously-owned repository   -> cannot verify anything, refuse   -> exit 1
+#   - unborn HEAD                  -> nothing to verify, refuse        -> exit 1
 #   - main behind origin/main      -> stale but shared, warn           -> exit 0
 #   - main ahead of origin/main    -> unpushed but on main, warn       -> exit 0
 #   - dirty working tree           -> not deployed code either, warn   -> exit 0
@@ -72,23 +74,43 @@ if ! command -v git >/dev/null 2>&1; then
   exit 1
 fi
 
-# One refusal, three ways to reach it: the directory is not a work tree, git
-# declines to trust it (dubious ownership on a shared VM), or it is a work tree
-# whose HEAD has no commit yet. All mean the same thing — there is nothing to
-# check — and all three would otherwise fall through to the detached-HEAD branch
-# below and print an empty SHA, which is the confusing message this splits out to
-# avoid.
+# One refusal, several ways to reach it: git will not trust the directory, it is
+# not a work tree at all, or it is a work tree whose HEAD has no commit yet. All
+# mean the same thing — there is nothing to check — and all of them would
+# otherwise fall through to the detached-HEAD branch below and print an empty
+# SHA, which is the confusing message this splits out to avoid.
+#
+# Dubious ownership gets its own message rather than sharing "not a git work
+# tree". The directory plainly *is* a repository in that case, so the generic
+# line sends an operator hunting the wrong hypothesis during a failed start —
+# the same misleading-verdict failure this whole guard exists to close, one
+# level down. It is reachable without anyone doing anything strange: a single
+# root-run git command, a restore, or a UID change on this shared VM is enough.
 unverifiable=""
+remedy=""
 head_sha=""
-if [ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" != "true" ]; then
-  unverifiable="$(pwd) is not a git work tree (or git declines to trust it)"
-elif ! head_sha="$(git rev-parse --verify --quiet --short HEAD 2>/dev/null)"; then
-  unverifiable="$(pwd) has an unborn HEAD — no commit to verify"
-fi
+# One probe, stderr folded in, matched with `case` rather than grep: this runs on
+# every start, so it costs one git invocation and no external process.
+probe="$(git rev-parse --is-inside-work-tree 2>&1)"
+case "${probe}" in
+  true)
+    if ! head_sha="$(git rev-parse --verify --quiet --short HEAD 2>/dev/null)"; then
+      unverifiable="$(pwd) has an unborn HEAD — no commit to verify"
+    fi
+    ;;
+  *"dubious ownership"*)
+    unverifiable="git refuses $(pwd) as dubiously owned — the directory is a repository, but not this user's"
+    remedy="git config --global --add safe.directory $(pwd), or restore the directory's owner"
+    ;;
+  *)
+    unverifiable="$(pwd) is not a git work tree"
+    ;;
+esac
 
 if [ -n "${unverifiable}" ]; then
   echo "check_main_checkout: ${unverifiable}" >&2
   echo "check_main_checkout: cannot verify the deployed code is ${DEPLOY_BRANCH}; refusing to start" >&2
+  [ -n "${remedy}" ] && echo "check_main_checkout: fix with: ${remedy}" >&2
   echo "check_main_checkout: set REPLICATOR_ALLOW_ANY_CHECKOUT=1 to start anyway" >&2
   exit 1
 fi
@@ -97,7 +119,20 @@ fi
 # detached checkout would be caught by the branch comparison below anyway; it is
 # split out only so the journal says "detached" instead of "on 'HEAD', not 'main'".
 branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
-if [ "${branch}" = "HEAD" ] || [ -z "${branch}" ]; then
+
+# An empty name should be unreachable — `rev-parse --verify HEAD` succeeded
+# above, so there is a commit to name. Refused on its own line anyway rather than
+# folded into the detached case below: calling a git failure "detached at <sha>"
+# is the same misleading-verdict shape the unborn-HEAD case was split out to
+# avoid, and an unreachable branch costs three lines to keep honest.
+if [ -z "${branch}" ]; then
+  echo "check_main_checkout: git could not name HEAD's branch in $(pwd)" >&2
+  echo "check_main_checkout: cannot verify the deployed code is ${DEPLOY_BRANCH}; refusing to start" >&2
+  echo "check_main_checkout: set REPLICATOR_ALLOW_ANY_CHECKOUT=1 to start anyway" >&2
+  exit 1
+fi
+
+if [ "${branch}" = "HEAD" ]; then
   echo "check_main_checkout: HEAD is detached at ${head_sha}" >&2
   echo "check_main_checkout: no branch to verify; refusing to start" >&2
   echo "check_main_checkout: 'git checkout ${DEPLOY_BRANCH}', or set REPLICATOR_ALLOW_ANY_CHECKOUT=1" >&2
