@@ -10,11 +10,18 @@ Since #29 there are two layers: the loop catches ``PermanentError`` /
 ``*FetchError`` leaves narrow the vocabulary back to ``FailureReason``. Both
 layers are tested — the base's contract is what a replicate handler will rely
 on, and it has no other coverage (CR #12).
+
+Since #17 there are **three** fates, not two, and the third is a sibling rather
+than a leaf: ``CompletedWithoutBlobError`` is a command that finished with no
+bytes to announce. Its position in the hierarchy is the whole of its behaviour —
+descend it from ``PermanentError`` and the loop's existing arm swallows it, and a
+successful conditional GET dead-letters again.
 """
 
 import pytest
 
 from src.core.errors import (
+    CompletedWithoutBlobError,
     FailureReason,
     HandlerError,
     PermanentError,
@@ -95,6 +102,7 @@ def test_the_reason_tokens_are_the_wire_tokens():
         "http_status",
         "invalid_request_options",
         "not_fetchable",
+        "not_modified",
         "too_large",
         "unsupported_schema_version",
         "handler_error",
@@ -120,3 +128,34 @@ def test_a_reason_serializes_as_its_token():
 def test_both_failure_types_still_share_a_base():
     assert issubclass(TransientFetchError, HandlerError)
     assert issubclass(PermanentFetchError, HandlerError)
+
+
+def test_a_completed_command_with_no_blob_is_a_sibling_of_the_other_two():
+    """#17: the third fate is structural, and the hierarchy *is* the mechanism.
+
+    ``process_message`` catches ``PermanentError`` and dead-letters it. A
+    ``CompletedWithoutBlobError`` that descended from it would be swallowed by
+    that arm, and a successful conditional GET would go back to closing as a
+    failure with a DLQ entry — the exact bug #17 exists to fix, reintroduced by a
+    one-word change to a base class with every other test still green.
+    """
+    assert issubclass(CompletedWithoutBlobError, HandlerError)
+    assert not issubclass(CompletedWithoutBlobError, PermanentError)
+    assert not issubclass(CompletedWithoutBlobError, TransientError)
+
+
+def test_a_completed_command_with_no_blob_carries_its_reason_and_status():
+    """The token and the status still ride the fact; only the fate differs."""
+    exc = CompletedWithoutBlobError(
+        "not modified", reason=FailureReason.NOT_MODIFIED, status_code=304
+    )
+
+    assert exc.reason is FailureReason.NOT_MODIFIED
+    assert exc.status_code == 304
+    assert str(exc) == "not modified"
+
+
+def test_the_reason_is_required_on_the_third_fate_too():
+    """Same argument as ``PermanentError``'s: a default relabels on the wire."""
+    with pytest.raises(TypeError):
+        CompletedWithoutBlobError("unclassified")  # type: ignore[call-arg]

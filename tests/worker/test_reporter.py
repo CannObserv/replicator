@@ -140,6 +140,47 @@ async def test_the_ceiling_path_reports_how_many_attempts_it_took(reporter, fake
     assert fact.detail == "boom"
 
 
+NOT_MODIFIED_REPORT = FailureReport(
+    command_id="cmd-1",
+    url="https://example.test/a",
+    info_source_id="isrc-01JQ8Z",
+    reason=FailureReason.NOT_MODIFIED,
+    status_code=304,
+)
+
+
+async def test_a_not_modified_report_is_still_a_terminal_fetch_failed_fact(reporter, fake_redis):
+    """Shape A (#17): a new token on the existing fact, not a new event type.
+
+    The honest cost is that ``fetch_failed`` now carries a **non-failure** — but
+    a consumer branching on ``terminal`` first, as the contract has always told
+    it to, already does the right thing with a token it has never seen.
+    """
+    await reporter()(NOT_MODIFIED_REPORT)
+
+    (fact,) = await decoded_facts(fake_redis, streams.CONTENT_BLOBS)
+    assert isinstance(fact, FetchFailedEvent)
+    assert fact.reason == "not_modified"
+    assert fact.terminal is True
+    assert fact.status_code == 304
+
+
+async def test_the_not_modified_case_gets_its_own_journal_line(reporter, fake_redis, caplog):
+    """``published fetch_failed`` becomes the commonest line in the journal (#17).
+
+    At steady state routine no-change checks dominate, and log-based alerting
+    reads that message as an error. The token distinguishes them on the wire; the
+    message has to distinguish them in the journal.
+    """
+    with caplog.at_level("INFO", logger="src.worker.reporter"):
+        await reporter()(NOT_MODIFIED_REPORT)
+        await reporter()(REPORT)
+
+    unchanged, failed = [r for r in caplog.records if r.name == "src.worker.reporter"]
+    assert "fetch_failed" not in unchanged.message
+    assert failed.message == "published fetch_failed"
+
+
 async def test_facts_can_be_pointed_at_a_scratch_stream(reporter, fake_redis):
     """Same reason ``build_handler`` takes a topic: a live-broker test needs one."""
     topic = "replicator.itest.blobs"

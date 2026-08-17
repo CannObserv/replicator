@@ -110,21 +110,23 @@ are the whole value of the six:
 > consumer written against 0.7.x may still carry a workaround for it. MUST-5 is unaffected — deduping
 > an inbox on the fingerprint is still wrong, and still loses a correlation.
 
-> **Do not attempt conditional GET yet — this is now the *only* thing standing in the way.**
-> `etag` and `last_modified` are the *read* half of the seam, and since #11 the write half exists:
-> Replicator honours the command's `headers`, so an `If-None-Match` you send **will** be sent to
-> the origin. What has not landed is the outcome. A validator that *matches* earns a **body-less
-> 304**, which Replicator still closes as `fetch_failed` / `http_status` — a terminal failure fact
-> for what is in fact the most useful possible answer, and one that would tell you the content is
-> gone when it is merely unchanged.
+> **Do not attempt conditional GET yet — but the reason has changed.** Replicator's half of the
+> seam is complete. `etag` and `last_modified` are the *read* half; since #11 the write half exists,
+> so an `If-None-Match` you send **will** reach the origin; and since **#17** the outcome exists
+> too: a matching validator earns `fetch_failed` · `not_modified` · `terminal=True` ·
+> `status_code=304`, with no blob, no dead-letter entry, and the command's dedupe key written. That
+> is the correct answer, and it is the one you will get.
 >
-> So the trap is live rather than theoretical: nothing stops you replaying a validator today, and
-> doing so converts every *successful* no-change check into a closed command. The missing piece is
-> tracked as **#17** — a 304 needs an outcome of its own, since there is no blob to announce and
-> `fetch_failed` means "no blob will ever arrive". Until #17 lands, keep these two fields in your
-> own records and send the request unconditionally. (#17 recommends `reason="not_modified"` on the
-> existing fact rather than a new event type, so an issuer branching on `terminal` first is already
-> forward-compatible with it.)
+> What is missing is now **on the consumer side, not this one**. `not_modified` means *no bytes are
+> coming and your last fingerprint still stands* — a branch a consumer written before #17 does not
+> have, and whose default is very likely "the content is gone" or "the fetch failed". Enabling
+> conditional GET against such a consumer converts every successful no-change check into a
+> spurious loss, which is the same damage the old warning described arriving from the other end.
+>
+> So: keep these two fields in your own records and send the request unconditionally **until your
+> own consumer has a branch for the token**. On Watcher's side that is
+> [CannObserv/watcher#249](https://github.com/CannObserv/watcher/issues/249) — `apply_fetch_blob`
+> is built around a blob arriving. This warning comes out when that lands, not when #17 did.
 
 ---
 
@@ -137,7 +139,8 @@ are the whole value of the six:
 | Frame decodes to a non-`content_fetch` payload | `content.fetch.dlq` | **nothing** — any `command_id` in it is another command's |
 | Command with a blank `command_id` | `content.fetch.dlq`, before the fetch | **nothing** — no correlator to key a fact on |
 | Malformed frame (fails `from_wire`; includes a naive `occurred_at`, and any 0.7.x command with no `info_source_id`) | `content.fetch.dlq`, synthesized record | **nothing** — no payload at all |
-| HTTP 4xx, or a body-less 304 | fact, then `content.fetch.dlq` | `fetch_failed` · `http_status` (+ `status_code`) |
+| HTTP 4xx — **412 included**, since a failed precondition on a GET is the issuer's error | fact, then `content.fetch.dlq` | `fetch_failed` · `http_status` (+ `status_code`) |
+| HTTP 304 Not Modified — a conditional GET that **succeeded** (#17) | fact, ack, and **no DLQ entry**; the dedupe key is written | `fetch_failed` · `not_modified` (+ `status_code=304`) |
 | URL not fetchable (bad scheme / invalid URL) | fact, then `content.fetch.dlq` | `fetch_failed` · `not_fetchable` |
 | Body over `REPLICATOR_MAX_BLOB_BYTES` (default 64 MiB) | fact, then `content.fetch.dlq` | `fetch_failed` · `too_large` |
 | Unsendable `headers` / `timeout_seconds` | fact, then `content.fetch.dlq`, **before the fetch** | `fetch_failed` · `invalid_request_options` |
@@ -147,6 +150,14 @@ are the whole value of the six:
 | Success | `blob_available` on `content.blobs` | the fact |
 
 Every `fetch_failed` row carries `terminal=True` — the command is closed and no blob will arrive.
+
+**One row behaves unlike every other, and it is #17's.** The 304 row is the only one where
+`terminal=True` is *good news*: no blob is coming because none is needed, and treating it as content
+loss is the single most likely way to misread this stream. It is also the only closed command that
+leaves **no `content.fetch.dlq` entry** — a successful no-change check is not operator-actionable,
+and at steady state it is the common outcome, so copying each one there would bury the entries that
+matter. The cost, stated once: **`fetch_failed` volume is no longer a failure signal.** Alert on
+`fetch_failed where reason != "not_modified"`.
 
 The "nothing" rows are not one problem, and the reaper is not the answer to all of them:
 
@@ -223,7 +234,12 @@ produces nothing *yet*:
 
 ## Reading the DLQ
 
-The operator's surface, and the complement of the fact rather than a substitute for it.
+The operator's surface, and the complement of *most* facts rather than a substitute for any.
+
+**It is no longer the complement of every terminal fact (#17).** A body-less 304 closes its command
+with a fact and an ack and writes **nothing** here — the first outcome to do so. So the DLQ is the
+complement of every **failed** close, not of every terminal one, and a fact with no matching entry
+is not evidence of a lost dead-letter.
 
 **The DLQ is still readable, and still worth reading** — for what the fact cannot carry. It is an
 ordinary stream on the same broker, and every entry carries the original **command** envelope — so

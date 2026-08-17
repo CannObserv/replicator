@@ -15,6 +15,11 @@ The silent rows are not silent for one reason, and the tests say which:
 
 Every route that reaches the DLQ also pins its ``dlq_reason``: five routes, five
 strings, and it is what an operator greps (CR #11).
+
+Since #17 one announced route reaches the DLQ not at all — a command that
+completed with **no blob**, which is a fact plus an ack. Its tests sit here
+rather than with the failures because what it shares with them is the fact, and
+what it does not share is everything else: no dead-letter, and a dedupe key.
 """
 
 import asyncio
@@ -31,7 +36,7 @@ from co_core.pure.models.changes import (
     SourceRevisionCapturedEvent,
 )
 
-from src.core.errors import FailureReason, PermanentFetchError
+from src.core.errors import CompletedWithoutBlobError, FailureReason, PermanentFetchError
 from src.worker.loop import (
     FETCH_SPEC,
     Outcome,
@@ -420,6 +425,107 @@ async def test_the_fact_is_published_before_the_ack(fake_redis, consumer, settin
     await process_one(fake_redis, consumer, settings, message, failing_handler, reporter=reporter)
 
     assert seen == ["reported(pending=1)", "dead_lettered"]
+
+
+async def unchanged_handler(command: ContentFetchCommand) -> None:
+    """The byte path's 304: the command is done, and there are no bytes (#17)."""
+    raise CompletedWithoutBlobError(
+        f"{command.url} returned HTTP 304", reason=FailureReason.NOT_MODIFIED, status_code=304
+    )
+
+
+async def test_a_command_that_completed_without_a_blob_is_announced(fake_redis, consumer, settings):
+    """The third fate: a fact, an ack, and nothing on the operator surface.
+
+    ``status_code`` still rides along — an issuer that has not learned the token
+    branches on ``terminal`` and can still see *which* body-less answer it got.
+    """
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-304", url=URL))
+    reports = collected_reports()
+
+    message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
+    outcome = await process_one(
+        fake_redis, consumer, settings, message, unchanged_handler, reporter=reports
+    )
+
+    assert outcome is Outcome.COMPLETED_WITHOUT_BLOB
+    assert await dlq_reasons(fake_redis) == []
+    (report,) = reports.reports
+    assert report.command_id == "cmd-304"
+    assert report.url == URL
+    assert report.reason is FailureReason.NOT_MODIFIED
+    assert report.status_code == 304
+
+
+async def test_a_command_that_completed_without_a_blob_takes_its_dedupe_key(
+    fake_redis, consumer, settings
+):
+    """Every *other* close acks without one; this one is a completion (#17).
+
+    A reclaim after a crash would otherwise re-ask an origin that has just said
+    nothing changed. Pinned end-to-end — the key existing is not the same claim
+    as a redelivery actually short-circuiting on it.
+    """
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-304"))
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-304"))
+
+    first = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
+    await process_one(fake_redis, consumer, settings, first, unchanged_handler)
+
+    assert await fake_redis.exists(FETCH_SPEC.dedupe_key("cmd-304"))
+    second = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
+    assert (
+        await process_one(fake_redis, consumer, settings, second, unreachable_handler)
+        is Outcome.DEDUPED
+    )
+
+
+async def test_the_fact_is_published_before_the_command_is_acked(fake_redis, consumer, settings):
+    """The ordering inverts here, and it still has to be publish-first (#17).
+
+    ``_close`` gets it right because ``dead_letter`` acks inside itself; this
+    path acks explicitly, so nothing structural enforces it. A fact published
+    after the ack is lost outright if the process dies in between, and there is
+    no DLQ entry left behind to repair from.
+    """
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-304"))
+    seen: list[str] = []
+
+    async def watching_reporter(report) -> None:
+        pending = await fake_redis.xpending(TOPIC, GROUP)
+        seen.append(f"reported(pending={pending['pending']})")
+
+    message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
+    await process_one(
+        fake_redis, consumer, settings, message, unchanged_handler, reporter=watching_reporter
+    )
+    seen.append("acked")
+
+    assert seen == ["reported(pending=1)", "acked"]
+
+
+async def test_a_reporter_that_raises_cannot_strand_a_completed_command(
+    fake_redis, consumer, settings
+):
+    """Same belt and braces as the dead-letter path, minus the dead-letter.
+
+    Here there is no ``dead_letter`` behind the reporter to unblock the stream,
+    so a raise that escaped would leave a command whose origin has already
+    answered pending forever.
+    """
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-304"))
+
+    async def exploding_reporter(report) -> None:
+        raise RuntimeError("reporter is broken")
+
+    message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
+    outcome = await process_one(
+        fake_redis, consumer, settings, message, unchanged_handler, reporter=exploding_reporter
+    )
+
+    assert outcome is Outcome.COMPLETED_WITHOUT_BLOB
+    pending = await fake_redis.xpending(TOPIC, GROUP)
+    assert pending["pending"] == 0
 
 
 async def test_a_reporter_that_raises_cannot_strand_the_message(fake_redis, consumer, settings):
