@@ -1,4 +1,4 @@
-"""The failure fact path: ``fetch_failed`` for a command that closes without a blob.
+"""The closing fact path: ``fetch_failed`` for a command that closes without a blob.
 
 Fills the ``FailureReporter`` seam ``src.worker.loop`` dispatches to, and is the
 mirror of ``src.worker.handler``: both publish to ``content.blobs``, because an
@@ -12,13 +12,25 @@ how to say so on the wire. That split is why ``terminal`` is not a parameter: th
 loop builds a report only where it has stopped retrying (#9 §3 — non-terminal
 facts are deferred).
 
+**Not every fact this publishes is a failure (#17).** ``not_modified`` is a
+successful conditional GET, carried on ``fetch_failed`` because the event's real
+meaning is "this command will not produce a blob" and ``terminal`` is the field
+consumers branch on. So the *count* of facts on this path stopped being a
+failure signal — ``reason != "not_modified"`` is the one to alert on — and the
+journal line is split accordingly below.
+
 **A failed publish is swallowed here**, deliberately asymmetric with
 ``handler._publish``, which re-raises. There, raising is what prevents an orphan
-blob nothing references. Here the dead-letter entry is already the durable
-record of the failure, and raising would convert a clean dead-letter into an
+blob nothing references. On a *failed* close the dead-letter entry is already the
+durable record, and raising would convert a clean dead-letter into an
 *unclassified* handler error that burns the delivery ceiling and lands in the
-same DLQ minutes later, stranding the message in the PEL in between. The issuer's
-reaper (contract MUST-6) is the backstop for the fact that did not make it.
+same DLQ minutes later, stranding the message in the PEL in between. On the
+``not_modified`` close there is no dead-letter entry at all (#17), so the swallow
+is doing more work: raising there would leave a command whose origin has already
+answered pending until the next reclaim, to be re-asked. Either way the issuer's
+reaper (contract MUST-6) is the backstop for the fact that did not make it —
+which is why ``_close_without_dlq`` catches this a second time rather than
+trusting the swallow.
 """
 
 from datetime import UTC, datetime
@@ -30,6 +42,7 @@ from co_core.pure.models.changes import FetchFailedEvent
 from co_core_aio.bus import AsyncBusPublisher
 from redis.asyncio import Redis
 
+from src.core.errors import FailureReason
 from src.core.logging import get_logger
 from src.worker.loop import FailureReport, FailureReporter
 
@@ -73,6 +86,16 @@ def build_failure_reporter(
             attempts=failure.attempts,
             detail=failure.detail,
         )
+        # ``==``, never ``is`` (CR #9). ``FailureReport.reason`` is annotated
+        # ``FailureReason``, but the *bases* it is fed from — ``PermanentError``
+        # and ``CompletedWithoutBlobError`` — type ``reason`` as a plain ``str``
+        # on purpose, so a second stream reports in its own vocabulary. The
+        # dataclass coerces nothing, so a raise site passing the literal
+        # ``"not_modified"`` type-checks, satisfies every test here, and would
+        # fail an identity check — silently sending the commonest outcome on the
+        # stream back to the "published fetch_failed" line this split exists to
+        # get it off. ``StrEnum`` makes ``==`` total against both forms.
+        not_modified = failure.reason == FailureReason.NOT_MODIFIED
         try:
             await publisher.execute(BusPublish(blobs_topic, to_wire(event)))
         except Exception as exc:
@@ -84,12 +107,32 @@ def build_failure_reporter(
                     "error": f"{type(exc).__name__}: {exc}",
                     # Says what the issuer is left with, so the line reads as a
                     # regression to MUST-6's old behaviour rather than as noise.
-                    "detail": "the dead-letter still happens; the issuer's reaper is the backstop",
+                    # Stated per case rather than hedged into one sentence (CR
+                    # #13): a ``not_modified`` close writes no DLQ entry, so on
+                    # that path this line and the reaper are the only records
+                    # there are, and a reader should not have to work out which
+                    # path they are looking at.
+                    "detail": (
+                        "no dead-letter entry is written on a not_modified close, so this line and "
+                        "the issuer's reaper are the only records"
+                        if not_modified
+                        else "the dead-letter still happens; the issuer's reaper is the backstop"
+                    ),
                 },
             )
             return
+        # Two messages for one event type, and the split is operational rather
+        # than cosmetic (#17). ``not_modified`` becomes the commonest line in the
+        # journal once issuers replay validators, and log-based alerting reads
+        # "fetch_failed" as an error — so the routine case must not carry the
+        # token in its message. Branching on ``reason`` is safe *here* in a way it
+        # would not be in the loop: this decides what a line says, not what
+        # happens to a message, so renaming the token costs a log message and
+        # nothing else.
         logger.info(
-            "published fetch_failed",
+            "published a completed-without-blob outcome"
+            if not_modified
+            else "published fetch_failed",
             extra={
                 "command_id": failure.command_id,
                 "reason": str(failure.reason),

@@ -13,7 +13,7 @@ import pytest
 from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.envelope import from_wire
 from co_core.pure.models.changes import ReplicationCompleteEvent, ReplicationFailedEvent
-from redis.exceptions import ResponseError
+from redis.exceptions import OutOfMemoryError, ResponseError
 
 from src.core.errors import ReplicateReason
 from src.storage.local import LocalBlobStore
@@ -251,14 +251,21 @@ async def test_a_failed_completion_publish_is_raised_not_swallowed(fake_redis, m
     reaper can clean up — ``objectCreator`` cannot delete it either. Raising
     leaves the command pending, and the redelivery re-runs a write T4 makes a
     safe no-op, so the fact gets another chance.
+
+    Raised as ``OutOfMemoryError``, the type redis-py actually produces for this
+    message, rather than the bare ``ResponseError`` this used to fake (CR #12).
+    ``pytest.raises`` accepted the parent either way, so nothing failed — but #20
+    made the *subclass* behave differently from its parent, so faking the parent
+    here would assert the OOM path using the one type that no longer represents
+    it, and would not notice an OOM-specific branch appearing in this publisher.
     """
     publish = build_completion_publisher(client=fake_redis, artifacts_topic=ARTIFACTS)
     command = make_replicate_command_model(command_id="rep-done", blob_uri="file:///x.bin")
 
     async def refuse(*args, **kwargs):
-        raise ResponseError("OOM command not allowed when used memory > 'maxmemory'")
+        raise OutOfMemoryError("OOM command not allowed when used memory > 'maxmemory'")
 
     monkeypatch.setattr(fake_redis, "xadd", refuse)
 
-    with pytest.raises(ResponseError):
+    with pytest.raises(OutOfMemoryError):
         await publish(command, "https://storage.googleapis.com/b/reps/2026/report.pdf")
