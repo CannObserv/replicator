@@ -44,14 +44,22 @@ states them in one line each; what a *particular* stream carries, and why, is in
   across commands is visible to nobody but the fetcher. `handler.py` reports the
   status to `HostPacer.report_rate_limited`, which multiplies the interval in
   force by `BACKOFF_MULTIPLIER` (×2, first step ≥ 2 s) up to
-  `BACKOFF_MAX_INTERVAL` (60 s), and drops it in one step once
-  `BACKOFF_DECAY_SECONDS` (1800 s) pass without another refusal. Five rules an
-  agent has to keep:
+  `BACKOFF_MAX_HEADROOM` (60 s) **above that host's floor**, and drops it in one
+  step once `BACKOFF_DECAY_SECONDS` (1800 s) pass without another refusal. Six
+  rules an agent has to keep:
   - **The published number stays the floor.** Escalation may only ever raise the
     effective interval above it. The floor is re-resolved on every read rather
     than folded into the escalation, so a republished policy — or a revocation —
     takes effect on the next command instead of being shadowed by a number this
     service invented. A host that once 429'd can never come back less polite.
+  - **The ceiling is headroom above that floor, not an absolute interval.**
+    Watcher's was absolute (`BACKOFF_MAX_INTERVAL`) and could be: it had one
+    global floor of 1 s and no per-host published numbers. Replicator has them
+    (#19), so an absolute ceiling would make the mechanism silently inert for
+    every host whose policy already exceeds it — the origins an issuer has
+    already marked fragile, and therefore the likeliest to go on refusing. The
+    constant is named for the shape (`BACKOFF_MAX_HEADROOM`) because the old name
+    is what made the wrong reading plausible (CR #14).
   - **Narrower than transient.** Keyed on the *status*, not on the exception type:
     a 500 or a 504 is a `TransientFetchError` too, but it is an origin bug or a
     slow upstream rather than a statement about request rate, and slowing a host
@@ -64,8 +72,10 @@ states them in one line each; what a *particular* stream carries, and why, is in
     busy enough to earn one.
   - **`Retry-After` raises an escalation, never softens one.** Honoured on both
     statuses, in both wire forms (delta-seconds *and* HTTP-date, RFC 9110
-    §10.2.3), clamped to `BACKOFF_MAX_INTERVAL`; a malformed, absent, or
-    already-past value falls back to the multiplier rather than raising. Applied
+    §10.2.3), clamped to the same headroom as any other escalation; a malformed,
+    absent, or already-past value falls back to the multiplier rather than
+    raising — `delay-seconds` is `1*DIGIT` and is checked as such, not left to
+    `int()`, which also accepts `1_0` as ten. Applied
     as `max(multiplier step, header)` because an origin refusing while asking for
     a one-second delay is describing the cadence it is already refusing — reading
     that downward would let a small header disable escalation outright, and being

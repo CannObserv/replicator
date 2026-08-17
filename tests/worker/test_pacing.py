@@ -10,7 +10,7 @@ import pytest
 from src.worker.pacing import (
     BACKOFF_DECAY_SECONDS,
     BACKOFF_FIRST_STEP,
-    BACKOFF_MAX_INTERVAL,
+    BACKOFF_MAX_HEADROOM,
     MAX_TRACKED_HOSTS,
     HostPacer,
 )
@@ -313,8 +313,9 @@ def test_further_rate_limiting_compounds_from_the_escalated_interval(clock):
 def test_the_escalation_is_capped(clock):
     """Unbounded doubling would park a host for hours off a transient refusal.
 
-    ``BACKOFF_MAX_INTERVAL`` is also roughly ``REPLICATOR_CLAIM_MIN_IDLE_MS``, so
-    the ceiling lands where parking can still express the wait.
+    ``BACKOFF_MAX_HEADROOM`` is also roughly ``REPLICATOR_CLAIM_MIN_IDLE_MS``, so
+    for a host on the interim default the ceiling lands where parking can still
+    express the wait.
     """
     pacer = HostPacer(1.0, clock=clock)
     pacer.record("https://example.test/a")
@@ -322,7 +323,47 @@ def test_the_escalation_is_capped(clock):
     for _ in range(20):
         interval = pacer.report_rate_limited("https://example.test/a")
 
-    assert interval == pytest.approx(BACKOFF_MAX_INTERVAL)
+    assert interval == pytest.approx(1.0 + BACKOFF_MAX_HEADROOM)
+
+
+def test_a_floor_above_the_ceiling_still_escalates(clock):
+    """The ceiling is headroom above the published floor, not an absolute (CR #14).
+
+    Watcher's ``BACKOFF_MAX_INTERVAL`` was an absolute 60 s and that was right
+    there: its floor was ``DEFAULT_MIN_INTERVAL = 1.0`` and it had no per-host
+    published numbers. Replicator does have them (#19), so an absolute ceiling
+    makes the whole mechanism inert for every host whose policy already exceeds
+    it — silently, and on exactly the origins an issuer has already marked
+    fragile and which are therefore likeliest to keep refusing.
+    """
+    pacer = HostPacer(1.0, policy=policy_of(**{"slow.test": 300.0}), clock=clock)
+    pacer.record("https://slow.test/a")
+
+    first = pacer.report_rate_limited("https://slow.test/a")
+
+    assert first > 300.0
+    assert pacer.wait_seconds("https://slow.test/b") == pytest.approx(first)
+    for _ in range(20):
+        interval = pacer.report_rate_limited("https://slow.test/a")
+    assert interval == pytest.approx(300.0 + BACKOFF_MAX_HEADROOM)
+
+
+def test_the_reported_interval_is_the_one_now_in_force(clock):
+    """The return value is what the caller logs, and it is the only signal this
+    mechanism emits — a 429 publishes no fact, and the transient raise behind it
+    is indistinguishable in the journal from a timeout (CR #15).
+
+    So it reports the spacing actually in force, not the escalation the mechanism
+    picked. The two agree today; returning the raw escalation made them disagree
+    for any host whose floor outran the ceiling, and an operator reading that line
+    would have drawn the wrong conclusion about what the host is being spaced at.
+    """
+    pacer = HostPacer(1.0, policy=policy_of(**{"slow.test": 300.0}), clock=clock)
+    pacer.record("https://slow.test/a")
+
+    reported = pacer.report_rate_limited("https://slow.test/a", retry_after_seconds=1.0)
+
+    assert reported == pytest.approx(pacer.wait_seconds("https://slow.test/b"))
 
 
 def test_escalation_is_per_host(clock):
@@ -341,14 +382,15 @@ def test_a_policy_floor_above_the_escalation_still_wins(clock):
 
     The published number is the issuer's decision and this mechanism is not
     allowed to overrule it downward — a host on a 300-second policy that once
-    429'd must not come back at 2 seconds.
+    429'd must not come back at 2 seconds, which is what the multiplier alone
+    would have made of the interim default.
     """
     pacer = HostPacer(1.0, policy=policy_of(**{"slow.test": 300.0}), clock=clock)
     pacer.record("https://slow.test/a")
 
     pacer.report_rate_limited("https://slow.test/a")
 
-    assert pacer.wait_seconds("https://slow.test/b") == pytest.approx(300.0)
+    assert pacer.wait_seconds("https://slow.test/b") >= 300.0
 
 
 def test_the_floor_is_resolved_on_every_read_not_folded_into_the_escalation(clock):
@@ -437,7 +479,7 @@ def test_a_retry_after_is_capped_like_any_other_escalation(clock):
 
     escalated = pacer.report_rate_limited("https://example.test/a", retry_after_seconds=3600.0)
 
-    assert escalated == pytest.approx(BACKOFF_MAX_INTERVAL)
+    assert escalated == pytest.approx(1.0 + BACKOFF_MAX_HEADROOM)
 
 
 def test_a_retry_after_shorter_than_the_step_does_not_soften_the_escalation(clock):

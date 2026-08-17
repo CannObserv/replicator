@@ -26,7 +26,7 @@ from src.core.errors import (
 )
 from src.storage.local import LocalBlobStore
 from src.worker.handler import _retry_after_seconds, build_handler
-from src.worker.pacing import BACKOFF_MAX_INTERVAL, HostPacer
+from src.worker.pacing import BACKOFF_MAX_HEADROOM, HostPacer
 from tests.worker.conftest import URL, Clock, FakeFetcher, command, fetch_result, published_facts
 
 
@@ -377,7 +377,7 @@ async def test_a_retry_after_past_the_ceiling_is_capped(paced, clock):
     with pytest.raises(TransientFetchError):
         await handler(command("cmd-1"))
 
-    assert pacer.wait_seconds(URL) == pytest.approx(BACKOFF_MAX_INTERVAL)
+    assert pacer.wait_seconds(URL) == pytest.approx(1.0 + BACKOFF_MAX_HEADROOM)
 
 
 async def test_the_escalated_wait_parks_the_next_command(paced, fake_redis, clock):
@@ -412,13 +412,16 @@ async def test_the_escalated_wait_parks_the_next_command(paced, fake_redis, cloc
         ("120", 120.0),
         ("0", 0.0),
         (" 30 ", 30.0),
-        ("-5", -5.0),
+        ("-5", None),
         ("", None),
         ("   ", None),
         (None, None),
         ("soon", None),
         ("1.5", None),
         ("0x10", None),
+        ("1_0", None),
+        ("١٢٣", None),
+        ("+120", None),
         ("Wed, 01 Jan 2025 01:00:00 GMT", 3600.0),
         ("Tue, 31 Dec 2024 23:00:00 GMT", -3600.0),
     ],
@@ -430,6 +433,17 @@ def test_the_retry_after_parse_covers_both_wire_forms_and_the_rubbish(value, exp
     value that is not a legal delta-seconds is not evidence about anything; it
     falls through to the date parse and then to ``None``, which the pacer reads as
     "no header" and answers with the multiplier.
+
+    The last three rows are what ``int()`` alone would have accepted against that
+    same claim (CR #16): PEP 515 underscores, non-ASCII decimal digits, and a
+    leading sign. ``1_0`` parsing as ten is the one with teeth — it is a wrong
+    number rather than a rejected one.
+
+    ``-5`` moved with them and is the only row whose answer changed. It reaches the
+    pacer identically either way — a negative ``asked`` loses to the multiplier's
+    step exactly as ``None`` does — so this is the grammar being stated once rather
+    than a behaviour change. A genuinely past deadline still arrives negative, via
+    the HTTP-date row below it.
     """
     now = datetime(2025, 1, 1, tzinfo=UTC)
 

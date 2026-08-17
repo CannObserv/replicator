@@ -59,11 +59,23 @@ MAX_TRACKED_HOSTS = 4096
 BACKOFF_MULTIPLIER = 2.0
 BACKOFF_FIRST_STEP = 2.0
 
-# Where escalation stops. Also roughly ``REPLICATOR_CLAIM_MIN_IDLE_MS``, which is
-# not a coincidence worth relying on but is why the ceiling lands somewhere a
-# parked command can still express: past a minute the wait outlives the reclaim
-# cadence that would bring the command back anyway.
-BACKOFF_MAX_INTERVAL = 60.0
+# Where escalation stops — **how far above the published floor it may go**, not an
+# absolute interval (CR #14). Watcher's constant was named ``BACKOFF_MAX_INTERVAL``
+# and was absolute, which was right there: its floor was a single global
+# ``DEFAULT_MIN_INTERVAL = 1.0`` and no host could be published slower. Replicator
+# has per-host published numbers (#19), so an absolute ceiling is silently inert
+# for every host whose policy already exceeds it — and those are precisely the
+# origins an issuer has already marked fragile, so the ones likeliest to go on
+# refusing. Renamed rather than re-tuned: the old name is what made the reading
+# plausible.
+#
+# Also roughly ``REPLICATOR_CLAIM_MIN_IDLE_MS``, which is not a coincidence worth
+# relying on but is why the headroom lands somewhere a parked command can still
+# express: past a minute the wait outlives the reclaim cadence that would bring
+# the command back anyway. That reasoning is about the *added* wait, which is what
+# makes headroom the right shape for it — a host already published at 300 s is
+# past the reclaim cadence before any escalation happens.
+BACKOFF_MAX_HEADROOM = 60.0
 
 # How long an origin must go without refusing before its escalation is dropped —
 # Watcher's ``DEFAULT_DECAY_WINDOW`` (``models/domain.py``), which lived on the
@@ -229,7 +241,7 @@ class HostPacer:
             self._prune(now)
 
     def report_rate_limited(self, url: str, *, retry_after_seconds: float | None = None) -> float:
-        """The origin asked for later. Raise this host's interval; return the new one.
+        """The origin asked for later. Raise this host's interval; return the one now in force.
 
         Takes a URL rather than a host for symmetry with the two methods above:
         every caller has a command with a URL in it, and making it split the host
@@ -238,8 +250,17 @@ class HostPacer:
         own rate limit.
 
         Compounds off the interval **in force**, so successive refusals double
-        (Watcher's ``BACKOFF_MULTIPLIER``) up to :data:`BACKOFF_MAX_INTERVAL`,
-        with :data:`BACKOFF_FIRST_STEP` as the floor on the first step.
+        (Watcher's ``BACKOFF_MULTIPLIER``) up to :data:`BACKOFF_MAX_HEADROOM`
+        *above this host's floor*, with :data:`BACKOFF_FIRST_STEP` as the floor on
+        the first step.
+
+        The return value is the spacing now in force, not the escalation this
+        method picked (CR #15). Those agree whenever the escalation is the larger
+        number, which is always — but the caller logs this, it is the only signal
+        the mechanism emits (a 429 publishes no fact, and the transient raise
+        behind it looks like a timeout in the journal), and resolving it through
+        :meth:`_interval_for` is what keeps that line honest if the ceiling is ever
+        re-shaped again.
 
         ``retry_after_seconds`` is the origin stating the number instead of us
         guessing it — parsed from the header by the caller, which is where the
@@ -261,18 +282,18 @@ class HostPacer:
             return 0.0
         now = self._clock()
         state = self._hosts.get(host)
+        floor = self._floor_for(host)
         stepped = max(self._interval_for(host, state, now) * BACKOFF_MULTIPLIER, BACKOFF_FIRST_STEP)
         asked = 0.0 if retry_after_seconds is None else retry_after_seconds
-        escalated = min(max(stepped, asked), BACKOFF_MAX_INTERVAL)
+        escalated = min(max(stepped, asked), floor + BACKOFF_MAX_HEADROOM)
         # Defensive on the stamp: ``_pace`` records before the fetch, so an entry
         # always exists by the time a status comes back. A mechanism that only
         # escalated hosts it had already seen would break silently if that order
         # ever changed, and "now" is the truthful answer anyway — a request just
         # went out and was refused.
-        self._hosts[host] = _HostState(
-            now if state is None else state.last_request_at, escalated, now
-        )
-        return escalated
+        escalation = _HostState(now if state is None else state.last_request_at, escalated, now)
+        self._hosts[host] = escalation
+        return self._interval_for(host, escalation, now)
 
     def _prune(self, now: float) -> None:
         """Drop hosts that can no longer change an answer this pacer gives.

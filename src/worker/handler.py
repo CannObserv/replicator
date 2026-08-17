@@ -700,11 +700,17 @@ def _retry_after_seconds(value: str | None, now: datetime) -> float | None:
     an unclassified handler failure retried to the delivery ceiling. ``None`` is
     the same answer the pacer gives an absent header: fall back to the multiplier.
 
-    ``int`` and not ``float`` for the first form: ``delay-seconds`` is ``1*DIGIT``,
-    so ``1.5`` and ``1e3`` are not legal and are better read as "no evidence" than
-    accepted leniently. A negative or already-past value is returned as-is and the
-    pacer treats it as no evidence too — the clamp belongs with the ceiling, in one
-    place, rather than half here.
+    ``delay-seconds`` is ``1*DIGIT``, so ``1.5`` and ``1e3`` are not legal and are
+    better read as "no evidence" than accepted leniently. The grammar is checked
+    explicitly rather than left to ``int()``, which is looser than the claim in
+    three ways (CR #16): it accepts PEP 515 underscores (``1_0`` → ten, a *wrong*
+    number rather than a rejected one), any Unicode decimal digit (``١٢٣`` → 123),
+    and a leading sign. ``isascii() and isdigit()`` is the whole of ``1*DIGIT`` and
+    excludes all three — ``isdigit()`` alone would still admit ``²``.
+
+    A negative or already-past value can only arrive as an HTTP-date now, and is
+    returned as-is for the pacer to read as no evidence — the clamp belongs with
+    the ceiling, in one place, rather than half here.
 
     ``now`` is passed rather than read, because the pacer's clock is monotonic and
     an HTTP-date is wall-clock; the handler is the only layer holding both.
@@ -714,10 +720,8 @@ def _retry_after_seconds(value: str | None, now: datetime) -> float | None:
     value = value.strip()
     if not value:
         return None
-    try:
-        return float(int(value))
-    except ValueError:
-        pass
+    if value.isascii() and value.isdigit():
+        return float(value)
     try:
         when = parsedate_to_datetime(value)
     except (TypeError, ValueError):
