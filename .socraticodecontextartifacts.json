@@ -106,6 +106,7 @@
       "description": "Project and tooling contract. The co-core / co-core-aio pins (>=0.7,<0.8) with their [extract] and [bus] extras, the [tool.uv] find-links wheelhouse resolution, the ruff rule set and its skills-vendor exclusion, the ty exclusion, the replicator-worker console script, pytest configuration (asyncio auto mode, integration marker, timeout) and the 80% coverage gate."
     },
     {
+      "name": "main-checkout-guard",
       "path": "./scripts/check_main_checkout.sh",
       "description": "ExecStartPre guard refusing to start replicator.service from any checkout but main (#37). The main checkout IS the deployment on this single-VM setup, so a worktree switch or a left-behind branch silently deploys unmerged code. Refuses on a non-main branch, a detached or unborn HEAD, a directory that is not a work tree, and git's dubious-ownership refusal (which gets its own message and remedy, since it means the directory is a repository but not this user's). Warns without refusing when the checkout is behind or ahead of origin/main or the tree is dirty — see #48. REPLICATOR_ALLOW_ANY_CHECKOUT=1, the literal 1 only, overrides. Behaviour is pinned by tests/test_check_main_checkout.py against throwaway git repos."
     }
