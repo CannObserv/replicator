@@ -1,4 +1,4 @@
-"""How the byte path spends a pacing wait (#12).
+"""How the byte path spends a pacing wait (#12), and what a 429 does to it (#25).
 
 Two outcomes, split by duration: a short wait is slept through in the handler, a
 long one parks the message in the PEL for ``claim_stale`` to bring back. The
@@ -6,19 +6,28 @@ split exists because neither alone is correct on a serial consume path — sleep
 through a long wait blocks every other host's commands and a SIGTERM behind them,
 and parking is bounded below by ``REPLICATOR_CLAIM_MIN_IDLE_MS``, so it cannot
 express the sub-minute spacing that is the normal case.
+
+The escalation half is the wiring plus the ``Retry-After`` parse: which statuses
+reach the pacer, and how a header value becomes seconds. The state machine it
+feeds — compounding, the cap, the quiet window — is ``test_pacing.py``.
 """
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from co_core.pure.adapters.bus import streams
 
 from src.core.config import get_settings
-from src.core.errors import TransientFetchError
+from src.core.errors import (
+    CompletedWithoutBlobError,
+    PermanentFetchError,
+    TransientFetchError,
+)
 from src.storage.local import LocalBlobStore
-from src.worker.handler import build_handler
-from src.worker.pacing import HostPacer
-from tests.worker.conftest import URL, Clock, FakeFetcher, command, published_facts
+from src.worker.handler import _retry_after_seconds, build_handler
+from src.worker.pacing import BACKOFF_MAX_HEADROOM, HostPacer
+from tests.worker.conftest import URL, Clock, FakeFetcher, command, fetch_result, published_facts
 
 
 @pytest.fixture
@@ -29,8 +38,9 @@ def paced(fake_redis, tmp_path):
         pacer: HostPacer,
         park_above_seconds: float = 5.0,
         stop: asyncio.Event | None = None,
+        fetcher: FakeFetcher | None = None,
     ):
-        fetcher = FakeFetcher()
+        fetcher = fetcher if fetcher is not None else FakeFetcher()
         return build_handler(
             fetcher=fetcher,
             store=LocalBlobStore(tmp_path),
@@ -226,6 +236,237 @@ async def test_a_wait_inside_the_poll_window_sleeps_rather_than_parks(fake_redis
     await handler(command("cmd-2"))
 
     assert fetcher.urls == [URL, URL]
+
+
+# --------------------------------------------------------------------------- #
+# Escalation wiring (#25). Which statuses reach the pacer, and the Retry-After
+# parse. Reported from the call site rather than from _raise_for_status — see the
+# module docstring on src/worker/handler.py::_report_rate_limited.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("status_code", [429, 503])
+async def test_the_statuses_that_ask_for_later_raise_the_hosts_interval(paced, clock, status_code):
+    """A 429 is the origin refusing, a 503 is it struggling; both want more space.
+
+    The escalation outlives the command that earned it, which is the whole point:
+    before #25 only the one command that hit the 429 was slowed, by the accident
+    of the reclaim cadence, while every sibling command to that host kept the
+    original spacing.
+    """
+    pacer = HostPacer(1.0, clock=clock)
+    refused = FakeFetcher(fetch_result(status_code=status_code, headers={}))
+    handler, _ = paced(pacer, fetcher=refused)
+
+    with pytest.raises(TransientFetchError, match=f"HTTP {status_code}"):
+        await handler(command("cmd-1"))
+
+    assert pacer.wait_seconds(URL) == pytest.approx(2.0)
+
+
+@pytest.mark.parametrize("status_code", [304, 404, 412, 500, 502])
+async def test_no_other_status_touches_the_hosts_interval(paced, clock, status_code):
+    """Escalation is for the two statuses that mean "later", not for failure at
+    large. A 404 is a settled answer, a 304 is a success, and a 500 is an origin
+    bug; none is evidence about how often this origin tolerates being asked.
+
+    500 is the interesting row: it is *transient* like a 429, so a mechanism keyed
+    on the exception type rather than on the status would escalate here too.
+    """
+    pacer = HostPacer(1.0, clock=clock)
+    answered = FakeFetcher(fetch_result(status_code=status_code, headers={}))
+    handler, _ = paced(pacer, fetcher=answered)
+
+    with pytest.raises((PermanentFetchError, TransientFetchError, CompletedWithoutBlobError)):
+        await handler(command("cmd-1"))
+
+    assert pacer.wait_seconds(URL) == pytest.approx(1.0)
+
+
+async def test_a_successful_fetch_leaves_the_interval_at_its_floor(paced, clock):
+    """The other half of the above, on the path that does not raise at all."""
+    pacer = HostPacer(1.0, clock=clock)
+    handler, _ = paced(pacer)
+
+    await handler(command("cmd-1"))
+
+    assert pacer.wait_seconds(URL) == pytest.approx(1.0)
+
+
+async def test_a_retry_after_in_seconds_sets_the_interval(paced, clock):
+    """Delta-seconds, the common wire form. 45 is well past what doubling a
+    1-second floor would have guessed, which is why the header is worth reading."""
+    pacer = HostPacer(1.0, clock=clock)
+    handler, _ = paced(
+        pacer,
+        fetcher=FakeFetcher(fetch_result(status_code=429, headers={"Retry-After": "45"})),
+    )
+
+    with pytest.raises(TransientFetchError):
+        await handler(command("cmd-1"))
+
+    assert pacer.wait_seconds(URL) == pytest.approx(45.0)
+
+
+async def test_the_retry_after_header_is_read_through_the_case_fold(paced, clock):
+    """``_folded_headers``, not ``result.headers``. The fold exists because
+    ``FetchResult.headers`` is a plain ``Mapping`` with no casing guarantee, and a
+    raw lookup would silently miss every lowercase spelling."""
+    pacer = HostPacer(1.0, clock=clock)
+    handler, _ = paced(
+        pacer,
+        fetcher=FakeFetcher(fetch_result(status_code=429, headers={"retry-after": "30"})),
+    )
+
+    with pytest.raises(TransientFetchError):
+        await handler(command("cmd-1"))
+
+    assert pacer.wait_seconds(URL) == pytest.approx(30.0)
+
+
+async def test_a_malformed_retry_after_falls_back_to_the_multiplier(paced, clock):
+    """It must not raise. An unparseable header is an origin being sloppy, and
+    turning that into an unclassified handler failure would burn the delivery
+    ceiling on a command whose only problem is that the origin is busy."""
+    pacer = HostPacer(1.0, clock=clock)
+    handler, _ = paced(
+        pacer,
+        fetcher=FakeFetcher(fetch_result(status_code=429, headers={"Retry-After": "soon"})),
+    )
+
+    with pytest.raises(TransientFetchError):
+        await handler(command("cmd-1"))
+
+    assert pacer.wait_seconds(URL) == pytest.approx(2.0)
+
+
+async def test_an_http_date_retry_after_is_honoured(paced, clock):
+    """The second wire form (RFC 9110 §10.2.3), and the one easy to forget.
+
+    Read as a duration from now, so the assertion is a window rather than a point:
+    the pacer's clock is monotonic and the header's is wall-clock, and only the
+    handler can bridge them.
+    """
+    when = datetime.now(UTC) + timedelta(seconds=40)
+    pacer = HostPacer(1.0, clock=clock)
+    handler, _ = paced(
+        pacer,
+        fetcher=FakeFetcher(
+            fetch_result(
+                status_code=429,
+                headers={"Retry-After": when.strftime("%a, %d %b %Y %H:%M:%S GMT")},
+            )
+        ),
+    )
+
+    with pytest.raises(TransientFetchError):
+        await handler(command("cmd-1"))
+
+    assert 35.0 <= pacer.wait_seconds(URL) <= 41.0
+
+
+async def test_a_retry_after_past_the_ceiling_is_capped(paced, clock):
+    """An untrusted number off the wire, bounded by the same ceiling as any other
+    escalation. A day-long value would otherwise park the host indefinitely."""
+    pacer = HostPacer(1.0, clock=clock)
+    handler, _ = paced(
+        pacer,
+        fetcher=FakeFetcher(fetch_result(status_code=429, headers={"Retry-After": "86400"})),
+    )
+
+    with pytest.raises(TransientFetchError):
+        await handler(command("cmd-1"))
+
+    assert pacer.wait_seconds(URL) == pytest.approx(1.0 + BACKOFF_MAX_HEADROOM)
+
+
+async def test_the_escalated_wait_parks_the_next_command(paced, fake_redis, clock):
+    """End to end: the escalation is only worth having if it reaches the wait.
+
+    The multiplier's 2 seconds is *under* this fixture's 5-second park bound, so
+    every assertion above is satisfied by an escalation that reaches
+    ``wait_seconds`` and stops there. A 45-second ``Retry-After`` puts the wait
+    over the bound, which is what turns the mechanism into an observable outcome —
+    a parked command, and an origin not asked again.
+    """
+    pacer = HostPacer(1.0, clock=clock)
+    limited, ok = (
+        FakeFetcher(fetch_result(status_code=429, headers={"Retry-After": "45"})),
+        FakeFetcher(),
+    )
+    handler, _ = paced(pacer, fetcher=limited)
+    with pytest.raises(TransientFetchError):
+        await handler(command("cmd-1"))
+
+    handler, _ = paced(pacer, fetcher=ok, park_above_seconds=5.0)
+    with pytest.raises(TransientFetchError, match="45.0-second politeness window"):
+        await handler(command("cmd-2"))
+
+    assert ok.urls == [], "the escalated host must not have been asked again"
+    assert await published_facts(fake_redis) == []
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("120", 120.0),
+        ("0", 0.0),
+        (" 30 ", 30.0),
+        ("-5", None),
+        ("", None),
+        ("   ", None),
+        (None, None),
+        ("soon", None),
+        ("1.5", None),
+        ("0x10", None),
+        ("1_0", None),
+        ("١٢٣", None),
+        ("+120", None),
+        ("Wed, 01 Jan 2025 01:00:00 GMT", 3600.0),
+        ("Tue, 31 Dec 2024 23:00:00 GMT", -3600.0),
+    ],
+)
+def test_the_retry_after_parse_covers_both_wire_forms_and_the_rubbish(value, expected):
+    """Delta-seconds is ``1*DIGIT`` per RFC 9110 — not a float.
+
+    ``1.5`` and ``1e3`` are rejected rather than accepted leniently, because a
+    value that is not a legal delta-seconds is not evidence about anything; it
+    falls through to the date parse and then to ``None``, which the pacer reads as
+    "no header" and answers with the multiplier.
+
+    The last three rows are what ``int()`` alone would have accepted against that
+    same claim (CR #16): PEP 515 underscores, non-ASCII decimal digits, and a
+    leading sign. ``1_0`` parsing as ten is the one with teeth — it is a wrong
+    number rather than a rejected one.
+
+    ``-5`` moved with them and is the only row whose answer changed. It reaches the
+    pacer identically either way — a negative ``asked`` loses to the multiplier's
+    step exactly as ``None`` does — so this is the grammar being stated once rather
+    than a behaviour change. A genuinely past deadline still arrives negative, via
+    the HTTP-date row below it.
+    """
+    now = datetime(2025, 1, 1, tzinfo=UTC)
+
+    assert _retry_after_seconds(value, now) == expected
+
+
+def test_a_retry_after_date_with_no_zone_is_read_as_utc():
+    """``-0000`` is "unknown zone" in RFC 5322 and ``parsedate_to_datetime``
+    returns a *naive* datetime for it, which would raise on subtraction from an
+    aware one. Everything in this service is UTC, so that is the reading."""
+    now = datetime(2025, 1, 1, tzinfo=UTC)
+
+    assert _retry_after_seconds("Wed, 01 Jan 2025 00:01:00 -0000", now) == pytest.approx(60.0)
+
+
+async def test_a_permanent_status_is_still_permanent_with_the_report_ahead_of_it(paced, clock):
+    """The report is a side effect ahead of the classifier, not a replacement for
+    it: ``_raise_for_status`` still owns every outcome (#17's three arms included)."""
+    pacer = HostPacer(1.0, clock=clock)
+    handler, _ = paced(pacer, fetcher=FakeFetcher(fetch_result(status_code=404, headers={})))
+
+    with pytest.raises(PermanentFetchError, match="HTTP 404"):
+        await handler(command("cmd-1"))
 
 
 async def test_an_unpaced_handler_is_the_pre_12_byte_path(fake_redis, tmp_path):

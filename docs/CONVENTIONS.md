@@ -38,3 +38,53 @@ states them in one line each; what a *particular* stream carries, and why, is in
   The mechanism in full — the four outcomes, the guard order, why the writers are
   keyed by alias — is [ARCHITECTURE.md](ARCHITECTURE.md); this bullet is the rule
   an agent needs before touching the replicate path.
+- **A 429 or a 503 escalates that host's spacing, and only those two (#25).** The
+  adaptive politeness Watcher ran on its own fetch path and lost at the Phase 4
+  cutover, re-homed here on the charter's second test: an origin's tolerance
+  across commands is visible to nobody but the fetcher. `handler.py` reports the
+  status to `HostPacer.report_rate_limited`, which multiplies the interval in
+  force by `BACKOFF_MULTIPLIER` (×2, first step ≥ 2 s) up to
+  `BACKOFF_MAX_HEADROOM` (60 s) **above that host's floor**, and drops it in one
+  step once `BACKOFF_DECAY_SECONDS` (1800 s) pass without another refusal. Six
+  rules an agent has to keep:
+  - **The published number stays the floor.** Escalation may only ever raise the
+    effective interval above it. The floor is re-resolved on every read rather
+    than folded into the escalation, so a republished policy — or a revocation —
+    takes effect on the next command instead of being shadowed by a number this
+    service invented. A host that once 429'd can never come back less polite.
+  - **The ceiling is headroom above that floor, not an absolute interval.**
+    Watcher's was absolute (`BACKOFF_MAX_INTERVAL`) and could be: it had one
+    global floor of 1 s and no per-host published numbers. Replicator has them
+    (#19), so an absolute ceiling would make the mechanism silently inert for
+    every host whose policy already exceeds it — the origins an issuer has
+    already marked fragile, and therefore the likeliest to go on refusing. The
+    constant is named for the shape (`BACKOFF_MAX_HEADROOM`) because the old name
+    is what made the wrong reading plausible (CR #14).
+  - **Narrower than transient.** Keyed on the *status*, not on the exception type:
+    a 500 or a 504 is a `TransientFetchError` too, but it is an origin bug or a
+    slow upstream rather than a statement about request rate, and slowing a host
+    for a fault more requests would not have caused buys nothing.
+  - **The quiet window is measured from the last refusal, not the last request.**
+    Watcher's `Domain.last_request_at` reads like the latter and was written only
+    on a 429. The distinction is the difference between working and not: a host
+    fetched every minute never has a half-hour gap between requests, so a window
+    measured from traffic would hold every escalation forever on exactly the hosts
+    busy enough to earn one.
+  - **`Retry-After` raises an escalation, never softens one.** Honoured on both
+    statuses, in both wire forms (delta-seconds *and* HTTP-date, RFC 9110
+    §10.2.3), clamped to the same headroom as any other escalation; a malformed,
+    absent, or already-past value falls back to the multiplier rather than
+    raising — `delay-seconds` is `1*DIGIT` and is checked as such, not left to
+    `int()`, which also accepts `1_0` as ten. Applied
+    as `max(multiplier step, header)` because an origin refusing while asking for
+    a one-second delay is describing the cadence it is already refusing — reading
+    that downward would let a small header disable escalation outright, and being
+    more polite than asked violates nothing.
+  - **No fact, no setting, no second map.** The escalated interval is transient
+    mechanism state: nothing publishes it (a 429 is non-terminal and emits no
+    fact at all), the constants are module constants rather than `REPLICATOR_*`
+    settings — the numbers an issuer owns travel on `content.fetch-policy` and
+    these are not those — and the state shares `HostPacer`'s existing bounded map
+    so `MAX_TRACKED_HOSTS` still governs it. `_prune` keeps an entry whose window
+    is open even once its interval has elapsed: reclaiming it would honour a
+    memory bound by becoming less polite.

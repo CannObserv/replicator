@@ -11,6 +11,7 @@ import asyncio
 import math
 import re
 from datetime import UTC, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from typing import NamedTuple, Protocol
 
 import httpx
@@ -68,6 +69,17 @@ _RETRYABLE_STATUSES = frozenset({408, 429})
 # that the issuer's copy is current. Classified on the status alone — see
 # ``_raise_for_status``.
 _NOT_MODIFIED = 304
+
+# The statuses that are the origin asking to be asked less often (#25). A 429 is
+# it refusing outright, a 503 is it saying it cannot cope; both are evidence about
+# this origin's tolerance, which is exactly what the pacer's escalation is for.
+#
+# Deliberately narrower than ``TransientFetchError``: a 500 or a 504 is transient
+# too, but it is an origin bug or a slow upstream rather than a statement about
+# request *rate*, and escalating on it would slow a host for a fault more requests
+# would not have caused. Keyed on the status here rather than on the exception for
+# that reason — the exception type cannot express the distinction.
+_RATE_LIMIT_STATUSES = frozenset({429, 503})
 
 # The request headers that make a 304 something Replicator asked for (#11 sends
 # them; #17 is what happens when one works). Read off the command as the issuer
@@ -258,10 +270,20 @@ def build_handler(
         # onto the bus, which under a reclaim is minutes after the bytes were on
         # the wire. This is the closest the handler can stand to that instant.
         fetched_at = datetime.now(UTC)
+        # Folded once, here rather than after the guards, because the escalation
+        # below needs Retry-After off a response the classifier is about to raise
+        # on. Cheap, and unconditional either way.
+        headers = _folded_headers(result)
+        # Ahead of the classifier and not inside it: this is a side effect on
+        # shared state, while ``_raise_for_status`` is a pure status -> outcome
+        # function that #17 gave three arms. Reporting from here also reads the
+        # status off the *result*, which is the only place it survives —
+        # ``TransientFetchError`` carries no status code, so a call site that
+        # waited for the raise could not tell a 429 from a 504.
+        _report_rate_limited(pacer, command, result.status_code, headers, now=fetched_at)
         _raise_for_status(result, command)
         _raise_for_size(result, command, settings.max_blob_bytes)
         fingerprint = sha256(result.content)
-        headers = _folded_headers(result)
         media_type = _media_type(headers)
         # Asked before storing, because store's short-circuit does not report
         # which branch it took and counting a re-store would inflate the tree's
@@ -622,6 +644,93 @@ async def _pace(
         )
     pacer.record(command.url)
     return wait
+
+
+def _report_rate_limited(
+    pacer: HostPacer,
+    command: ContentFetchCommand,
+    status_code: int,
+    headers: dict[str, str],
+    *,
+    now: datetime,
+) -> None:
+    """Tell the pacer this origin asked for later, so its siblings slow down too (#25).
+
+    The gap the Phase 4 cutover opened. Watcher escalated on the 429s its own
+    fetch path saw; that path became a publish path, and on this side a 429 was
+    only ever a ``TransientFetchError`` — the one command that hit it came back a
+    minute later and every *other* command to the same host kept the original
+    spacing. Nothing else in the cluster can see this: a 429 produces no fact
+    (transient failures are non-terminal by design), so the issuer cannot react
+    even in principle.
+
+    A no-op on every other status. Called before ``_raise_for_status`` because the
+    classifier does not return on these two, and ordering it first costs nothing
+    on the paths that do.
+    """
+    if status_code not in _RATE_LIMIT_STATUSES:
+        return
+    retry_after = _retry_after_seconds(headers.get("retry-after"), now)
+    interval = pacer.report_rate_limited(command.url, retry_after_seconds=retry_after)
+    # WARNING rather than INFO: an origin refusing is an operator-visible
+    # condition, and this is the only surface it gets — there is no fact, and the
+    # transient raise below is indistinguishable in the journal from a timeout.
+    logger.warning(
+        "the origin asked to be asked less often; raising this host's interval",
+        extra={
+            "command_id": command.command_id,
+            "url": command.url,
+            "status_code": status_code,
+            "interval_seconds": interval,
+            "retry_after_seconds": retry_after,
+        },
+    )
+
+
+def _retry_after_seconds(value: str | None, now: datetime) -> float | None:
+    """A ``Retry-After`` header as seconds from ``now``, or ``None`` if unusable.
+
+    Both wire forms, because RFC 9110 §10.2.3 defines both and origins send both:
+    ``delay-seconds`` (``Retry-After: 120``) and an HTTP-date (``Retry-After: Wed,
+    01 Jan 2025 01:00:00 GMT``). Reading only the first silently discards the
+    origin's number on the second and falls back to guessing.
+
+    **Never raises.** An unparseable value is an origin being sloppy, and turning
+    that into an unhandled exception here would convert "the origin is busy" into
+    an unclassified handler failure retried to the delivery ceiling. ``None`` is
+    the same answer the pacer gives an absent header: fall back to the multiplier.
+
+    ``delay-seconds`` is ``1*DIGIT``, so ``1.5`` and ``1e3`` are not legal and are
+    better read as "no evidence" than accepted leniently. The grammar is checked
+    explicitly rather than left to ``int()``, which is looser than the claim in
+    three ways (CR #16): it accepts PEP 515 underscores (``1_0`` → ten, a *wrong*
+    number rather than a rejected one), any Unicode decimal digit (``١٢٣`` → 123),
+    and a leading sign. ``isascii() and isdigit()`` is the whole of ``1*DIGIT`` and
+    excludes all three — ``isdigit()`` alone would still admit ``²``.
+
+    A negative or already-past value can only arrive as an HTTP-date now, and is
+    returned as-is for the pacer to read as no evidence — the clamp belongs with
+    the ceiling, in one place, rather than half here.
+
+    ``now`` is passed rather than read, because the pacer's clock is monotonic and
+    an HTTP-date is wall-clock; the handler is the only layer holding both.
+    """
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    if value.isascii() and value.isdigit():
+        return float(value)
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        # An RFC 5322 ``-0000`` means "zone unknown" and arrives naive, which
+        # would raise on subtraction. Everything in this service is UTC.
+        when = when.replace(tzinfo=UTC)
+    return (when - now).total_seconds()
 
 
 def _raise_for_ceiling(usage: BlobUsage, ceiling_bytes: int) -> None:
