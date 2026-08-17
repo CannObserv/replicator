@@ -91,8 +91,10 @@ test a branch with `uv run python -m src.worker.main` under a distinct
 `REPLICATOR_CONSUMER_NAME`. **After editing `deploy/replicator.service`, `cp` it to
 `/etc/systemd/system/`** — the installed unit is a copy, not a symlink, so
 `daemon-reload` alone silently re-reads the old file and the mismatch has no
-symptom until a directive matters. Full lifecycle table and the dev-server
-invocation: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+symptom until a directive matters. **Refuses to start off `main`** (#37) —
+`scripts/check_main_checkout.sh`; `REPLICATOR_ALLOW_ANY_CHECKOUT=1` overrides.
+Full lifecycle table and the dev-server invocation:
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Environment Variables
 
