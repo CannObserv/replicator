@@ -133,10 +133,10 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
   every decoded payload before destructuring. Use the canonical `extra="ignore"`
   models on the consume path, never the strict `*Emit` classes, and branch on
   `schema_version` first.
-- **Deterministic failure ⇒ DLQ; transient failure ⇒ retry.** `dead_letter` acks
-  inside itself, so a fact is published *before* it. Retry cadence is
-  `REPLICATOR_CLAIM_MIN_IDLE_MS`; a failing *cycle* is `run_loop`'s problem, not
-  the message's.
+- **Deterministic ⇒ DLQ; transient ⇒ retry; completed without bytes ⇒ fact + ack,
+  no DLQ (#17).** `dead_letter` acks inside itself, so a fact is published
+  *before* it. Retry cadence is `REPLICATOR_CLAIM_MIN_IDLE_MS`; a failing *cycle*
+  is `run_loop`'s problem, not the message's.
 - **Consumers must be idempotent; producers own the outbox.** Replicator has no DB
   — its durable record of intent is the consumer group's PEL. Do not add a
   Postgres outbox to the consume path.

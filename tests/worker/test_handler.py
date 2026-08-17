@@ -6,7 +6,12 @@ from co_core.pure.util.hashing import sha256
 from redis.exceptions import ResponseError
 
 from src.core.config import get_settings
-from src.core.errors import FailureReason, PermanentFetchError, TransientFetchError
+from src.core.errors import (
+    CompletedWithoutBlobError,
+    FailureReason,
+    PermanentFetchError,
+    TransientFetchError,
+)
 from src.storage.local import LocalBlobStore
 from src.storage.sweeper import BlobUsage
 from tests.worker.conftest import (
@@ -137,13 +142,89 @@ async def test_a_server_error_or_backpressure_is_transient(handler, status_code)
         await handler(FakeFetcher(fetch_result(status_code=status_code)))(command())
 
 
-async def test_a_body_less_redirect_is_permanent(handler):
-    """A 304 passes ``is_success`` but carries no body — storing it would store nothing."""
-    with pytest.raises(PermanentFetchError) as caught:
+async def test_a_body_less_304_completes_the_command_without_a_blob(handler):
+    """#17: "your bytes are current" is the best answer a conditional GET gets.
+
+    It still passes ``is_success`` while carrying nothing to store, so it is not
+    a success — but it is not a failure either, and until #17 it dead-lettered.
+    """
+    with pytest.raises(CompletedWithoutBlobError) as caught:
         await handler(FakeFetcher(fetch_result(content=b"", status_code=304)))(command())
 
-    assert caught.value.reason is FailureReason.HTTP_STATUS
+    assert caught.value.reason is FailureReason.NOT_MODIFIED
     assert caught.value.status_code == 304
+
+
+async def test_a_304_carrying_a_body_is_classified_on_its_status_alone(
+    handler, fake_redis, tmp_path
+):
+    """RFC 9110 forbids a body here; an origin that sends one changes nothing.
+
+    Branching on the body would make the outcome depend on a field the status has
+    already settled, and the ``is_2xx`` guard means those bytes are never stored
+    either way — asserted, because "deliberately ignored" and "accidentally
+    stored under an empty fingerprint" look identical from the raise site.
+    """
+    with pytest.raises(CompletedWithoutBlobError) as caught:
+        await handler(FakeFetcher(fetch_result(content=b"surprise", status_code=304)))(command())
+
+    assert caught.value.reason is FailureReason.NOT_MODIFIED
+    assert await published_facts(fake_redis) == []
+    assert list(tmp_path.iterdir()) == []
+
+
+async def test_a_failed_precondition_stays_a_permanent_http_status(handler):
+    """412 is the *other* conditional-request status, and it is an issuer error.
+
+    A failed precondition on a GET means the issuer sent an ``If-Match`` the
+    origin could not satisfy — deterministic, actionable, and nothing like the
+    successful no-change check a 304 reports. Pinned so the pair reads as a
+    decision rather than a gap (#17).
+    """
+    with pytest.raises(PermanentFetchError) as caught:
+        await handler(FakeFetcher(fetch_result(status_code=412)))(command())
+
+    assert caught.value.reason is FailureReason.HTTP_STATUS
+    assert caught.value.status_code == 412
+
+
+async def test_an_unbidden_304_is_logged_at_warning(handler, caplog):
+    """An origin answering a question nobody asked used to be caught by the DLQ.
+
+    Before #17 every 304 dead-lettered, so a misbehaving origin was visible on an
+    operator surface by accident. Now that the bidden case closes cleanly and
+    routinely, the level is what carries the distinction.
+    """
+    with (
+        caplog.at_level("INFO", logger="src.worker.handler"),
+        pytest.raises(CompletedWithoutBlobError),
+    ):
+        await handler(FakeFetcher(fetch_result(content=b"", status_code=304)))(command())
+
+    (record,) = [r for r in caplog.records if r.name == "src.worker.handler"]
+    assert record.levelname == "WARNING"
+    assert record.validators == []
+
+
+@pytest.mark.parametrize("header", ["If-None-Match", "if-modified-since"])
+async def test_a_304_that_was_asked_for_is_logged_at_info(handler, caplog, header):
+    """The common case at steady state — it must not read as an anomaly.
+
+    Matched case-insensitively against the command's own ``headers``, not the
+    folded request map: an issuer spelling it ``If-None-Match`` asked for this
+    304 exactly as much as one spelling it lowercase.
+    """
+    with (
+        caplog.at_level("INFO", logger="src.worker.handler"),
+        pytest.raises(CompletedWithoutBlobError),
+    ):
+        await handler(FakeFetcher(fetch_result(content=b"", status_code=304)))(
+            command(headers={header: '"abc"'})
+        )
+
+    (record,) = [r for r in caplog.records if r.name == "src.worker.handler"]
+    assert record.levelname == "INFO"
+    assert record.validators == [header.lower()]
 
 
 async def test_a_failed_fetch_stores_nothing_and_publishes_nothing(handler, fake_redis, tmp_path):
@@ -386,7 +467,9 @@ async def test_a_failed_publish_still_reaches_the_loop_unchanged(handler, fake_r
 
     Swallowing or re-wrapping this would change the message's fate — a
     ResponseError walks the delivery ceiling to the DLQ, which is the intended
-    outcome for a publish that is not going to start working.
+    outcome for a publish that is not going to start working. Not every one:
+    ``OutOfMemoryError`` subclasses it and is classified transient since #20, so
+    a broker out of memory retries rather than dead-lettering.
     """
 
     async def failing_xadd(*args, **kwargs):

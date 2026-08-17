@@ -9,11 +9,17 @@ the byte path in ``src.worker.handler`` (fetch, fingerprint, temp-store,
 ``blob_available``). This module stays ignorant of what a handler does, and
 decides only what its success or failure means.
 
+**Three fates, not two (#17).** Transient ⇒ retry, no fact; permanent ⇒ fact,
+then dead-letter; and *completed without bytes* ⇒ fact, then ack, and no DLQ
+entry at all. The third is selected by the exception's **type**, exactly as the
+other two are — see ``CompletedWithoutBlobError`` for why branching on the
+``reason`` token instead would make a wire string load-bearing here.
+
 **One loop, N command streams (#29).** Everything here is the same decision for
 every command stream: read one at a time, refuse a foreign payload, branch on
 ``schema_version`` before destructuring, dedupe on ``command_id``, ack after the
 handler, retry the transient and dead-letter the deterministic, and publish the
-failure fact before the dead-letter. What differs per stream — which payload type
+fact before whatever closes the message. What differs per stream — which payload type
 is its command, what its dedupe keys are namespaced under, what to call it in the
 journal, and how to build its failure report — is injected as a ``CommandSpec``.
 So ``content.replicate`` is another ``run_loop`` with another spec, not a second
@@ -39,7 +45,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from src.core.config import Settings
-from src.core.errors import FailureReason, PermanentError, TransientError
+from src.core.errors import CompletedWithoutBlobError, FailureReason, PermanentError, TransientError
 from src.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -379,12 +385,21 @@ def _report_or_none[C: Command, R: Report](
 
 
 class Outcome(StrEnum):
-    """What ``process_message`` did with one message."""
+    """What ``process_message`` did with one message.
+
+    ``COMPLETED_WITHOUT_BLOB`` is the third fate (#17): a fact is published, the
+    message is acked, and nothing reaches ``<topic>.dlq``. Deliberately **not**
+    folded into ``ACKED`` — once issuers replay validators a 304 becomes the
+    common answer, so counting the two together would make the one number an
+    operator reads to mean "commands that produced bytes" unreadable, in the
+    direction that looks healthy.
+    """
 
     ACKED = "acked"
     DEDUPED = "deduped"
     DEAD_LETTERED = "dead_lettered"
     RETRY = "retry"
+    COMPLETED_WITHOUT_BLOB = "completed_without_blob"
 
 
 async def process_message[C: Command, R: Report](
@@ -507,6 +522,27 @@ async def process_message[C: Command, R: Report](
     # these handlers untouched — it is not a message failure.
     try:
         await handler(command)
+    except CompletedWithoutBlobError as exc:
+        # The third fate (#17): the command is *done*, it just produced no bytes.
+        # Caught before the permanent arm only for readability — the two types are
+        # siblings, so neither can shadow the other, which is the whole reason
+        # this is a type rather than a branch on ``exc.reason``.
+        return await _close_without_dlq(
+            consumer,
+            message.message_id,
+            client=client,
+            dedupe_key=dedupe_key,
+            dedupe_ttl_seconds=settings.dedupe_ttl_seconds,
+            label=spec.label,
+            reporter=reporter,
+            report=_report_or_none(
+                spec,
+                command,
+                reason=exc.reason,
+                status_code=exc.status_code,
+                detail=str(exc),
+            ),
+        )
     except PermanentError as exc:
         return await _close(
             consumer,
@@ -662,6 +698,81 @@ async def _close[R: Report](
     that did not decode. Those stay DLQ-only, and contract MUST-6 keeps the
     issuer's reaper as the backstop for them.
 
+    The correlator guard and the swallowed reporter failure live in
+    ``_announce``, shared with the one closing path that does *not* dead-letter.
+    """
+    await _announce(reporter, report, message_id=message_id)
+    return await _dead_letter(
+        consumer, message_id, fields, label=label, reason=reason, detail=detail
+    )
+
+
+async def _close_without_dlq[R: Report](
+    consumer: AsyncBusConsumer,
+    message_id: str,
+    *,
+    client: Redis,
+    dedupe_key: str,
+    dedupe_ttl_seconds: int,
+    label: str,
+    reporter: FailureReporter[R],
+    report: R | None,
+) -> Outcome:
+    """Announce a command that completed with no bytes, then ack it. No DLQ (#17).
+
+    **The ordering inverts here, and nothing structural enforces it.** ``_close``
+    gets fact-before-ack right for free — ``dead_letter`` acks inside itself, so
+    there is only one call to make. This path acks explicitly, which means the
+    two statements could be written in either order and only one is correct: a
+    fact published after the ack is lost outright if the process dies in between,
+    and unlike the dead-letter path there is no DLQ entry left behind to repair
+    from. Publish, then key, then ack — and ``_close``'s reasoning about why the
+    duplicate on redelivery is the cheap side of that trade (contract MUST-4)
+    applies here unchanged.
+
+    **This is the one close that writes the dedupe key**, and it is the reason
+    the key is not simply ``_close``'s job too. The other closes *discard* a
+    command; this one completes it. Without the key a reclaim after a crash
+    re-asks an origin that has just said nothing changed — the politeness cost of
+    a request Replicator already knows the answer to. Written before the ack for
+    the same reason the fact is, and ``nx=True`` so a redelivery cannot extend a
+    window the first delivery opened.
+
+    **Nothing reaches ``<topic>.dlq``.** A successful conditional GET is not
+    operator-actionable, and at steady state it is the *common* outcome, so
+    copying each one there would fill the operator's surface with routine
+    successes and devalue it — the same argument the fact stream now carries as
+    its own cost (see ``FailureReason.NOT_MODIFIED``).
+
+    A ``report`` of ``None`` means this stream's builder is broken; the command
+    still closes, and MUST-6's reaper is the backstop, exactly as on the
+    dead-letter path.
+    """
+    await _announce(reporter, report, message_id=message_id)
+    await client.set(dedupe_key, message_id, nx=True, ex=dedupe_ttl_seconds)
+    await consumer.ack(message_id)
+    logger.info(
+        "closed a command that completed without a blob",
+        extra={
+            "stream": label,
+            "message_id": message_id,
+            "command_id": None if report is None else report.command_id,
+            "reason": None if report is None else str(report.reason),
+        },
+    )
+    return Outcome.COMPLETED_WITHOUT_BLOB
+
+
+async def _announce[R: Report](
+    reporter: FailureReporter[R], report: R | None, *, message_id: str
+) -> None:
+    """Publish one closing fact, and never be the reason a message is stranded.
+
+    Extracted from ``_close`` so the second closing path (``_close_without_dlq``)
+    cannot drift from it: the correlator guard and the swallow are what make a
+    fact optional and safe, and a copy of them would be one refactor away from
+    being only half a copy.
+
     **A correlator-less report is refused here rather than at the call sites.**
     ``Report.command_id`` is the one field every stream's fact requires and *is*
     the event — ``FetchFailedEvent``'s is the shipped example — so a fact naming
@@ -669,33 +780,32 @@ async def _close[R: Report](
     Enforced at this one choke point so the invariant holds for every report path
     there is and every one added later; it is logged because otherwise a
     malformed command would be indistinguishable in the journal from an ordinary
-    dead-letter.
+    close.
 
-    The reporter's own failures are swallowed there, but they are caught here as
-    well: a reporter that raised would abandon the dead-letter and leave a
-    hopeless command in the PEL to be redelivered forever.
+    The reporter's own failures are swallowed inside it, but they are caught here
+    as well: a reporter that raised would abandon whatever its caller does next —
+    the dead-letter, or the ack — and leave the command in the PEL to be
+    redelivered forever.
     """
-    if report is not None:
-        if not report.command_id:
-            logger.warning(
-                "cannot announce this failure — the command carries no command_id",
-                extra={"message_id": message_id, "reason": str(report.reason)},
-            )
-        else:
-            try:
-                await reporter(report)
-            except Exception as exc:
-                logger.error(
-                    "failure reporter raised — dead-lettering anyway",
-                    extra={
-                        "command_id": report.command_id,
-                        "error": f"{type(exc).__name__}: {exc}",
-                    },
-                    exc_info=exc,
-                )
-    return await _dead_letter(
-        consumer, message_id, fields, label=label, reason=reason, detail=detail
-    )
+    if report is None:
+        return
+    if not report.command_id:
+        logger.warning(
+            "cannot announce this failure — the command carries no command_id",
+            extra={"message_id": message_id, "reason": str(report.reason)},
+        )
+        return
+    try:
+        await reporter(report)
+    except Exception as exc:
+        logger.error(
+            "failure reporter raised — closing the command anyway",
+            extra={
+                "command_id": report.command_id,
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+            exc_info=exc,
+        )
 
 
 # Field names ``logging`` will not let an ``extra`` dict carry: every attribute a

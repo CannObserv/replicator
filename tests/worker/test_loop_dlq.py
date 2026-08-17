@@ -3,6 +3,14 @@
 Five routes reach ``<topic>.dlq`` — a frame that will not decode, one whose
 entry has been trimmed, a payload of the wrong type, an unrecognized
 ``schema_version``, and a handler reporting a permanent failure.
+
+**One terminal close reaches none of them (#17).** A command that completed with
+no blob — today only a 304 — publishes its fact and acks, and that is the whole
+of its record. The DLQ is an operator surface, and a successful conditional GET
+is not operator-actionable: copying every one there would fill it with routine
+successes at the exact rate conditional GET is meant to make common. So the
+invariant this module used to state is narrower than it looked — every *failed*
+close leaves an entry, not every terminal one.
 """
 
 import asyncio
@@ -14,7 +22,7 @@ from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
 from co_core.pure.adapters.bus.streams import dlq_name
 from co_core.pure.models.changes import BlobAvailableEvent, ContentFetchCommand
 
-from src.core.errors import FailureReason, PermanentFetchError
+from src.core.errors import CompletedWithoutBlobError, FailureReason, PermanentFetchError
 from src.worker.loop import FETCH_SPEC, Outcome, dead_letter_anomaly, poll_once, process_message
 from tests.worker.conftest import (
     GROUP,
@@ -137,6 +145,33 @@ async def test_dead_lettered_frames_carry_their_reason(fake_redis, consumer, set
     assert entry[b"dlq_reason"] == b"handler reported a permanent failure"
     assert entry[b"dlq_original_id"] == message.message_id.encode()
     assert entry[b"payload"]  # the original frame is preserved alongside
+
+
+async def test_a_command_that_completed_without_a_blob_leaves_the_dlq_empty(
+    fake_redis, consumer, settings
+):
+    """#17's one genuinely new assertion: the first close that dead-letters nothing.
+
+    Asserted as ``XLEN == 0`` rather than as "no entry for this command": a DLQ
+    that grows by one per routine no-change check is the failure mode, and a
+    filtered assertion would pass while it filled.
+    """
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-304"))
+
+    async def unchanged(command: ContentFetchCommand) -> None:
+        raise CompletedWithoutBlobError(
+            f"{command.url} returned HTTP 304",
+            reason=FailureReason.NOT_MODIFIED,
+            status_code=304,
+        )
+
+    message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
+    outcome = await process_one(fake_redis, consumer, settings, message, unchanged)
+
+    assert outcome is Outcome.COMPLETED_WITHOUT_BLOB
+    assert await fake_redis.xlen(dlq_name(TOPIC)) == 0
+    pending = await fake_redis.xpending(TOPIC, GROUP)
+    assert pending["pending"] == 0
 
 
 async def test_the_loop_keeps_running_past_a_poison_frame(fake_redis, consumer, settings):

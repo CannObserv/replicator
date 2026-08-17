@@ -19,6 +19,12 @@ having to parse it back out.
 loop catches, so a second command stream classifies its own failures without the
 retry-or-not decision learning it exists; the ``*FetchError`` leaves are what the
 byte path raises, so a raise site still says which handler is speaking.
+
+**Three fates since #17.** Retry, dead-letter, and *complete without bytes* —
+``CompletedWithoutBlobError``, which publishes a fact and acks and reaches no
+DLQ. It is a sibling of the other two rather than a leaf of either, because the
+hierarchy is what selects the fate: subclassing ``PermanentError`` would put it
+straight back on the dead-letter path.
 """
 
 from enum import StrEnum
@@ -49,7 +55,29 @@ class FailureReason(StrEnum):
     """
 
     HTTP_STATUS = "http_status"
-    """A non-2xx the origin meant: 4xx, or a body-less 304."""
+    """A non-2xx the origin meant, and meant as a refusal: a 4xx.
+
+    Includes **412 Precondition Failed** — the other conditional-request status,
+    and unlike a 304 it is an issuer error: a precondition that fails on a GET
+    means the ``If-Match`` sent was one the origin could not satisfy. Decided
+    with #17 rather than left to the first issuer using ``If-Match`` to discover.
+    """
+
+    NOT_MODIFIED = "not_modified"
+    """A conditional GET that succeeded: 304, and the issuer's bytes still stand.
+
+    **Not a failure**, and the honest cost of putting it on ``fetch_failed`` (#17,
+    shape A). The event's real meaning is "this command will not produce a blob";
+    ``terminal`` is the field that matters, and a consumer branching on it first —
+    as the contract has always required — handles this token before it has heard
+    of it. A dedicated ``content_unchanged`` fact would have cost every consumer a
+    dispatch arm for an outcome structurally identical to the others here.
+
+    The consequence, which belongs next to the token rather than only in a
+    docstring: at steady state this dominates the stream, so ``fetch_failed``
+    volume stops being a failure signal. ``fetch_failed where reason !=
+    "not_modified"`` is the one to count.
+    """
 
     NOT_FETCHABLE = "not_fetchable"
     """Bad scheme or invalid URL — not a URL, and it will not become one."""
@@ -177,6 +205,35 @@ class PermanentError(HandlerError):
     and friends, which are deliberately not ``FailureReason`` members. The
     per-stream leaves narrow it back — see ``PermanentFetchError`` — so a raise
     site still gets its own vocabulary checked rather than accepting any string.
+    """
+
+    def __init__(self, message: str, *, reason: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.status_code = status_code
+
+
+class CompletedWithoutBlobError(HandlerError):
+    """The command is finished and there are no bytes: publish, ack, no DLQ (#17).
+
+    The third fate, and a **sibling** of the two above rather than a leaf of
+    either. Descended from ``PermanentError`` it would be swallowed by
+    ``process_message``'s existing arm and dead-letter exactly as before; the
+    alternative — leaving it a ``PermanentFetchError`` and branching on
+    ``exc.reason is FailureReason.NOT_MODIFIED`` in that arm — would make a
+    **wire token load-bearing for local control flow**, so renaming a string
+    Watcher branches on would silently change retry and DLQ behaviour. The fate
+    is structural, exactly as the other two are.
+
+    Named in the loop's vocabulary rather than HTTP's: the token is the issuer's
+    word, the exception type is the loop's. A 304 is the only condition raising
+    this today, and the name leaves room for the next body-less-but-fine outcome
+    without a second one-off type.
+
+    ``reason`` is required and typed ``str`` for ``PermanentError``'s reasons: a
+    default would relabel a specific outcome as a generic one on the wire, and
+    the token vocabulary is producer-owned per stream. ``status_code`` is set
+    where there was one.
     """
 
     def __init__(self, message: str, *, reason: str, status_code: int | None = None) -> None:

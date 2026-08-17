@@ -154,8 +154,10 @@ lives here rather than in Watcher. Three rules govern reading them — **`None` 
 never "the default"**; **`status_code` is always 2xx here**, so it is not a success branch;
 **"verbatim" excludes surrounding whitespace**, and an over-long value is dropped rather than
 truncated — and one warning governs acting on them: **do not attempt conditional GET yet**, because
-a validator that matches earns a body-less 304 that Replicator still closes as a terminal
-`fetch_failed` · `http_status` (**#17**). All four, with the reasoning, in
+the *consumer* side is not ready. Replicator's half landed with **#17** — a matching validator earns
+`fetch_failed` · `not_modified` · `terminal=True` with no blob and no DLQ entry, which is the
+outcome you want — but a consumer with no branch for "no bytes, your last fingerprint stands" will
+read it as content that has gone away. All four, with the reasoning, in
 [the reference](content-fetch-issuer-reference.md#the-enriched-blob_available-fields).
 
 ### The failure fact
@@ -172,11 +174,11 @@ a validator that matches earns a body-less 304 that Replicator still closes as a
 | `info_source_id` | `str` | **Required.** Echoed verbatim, exactly as on the success fact |
 | `reason` | `str` | Stable token; see below. **Treat an unknown value as opaque** |
 | `terminal` | `bool` | `True` = the command is closed, no blob will ever arrive. **Branch on this first** |
-| `status_code` | `int \| None` | Set for `http_status`; absent otherwise |
+| `status_code` | `int \| None` | Set for `http_status` and `not_modified`; absent otherwise |
 | `attempts` | `int \| None` | Set only where the attempt count is *why* the command closed |
 | `detail` | `str \| None` | Free text for the journal. **Never branch on it**, and never show it to an end user — on `handler_error` it is an unanticipated exception's text, so unbounded |
 
-The tokens emitted today are `http_status`, `not_fetchable`, `too_large`,
+The tokens emitted today are `http_status`, `not_modified`, `not_fetchable`, `too_large`,
 `unsupported_schema_version`, `invalid_request_options` and `handler_error` — one per row of the
 [failure taxonomy](content-fetch-issuer-reference.md#failure-taxonomy-what-happens-and-what-the-issuer-sees),
 which states each one's condition. `reason` is a plain `str`, not a `Literal`, so the list is
@@ -184,6 +186,14 @@ additive and a consumer branching on `terminal` first is already correct for tok
 exist yet. Replicator never emits co-core's `wrong_payload_type`, and everything it emits today is
 `terminal=True` — both deliberate, both in
 [the reference](content-fetch-issuer-reference.md#reading-the-failure-fact).
+
+**`not_modified` is a success wearing this event's name (#17).** A body-less 304 means the origin
+agrees your copy is current: no blob is coming, and none is needed. It rides `fetch_failed` because
+the event's real meaning is *this command will not produce a blob*, and `terminal` is the field that
+carries it — which is why MUST-4's "treat an unknown `reason` as opaque" was worth insisting on.
+Two consequences for an issuer: **do not treat it as content loss**, and **do not alert on
+`fetch_failed` rate** — at steady state this token dominates, so the signal is
+`fetch_failed where reason != "not_modified"`.
 
 All three models are `extra="ignore"`, so additive producer fields are tolerated. Branch on
 `schema_version` **before** destructuring, and never use the strict `*Emit` classes on a consume path.

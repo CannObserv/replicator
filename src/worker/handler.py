@@ -3,7 +3,8 @@
 Fills the seam ``src.worker.loop`` dispatches to. The loop owns a message's fate;
 this module's only vocabulary for influencing it is raising —
 ``PermanentFetchError`` to dead-letter now, ``TransientFetchError`` to leave the
-message pending for the next reclaim.
+message pending for the next reclaim, and since #17
+``CompletedWithoutBlobError`` to close the command with a fact and no DLQ entry.
 """
 
 import asyncio
@@ -23,7 +24,12 @@ from co_core_aio.bus import AsyncBusPublisher
 from redis.asyncio import Redis
 
 from src.core.config import Settings
-from src.core.errors import FailureReason, PermanentFetchError, TransientFetchError
+from src.core.errors import (
+    CompletedWithoutBlobError,
+    FailureReason,
+    PermanentFetchError,
+    TransientFetchError,
+)
 from src.core.logging import get_logger
 from src.storage.base import BlobStore
 from src.storage.sweeper import BlobUsage
@@ -57,6 +63,16 @@ MAX_HEADER_VALUE_LENGTH = 1024
 # a tight loop against a struggling origin: raising leaves the message pending
 # and the next reclaim brings it back a minute later.
 _RETRYABLE_STATUSES = frozenset({408, 429})
+
+# The one non-2xx that is an *answer* rather than a refusal: the origin agreeing
+# that the issuer's copy is current. Classified on the status alone — see
+# ``_raise_for_status``.
+_NOT_MODIFIED = 304
+
+# The request headers that make a 304 something Replicator asked for (#11 sends
+# them; #17 is what happens when one works). Read off the command as the issuer
+# spelled it, folded here, so the check cannot disagree with what went out.
+_VALIDATOR_HEADERS = frozenset({"if-none-match", "if-modified-since"})
 
 # How many request headers a command may carry, and how many bytes they may add
 # up to on the wire (#11).
@@ -373,7 +389,10 @@ async def _publish(
 
     The error is re-raised untouched. The loop, not the handler, decides a
     message's fate, and a ``ResponseError`` reaching the DLQ is the right outcome
-    for a publish that is not going to start working.
+    for a publish that is not going to start working — with the carve-out that
+    ``OutOfMemoryError`` is a ``ResponseError`` subclass the loop now classifies
+    transient (#20), so a broker out of memory retries instead (see
+    ``loop._TRANSIENT_ERRORS``).
     """
     try:
         await publisher.execute(BusPublish(topic, to_wire(event)))
@@ -636,12 +655,26 @@ def _raise_for_size(result: FetchResult, command: ContentFetchCommand, maximum: 
 
 
 def _raise_for_status(result: FetchResult, command: ContentFetchCommand) -> None:
-    """Turn a captured non-2xx status into the loop's failure vocabulary.
+    """Turn a captured non-2xx status into the loop's outcome vocabulary.
 
     ``is_2xx`` and not ``is_success`` is the body-presence predicate: a 304 Not
     Modified reports ``is_success`` while carrying an empty body, and it reaches
     us on the *default* path — httpx only follows the redirects that carry a
     ``Location``. Storing that would content-address the empty string.
+
+    **A 304 is classified on its status alone, and its body is ignored.** RFC 9110
+    forbids one, but an origin that sends anyway must not change the outcome —
+    branching on the body would make the answer depend on a field the status has
+    already settled. The ``is_2xx`` guard above is what keeps those bytes out of
+    the store, and that is deliberate rather than incidental: a 304's body is not
+    the resource, so content-addressing it would mint a fingerprint for
+    something no issuer asked for.
+
+    Three outcomes, not two, since #17: a 304 is neither a failure nor a success
+    but a **completed command with no blob**, so it raises the sibling type and
+    the loop publishes-and-acks rather than dead-lettering. Everything else
+    non-2xx and non-retryable — 412 included, since a failed precondition on a
+    GET is the issuer's error — stays ``http_status``.
 
     The co-core fetch driver captures non-2xx into the result rather than
     raising, so this is the only place a status becomes an outcome.
@@ -649,6 +682,11 @@ def _raise_for_status(result: FetchResult, command: ContentFetchCommand) -> None
     if result.is_2xx:
         return
     detail = f"{command.url} returned HTTP {result.status_code}"
+    if result.status_code == _NOT_MODIFIED:
+        _log_not_modified(command)
+        raise CompletedWithoutBlobError(
+            detail, reason=FailureReason.NOT_MODIFIED, status_code=result.status_code
+        )
     if result.status_code >= 500 or result.status_code in _RETRYABLE_STATUSES:
         raise TransientFetchError(detail)
     # The status rides as a field, not only in the message: it is the one datum a
@@ -656,6 +694,37 @@ def _raise_for_status(result: FetchResult, command: ContentFetchCommand) -> None
     # what an issuer's per-domain backoff branches on (#9).
     raise PermanentFetchError(
         detail, reason=FailureReason.HTTP_STATUS, status_code=result.status_code
+    )
+
+
+def _log_not_modified(command: ContentFetchCommand) -> None:
+    """Say whether this 304 was asked for — WARNING when it was not (#17).
+
+    An **unbidden** 304 is an origin behaving oddly, and until #17 that signal was
+    carried by accident: every 304 dead-lettered, so it landed on an operator
+    surface. Now that the bidden case closes cleanly and, at steady state,
+    routinely, the level is the only thing left to carry the distinction — and it
+    costs three lines to keep.
+
+    Read off ``command.headers`` rather than the folded request map because the
+    fold refuses as well as folds: this runs after a fetch has already gone out,
+    and a reporting line must not be able to raise. Case is folded here for the
+    same reason ``_request_headers`` folds it — an issuer spelling it
+    ``If-None-Match`` asked for this 304 exactly as much as one spelling it
+    lowercase.
+    """
+    validators = sorted({name.lower() for name in (command.headers or {})} & _VALIDATOR_HEADERS)
+    context = {
+        "command_id": command.command_id,
+        "url": command.url,
+        "validators": validators,
+    }
+    if validators:
+        logger.info("the origin reports the content unchanged", extra=context)
+        return
+    logger.warning(
+        "the origin reports the content unchanged for a request that sent no validator",
+        extra=context,
     )
 
 
