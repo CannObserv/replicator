@@ -211,6 +211,8 @@ git submodule update --remote --merge         # pull upstream skill changes
 ## Deploy
 
 ```bash
+bash scripts/check_main_checkout.sh                     # what the unit asserts before it starts
+
 sudo cp deploy/replicator.service /etc/systemd/system/replicator.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now replicator

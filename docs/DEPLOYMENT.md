@@ -41,6 +41,26 @@ The **redis-py client** resolves `>=5,<8` transitively via `co-core-aio[bus]`. D
 
 The copy is deliberate, for the same reason `/etc/replicator/.env` is not read from the repo: the live unit must survive a repo reset, a worktree switch, or a branch checkout that happens to be mid-edit.
 
+### The checkout guard — the service refuses to start off `main` (#37)
+
+"Code committed to main is the deployed code" was an invariant AGENTS.md asserted and nothing enforced. On 2026-08-14, during #29, a restart to verify a credential change deployed branch `29-replicate-refusals` as build `7d6f195` while `main` was at `b69771a`. The blast radius was small — the replicate loop had nothing provisioned and refused everything — but the service ran unmerged code, and it was noticed only because someone read the build stamp carefully. That is the point: a branch deploy stamps `BUILD_ID` with the branch commit, so the journal *looks* correct while describing code that is on no shared branch.
+
+`scripts/check_main_checkout.sh` is now a fatal `ExecStartPre` (no `-` prefix), placed **before** the `BUILD_ID` stamp so a refused start cannot leave a misleading build id in `/run/replicator/build-id`, which outlives the failed start. It checks the unit's `WorkingDirectory` rather than a hardcoded path, so the guard, the stamp, and `ExecStart` can never disagree about which tree is under test.
+
+| Condition | Verdict |
+|---|---|
+| HEAD on `main`, clean, in sync | start |
+| HEAD on any other branch | **refuse** — the case that motivated it |
+| detached HEAD | **refuse**, named as such rather than as "on 'HEAD'" |
+| unborn HEAD, or not a git work tree | **refuse** — no evidence to check, and soft-passing would make `rm -rf .git` a silent bypass |
+| `main` behind `origin/main` | warn — a stale-but-shared commit is a different problem from an unshared one, and `origin/main` is only as fresh as the last fetch, so refusing would make the service unstartable during a network outage. The guard never fetches |
+| `main` ahead of `origin/main` | warn — unpushed commits on `main` are arguably the same "on no shared branch" case, but they inherit that staleness problem, so the refuse/warn call is deferred |
+| dirty working tree (tracked files) | warn — refusing would block an operator mid-incident. Untracked files **and submodule state** are ignored, on the same reasoning both times: scratch files and a `skills-vendor/` refresh would otherwise keep this warning permanently lit over things the worker never loads, and a warning nobody reads is no warning |
+
+Verify it by hand with `bash scripts/check_main_checkout.sh` (exit 0 starts, non-zero refuses). `REPLICATOR_ALLOW_ANY_CHECKOUT=1` is the escape hatch — see **Environment Variables**.
+
+**The guard reaches the live service only after the `cp`.** It ships in `deploy/replicator.service`, and the installed unit is a copy — so until `sudo cp deploy/replicator.service /etc/systemd/system/ && sudo systemctl daemon-reload`, the running service is still ungated. A guard that exists only in the repo's copy of the unit is the same failure mode one level up.
+
 ### The co-core 0.8.0 cutover is a two-repo deploy, streams flushed between (#28)
 
 `schema_version` stays 1, and that is a decision rather than an oversight: bumping to 2 would imply
@@ -125,4 +145,5 @@ In `/etc/replicator/.env` (read by the service):
 
   **Each alias gets its own writer, so two aliases may safely name two buckets.** The worker builds one `AsyncGcsDriver` per binding at startup and keys them by alias — a driver *is* a bucket, and keying them by provider once let a command land in a bucket its binding never named (CR #26). A binding whose driver cannot be built — ADC resolves inside that constructor, so an expired key file or a revoked SA raises there — is **skipped and logged at ERROR**, never fatal: commands naming it are refused `provider_disabled`, and the fetch path keeps running. Grep the journal for `could not build a provider writer` after any credential change.
 - `REPLICATOR_LOG_LEVEL` — default `INFO`. Governs the **root** logger only, which is the whole tree for the worker. Under the dev server's `--log-config`, uvicorn's own `uvicorn` / `uvicorn.access` / `uvicorn.error` loggers are pinned `INFO` by `src/core/log_config.json` and do not follow it (nor did they under uvicorn's built-in config), so setting `WARNING` will not silence access lines; root itself is `INFO` from boot until the lifespan's `configure_logging()` applies this value
+- `REPLICATOR_ALLOW_ANY_CHECKOUT` — bypasses the `main`-checkout guard; **unset by default, which is the enforcing posture**. `scripts/check_main_checkout.sh` runs as the unit's first non-privileged `ExecStartPre` and refuses to start on any branch but `main` — see **The checkout guard** above. Only the literal `1` bypasses it; anything else non-empty logs that it is *not* bypassing rather than silently failing to, because an override that quietly does nothing is worse than none. Exists at all because a guard with no override gets removed rather than overridden — but it is not the way to test a branch on this VM. That is `uv run python -m src.worker.main` under a distinct `REPLICATOR_CONSUMER_NAME`, which never touches the unit and never needs this. Set it only when the thing under test *is* the unit (#37)
 - `BUILD_ID` — git SHA stamped by the systemd unit's `ExecStartPre`; defaults to `"dev"` outside systemd
