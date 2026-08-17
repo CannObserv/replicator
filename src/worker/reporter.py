@@ -86,6 +86,16 @@ def build_failure_reporter(
             attempts=failure.attempts,
             detail=failure.detail,
         )
+        # ``==``, never ``is`` (CR #9). ``FailureReport.reason`` is annotated
+        # ``FailureReason``, but the *bases* it is fed from — ``PermanentError``
+        # and ``CompletedWithoutBlobError`` — type ``reason`` as a plain ``str``
+        # on purpose, so a second stream reports in its own vocabulary. The
+        # dataclass coerces nothing, so a raise site passing the literal
+        # ``"not_modified"`` type-checks, satisfies every test here, and would
+        # fail an identity check — silently sending the commonest outcome on the
+        # stream back to the "published fetch_failed" line this split exists to
+        # get it off. ``StrEnum`` makes ``==`` total against both forms.
+        not_modified = failure.reason == FailureReason.NOT_MODIFIED
         try:
             await publisher.execute(BusPublish(blobs_topic, to_wire(event)))
         except Exception as exc:
@@ -97,12 +107,16 @@ def build_failure_reporter(
                     "error": f"{type(exc).__name__}: {exc}",
                     # Says what the issuer is left with, so the line reads as a
                     # regression to MUST-6's old behaviour rather than as noise.
-                    # Hedged on the dead-letter since #17: a ``not_modified``
-                    # close writes no DLQ entry, so on that path this line and
-                    # the reaper are the only records there are.
+                    # Stated per case rather than hedged into one sentence (CR
+                    # #13): a ``not_modified`` close writes no DLQ entry, so on
+                    # that path this line and the reaper are the only records
+                    # there are, and a reader should not have to work out which
+                    # path they are looking at.
                     "detail": (
-                        "the command still closes, and the dead-letter still happens unless this "
-                        "was a not_modified close; the issuer's reaper is the backstop"
+                        "no dead-letter entry is written on a not_modified close, so this line and "
+                        "the issuer's reaper are the only records"
+                        if not_modified
+                        else "the dead-letter still happens; the issuer's reaper is the backstop"
                     ),
                 },
             )
@@ -115,13 +129,10 @@ def build_failure_reporter(
         # would not be in the loop: this decides what a line says, not what
         # happens to a message, so renaming the token costs a log message and
         # nothing else.
-        message = (
-            "published a completed-without-blob outcome"
-            if failure.reason is FailureReason.NOT_MODIFIED
-            else "published fetch_failed"
-        )
         logger.info(
-            message,
+            "published a completed-without-blob outcome"
+            if not_modified
+            else "published fetch_failed",
             extra={
                 "command_id": failure.command_id,
                 "reason": str(failure.reason),

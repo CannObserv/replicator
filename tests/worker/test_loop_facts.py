@@ -24,6 +24,7 @@ what it does not share is everything else: no dead-letter, and a dedupe key.
 
 import asyncio
 import json
+import logging
 
 from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.envelope import to_wire
@@ -55,6 +56,14 @@ from tests.worker.conftest import (
     process_one,
     unreachable_handler,
 )
+
+# The ERROR line ``loop._announce`` emits when a reporter raises. Pinned because
+# ``_announce`` is shared by both closing paths since #17, so the string has to
+# be true of a dead-letter *and* of an ack — it said "dead-lettering anyway"
+# before, which was only ever true of one of them. Asserted rather than left to
+# review: this batch splits another journal line for log-based alerting's sake,
+# and a message nothing pins is a message that changes silently (CR #11).
+_ANNOUNCE_SWALLOW_LINE = "failure reporter raised — closing the command anyway"
 
 
 async def dlq_reasons(client) -> list[str]:
@@ -505,7 +514,7 @@ async def test_the_fact_is_published_before_the_command_is_acked(fake_redis, con
 
 
 async def test_a_reporter_that_raises_cannot_strand_a_completed_command(
-    fake_redis, consumer, settings
+    fake_redis, consumer, settings, caplog
 ):
     """Same belt and braces as the dead-letter path, minus the dead-letter.
 
@@ -519,16 +528,20 @@ async def test_a_reporter_that_raises_cannot_strand_a_completed_command(
         raise RuntimeError("reporter is broken")
 
     message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
-    outcome = await process_one(
-        fake_redis, consumer, settings, message, unchanged_handler, reporter=exploding_reporter
-    )
+    with caplog.at_level(logging.ERROR):
+        outcome = await process_one(
+            fake_redis, consumer, settings, message, unchanged_handler, reporter=exploding_reporter
+        )
 
     assert outcome is Outcome.COMPLETED_WITHOUT_BLOB
     pending = await fake_redis.xpending(TOPIC, GROUP)
     assert pending["pending"] == 0
+    assert _ANNOUNCE_SWALLOW_LINE in caplog.text
 
 
-async def test_a_reporter_that_raises_cannot_strand_the_message(fake_redis, consumer, settings):
+async def test_a_reporter_that_raises_cannot_strand_the_message(
+    fake_redis, consumer, settings, caplog
+):
     """Belt and braces: the reporter swallows its own publish failures, but the
     loop must not depend on that. A raising reporter here would leave the message
     unacked and re-deliver a command that is never going to succeed.
@@ -539,13 +552,15 @@ async def test_a_reporter_that_raises_cannot_strand_the_message(fake_redis, cons
         raise RuntimeError("reporter is broken")
 
     message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
-    outcome = await process_one(
-        fake_redis, consumer, settings, message, failing_handler, reporter=exploding_reporter
-    )
+    with caplog.at_level(logging.ERROR):
+        outcome = await process_one(
+            fake_redis, consumer, settings, message, failing_handler, reporter=exploding_reporter
+        )
 
     assert outcome is Outcome.DEAD_LETTERED
     pending = await fake_redis.xpending(TOPIC, GROUP)
     assert pending["pending"] == 0
+    assert _ANNOUNCE_SWALLOW_LINE in caplog.text
 
 
 async def test_the_loop_publishes_a_real_fact_end_to_end(fake_redis, consumer, settings):

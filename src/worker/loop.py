@@ -405,11 +405,16 @@ class Outcome(StrEnum):
     """What ``process_message`` did with one message.
 
     ``COMPLETED_WITHOUT_BLOB`` is the third fate (#17): a fact is published, the
-    message is acked, and nothing reaches ``<topic>.dlq``. Deliberately **not**
-    folded into ``ACKED`` — once issuers replay validators a 304 becomes the
-    common answer, so counting the two together would make the one number an
-    operator reads to mean "commands that produced bytes" unreadable, in the
-    direction that looks healthy.
+    message is acked, and nothing reaches ``<topic>.dlq``.
+
+    **Nothing aggregates these today** — ``run_loop`` discards what
+    ``process_message`` returns, so the operator-visible distinction is the
+    journal line each path emits, and these members are the loop's own vocabulary
+    for its tests (CR #10). Kept distinct from ``ACKED`` anyway, and not as
+    bookkeeping: once issuers replay validators a 304 becomes the *common* answer,
+    so a counter built on these later would report "commands that produced bytes"
+    as the sum of two very different things — wrong in the direction that looks
+    healthy. Folding them now would quietly foreclose that.
     """
 
     ACKED = "acked"
