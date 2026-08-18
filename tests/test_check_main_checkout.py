@@ -263,13 +263,14 @@ def test_being_behind_origin_main_only_warns(repo: Path):
     assert "behind" in result.stderr
 
 
-def test_being_ahead_of_origin_main_only_warns(repo: Path):
-    """Not in #37's table, and arguably the stronger case — see the script's comment.
+def test_being_ahead_of_origin_main_refuses(repo: Path):
+    """Unpushed commits on ``main`` are the "on no shared branch" case #37 objects to (#48).
 
-    Local commits on ``main`` that were never pushed are exactly the "code that is
-    on no shared branch" the issue objects to, but ``origin/main`` is a cached ref,
-    so refusing on it would fail an operator whose only sin is not having fetched.
-    Warn, and leave the refuse/warn call to a follow-up.
+    The asymmetry with the *behind* case above is the whole argument: ``origin/main``
+    is updated by fetch **and** by a successful push from this repository, so a
+    never-fetched ref can hide behind-ness — remote commits this checkout cannot see
+    — but it cannot manufacture ahead-ness for commits this checkout pushed. Ahead is
+    therefore local evidence, and no network call is needed for it to be sound.
     """
     _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
     (repo / "file.txt").write_text("two\n")
@@ -277,5 +278,76 @@ def test_being_ahead_of_origin_main_only_warns(repo: Path):
 
     result = _run_guard(repo)
 
-    assert result.returncode == 0, result.stderr
+    assert result.returncode != 0
     assert "ahead" in result.stderr
+    # The two remedies and the staleness hypothesis, so an operator who believes the
+    # commits are already pushed is not left to guess which of the two is wrong.
+    assert "git push" in result.stderr
+    assert "git fetch" in result.stderr
+
+
+def test_the_override_lets_unpushed_commits_through(repo: Path):
+    """The network-partition answer: committed a hotfix, cannot reach the remote (#48)."""
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    (repo / "file.txt").write_text("two\n")
+    _git(repo, "commit", "--quiet", "--no-gpg-sign", "-am", "second")
+
+    result = _run_guard(repo, **{OVERRIDE: "1"})
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_a_diverged_main_refuses_and_names_both_sides(repo: Path):
+    """Ahead *and* behind: the refusal wins, but the behind warning still prints.
+
+    Divergence is what a PR merged by squash or rebase looks like locally — the
+    upstream commits carry different SHAs, so the tree is not merely ahead. An
+    operator seeing only "ahead" would push and get rejected; the behind line names
+    the other half of what has to be reconciled.
+    """
+    (repo / "file.txt").write_text("upstream\n")
+    _git(repo, "commit", "--quiet", "--no-gpg-sign", "-am", "upstream")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "reset", "--hard", "--quiet", "HEAD~1")
+    (repo / "file.txt").write_text("local\n")
+    _git(repo, "commit", "--quiet", "--no-gpg-sign", "-am", "local")
+
+    result = _run_guard(repo)
+
+    assert result.returncode != 0
+    assert "ahead" in result.stderr
+    assert "behind" in result.stderr
+
+
+def test_a_refused_start_still_names_the_dirty_tree(repo: Path):
+    """Every warn prints before any refusal, so one start reports every condition (#48 CR #22).
+
+    The behind/ahead pair is ordered for this reason already; a tree that is both
+    ahead and dirty has the same claim on being told once rather than across two
+    failed starts.
+    """
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    (repo / "file.txt").write_text("two\n")
+    _git(repo, "commit", "--quiet", "--no-gpg-sign", "-am", "second")
+    (repo / "file.txt").write_text("and uncommitted\n")
+
+    result = _run_guard(repo)
+
+    assert result.returncode != 0
+    assert "ahead" in result.stderr
+    assert "uncommitted" in result.stderr
+
+
+def test_a_missing_origin_main_ref_warns_but_starts(repo: Path):
+    """No ref to compare against ⇒ no evidence either way ⇒ say so, and start (#48).
+
+    Deliberately *not* the fail-loud treatment the unverifiable-tree cases get: there
+    the missing thing is the whole checkout, here HEAD has already been proven to be
+    ``main``. But once ahead-of-origin refuses, silence here would make
+    ``git remote remove origin`` a quiet bypass of that refusal, so the absence is
+    named rather than passed over.
+    """
+    result = _run_guard(repo)
+
+    assert result.returncode == 0, result.stderr
+    assert "no origin/main" in result.stderr

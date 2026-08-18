@@ -178,3 +178,9 @@ design (see [docs/STYLE.md](docs/STYLE.md), "Not everything in the journal is JS
 
 Because `ExecStart` runs `--frozen --no-sync`, run `uv sync --frozen` as part of the deploy, before
 `systemctl restart`.
+
+`ExecStartPre` also refuses the start outright if this checkout is not on `main`, or if `main`
+carries commits that were never pushed (#37, #48) — the deployed code has to be code someone else
+can see. So get level with `origin/main` first: `git pull --ff-only` when the merge happened on
+GitHub, `git push` when it happened here. Full verdict table and the escape hatch:
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).

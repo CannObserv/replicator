@@ -16,18 +16,30 @@
 #   - not a git work tree          -> cannot verify anything, refuse   -> exit 1
 #   - dubiously-owned repository   -> cannot verify anything, refuse   -> exit 1
 #   - unborn HEAD                  -> nothing to verify, refuse        -> exit 1
+#   - main ahead of origin/main    -> unpushed, so unshared, refuse    -> exit 1
 #   - main behind origin/main      -> stale but shared, warn           -> exit 0
-#   - main ahead of origin/main    -> unpushed but on main, warn       -> exit 0
+#   - no origin/main ref at all    -> nothing to compare against, warn -> exit 0
 #   - dirty working tree           -> not deployed code either, warn   -> exit 0
 #   - clean checkout on main       -> ok                               -> exit 0
 #
-# The warn tier is warn rather than refuse for one reason each: `origin/main` is a
-# cached ref, only as fresh as the last fetch, so refusing on it would make the
-# service unstartable during a network outage; and a dirty tree refusal would
-# block an operator mid-incident. Ahead-of-origin is the arguable one — unpushed
-# commits on main are precisely the "on no shared branch" case #37 objects to —
-# but it shares origin/main's staleness problem, so it warns here and the
-# refuse/warn call is left to a follow-up rather than decided by this script.
+# Ahead-of-origin refuses and behind-of-origin warns, which looks inconsistent for
+# two readings of one cached ref and is not (#48). `origin/main` is updated by
+# `git fetch` *and* by a successful `git push` from this repository. So a
+# never-fetched ref can hide behind-ness — remote commits this checkout cannot see,
+# which is why refusing there would fail an operator whose only sin is a network
+# outage — but it cannot manufacture ahead-ness for commits this checkout pushed,
+# because the push would have moved the ref. Ahead is local evidence: these commits
+# are here, and nothing here ever published them. That is exactly the "code that is
+# on no shared branch" case #37 objects to, and it is assertable without the network
+# call an ExecStartPre must not make. The only false positive needs someone to
+# publish the identical SHAs from another clone; through a PR merge the SHAs differ,
+# so the tree reads as diverged rather than ahead — still unshared, still refused.
+#
+# The remaining warns are warns for one reason each: a dirty-tree refusal would block
+# an operator mid-incident, and a missing `origin/main` is absence of evidence rather
+# than evidence of an unshared commit — HEAD has already been proven to be `main` by
+# then. It is said out loud rather than passed over in silence only because ahead now
+# refuses, which would otherwise make `git remote remove origin` a quiet bypass.
 #
 # Unlike scripts/check_redis_floor.sh, absence is *hard* rather than soft. There
 # the missing thing is a broker that may still be starting; here it is the
@@ -146,21 +158,11 @@ if [ "${branch}" != "${DEPLOY_BRANCH}" ]; then
   exit 1
 fi
 
-# --- On main. Everything below is advisory; the exit code is already 0. -------
-
-# No fetch: an ExecStartPre must not make a network call the start can wait on,
-# and a warning computed from the last fetch is worth more than a hang.
-if git rev-parse --verify --quiet "${REMOTE_REF}" >/dev/null 2>&1; then
-  behind="$(git rev-list --count "HEAD..${REMOTE_REF}" 2>/dev/null)"
-  ahead="$(git rev-list --count "${REMOTE_REF}..HEAD" 2>/dev/null)"
-
-  if [ -n "${behind}" ] && [ "${behind}" -gt 0 ] 2>/dev/null; then
-    echo "check_main_checkout: ${DEPLOY_BRANCH} is ${behind} commit(s) behind ${REMOTE_REF} as of the last fetch — starting anyway" >&2
-  fi
-  if [ -n "${ahead}" ] && [ "${ahead}" -gt 0 ] 2>/dev/null; then
-    echo "check_main_checkout: ${DEPLOY_BRANCH} is ${ahead} commit(s) ahead of ${REMOTE_REF} (unpushed) — starting anyway" >&2
-  fi
-fi
+# --- On main. The warns come first, then the one refusal that can still fire. --
+#
+# Ordered that way so a single failed start names every condition: an operator who
+# fixes the ahead refusal should not then discover a dirty tree on the next start.
+# Same reasoning as printing `behind` before the `ahead` refusal below.
 
 # Tracked, non-submodule files only, on the same reasoning both times: a warning
 # that fires routinely for a reason unrelated to the worker's code trains
@@ -171,6 +173,36 @@ fi
 # agent tooling the worker never loads.
 if [ -n "$(git status --porcelain --untracked-files=no --ignore-submodules=all 2>/dev/null)" ]; then
   echo "check_main_checkout: working tree has uncommitted changes to tracked files — starting anyway" >&2
+fi
+
+# No fetch: an ExecStartPre must not make a network call the start can wait on,
+# and a warning computed from the last fetch is worth more than a hang.
+if git rev-parse --verify --quiet "${REMOTE_REF}" >/dev/null 2>&1; then
+  behind="$(git rev-list --count "HEAD..${REMOTE_REF}" 2>/dev/null)"
+  ahead="$(git rev-list --count "${REMOTE_REF}..HEAD" 2>/dev/null)"
+
+  # Behind is printed before the ahead refusal rather than after it, so a diverged
+  # checkout names both sides: an operator told only "ahead" pushes and is rejected.
+  if [ -n "${behind}" ] && [ "${behind}" -gt 0 ] 2>/dev/null; then
+    echo "check_main_checkout: ${DEPLOY_BRANCH} is ${behind} commit(s) behind ${REMOTE_REF} as of the last fetch — starting anyway" >&2
+  fi
+  if [ -n "${ahead}" ] && [ "${ahead}" -gt 0 ] 2>/dev/null; then
+    echo "check_main_checkout: ${DEPLOY_BRANCH} is ${ahead} commit(s) ahead of ${REMOTE_REF} — unpushed, so on no shared branch" >&2
+    echo "check_main_checkout: refusing to start — the service would run code nobody else has" >&2
+    echo "check_main_checkout: 'git push' to share them, or 'git reset --hard ${REMOTE_REF}' to drop them" >&2
+    # Named because it is the one reading of this refusal an operator can get wrong,
+    # and the fix is not the same: a ref stale in this direction means the commits
+    # were published from somewhere other than this repository.
+    echo "check_main_checkout: if they are already pushed, ${REMOTE_REF} is stale — 'git fetch'" >&2
+    echo "check_main_checkout: during a network partition, set REPLICATOR_ALLOW_ANY_CHECKOUT=1" >&2
+    exit 1
+  fi
+else
+  # Not fatal: HEAD is already proven to be ${DEPLOY_BRANCH}, so this is absence of
+  # evidence, not evidence of an unshared commit. Said out loud all the same — with
+  # ahead refusing above, silence here would make removing the remote a way to bypass
+  # that refusal without touching the guard.
+  echo "check_main_checkout: no ${REMOTE_REF} ref in $(pwd) — cannot tell whether ${DEPLOY_BRANCH} is shared — starting anyway" >&2
 fi
 
 echo "check_main_checkout: on ${DEPLOY_BRANCH} at ${head_sha}"

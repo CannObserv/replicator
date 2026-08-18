@@ -12,7 +12,7 @@ deliberately not JSON.
 
 - **wheelhouse sync** — `wheelhouse in sync: N downloaded, M already present -> …` on the happy path, `error: could not sync gs://…` on the non-fatal failure path. It runs `uv run --no-project`, before the deploy's `uv sync`, in an environment holding `google-cloud-storage` and nothing else (#15, skills#83).
 - **`check_redis_floor.sh`** — `check_redis_floor: Redis X meets the >=7.0 floor`, or the refusal below it. A bash preflight; there is no interpreter to import from.
-- **`check_main_checkout.sh`** — `check_main_checkout: on main at <sha>`, or a refusal, or a warn-tier line about a stale/unpushed/dirty tree (#37). Same reason.
+- **`check_main_checkout.sh`** — `check_main_checkout: on main at <sha>`, or a refusal — a branch, a detached or unborn HEAD, an unverifiable tree, or **unpushed commits on `main`** (#48) — or a warn-tier line about a stale or dirty tree (#37). Same reason.
 
 A shipper reading journald natively is unaffected (the message is a field alongside `_SYSTEMD_UNIT` / `_PID`); a pipeline that `json.loads` every `MESSAGE` must tolerate all of them — **the refusal lines especially, since they appear exactly when something is already wrong**, which is when a dropped log line costs the most. Two of the three can *only* speak on a bad start.
 

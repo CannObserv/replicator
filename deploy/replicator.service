@@ -30,9 +30,11 @@ ExecStartPre=+/bin/bash -c 'mkdir -p /run/replicator && chown exedev:exedev /run
 
 # Hard guard: "Code committed to main is the deployed code" (AGENTS.md) was an
 # invariant nothing enforced until #37 — a restart while the checkout sat on a
-# feature branch deployed unmerged code. Refuses a non-main or detached HEAD;
-# warns only on a stale, unpushed, or dirty tree. Not '-' prefixed: a guard whose
-# refusal is logged and ignored is not a guard.
+# feature branch deployed unmerged code. Refuses a non-main or detached HEAD, and
+# a main carrying commits that were never pushed (#48) — unpushed is unshared, and
+# unlike 'behind' that verdict does not need the cached origin/main to be fresh.
+# Warns only on a stale or dirty tree. Not '-' prefixed: a guard whose refusal is
+# logged and ignored is not a guard.
 #
 # Placed BEFORE the BUILD_ID stamp on purpose. /run/replicator/build-id outlives a
 # failed start, so stamping the branch SHA first would leave the journal
