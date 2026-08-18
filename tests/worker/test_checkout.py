@@ -115,6 +115,84 @@ def test_a_missing_script_refuses(monkeypatch, tmp_path):
     assert "gone.sh" in refusal
 
 
+@pytest.mark.parametrize(
+    "carried",
+    [
+        pytest.param("GH_TOKEN", id="the-repo-pat"),
+        pytest.param("GH_TOKEN_ARCHIVER", id="a-sibling-repo-pat"),
+        pytest.param("GOOGLE_APPLICATION_CREDENTIALS", id="the-write-identity"),
+    ],
+)
+def test_the_child_does_not_inherit_the_shell_s_secrets(monkeypatch, carried):
+    """CR #2. The guard is the only subprocess the worker spawns — keep it starved.
+
+    AGENTS.md justifies the two-env-file boundary in exactly these terms: the
+    repo `.env` holds org-wide PATs, and handing them "to a process whose job is
+    fetching public URLs widens the blast radius of any crash dump **or
+    subprocess** for no benefit". A dev worker is started from a shell that
+    AGENTS.md itself tells you to load both files into, so the full environment
+    is real, not hypothetical — and this script needs none of it.
+    """
+    monkeypatch.setenv(carried, "a-secret-the-guard-has-no-use-for")
+    seen = {}
+
+    def record(argv, **kwargs):
+        seen["env"] = kwargs.get("env")
+        return FakeCompleted(0)
+
+    monkeypatch.setattr(subprocess, "run", record)
+
+    checkout_refusal()
+
+    assert seen["env"] is not None, "no env= means the child inherits everything"
+    assert carried not in seen["env"]
+
+
+def test_the_child_gets_what_the_script_actually_needs(monkeypatch):
+    """PATH to find git, HOME because git reads the global config for
+    `safe.directory`, and the override the script itself reads."""
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("HOME", "/home/someone")
+    monkeypatch.setenv("REPLICATOR_ALLOW_ANY_CHECKOUT", "1")
+    seen = {}
+
+    def record(argv, **kwargs):
+        seen["env"] = kwargs.get("env")
+        return FakeCompleted(0)
+
+    monkeypatch.setattr(subprocess, "run", record)
+
+    checkout_refusal()
+
+    assert seen["env"] == {
+        "PATH": "/usr/bin",
+        "HOME": "/home/someone",
+        "REPLICATOR_ALLOW_ANY_CHECKOUT": "1",
+    }
+
+
+def test_a_variable_the_shell_never_set_is_simply_absent(monkeypatch):
+    """An unset override must not arrive as an empty string.
+
+    The script branches on `${REPLICATOR_ALLOW_ANY_CHECKOUT:-}` being empty
+    versus `1` versus anything else, and its third branch logs "is '', not '1'
+    — not bypassing" on every start. Passing the key with an empty value would
+    make that line permanent noise (#48).
+    """
+    monkeypatch.delenv("REPLICATOR_ALLOW_ANY_CHECKOUT", raising=False)
+    seen = {}
+
+    def record(argv, **kwargs):
+        seen["env"] = kwargs.get("env")
+        return FakeCompleted(0)
+
+    monkeypatch.setattr(subprocess, "run", record)
+
+    checkout_refusal()
+
+    assert "REPLICATOR_ALLOW_ANY_CHECKOUT" not in seen["env"]
+
+
 def test_the_script_runs_against_this_checkout_not_the_working_directory(monkeypatch):
     """`cwd` is derived from this module's own path.
 

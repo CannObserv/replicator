@@ -31,6 +31,7 @@ The caller is ``build_writers``, and only when there is a provider binding to
 build — a worker that replicates nothing shells out to nothing.
 """
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -41,6 +42,30 @@ GUARD = REPO_ROOT / "scripts" / "check_main_checkout.sh"
 # reading `origin/main` from the cached ref rather than fetching — so this bounds
 # a hang, not a slow answer.
 GUARD_TIMEOUT_SECONDS = 10.0
+
+# Everything the guard needs, and nothing else (CR #2). ``PATH`` to find ``git``,
+# ``HOME`` because git reads the global config there — that is where a
+# ``safe.directory`` entry lives, and the dubious-ownership branch exists to
+# report its absence — and the override the script itself reads.
+#
+# Passing an explicit environment rather than inheriting is the point.
+# ``replicator.service`` reads only ``/etc/replicator/.env``, but a *dev* worker
+# is started from a shell AGENTS.md tells you to load the repo ``.env`` into as
+# well, which carries org-wide PATs. That file's own rule is that handing them to
+# a subprocess "widens the blast radius of any crash dump or subprocess for no
+# benefit", and this is the only subprocess the worker spawns.
+GUARD_ENV_KEYS = ("PATH", "HOME", "REPLICATOR_ALLOW_ANY_CHECKOUT")
+
+
+def _guard_env() -> dict[str, str]:
+    """``GUARD_ENV_KEYS`` that are actually set, and no others.
+
+    Absent keys are **omitted rather than empty**: the script branches on
+    ``REPLICATOR_ALLOW_ANY_CHECKOUT`` being unset versus ``1`` versus anything
+    else, and its third branch logs "is '', not '1' — not bypassing" on every
+    start. An empty value would make that line permanent noise (#48).
+    """
+    return {key: os.environ[key] for key in GUARD_ENV_KEYS if key in os.environ}
 
 
 def checkout_refusal() -> str | None:
@@ -56,6 +81,7 @@ def checkout_refusal() -> str | None:
         completed = subprocess.run(
             ["bash", str(GUARD)],
             cwd=REPO_ROOT,
+            env=_guard_env(),
             capture_output=True,
             text=True,
             timeout=GUARD_TIMEOUT_SECONDS,

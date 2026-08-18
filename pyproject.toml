@@ -68,7 +68,10 @@ find-links = ["./.wheelhouse"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v --tb=short -m 'not integration and not gcs' --cov=src --cov-report=term-missing"
+# --strict-markers: an unregistered marker is an error, not a warning. A typo'd
+# `@pytest.mark.gsc` would otherwise leave a test that never runs under any
+# selector and never reports why (CR #9).
+addopts = "-v --tb=short --strict-markers -m 'not integration and not gcs' --cov=src --cov-report=term-missing"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
@@ -79,7 +82,7 @@ timeout = 300
 timeout_method = "thread"
 markers = [
     "integration: marks tests that hit live external services or a real Redis broker; excluded by default (run with -m integration)",
-    "gcs: marks tests that write to the provisioned GCS test bucket; excluded by default (run with -m gcs). Separate from `integration`, which means the live VM Redis — local, free, and routinely run; a marker that also writes to a bucket changes what that command costs (#51)",
+    "gcs: marks tests that write to the provisioned GCS test bucket; excluded by default (run with -m gcs). Deliberately not `integration` — see docs/TESTING.md",
 ]
 filterwarnings = [
     "error::DeprecationWarning",

@@ -22,6 +22,15 @@ property of the test tree, and its reasoning lives in `docs/TESTING.md`. Filing
 it there would have cost the boundaries file the one navigational promise it
 makes.
 
+**This scan is the fast signal, not the boundary** (CR #7). It matches whole
+string literals, so a name assembled from parts — a concatenation, an f-string
+around a variable — passes it. That is not a hole to plug: the same evasion would
+defeat any static check, and what actually stops a write is the runtime half in
+`tests/conftest.py`, which sees the bucket a driver was *constructed with* rather
+than the source it came from, and behind that the IAM grant, which refuses the
+write whatever both of them believe. Read the three as layers with different
+failure modes, and do not spend effort making this one exhaustive.
+
 **Two conventions inherited from that file, because both earn their keep.** The
 detector is itself tested — a structural scan that quietly walks zero files
 passes forever while enforcing nothing, which is worse than no test because the
@@ -114,11 +123,10 @@ def test_no_module_names_a_production_destination():
     files = _python_files()
     assert files, "the scan found no modules — it is a no-op"
 
-    offenders = {
-        path.relative_to(REPO).as_posix(): sorted(_hits(ast.parse(path.read_text())))
-        for path in files
-        if _hits(ast.parse(path.read_text()))
-    }
+    # Parsed once per file, not once per clause (CR #5): the same call in the
+    # value and the condition read and parsed all of `src/` and `tests/` twice.
+    hits = {path.relative_to(REPO).as_posix(): _hits(ast.parse(path.read_text())) for path in files}
+    offenders = {module: sorted(found) for module, found in hits.items() if found}
 
     assert not offenders
 
