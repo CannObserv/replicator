@@ -29,10 +29,11 @@ src/core/errors.py   — TransientError / PermanentError (what the loop catches)
 src/worker/replicate.py — The content.replicate handler: alias resolve, T3/T3a guards, refusals
 src/worker/aliases.py — The provisioned destination set, read once from env-referenced host config
 src/worker/replicate_reporter.py — replication_failed on content.artifacts
+src/worker/checkout.py — Is this checkout main's code? Asked before a write identity is built (#52)
 src/core/logging.py  — build_json_formatter() + ColorMessageFilter + configure_logging() + get_logger()
 src/core/log_config.json — uvicorn --log-config; routes uvicorn's own loggers through that formatter
 src/core/config.py   — Settings / env access (see Environment Variables)
-scripts/        — sync_wheelhouse.py, check_redis_floor.sh, seed_fetch.py
+scripts/        — sync_wheelhouse.py, check_redis_floor.sh, check_main_checkout.sh, seed_fetch.py
 scripts/seed_fetch.py — the MVP command issuer; publishes content.fetch, --watch tails the facts
 tests/          — Mirrors src/ structure; integration tests in `@pytest.mark.integration`
 docs/           — Reference docs; the Detail Docs index in AGENTS.md is the roster

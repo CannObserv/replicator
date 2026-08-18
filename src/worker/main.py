@@ -31,6 +31,7 @@ from src.core.logging import configure_logging, get_logger
 from src.storage.local import LocalBlobStore, ensure_directory
 from src.storage.sweeper import BlobUsage
 from src.worker.aliases import AliasTable, load_alias_table
+from src.worker.checkout import checkout_refusal
 from src.worker.handler import build_handler
 from src.worker.loop import FETCH_SPEC, REPLICATE_SPEC, run_loop
 from src.worker.policy import (
@@ -156,10 +157,42 @@ def build_writers(aliases: AliasTable) -> dict[str, AsyncGcsDriver]:
     accurate and the reason whose remedy is the operator act that fixes it. Per
     binding rather than all-or-nothing, the same shape ``load_alias_table`` uses
     for one unusable entry in a readable table.
+
+    **And a checkout that is not main's code builds no writer at all** (#52).
+    ``replicator.service`` asks that question as an ``ExecStartPre``; a dev worker
+    started with ``uv run python -m src.worker.main`` runs no ``ExecStartPre`` and
+    inherits, per AGENTS.md's own shell snippet, the production ADC and the
+    production alias table. Refused the same way an unbuildable driver is —
+    skipped and logged, never raised — so the fetch path is untouched and the
+    handler's reason stays ``provider_disabled``. ``REPLICATOR_ALLOW_ANY_CHECKOUT=1``
+    is the override, read by the script rather than here (``src/worker/checkout.py``).
     """
     writers: dict[str, AsyncGcsDriver] = {}
+    refusal: str | None = None
+    asked = False
     for alias, binding in aliases.bindings.items():
         if binding.provider != "gcs":
+            continue
+        # Asked here rather than at the top: a worker with nothing provisioned —
+        # every worker on this VM today — should not pay a subprocess for a
+        # question about a write it will never attempt. Asked once and cached for
+        # the table, because the answer cannot differ between two bindings read
+        # in the same process.
+        if not asked:
+            refusal, asked = checkout_refusal(), True
+        if refusal is not None:
+            logger.error(
+                "refusing to build a provider writer — this checkout is not main's code",
+                extra={
+                    "alias": alias,
+                    "provider": binding.provider,
+                    "refusal": refusal,
+                    "detail": (
+                        "commands naming it are refused provider_disabled; "
+                        "set REPLICATOR_ALLOW_ANY_CHECKOUT=1 to build it anyway"
+                    ),
+                },
+            )
             continue
         try:
             writers[alias] = AsyncGcsDriver(binding.bucket)
