@@ -66,13 +66,22 @@ def run_prefix() -> str:
 
 @pytest.fixture
 def gcs(gcs_bucket):
-    """A plain client for the assertions and the teardown.
+    """A plain client for the assertions and the teardown, closed on the way out.
 
     Separate from the driver under test on purpose: a test that verified a write
     through the same object that performed it would be asserting the driver
     against itself.
+
+    Closed rather than dropped (CR #6). ``storage.Client`` holds a requests
+    session, and a module that leaks one per test is the shape of bug
+    ``test_a_writer_that_fails_to_close_does_not_leak_the_redis_client`` exists
+    to keep out of the worker.
     """
-    return storage.Client().bucket(gcs_bucket)
+    client = storage.Client()
+    try:
+        yield client.bucket(gcs_bucket)
+    finally:
+        client.close()
 
 
 @pytest.fixture
@@ -95,13 +104,22 @@ def written(gcs, run_prefix):
 
 
 @pytest.fixture
-def driver(gcs_bucket):
-    """The real ``AsyncGcsDriver``, against the test bucket.
+async def driver(gcs_bucket):
+    """The real ``AsyncGcsDriver``, against the test bucket — and closed after.
 
     The autouse guard in ``tests/conftest.py`` has already refused every other
     bucket name before this constructor resolves a credential.
+
+    ``aclose`` is not optional here (CR #1). The driver builds its own
+    ``storage.Client`` when none is passed and therefore owns it, so a fixture
+    that dropped the driver would leak a transport per test — while the unit
+    tests one directory over assert the worker never does that on shutdown.
     """
-    return AsyncGcsDriver(gcs_bucket)
+    writer = AsyncGcsDriver(gcs_bucket)
+    try:
+        yield writer
+    finally:
+        await writer.aclose()
 
 
 @pytest.fixture

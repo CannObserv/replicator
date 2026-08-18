@@ -134,8 +134,9 @@ the frames without contacting a broker at all.
 ## Test & lint
 
 ```bash
-uv run pytest                          # default suite; integration tests deselected
+uv run pytest                          # default suite; integration and gcs deselected
 uv run pytest --no-cov -m integration  # live-broker tests (scratch db, never db 0)
+uv run pytest --no-cov -m gcs          # T4 rows against the GCS test bucket (#38)
 uv run ruff check .
 ```
 

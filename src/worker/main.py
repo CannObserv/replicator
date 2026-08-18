@@ -401,6 +401,17 @@ async def run(
         # would put a blocking credential lookup on the event loop once per
         # replicate command. Empty on a host with nothing provisioned, which is
         # every host until an operator writes an alias table.
+        #
+        # **Two blocking calls, both deliberate, both only here** (CR #4). The
+        # second is the checkout guard's `subprocess.run`, up to
+        # `GUARD_TIMEOUT_SECONDS`. Neither starves anything: no task exists yet,
+        # so the loop has nothing else to run. What they do cost is shutdown
+        # latency — signal handlers are installed by this point, so a SIGTERM
+        # arriving inside that window sets `stop` but is not *seen* until the
+        # call returns. Bounded, startup-only, and cheaper than the alternative:
+        # `to_thread` here would buy responsiveness during a window in which
+        # there is nothing to respond to. Move either off the loop only if it
+        # ever moves out of startup.
         writers = build_writers(aliases)
         # Default start_id="$" reads only messages added after group creation.
         # The MVP seed harness controls when commands appear, so a backlog drain
