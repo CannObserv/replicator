@@ -161,3 +161,87 @@ jobs:
       # is marked @pytest.mark.integration and excluded by default.
       - name: pytest (default, excludes integration)
         run: uv run pytest
+
+  # The only job in this workflow that holds a delete-capable identity, and it is
+  # a separate job for exactly that reason (#53). The `test` job authenticates as
+  # `co-pypi-reader` — read on the package index and nothing else — and giving it
+  # a second identity that can write and delete objects would widen every unit
+  # test's blast radius to buy coverage that three tests need.
+  #
+  # Keyless: the test SA is bound to this repo's WIF provider, so no key exists to
+  # leak. `google-github-actions/auth` writes a credentials file and exports
+  # GOOGLE_APPLICATION_CREDENTIALS; the fixtures in tests/conftest.py strip that
+  # variable from every test and re-point it, per test, from
+  # REPLICATOR_TEST_GCS_CREDENTIALS — so the path is threaded explicitly rather
+  # than inherited, and an unmarked test cannot reach the identity at all.
+  gcs:
+    name: gcs (T4 against the test bucket)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Assert wheelhouse auth is configured
+        env:
+          WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+        run: |
+          if [ -z "$WIF_PROVIDER" ]; then
+            echo "::error::vars.GCP_WIF_PROVIDER is empty for this repo. GCP is not the problem — the org variable is not visible here. Fix under Org Settings > Secrets and variables > Actions > Variables > GCP_WIF_PROVIDER > Repository access."
+            exit 1
+          fi
+
+      # First identity: read-only, and only to mirror the wheelhouse.
+      - name: Authenticate to Google Cloud (WIF, read-only)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: co-pypi-reader@co-gcs.iam.gserviceaccount.com
+
+      - name: Sync cannobserv wheelhouse
+        run: uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
+
+      - name: uv sync
+        run: uv sync --frozen --group dev
+
+      # Second identity, after the wheelhouse is already mirrored: objectAdmin on
+      # co-gcs-test-replication and no grant whatsoever on the production bucket
+      # (docs/DEPLOYMENT.md, "The GCS test bucket").
+      - name: Authenticate to Google Cloud (WIF, test bucket writer)
+        id: gcs_auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: co-gcs-test-replicator@co-gcs.iam.gserviceaccount.com
+
+      # Skipping is not passing here, and a skip is silent — the fixtures skip a
+      # `gcs` test when either variable is unset, which on a developer's machine
+      # is correct and in CI would mean the provisioning or the WIF binding
+      # regressed while the job stayed green. The bucket is a literal below, so
+      # only the credentials path can be empty; assert it rather than discover it.
+      - name: Assert the test identity resolved
+        run: |
+          if [ -z "${{ steps.gcs_auth.outputs.credentials_file_path }}" ]; then
+            echo "::error::WIF auth produced no credentials file for co-gcs-test-replicator. The gcs tests would skip, not fail. Check the SA's roles/iam.workloadIdentityUser binding on this repo's principalSet (docs/DEPLOYMENT.md)."
+            exit 1
+          fi
+
+      # --no-cov: these rows do not exercise all of src/, and the gate measures
+      # it. `-m gcs` is deselected from the default suite, so this is the only
+      # place they run. `-rs` prints the reason for any skip that survives the
+      # assertion above, so a future one is legible in the log rather than a
+      # missing line.
+      - name: pytest (T4 rows against the real bucket)
+        env:
+          REPLICATOR_TEST_GCS_BUCKET: co-gcs-test-replication
+          REPLICATOR_TEST_GCS_CREDENTIALS: ${{ steps.gcs_auth.outputs.credentials_file_path }}
+        run: uv run pytest --no-cov -m gcs -rs

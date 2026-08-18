@@ -17,7 +17,7 @@ adopters had built.
 | T2 — an alias resolves only if provisioned on this host | shipped (`REPLICATOR_REPLICATION_ALIASES_FILE`) |
 | T3 — containment, and the path guard | shipped for `gcs`; the `gdrive`/`ia` rows arrive with those providers |
 | T3a — resolve by fingerprint, never by path | shipped |
-| T4 — the absent/matching/differing table | shipped for `gcs`, and verified against the live bucket |
+| T4 — the absent/matching/differing table | shipped for `gcs`, and **verified in CI** against `co-gcs-test-replication` — all three rows, every push (#53). Was a hand-run against production, which could never be repeated: that bucket grants no `delete`, so the conflict row could not reset itself (#38) |
 | T5 — `ia` gated on an operator act | shipped by construction: `ia` cannot be provisioned at all yet |
 | T6 — `public_url` never echoed from the command | shipped, **reworded** — see below (#36) |
 | Charter — the alias is a key, never a value | shipped, plus a second scan that no payload field feeds a credential parameter |

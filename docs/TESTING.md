@@ -7,7 +7,7 @@ allowed to touch.
 
 ## Test layout
 
-- Test structure mirrors source (`src/foo.py` → `tests/test_foo.py`). A module whose tests outgrow one file splits by concern, not by helper: `tests/worker/test_loop_dlq.py`, `test_loop_recovery.py`, … with the shared wiring in that package's `conftest.py`. Concern is the default axis; **environment** is the one exception — tests needing a live broker split off with an `_integration` suffix (`tests/worker/test_main_integration.py`), so the filename says what the marker enforces
+- Test structure mirrors source (`src/foo.py` → `tests/test_foo.py`). A module whose tests outgrow one file splits by concern, not by helper: `tests/worker/test_loop_dlq.py`, `test_loop_recovery.py`, … with the shared wiring in that package's `conftest.py`. Concern is the default axis; **environment** is the one exception — tests needing a live broker split off with an `_integration` suffix (`tests/worker/test_main_integration.py`), and those needing the real GCS bucket with a `_gcs` one (`tests/worker/test_replicate_writer_gcs.py`), so the filename says what the marker enforces
 
 ## Testing the bus
 
@@ -61,6 +61,28 @@ that also writes to a bucket changes what `-m integration` costs.
 ```bash
 uv run pytest --no-cov -m gcs
 ```
+
+**What runs there.** `tests/worker/test_replicate_writer_gcs.py` — the three T4
+rows against the real bucket: absent writes and completes, a redelivery onto
+identical bytes is a no-op that still emits the *same* `public_url` and leaves the
+object's generation untouched, and differing bytes at one destination are a
+terminal `destination_conflict` with nothing overwritten. The fourth outcome,
+`INDETERMINATE`, is deliberately absent — provoking a delete between the failed
+create and the confirming read is either flaky or needs a seam in the write path
+that exists only for the test, and it is covered against the fake.
+
+Each test writes under its own `replicator-t4/<random>/` prefix and its teardown
+deletes it, then **asserts the prefix is empty** — a cleanup that silently missed
+an object would be collected by the lifecycle rule a day later, so nothing would
+ever fail and the next reader would inherit the ambiguity #38 spent a comment
+thread resolving. The lifecycle rule is litter insurance, not the reset; the reset
+is the test SA's `delete`, which is the whole reason the bucket exists.
+
+CI runs these in their own `gcs` job, keyless via the same WIF provider — the only
+job in the workflow holding a delete-capable identity, kept separate so an
+ordinary unit test's blast radius does not widen to buy three tests' coverage. A
+skip there would be a green run with no verification, so the job asserts the
+credentials file resolved before it runs pytest.
 
 Two variables, **neither with a default** — absent means skip, never "use
 whatever the code would have picked":
