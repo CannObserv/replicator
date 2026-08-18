@@ -159,8 +159,7 @@ never "the default"**; **`status_code` is always 2xx here**, so it is not a succ
 truncated — and one rule governs *acting* on them: replaying `etag` or `last_modified` **is**
 conditional GET, so it is gated on your own consumer rather than on Replicator, and
 [MUST-8](#8-do-not-send-a-validator-until-you-handle-not_modified) states the gate. All four, with
-the reasoning, in
-[the reference](content-fetch-issuer-reference.md#the-enriched-blob_available-fields).
+the reasoning, in [the reference](content-fetch-issuer-reference.md#the-enriched-blob_available-fields).
 
 ### The failure fact
 
@@ -370,9 +369,10 @@ Two corollaries, both about values you have stored:
 - **Replay verbatim or not at all.** `etag` and `last_modified` are passed through unparsed
   precisely so they can go back out unparsed; a parse/re-serialize round trip hands the origin a
   value it never sent, which fails to match and silently costs you the whole mechanism.
-- **A stored validator that cannot be sent must be discarded automatically.** See
-  [`invalid_request_options` and stored values](content-fetch-issuer-reference.md#request-options-what-replicator-will-send-and-what-it-refuses-11)
-  — the refusal is terminal *and* pre-request, so it repeats forever on its own.
+- **Screen a stored validator before sending it, and clear it if it is refused anyway.** See
+  [`invalid_request_options` and stored values](content-fetch-issuer-reference.md#invalid_request_options-and-stored-values)
+  — that refusal is terminal *and* pre-request, so an unsendable stored value repeats forever on
+  its own.
 
 ---
 

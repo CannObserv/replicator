@@ -15,8 +15,7 @@ become advisory by living here.
 
 **Changing this document.** The same rule the contract states applies: a change to the failure
 taxonomy or to the refusal rules is announced on the issuer repos' trackers in the same change that
-edits this file — see
-[the contract](content-fetch-issuer-contract.md) for how to pick the issue.
+edits this file — see [the contract](content-fetch-issuer-contract.md) for how to pick the issue.
 
 ---
 
@@ -58,26 +57,38 @@ own fingerprints.
 | `timeout_seconds` that is zero, negative, NaN, or infinite | Not a duration |
 | `timeout_seconds` over `REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS` (default **120**) | Replicator's consume path is serial, so your timeout is a lien on every *other* issuer's commands too. Ask an operator if 120 s is genuinely too short for a target |
 
-**`invalid_request_options` is the one refusal an issuer can wedge itself on, so clear the stored
-value automatically.** Every other terminal outcome describes something about the *fetch*, and
-re-issuing eventually behaves differently. This one is terminal **and** pre-request: it is decided
-entirely from the command, so an issuer that re-derives the same command from stored state is
-refused identically every cycle, forever, without the origin ever being contacted. The URL is not
-slow or broken — it is simply never fetched again, and nothing in the fact stream distinguishes
-that from a resource nobody is asking about.
-
-The realistic source is a **stored validator** — an `etag` kept from an earlier fact and replayed
-in `If-None-Match` (see [MUST-8](content-fetch-issuer-contract.md#8-do-not-send-a-validator-until-you-handle-not_modified)).
-So the remedy has to be automatic rather than operator-driven: on `invalid_request_options`, and on
-that reason alone, discard the stored request options the command was built from so the next one
-goes out unconditional and the item self-heals. Watcher does exactly this. An unsendable value that
-only a human can clear is an item that stops being fetched until a human notices, which is the
-failure mode this refusal is least likely to advertise.
-
 **Neither field touches identity.** They ride inside `payload`, not the envelope: `command_id`
 remains the sole dedupe key and the sole correlator. Two commands differing only in options are two
 fetch occasions (MUST-1 unchanged); a *redelivery* carrying different options is still the same
 command and is still deduped.
+
+### `invalid_request_options` and stored values
+
+**This is the one refusal an issuer can wedge itself on.** Every other terminal outcome describes
+something about the *fetch*, and re-issuing eventually behaves differently. This one is terminal
+**and** pre-request: it is decided entirely from the command, so an issuer that re-derives the same
+command from stored state is refused identically every cycle, forever, without the origin ever
+being contacted. The URL is not slow or broken — it is simply never fetched again, and nothing in
+the fact stream distinguishes that from a resource nobody is asking about.
+
+The realistic source is a **stored validator** — an `etag` kept from an earlier fact and replayed in
+`If-None-Match` (see
+[MUST-8](content-fetch-issuer-contract.md#8-do-not-send-a-validator-until-you-handle-not_modified)).
+So take both halves, because they defend different things:
+
+- **Screen the value before it goes on `headers`.** Apply the refusal rules above to a stored
+  validator at mint time and send nothing that would be refused — the command then goes out
+  unconditional, which costs one full fetch, instead of going out refused, which costs the fetch
+  *and* the item's health signal. This is prevention, and it is the cheaper half.
+- **Clear the stored value on the refusal, automatically.** On `invalid_request_options`, and on
+  that reason alone, discard the stored request options the command was built from. This is the
+  backstop for values that were stored under an older screen — including any stored before the
+  screen existed — and it is what makes the wedge self-healing rather than operator-driven.
+
+Watcher runs both: `sendable_validator()` refuses to mint an unsendable value, and
+`clear_validators()` fires on this reason and no other. An unsendable value that only a human can
+clear is an item that stops being fetched until a human notices, which is the failure mode this
+refusal is least likely to advertise.
 
 ---
 
@@ -132,7 +143,7 @@ are the whole value of the six:
 > earns `fetch_failed` · `not_modified` · `terminal=True` · `status_code=304`, with no blob, no
 > dead-letter entry, and the command's dedupe key written. The reference consumer has handled that
 > token since [CannObserv/watcher#249](https://github.com/CannObserv/watcher/issues/249) and
-> stores and replays validators since
+> implements store-and-replay as of
 > [CannObserv/watcher#269](https://github.com/CannObserv/watcher/issues/269).
 >
 > None of that discharges the obligation for *your* consumer, which is why it is stated as
@@ -175,8 +186,7 @@ Every `fetch_failed` row carries `terminal=True` — the command is closed and n
 loss is the single most likely way to misread this stream. It is also the only closed command that
 leaves **no `content.fetch.dlq` entry** — a successful no-change check is not operator-actionable,
 and wherever conditional GET is in use it is the common outcome, so copying each one there would
-bury the entries that
-matter. The cost, stated once: **`fetch_failed` volume is no longer a failure signal.** Alert on
+bury the entries that matter. The cost, stated once: **`fetch_failed` volume is no longer a failure signal.** Alert on
 `fetch_failed where reason != "not_modified"`.
 
 The "nothing" rows are not one problem, and the reaper is not the answer to all of them:
