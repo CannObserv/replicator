@@ -761,10 +761,10 @@ async def _close_without_dlq[R: Report](
     window the first delivery opened.
 
     **Nothing reaches ``<topic>.dlq``.** A successful conditional GET is not
-    operator-actionable, and at steady state it is the *common* outcome, so
-    copying each one there would fill the operator's surface with routine
-    successes and devalue it — the same argument the fact stream now carries as
-    its own cost (see ``FailureReason.NOT_MODIFIED``).
+    operator-actionable, and wherever conditional GET is in use it is the
+    *common* outcome, so copying each one there would fill the operator's surface
+    with routine successes and devalue it — the same argument the fact stream now
+    carries as its own cost (see ``FailureReason.NOT_MODIFIED``).
 
     A ``report`` of ``None`` means this stream's builder is broken; the command
     still closes, and MUST-6's reaper is the backstop, exactly as on the

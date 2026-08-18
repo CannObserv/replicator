@@ -16,9 +16,12 @@ settles the *service* — what Replicator is allowed to become, and therefore wh
 this contract will never grow. Read it before proposing a payload addition (#12).
 
 **Changing this document.** "Link, don't copy" only holds if a change reaches the issuers, so a
-change to any MUST or to the failure taxonomy is announced on the open issuer-side trackers —
-currently [CannObserv/watcher#241](https://github.com/CannObserv/watcher/issues/241) — in the same
-change that edits this file. What is asserted here is asserted about this repo's code: edit both.
+change to any MUST or to the failure taxonomy is announced on the issuer repos' trackers in the
+same change that edits this file — on the open issue for the capability it touches where there is
+one, and as a fresh issue where there is not. Do not pin a standing tracker here: the Phase 4
+build-out issue ([CannObserv/watcher#241](https://github.com/CannObserv/watcher/issues/241)) held
+that role until it closed, and a dead link is how an announcement gets skipped. What is asserted
+here is asserted about this repo's code: edit both.
 
 **Why this document exists.** One command stream and one fact stream carrying **both outcomes**,
 each payload inside a co-core envelope — a shape in its own right, and the first thing a producer
@@ -153,11 +156,10 @@ carry what Replicator holds at publish time and a broadcast consumer cannot reco
 lives here rather than in Watcher. Three rules govern reading them — **`None` means nobody said,
 never "the default"**; **`status_code` is always 2xx here**, so it is not a success branch;
 **"verbatim" excludes surrounding whitespace**, and an over-long value is dropped rather than
-truncated — and one warning governs acting on them: **do not attempt conditional GET yet**, because
-the *consumer* side is not ready. Replicator's half landed with **#17** — a matching validator earns
-`fetch_failed` · `not_modified` · `terminal=True` with no blob and no DLQ entry, which is the
-outcome you want — but a consumer with no branch for "no bytes, your last fingerprint stands" will
-read it as content that has gone away. All four, with the reasoning, in
+truncated — and one rule governs *acting* on them: replaying `etag` or `last_modified` **is**
+conditional GET, so it is gated on your own consumer rather than on Replicator, and
+[MUST-8](#8-do-not-send-a-validator-until-you-handle-not_modified) states the gate. All four, with
+the reasoning, in
 [the reference](content-fetch-issuer-reference.md#the-enriched-blob_available-fields).
 
 ### The failure fact
@@ -192,8 +194,8 @@ agrees your copy is current: no blob is coming, and none is needed. It rides `fe
 the event's real meaning is *this command will not produce a blob*, and `terminal` is the field that
 carries it — which is why MUST-4's "treat an unknown `reason` as opaque" was worth insisting on.
 Two consequences for an issuer: **do not treat it as content loss**, and **do not alert on
-`fetch_failed` rate** — at steady state this token dominates, so the signal is
-`fetch_failed where reason != "not_modified"`.
+`fetch_failed` rate** — wherever conditional GET is in use this token dominates at steady state, so
+the signal is `fetch_failed where reason != "not_modified"`.
 
 All three models are `extra="ignore"`, so additive producer fields are tolerated. Branch on
 `schema_version` **before** destructuring, and never use the strict `*Emit` classes on a consume path.
@@ -334,6 +336,43 @@ is recorded as absence rather than guessed.
 
 Also: `blob_uri` is a **`file://` URI on Replicator's host** — the contract is VM-local today, a
 consumer elsewhere cannot open it, and nothing on the wire says so.
+
+### 8. Do not send a validator until you handle `not_modified`
+
+The only conditional obligation here, and it binds the moment you put an `If-None-Match` or
+`If-Modified-Since` on `headers`. Before that first validator goes out, your consumer **MUST** have
+a branch for `fetch_failed` · `reason="not_modified"` that closes the command as a **successful**
+check — no bytes came, your previous fingerprint stands — rather than as a fetch error, a content
+loss, or a health regression.
+
+Replicator's half has been complete since **#17**: a matching validator earns
+`fetch_failed` · `not_modified` · `terminal=True` · `status_code=304`, with no blob, no
+dead-letter entry, and the dedupe key written. That is the right answer and the one you will get.
+The risk was never the producer.
+
+**Why this is a MUST and not advice.** The token arrives on the *failure* event, so a consumer's
+default handling of it is whatever its `fetch_failed` branch already does — and for a
+health-tracking consumer that is "mark the item unhealthy". Conditional GET then inverts the
+signal: the better the origin's caching, the more often a perfectly healthy resource is recorded
+as failing, on **every successful** no-change check. Nothing degrades gradually, and the damage is
+proportional to how well the mechanism is working.
+
+The reference consumer built the branch first and the validators second, in that order and
+deliberately: [CannObserv/watcher#249](https://github.com/CannObserv/watcher/issues/249) taught it
+to close a command on `not_modified` as a successful check, and only then did
+[CannObserv/watcher#269](https://github.com/CannObserv/watcher/issues/269) store each item's
+`etag` / `last_modified` from the fact that closed its latest command and replay them verbatim on
+the next one. That sequence is an existence proof, not a permission slip: this MUST is about *your*
+consumer, and no other issuer's readiness discharges it.
+
+Two corollaries, both about values you have stored:
+
+- **Replay verbatim or not at all.** `etag` and `last_modified` are passed through unparsed
+  precisely so they can go back out unparsed; a parse/re-serialize round trip hands the origin a
+  value it never sent, which fails to match and silently costs you the whole mechanism.
+- **A stored validator that cannot be sent must be discarded automatically.** See
+  [`invalid_request_options` and stored values](content-fetch-issuer-reference.md#request-options-what-replicator-will-send-and-what-it-refuses-11)
+  — the refusal is terminal *and* pre-request, so it repeats forever on its own.
 
 ---
 
