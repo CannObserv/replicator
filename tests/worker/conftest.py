@@ -349,3 +349,20 @@ async def noop_handler(command: ContentFetchCommand) -> None:
     Loop tests are about what the loop does with a handler's outcome, not about
     the byte path — that has its own tests in ``test_handler.py``.
     """
+
+
+@pytest.fixture(autouse=True)
+def _accepted_checkout(monkeypatch):
+    """Every test runs as though this checkout were main's, unless it says otherwise.
+
+    ``build_writers`` asks ``checkout_refusal`` before building a write identity
+    (#52), and the honest answer here is a refusal — the suite is developed on
+    branches, in worktrees. Left unpatched, that would make five unrelated writer
+    tests pass on ``main`` and fail everywhere else: a suite whose result depends
+    on the branch name is a suite nobody can read a failure from.
+
+    The guard's own behaviour is asserted deliberately, by the tests that patch
+    this back to a refusal, and its verdict by ``tests/worker/test_checkout.py``
+    against a stubbed ``subprocess``.
+    """
+    monkeypatch.setattr("src.worker.main.checkout_refusal", lambda: None)

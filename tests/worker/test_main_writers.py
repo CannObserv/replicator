@@ -231,3 +231,98 @@ async def test_a_writer_that_fails_to_close_does_not_leak_the_redis_client(
     assert closed == [True]
     assert any(w.closed for w in StubDriver.built if not isinstance(w, Unclosable))
     assert "failed to close a provider writer" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------
+# The checkout guard (#52)
+# --------------------------------------------------------------------------
+
+# `scripts/check_main_checkout.sh` keeps the *service* off unmerged code, as an
+# `ExecStartPre`. A dev worker is started with `uv run python -m src.worker.main`
+# and runs no `ExecStartPre` at all — while inheriting, per AGENTS.md's own shell
+# snippet, the production ADC and (once #50 provisions it) the production alias
+# table. So the question gets asked again here, at the moment a binding becomes a
+# live write identity.
+#
+# Skip, don't raise: the posture two tests above, and for the same reason —
+# a replicate misconfiguration must not take down a worker whose job is
+# `content.fetch`. The alias ends up with no writer, so the handler refuses it
+# `provider_disabled`, which is accurate and names the operator act that fixes it.
+
+
+async def test_a_refused_checkout_builds_no_writer(monkeypatch, alias_file, wired, capsys):
+    monkeypatch.setattr(
+        "src.worker.main.checkout_refusal",
+        lambda: "check_main_checkout: HEAD is on 'wip', not 'main'",
+    )
+    monkeypatch.setenv(
+        "REPLICATOR_REPLICATION_ALIASES_FILE",
+        alias_file({"public": {"provider": "gcs", "bucket": "example-replication-bucket"}}),
+    )
+
+    await run(_stopped())
+
+    assert wired["writers"] == {}
+    assert StubDriver.built == []
+    out = capsys.readouterr().out
+    assert "not main's code" in out
+    assert "not 'main'" in out
+
+
+async def test_a_refused_checkout_withholds_the_writer_and_nothing_else(
+    monkeypatch, alias_file, wired
+):
+    """The worker still runs, and the table is still read.
+
+    Only the write identity is withheld — the binding is still provisioned, which
+    is what makes the handler's refusal `provider_disabled` rather than
+    `unknown_alias`. An operator reading the fact learns the destination exists
+    and this host will not write to it, which is the true statement.
+    """
+    monkeypatch.setattr("src.worker.main.checkout_refusal", lambda: "unmerged")
+    monkeypatch.setenv(
+        "REPLICATOR_REPLICATION_ALIASES_FILE",
+        alias_file({"public": {"provider": "gcs", "bucket": "example-replication-bucket"}}),
+    )
+
+    await run(_stopped())
+
+    assert wired["writers"] == {}
+    assert list(wired["aliases"].bindings) == ["public"]
+
+
+async def test_the_guard_is_not_consulted_without_a_binding_to_build(monkeypatch):
+    """No provider binding, no question to ask — and no subprocess.
+
+    A worker that replicates nothing is every worker on this VM today. Asking git
+    on each of their startups would be a cost paid by the case the guard is not
+    about.
+    """
+    asked = []
+    monkeypatch.setattr("src.worker.main.checkout_refusal", lambda: asked.append(True))
+
+    assert build_writers(AliasTable({})) == {}
+    assert build_writers(AliasTable({"drive": AliasBinding(provider="gdrive")})) == {}
+    assert asked == []
+
+
+async def test_an_accepted_checkout_is_asked_once_for_the_whole_table(monkeypatch, alias_file):
+    """One verdict per startup, not one per binding.
+
+    The answer cannot differ between two bindings read from the same table in the
+    same process, and `checkout_refusal` shells out to `bash` to get it.
+    """
+    asked = []
+    monkeypatch.setattr("src.worker.main.checkout_refusal", lambda: asked.append(True) or None)
+    monkeypatch.setattr("src.worker.main.AsyncGcsDriver", StubDriver)
+    table = AliasTable(
+        {
+            "public": AliasBinding(provider="gcs", bucket="example-replication-bucket"),
+            "private": AliasBinding(provider="gcs", bucket="example-internal-bucket"),
+        }
+    )
+
+    writers = build_writers(table)
+
+    assert sorted(writers) == ["private", "public"]
+    assert asked == [True]

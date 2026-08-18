@@ -95,7 +95,10 @@ test a branch with `uv run python -m src.worker.main` under a distinct
 `daemon-reload` alone silently re-reads the old file and the mismatch has no
 symptom until a directive matters. **Refuses to start off `main`, or off
 unpushed commits** (#37, #48) — `scripts/check_main_checkout.sh`;
-`REPLICATOR_ALLOW_ANY_CHECKOUT=1` overrides.
+`REPLICATOR_ALLOW_ANY_CHECKOUT=1` overrides. A **dev** worker runs no
+`ExecStartPre`, so `build_writers` asks the same script directly and builds no
+provider writer on a checkout it rejects (#52) — fetch untouched, the alias
+refused `provider_disabled`.
 Full lifecycle table and the dev-server invocation:
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
