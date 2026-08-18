@@ -74,9 +74,9 @@ class FailureReason(StrEnum):
     dispatch arm for an outcome structurally identical to the others here.
 
     The consequence, which belongs next to the token rather than only in a
-    docstring: at steady state this dominates the stream, so ``fetch_failed``
-    volume stops being a failure signal. ``fetch_failed where reason !=
-    "not_modified"`` is the one to count.
+    docstring: wherever conditional GET is in use this dominates the stream, so
+    ``fetch_failed`` volume stops being a failure signal. ``fetch_failed where
+    reason != "not_modified"`` is the one to count.
     """
 
     NOT_FETCHABLE = "not_fetchable"

@@ -5,7 +5,7 @@
 Replicator's behaviour exactly as the contract does — this file is not commentary.
 
 **What is here rather than there.** The contract carries what an issuer must *do*: the frame,
-the payload shapes, the seven MUSTs, and the guarantee/non-guarantee pair. This file carries
+the payload shapes, the eight MUSTs, and the guarantee/non-guarantee pair. This file carries
 what an issuer *looks up* — the header and timeout rules it consults when a command is refused,
 the reasoning behind the enriched `blob_available` fields, the condition-by-condition failure
 taxonomy, the trust posture the whole capability rests on, and the mechanisms behind several of
@@ -14,9 +14,9 @@ contract stays short enough to read start to finish; both files are normative, a
 become advisory by living here.
 
 **Changing this document.** The same rule the contract states applies: a change to the failure
-taxonomy or to the refusal rules is announced on the open issuer-side trackers — currently
-[CannObserv/watcher#241](https://github.com/CannObserv/watcher/issues/241) — in the same change
-that edits this file.
+taxonomy or to the refusal rules is announced on the issuer repos' trackers in the same change that
+edits this file — see
+[the contract](content-fetch-issuer-contract.md) for how to pick the issue.
 
 ---
 
@@ -58,6 +58,22 @@ own fingerprints.
 | `timeout_seconds` that is zero, negative, NaN, or infinite | Not a duration |
 | `timeout_seconds` over `REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS` (default **120**) | Replicator's consume path is serial, so your timeout is a lien on every *other* issuer's commands too. Ask an operator if 120 s is genuinely too short for a target |
 
+**`invalid_request_options` is the one refusal an issuer can wedge itself on, so clear the stored
+value automatically.** Every other terminal outcome describes something about the *fetch*, and
+re-issuing eventually behaves differently. This one is terminal **and** pre-request: it is decided
+entirely from the command, so an issuer that re-derives the same command from stored state is
+refused identically every cycle, forever, without the origin ever being contacted. The URL is not
+slow or broken — it is simply never fetched again, and nothing in the fact stream distinguishes
+that from a resource nobody is asking about.
+
+The realistic source is a **stored validator** — an `etag` kept from an earlier fact and replayed
+in `If-None-Match` (see [MUST-8](content-fetch-issuer-contract.md#8-do-not-send-a-validator-until-you-handle-not_modified)).
+So the remedy has to be automatic rather than operator-driven: on `invalid_request_options`, and on
+that reason alone, discard the stored request options the command was built from so the next one
+goes out unconditional and the item self-heals. Watcher does exactly this. An unsendable value that
+only a human can clear is an item that stops being fetched until a human notices, which is the
+failure mode this refusal is least likely to advertise.
+
 **Neither field touches identity.** They ride inside `payload`, not the envelope: `command_id`
 remains the sole dedupe key and the sole correlator. Two commands differing only in options are two
 fetch occasions (MUST-1 unchanged); a *redelivery* carrying different options is still the same
@@ -69,7 +85,7 @@ command and is still deduped.
 
 Field types and defaults are in
 [the success fact](content-fetch-issuer-contract.md#the-success-fact). This is why they are
-shaped the way they are, and the one thing they do not yet let an issuer do.
+shaped the way they are, and what an issuer owes its own consumer before acting on two of them.
 
 The six enriched fields (cannobserv#271, `final_url` sourced by cannobserv#279, produced by #10)
 carry what Replicator holds at publish time and a broadcast consumer cannot recover once fetching
@@ -110,23 +126,26 @@ are the whole value of the six:
 > consumer written against 0.7.x may still carry a workaround for it. MUST-5 is unaffected — deduping
 > an inbox on the fingerprint is still wrong, and still loses a correlation.
 
-> **Do not attempt conditional GET yet — but the reason has changed.** Replicator's half of the
-> seam is complete. `etag` and `last_modified` are the *read* half; since #11 the write half exists,
-> so an `If-None-Match` you send **will** reach the origin; and since **#17** the outcome exists
-> too: a matching validator earns `fetch_failed` · `not_modified` · `terminal=True` ·
-> `status_code=304`, with no blob, no dead-letter entry, and the command's dedupe key written. That
-> is the correct answer, and it is the one you will get.
+> **The seam is complete on both sides — which moves the question to your side.** `etag` and
+> `last_modified` are the *read* half; since #11 the write half exists, so an `If-None-Match` you
+> send **will** reach the origin; and since **#17** the outcome exists too: a matching validator
+> earns `fetch_failed` · `not_modified` · `terminal=True` · `status_code=304`, with no blob, no
+> dead-letter entry, and the command's dedupe key written. The reference consumer has handled that
+> token since [CannObserv/watcher#249](https://github.com/CannObserv/watcher/issues/249) and
+> stores and replays validators since
+> [CannObserv/watcher#269](https://github.com/CannObserv/watcher/issues/269).
 >
-> What is missing is now **on the consumer side, not this one**. `not_modified` means *no bytes are
-> coming and your last fingerprint still stands* — a branch a consumer written before #17 does not
-> have, and whose default is very likely "the content is gone" or "the fetch failed". Enabling
-> conditional GET against such a consumer converts every successful no-change check into a
-> spurious loss, which is the same damage the old warning described arriving from the other end.
+> None of that discharges the obligation for *your* consumer, which is why it is stated as
+> [MUST-8](content-fetch-issuer-contract.md#8-do-not-send-a-validator-until-you-handle-not_modified)
+> rather than as a note here. `not_modified` means *no bytes are coming and your last fingerprint
+> still stands*; it arrives on the **failure** event, so a consumer without an explicit branch
+> falls through to whatever its `fetch_failed` handling already does — very likely "the content is
+> gone", "the fetch failed", or a health regression. That converts every successful no-change check
+> into a spurious loss, and the better the origin's caching, the more of them there are.
 >
-> So: keep these two fields in your own records and send the request unconditionally **until your
-> own consumer has a branch for the token**. On Watcher's side that is
-> [CannObserv/watcher#249](https://github.com/CannObserv/watcher/issues/249) — `apply_fetch_blob`
-> is built around a blob arriving. This warning comes out when that lands, not when #17 did.
+> So the two fields are safe to *record* unconditionally and safe to *replay* only once that branch
+> exists. Replay them verbatim when you do — parsing and re-serializing hands the origin a value it
+> never sent, which cannot match.
 
 ---
 
@@ -155,7 +174,8 @@ Every `fetch_failed` row carries `terminal=True` — the command is closed and n
 `terminal=True` is *good news*: no blob is coming because none is needed, and treating it as content
 loss is the single most likely way to misread this stream. It is also the only closed command that
 leaves **no `content.fetch.dlq` entry** — a successful no-change check is not operator-actionable,
-and at steady state it is the common outcome, so copying each one there would bury the entries that
+and wherever conditional GET is in use it is the common outcome, so copying each one there would
+bury the entries that
 matter. The cost, stated once: **`fetch_failed` volume is no longer a failure signal.** Alert on
 `fetch_failed where reason != "not_modified"`.
 

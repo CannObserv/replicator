@@ -811,9 +811,9 @@ def _log_not_modified(command: ContentFetchCommand) -> None:
 
     An **unbidden** 304 is an origin behaving oddly, and until #17 that signal was
     carried by accident: every 304 dead-lettered, so it landed on an operator
-    surface. Now that the bidden case closes cleanly and, at steady state,
-    routinely, the level is the only thing left to carry the distinction — and it
-    costs three lines to keep.
+    surface. Now that the bidden case closes cleanly and — wherever conditional
+    GET is in use — routinely, the level is the only thing left to carry the
+    distinction, and it costs three lines to keep.
 
     Read off ``command.headers`` rather than the folded request map because the
     fold refuses as well as folds: this runs after a fetch has already gone out,
