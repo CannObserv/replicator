@@ -23,6 +23,43 @@ The Redis change bus is Archiver-operated cluster infrastructure (the shared VM'
 
 The **redis-py client** resolves `>=5,<8` transitively via `co-core-aio[bus]`. Don't re-pin it narrower.
 
+### The GCS test bucket — the opposite grant, on purpose (#38, #50)
+
+Production `co-gcs-replication` can never be a test target. Its writer holds `storage.objects.{create,get,list}` and **no `delete`, no `update`** — the property that enforces T4's "never overwrite, never delete" at IAM rather than only in our code, and therefore the property that makes a conflict fixture unable to reset itself. Every verification run against it would be permanent litter, which is why the hand-run T4 e2e was never committed as a test.
+
+Provisioned 2026-08-18 in project `co-gcs`:
+
+| | |
+|---|---|
+| Bucket | `gs://co-gcs-test-replication` |
+| Service account | `co-gcs-test-replicator@co-gcs.iam.gserviceaccount.com` |
+| Grant | `roles/storage.objectAdmin` on that bucket **only** |
+| Key on the VM | `/etc/replicator/co-gcs-test-replicator.json` (`root:exedev`, `0640`) |
+| CI identity | the same SA, keyless, via `principalSet://iam.googleapis.com/projects/912903030445/locations/global/workloadIdentityPools/github/attribute.repository/CannObserv/replicator` |
+
+**`test` is infixed in both names, never suffixed.** `co-gcs-replication-test` would contain the production bucket name as a substring, and `co-gcs-replication-test` likewise for the SA — which would make `tests/test_destinations.py`'s literal scan refuse the very names it exists to steer traffic towards, or force it to carry a negative lookahead nobody maintains. Renaming either resource means revisiting that scan.
+
+What the bucket differs from production in, and why each one:
+
+| Property | Test bucket | Why |
+|---|---|---|
+| `delete` / `update` on objects | granted | a conflict fixture must reset itself, or the same test cannot run twice |
+| soft-delete policy | **cleared** | the GCS default is 7 days; deleted fixtures would linger and "absent" assertions would read against a bucket that still remembers. That ambiguity is what made #38's investigation need a second pass |
+| lifecycle | delete at age 1 day | litter insurance only. It is asynchronous with 24h+ latency and is **not** the fixture reset — the SA's `delete` is |
+| public access | prevented | production is public; nothing here should be |
+| location, storage class, versioning (off) | matched | a test only predicts production behaviour to the extent the destinations agree |
+
+**The test SA cannot read the bucket's own metadata**, because `objectAdmin` does not include `storage.buckets.get` — the same blindness production's writer has. So the lifecycle rule and the location are verifiable only from a workstation with `roles/storage.admin`:
+
+```bash
+gcloud storage buckets describe gs://co-gcs-test-replication \
+  --format="yaml(location, storageClass, versioning, lifecycle, softDeletePolicy, iamConfiguration)"
+```
+
+Everything else was verified from the VM as the test SA on 2026-08-18: `create` with `ifGenerationMatch: 0` succeeds, a second create raises `PreconditionFailed`, the confirming `get` finds the object, `delete` removes it, and a soft-deleted listing is refused `400 Soft delete policy is required to list soft-deleted versions` — which is the policy-cleared confirmation. On production the same identity holds **no write permission of any kind**; the `get`/`list` it does report there belong to `allUsers`, since that bucket is public, and are not a grant to this SA — an anonymous client reports the identical pair.
+
+Usage, the marker, and the two variables: **Testing the write path** in [TESTING.md](TESTING.md).
+
 ## Server Lifecycle
 
 **`replicator.service` runs the worker.** It binds no port, so there is no port to conflict over — but only one process should hold a given consumer name at a time.
@@ -118,6 +155,10 @@ In `.env` (dev/agent only — never read by the service):
 Read by neither env file — test-only, defined in `tests/conftest.py`:
 - `REPLICATOR_TEST_REDIS_URL` — live broker for `@pytest.mark.integration`; default `redis://localhost:6379/15`. Must not resolve to db 0 (the fixture fails outright if it does) — see **Testing the bus**
   in [TESTING.md](TESTING.md)
+- `REPLICATOR_TEST_GCS_BUCKET` — the bucket `@pytest.mark.gcs` may write to; `co-gcs-test-replication`. **No default** — absent means those tests skip, never "use whatever the code would have picked", which on a host configured for production is the production bucket
+- `REPLICATOR_TEST_GCS_CREDENTIALS` — path to the test SA key (`/etc/replicator/co-gcs-test-replicator.json` here, the WIF credentials file in CI). Also no default, and mapped onto `GOOGLE_APPLICATION_CREDENTIALS` for marked tests only — the bucket name alone cannot catch a run pointed at the right bucket with the production identity, which is reachable because the Common Commands snippet sources `/etc/replicator/.env`
+
+  Both belong in the repo `.env` or the invoking shell, **never in `/etc/replicator/.env`** — that is the file the service reads, and a delete-capable identity is precisely the grant T4 exists to withhold from the worker. The resource itself: **The GCS test bucket** above
 
 In `/etc/replicator/.env` (read by the service):
 - `GOOGLE_APPLICATION_CREDENTIALS` — SA key for the wheelhouse mirror (`/etc/replicator/co-pypi-reader.json`)
