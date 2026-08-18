@@ -140,6 +140,8 @@ curl -s localhost:8041/health | jq
 uv run pytest                              # full suite, coverage gate active
 uv run pytest --no-cov tests/worker/       # subset; skip the gate (it measures all of src/)
 uv run pytest --no-cov -m integration      # requires the live VM Redis; skip the gate
+uv run pytest --no-cov -m gcs              # writes to the GCS test bucket; skips unless
+                                           # REPLICATOR_TEST_GCS_{BUCKET,CREDENTIALS} are set (#38)
 ```
 
 ## Lint

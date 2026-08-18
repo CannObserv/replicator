@@ -10,9 +10,10 @@ session, or savepoint machinery here.
 
 import logging
 import os
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping
 
 import pytest
+from co_core_aio.gcs import AsyncGcsDriver
 from httpx import ASGITransport, AsyncClient
 from redis.asyncio import Redis
 from redis.exceptions import AuthenticationError, AuthorizationError
@@ -30,10 +31,114 @@ DEFAULT_TEST_REDIS_URL = "redis://localhost:6379/15"
 # concurrent test is permitted to run — change one, revisit the other.
 LEFTOVER_TTL_SECONDS = 900
 
+# Production configuration an agent's shell is *told* to carry: AGENTS.md's
+# Common Commands snippet sources `/etc/replicator/.env` before any repo command,
+# so `uv run pytest` inherits the worker's ADC and — once #50 provisions it — the
+# production alias table. Neither has any business reaching a test, and the
+# autouse fixture below removes both rather than trusting no test reads them.
+PRODUCTION_ENV = ("REPLICATOR_REPLICATION_ALIASES_FILE", "GOOGLE_APPLICATION_CREDENTIALS")
+
+# The test destination, and the identity to reach it with. **Neither has a
+# default** (#38, #51): absent means the `@pytest.mark.gcs` tests skip, and never
+# means "use whatever the code would have picked" — which on a worker configured
+# for production is the production bucket. `REPLICATOR_TEST_REDIS_URL` may
+# default because db 15 on localhost cannot be the live database and `real_redis`
+# refuses db 0 outright; no bucket name has that property.
+TEST_BUCKET_ENV = "REPLICATOR_TEST_GCS_BUCKET"
+TEST_CREDENTIALS_ENV = "REPLICATOR_TEST_GCS_CREDENTIALS"
+
+
+def resolve_test_bucket(env: Mapping[str, str]) -> str | None:
+    """The configured test bucket, or ``None``. Deliberately not a lookup with a default."""
+    return env.get(TEST_BUCKET_ENV)
+
+
+def guarded_init(original, expected: str | None):
+    """Wrap ``AsyncGcsDriver.__init__`` so a wrong bucket is refused before ADC.
+
+    The refusal has to precede the call through, not follow it: the real
+    ``__init__`` builds ``storage.Client()`` in its own body, which reads the key
+    file and on a GCE-style host reaches the metadata server. Checking afterwards
+    would authenticate first and object second.
+
+    ``expected=None`` means *no* bucket is acceptable — the state every test that
+    is not marked ``gcs`` runs in, so a real driver cannot be constructed by
+    accident anywhere in the default suite.
+
+    The bucket is read from either call form. `AsyncGcsDriver(bucket=...)` is as
+    legal as the positional call, and a guard that inspected ``args[0]`` alone
+    would pass every keyword call straight through while reading as though it
+    refused them.
+    """
+
+    def refuse(self, *args, **kwargs):
+        bucket = args[0] if args else kwargs.get("bucket")
+        if expected is None:
+            raise AssertionError(
+                f"a test that is not marked @pytest.mark.gcs constructed a real "
+                f"AsyncGcsDriver({bucket!r}) — mark it, or use a stub driver"
+            )
+        if bucket != expected:
+            raise AssertionError(
+                f"refusing AsyncGcsDriver({bucket!r}): a gcs test may only reach "
+                f"{expected!r}, the bucket named by {TEST_BUCKET_ENV}"
+            )
+        return original(self, *args, **kwargs)
+
+    return refuse
+
 
 @pytest.fixture(scope="session")
 def anyio_backend():
     return "asyncio"
+
+
+@pytest.fixture(autouse=True)
+def _no_production_destination(request, monkeypatch):
+    """Production is unreachable from every test, and reachable from none by default.
+
+    Two halves, because the two failure modes are different. The environment
+    scrub handles *inheritance* — the production ADC and alias table an agent's
+    shell was told to load. The driver patch handles *construction*, which is the
+    only way a bucket name becomes a write, and it fires before any credential is
+    touched (see ``guarded_init``).
+
+    A ``@pytest.mark.gcs`` test opts back in explicitly: it gets the test bucket
+    and the test identity, both from variables with no default, and skips when
+    either is absent.
+
+    Nothing in the tree reaches a real driver today — ``test_main_writers.py``
+    stubs it — but that is an accident of how those tests are written rather than
+    a property anyone asserted, and it is the accident #38 objects to.
+    """
+    for name in PRODUCTION_ENV:
+        monkeypatch.delenv(name, raising=False)
+
+    expected = None
+    if request.node.get_closest_marker("gcs"):
+        expected = resolve_test_bucket(os.environ)
+        if not expected:
+            pytest.skip(f"{TEST_BUCKET_ENV} is unset — no test bucket to write to (#50)")
+        credentials = os.environ.get(TEST_CREDENTIALS_ENV)
+        if not credentials:
+            pytest.skip(f"{TEST_CREDENTIALS_ENV} is unset — no test identity to write as (#50)")
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", credentials)
+
+    monkeypatch.setattr(AsyncGcsDriver, "__init__", guarded_init(AsyncGcsDriver.__init__, expected))
+
+
+@pytest.fixture
+def gcs_bucket(request) -> str:
+    """The provisioned test bucket, for a ``@pytest.mark.gcs`` test.
+
+    The skip and the credential swap already happened in the autouse fixture
+    above — this is only the name, so a test does not read the environment
+    itself and cannot read it with a fallback.
+    """
+    assert request.node.get_closest_marker("gcs"), "gcs_bucket requires @pytest.mark.gcs"
+    bucket = resolve_test_bucket(os.environ)
+    assert bucket
+    return bucket
 
 
 @pytest.fixture(autouse=True)

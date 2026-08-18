@@ -36,8 +36,8 @@ from tests.worker.conftest import now
 from tests.worker.test_loop_spec import make_replicate_command_model
 
 FINGERPRINT = "d" * 64
-BINDING = AliasBinding(provider="gcs", bucket="co-gcs-replication")
-PUBLIC_URL = "https://storage.googleapis.com/co-gcs-replication/organizations/x/report.pdf"
+BINDING = AliasBinding(provider="gcs", bucket="example-replication-bucket")
+PUBLIC_URL = "https://storage.googleapis.com/example-replication-bucket/organizations/x/report.pdf"
 
 
 class FakeGcs:
@@ -283,8 +283,8 @@ async def test_each_alias_reaches_its_own_bucket_and_no_other(store, blob_uri):
     ``validate_destination``; nothing downstream re-checks the bucket, because by
     then it is baked into the driver.
     """
-    public = AliasBinding(provider="gcs", bucket="co-gcs-replication")
-    private = AliasBinding(provider="gcs", bucket="co-gcs-internal")
+    public = AliasBinding(provider="gcs", bucket="example-replication-bucket")
+    private = AliasBinding(provider="gcs", bucket="example-internal-bucket")
     to_public = FakeGcs(result(GcsCreateOutcome.WROTE, public_url=PUBLIC_URL))
     to_private = FakeGcs(result(GcsCreateOutcome.WROTE, public_url=PUBLIC_URL))
 
