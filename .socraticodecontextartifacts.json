@@ -83,7 +83,7 @@
     {
       "name": "deployment-topology",
       "path": "./deploy/replicator.service",
-      "description": "systemd unit running the worker (not the API). Ordering behind the Archiver-operated redis-server.service via Wants=/After= rather than Requires=, the BUILD_ID stamp written by ExecStartPre, the deliberate absence of the repo .env from the EnvironmentFile chain (it holds GitHub PATs the worker never needs), the hard Redis >=7.0 floor guard, the main-checkout guard that refuses to start the service off any branch but main (#37, scripts/check_main_checkout.sh, overridable with REPLICATOR_ALLOW_ANY_CHECKOUT=1) and sits ahead of the BUILD_ID stamp, the non-fatal wheelhouse sync, StateDirectory, and bounded restarts."
+      "description": "systemd unit running the worker (not the API). Ordering behind the Archiver-operated redis-server.service via Wants=/After= rather than Requires=, the BUILD_ID stamp written by ExecStartPre, the deliberate absence of the repo .env from the EnvironmentFile chain (it holds GitHub PATs the worker never needs), the hard Redis >=7.0 floor guard, the main-checkout guard that refuses to start the service off any branch but main, or off a main carrying unpushed commits (#37, #48, scripts/check_main_checkout.sh, overridable with REPLICATOR_ALLOW_ANY_CHECKOUT=1) and sits ahead of the BUILD_ID stamp, the non-fatal wheelhouse sync, StateDirectory, and bounded restarts."
     },
     {
       "name": "wheelhouse-sync",

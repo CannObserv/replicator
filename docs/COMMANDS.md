@@ -217,9 +217,11 @@ sudo cp deploy/replicator.service /etc/systemd/system/replicator.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now replicator
 
-git push && uv sync --frozen && sudo systemctl restart replicator   # after merging to main
-# The push is not optional: the guard refuses to start a `main` that is ahead of
-# origin/main, because unpushed commits are on no shared branch (#48).
+git pull --ff-only && uv sync --frozen && sudo systemctl restart replicator  # merged on GitHub
+git push && uv sync --frozen && sudo systemctl restart replicator            # merged locally
+# Getting main level with origin is not optional: the guard refuses to start a
+# `main` that is ahead of origin/main, because unpushed commits are on no shared
+# branch (#48). Which command does it depends on where the merge happened.
 
 # The installed unit is a COPY, not a symlink — a merge that touched
 # deploy/replicator.service needs the cp above re-run before the reload, or the

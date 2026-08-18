@@ -158,7 +158,22 @@ if [ "${branch}" != "${DEPLOY_BRANCH}" ]; then
   exit 1
 fi
 
-# --- On main. Everything below is advisory; the exit code is already 0. -------
+# --- On main. The warns come first, then the one refusal that can still fire. --
+#
+# Ordered that way so a single failed start names every condition: an operator who
+# fixes the ahead refusal should not then discover a dirty tree on the next start.
+# Same reasoning as printing `behind` before the `ahead` refusal below.
+
+# Tracked, non-submodule files only, on the same reasoning both times: a warning
+# that fires routinely for a reason unrelated to the worker's code trains
+# operators to ignore the line, which is the failure a warning tier exists to
+# avoid. An untracked file is not a modification to deployed code; and
+# `skills-vendor/` holds two submodules that a once-a-day refresh hook moves, so
+# counting submodule state would keep this warning permanently lit over vendored
+# agent tooling the worker never loads.
+if [ -n "$(git status --porcelain --untracked-files=no --ignore-submodules=all 2>/dev/null)" ]; then
+  echo "check_main_checkout: working tree has uncommitted changes to tracked files — starting anyway" >&2
+fi
 
 # No fetch: an ExecStartPre must not make a network call the start can wait on,
 # and a warning computed from the last fetch is worth more than a hang.
@@ -188,17 +203,6 @@ else
   # ahead refusing above, silence here would make removing the remote a way to bypass
   # that refusal without touching the guard.
   echo "check_main_checkout: no ${REMOTE_REF} ref in $(pwd) — cannot tell whether ${DEPLOY_BRANCH} is shared — starting anyway" >&2
-fi
-
-# Tracked, non-submodule files only, on the same reasoning both times: a warning
-# that fires routinely for a reason unrelated to the worker's code trains
-# operators to ignore the line, which is the failure a warning tier exists to
-# avoid. An untracked file is not a modification to deployed code; and
-# `skills-vendor/` holds two submodules that a once-a-day refresh hook moves, so
-# counting submodule state would keep this warning permanently lit over vendored
-# agent tooling the worker never loads.
-if [ -n "$(git status --porcelain --untracked-files=no --ignore-submodules=all 2>/dev/null)" ]; then
-  echo "check_main_checkout: working tree has uncommitted changes to tracked files — starting anyway" >&2
 fi
 
 echo "check_main_checkout: on ${DEPLOY_BRANCH} at ${head_sha}"

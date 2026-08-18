@@ -319,6 +319,25 @@ def test_a_diverged_main_refuses_and_names_both_sides(repo: Path):
     assert "behind" in result.stderr
 
 
+def test_a_refused_start_still_names_the_dirty_tree(repo: Path):
+    """Every warn prints before any refusal, so one start reports every condition (#48 CR #22).
+
+    The behind/ahead pair is ordered for this reason already; a tree that is both
+    ahead and dirty has the same claim on being told once rather than across two
+    failed starts.
+    """
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    (repo / "file.txt").write_text("two\n")
+    _git(repo, "commit", "--quiet", "--no-gpg-sign", "-am", "second")
+    (repo / "file.txt").write_text("and uncommitted\n")
+
+    result = _run_guard(repo)
+
+    assert result.returncode != 0
+    assert "ahead" in result.stderr
+    assert "uncommitted" in result.stderr
+
+
 def test_a_missing_origin_main_ref_warns_but_starts(repo: Path):
     """No ref to compare against ⇒ no evidence either way ⇒ say so, and start (#48).
 

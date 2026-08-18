@@ -85,9 +85,10 @@ guards it as an `ExecStartPre`. Ports, neighbours, and the redis-py pin:
 
 ## Server Lifecycle
 
-`replicator.service` runs the worker. Deploy committed code with `git push && uv sync
---frozen && sudo systemctl restart replicator` — the push first, because the guard
-refuses a `main` that is ahead of `origin/main` (#48); debug with `sudo journalctl -u replicator -f`;
+`replicator.service` runs the worker. Deploy committed code with `git pull --ff-only
+&& uv sync --frozen && sudo systemctl restart replicator` — `git push` instead of the
+pull when the merge happened here, because the guard refuses a `main` that is ahead
+of `origin/main` (#48); debug with `sudo journalctl -u replicator -f`;
 test a branch with `uv run python -m src.worker.main` under a distinct
 `REPLICATOR_CONSUMER_NAME`. **After editing `deploy/replicator.service`, `cp` it to
 `/etc/systemd/system/`** — the installed unit is a copy, not a symlink, so
