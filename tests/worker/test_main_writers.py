@@ -82,7 +82,7 @@ async def test_two_gcs_aliases_get_one_driver_each(monkeypatch, alias_file, wire
 
     Provisioned together, these two used to collapse to a single ``{"gcs": ...}``
     entry — so a command naming ``public`` reached the driver holding
-    ``co-gcs-internal`` and wrote outside the root its binding declared. The
+    ``example-internal-bucket`` and wrote outside the root its binding declared. The
     second driver was also never closed, because it was no longer in the dict the
     shutdown path iterates.
     """
@@ -90,8 +90,8 @@ async def test_two_gcs_aliases_get_one_driver_each(monkeypatch, alias_file, wire
         "REPLICATOR_REPLICATION_ALIASES_FILE",
         alias_file(
             {
-                "public": {"provider": "gcs", "bucket": "co-gcs-replication"},
-                "private": {"provider": "gcs", "bucket": "co-gcs-internal"},
+                "public": {"provider": "gcs", "bucket": "example-replication-bucket"},
+                "private": {"provider": "gcs", "bucket": "example-internal-bucket"},
             }
         ),
     )
@@ -100,8 +100,8 @@ async def test_two_gcs_aliases_get_one_driver_each(monkeypatch, alias_file, wire
 
     writers = wired["writers"]
     assert {alias: writer.bucket for alias, writer in writers.items()} == {
-        "public": "co-gcs-replication",
-        "private": "co-gcs-internal",
+        "public": "example-replication-bucket",
+        "private": "example-internal-bucket",
     }
 
 
@@ -112,8 +112,8 @@ async def test_every_driver_built_is_a_driver_closed(monkeypatch, alias_file, wi
         "REPLICATOR_REPLICATION_ALIASES_FILE",
         alias_file(
             {
-                "public": {"provider": "gcs", "bucket": "co-gcs-replication"},
-                "private": {"provider": "gcs", "bucket": "co-gcs-internal"},
+                "public": {"provider": "gcs", "bucket": "example-replication-bucket"},
+                "private": {"provider": "gcs", "bucket": "example-internal-bucket"},
             }
         ),
     )
@@ -142,7 +142,7 @@ async def test_a_driver_that_cannot_be_built_does_not_stop_the_worker(
     monkeypatch.setattr("src.worker.main.AsyncGcsDriver", refuse)
     monkeypatch.setenv(
         "REPLICATOR_REPLICATION_ALIASES_FILE",
-        alias_file({"public": {"provider": "gcs", "bucket": "co-gcs-replication"}}),
+        alias_file({"public": {"provider": "gcs", "bucket": "example-replication-bucket"}}),
     )
 
     await run(_stopped())
@@ -156,7 +156,7 @@ async def test_one_unbuildable_driver_does_not_cost_the_others(monkeypatch, alia
     for one unusable entry in an otherwise readable table."""
 
     def selective(bucket, **kwargs):
-        if bucket == "co-gcs-internal":
+        if bucket == "example-internal-bucket":
             raise RuntimeError("no credentials for this one")
         return StubDriver(bucket)
 
@@ -165,8 +165,8 @@ async def test_one_unbuildable_driver_does_not_cost_the_others(monkeypatch, alia
         "REPLICATOR_REPLICATION_ALIASES_FILE",
         alias_file(
             {
-                "public": {"provider": "gcs", "bucket": "co-gcs-replication"},
-                "private": {"provider": "gcs", "bucket": "co-gcs-internal"},
+                "public": {"provider": "gcs", "bucket": "example-replication-bucket"},
+                "private": {"provider": "gcs", "bucket": "example-internal-bucket"},
             }
         ),
     )
@@ -204,15 +204,15 @@ async def test_a_writer_that_fails_to_close_does_not_leak_the_redis_client(
             raise RuntimeError("the transport was already gone")
 
     def build(bucket, **kwargs):
-        return Unclosable(bucket) if bucket == "co-gcs-internal" else StubDriver(bucket)
+        return Unclosable(bucket) if bucket == "example-internal-bucket" else StubDriver(bucket)
 
     monkeypatch.setattr("src.worker.main.AsyncGcsDriver", build)
     monkeypatch.setenv(
         "REPLICATOR_REPLICATION_ALIASES_FILE",
         alias_file(
             {
-                "private": {"provider": "gcs", "bucket": "co-gcs-internal"},
-                "public": {"provider": "gcs", "bucket": "co-gcs-replication"},
+                "private": {"provider": "gcs", "bucket": "example-internal-bucket"},
+                "public": {"provider": "gcs", "bucket": "example-replication-bucket"},
             }
         ),
     )

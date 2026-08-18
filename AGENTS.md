@@ -165,7 +165,7 @@ Where the reasoning lives:
 - What each stream carries — [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - The rules common to all of them — [docs/CONVENTIONS.md](docs/CONVENTIONS.md)
 - Blob paths, modes, and the retention sweep — [docs/STORAGE.md](docs/STORAGE.md)
-- Fakeredis's divergences, and the keys an integration run may touch — [docs/TESTING.md](docs/TESTING.md)
+- Fakeredis's divergences, the keys an integration run may touch, and why production `co-gcs-replication` is refused from every test — [docs/TESTING.md](docs/TESTING.md)
 
 ## Common Commands
 
@@ -239,7 +239,7 @@ are deliberately not JSON: [docs/STYLE.md](docs/STYLE.md).
 - [docs/CONVENTIONS.md](docs/CONVENTIONS.md) — the co-core/Redis Streams rules common to every stream: idempotency, validation, DLQ, `claim_stale`
 - [docs/STORAGE.md](docs/STORAGE.md) — blob paths and modes, the three populations under `REPLICATOR_BLOB_DIR`, TTL and ceiling semantics
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — VM topology, ports, the systemd unit's lifecycle, and every environment variable the service reads
-- [docs/TESTING.md](docs/TESTING.md) — where fakeredis diverges from the live broker, and which keys an integration run may create
+- [docs/TESTING.md](docs/TESTING.md) — where fakeredis diverges from the live broker, which keys an integration run may create, and the two halves that make the production replication bucket unreachable from a test (#38): the `tests/test_destinations.py` literal scan and the autouse fixtures that strip the production ADC and refuse every `AsyncGcsDriver` bucket but `REPLICATOR_TEST_GCS_BUCKET`
 - [docs/STYLE.md](docs/STYLE.md) — the logging stack: formatter, installers, and the non-JSON journald lines
 - [docs/COMMANDS.md](docs/COMMANDS.md) — every runnable command, with flags
 - [docs/SKILLS.md](docs/SKILLS.md) — vendored skill inventory and refresh procedure
