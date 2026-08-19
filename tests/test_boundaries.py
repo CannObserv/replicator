@@ -33,7 +33,9 @@ from starlette.routing import Route, WebSocketRoute
 
 from src.api.main import app
 from src.core.config import Settings
+from src.storage.gcs import GcsBlobStore
 from src.storage.local import LocalBlobStore
+from tests.storage.test_gcs import FakeBucket, FakeClient
 
 REPO = Path(__file__).resolve().parents[1]
 SRC = REPO / "src"
@@ -1227,17 +1229,46 @@ def test_the_unit_starts_the_worker_and_binds_no_port():
 # --------------------------------------------------------------------------
 
 
-def test_a_blob_uri_is_still_host_local(tmp_path):
+def test_a_blob_uri_is_host_local_on_the_default_backend(tmp_path):
     """Characterization, not endorsement — see the charter's "Known violation".
 
     ``file://`` means every ``content.blobs`` consumer must share Replicator's
     filesystem: a data-plane coupling in a service otherwise reached only through
     the broker, and a constraint on the issuer's deployment topology the issuer
-    never agreed to. Pinned so #7's object-store backend flips a written line
-    rather than quietly satisfying an unstated one.
+    never agreed to.
+
+    #7 built the way out and did **not** take it. The object store exists and
+    satisfies the same seam, but `REPLICATOR_BLOB_BACKEND` still defaults to
+    `local`, so what a bare deployment announces is unchanged and the violation
+    is still the live one. It closes when an operator flips the environment
+    (Phase C) and Watcher can read the new scheme (CannObserv/watcher#275) —
+    not when the code lands.
+
+    Kept as a pin rather than deleted for exactly that reason: a charter that
+    said "resolved" while every running worker still announced `file://` would
+    be the decorative document its own section warns about.
     """
     store = LocalBlobStore(tmp_path)
 
     uri = store.store(b"bytes", "0" * 64, "text/plain")
 
     assert uri.startswith("file://")
+    assert Settings().blob_backend == "local"
+
+
+def test_the_object_store_backend_announces_a_host_independent_uri():
+    """The other half of the pin: the way out exists and is one variable away.
+
+    Asserted so the charter's "Known violation" section can say *what closes it*
+    and be checked on that, rather than only on the violation still standing. A
+    line that describes a remedy nobody can execute is the same decorative
+    failure one step later.
+    """
+    store = GcsBlobStore(
+        "a-temp-bucket", prefix="blobs", client=FakeClient(FakeBucket("a-temp-bucket"))
+    )
+
+    uri = store.uri_for("0" * 64)
+
+    assert uri.startswith("gs://")
+    assert "a-temp-bucket" in uri

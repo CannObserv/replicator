@@ -5,7 +5,7 @@ Every test here runs against a fake client. That is not a shortcut around the
 draws: what this module owns is the *decisions* (which key, which precondition,
 what a lost race means), and none of them need a network to be wrong. The one
 thing a fake cannot check is that the SDK accepts these arguments, which is what
-the marked integration test in ``test_gcs_integration.py`` is for.
+the marked test in ``test_gcs_bucket.py`` is for.
 """
 
 import re
@@ -360,3 +360,26 @@ def test_the_preflight_key_cannot_collide_with_a_blob(store):
     which is the stronger half.
     """
     assert not _FINGERPRINT_RE.match(GcsBlobStore.PREFLIGHT_KEY.removesuffix(".bin"))
+
+
+def test_a_failed_download_does_not_leak_its_spool_file(store, bucket, monkeypatch):
+    """The spool is created before the download, so a failure has to close it.
+
+    On the disk-spilled path that handle is a real file. Leaking one per failed
+    read is not hypothetical — a bucket a worker cannot reach fails every read on
+    a loop, and the local backend's `_write_atomically` carries the same
+    unlink-on-failure for exactly this reason.
+    """
+    closed = []
+
+    class Failing(FakeBlob):
+        def download_to_file(self, handle, timeout=None):
+            monkeypatch.setattr(handle, "close", lambda: closed.append(True))
+            raise NotFound("gone mid-read")
+
+    bucket.blob = lambda name: Failing(bucket, name)
+
+    with pytest.raises(NotFound):
+        store.open_stream(FINGERPRINT)
+
+    assert closed == [True]

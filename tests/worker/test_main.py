@@ -1007,3 +1007,32 @@ async def test_the_gcs_backend_does_not_check_traversal(monkeypatch, fake_redis,
     await run(_stopped())
 
     assert checked == []
+
+
+async def test_a_preflight_failure_names_the_bucket_in_the_journal(
+    monkeypatch, fake_redis, tmp_path, capsys
+):
+    """The object-store twin of "blob directory is not usable", including its shape.
+
+    Logged structurally before re-raising, for the reason the local branch does
+    it: an uncaught exception puts the one line that matters into the journal as
+    a bare traceback, unparseable by a pipeline expecting JSON, right before the
+    unit flaps to its restart limit. The bucket is named because "not usable" is
+    not an actionable line on a host that configures two of them.
+    """
+    _gcs_env(monkeypatch, bucket="a-temp-bucket")
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+
+    class Refusing:
+        def preflight(self):
+            raise OSError("no such bucket")
+
+    monkeypatch.setattr("src.worker.main.GcsBlobStore", lambda *a, **kw: Refusing())
+
+    with pytest.raises(OSError, match="no such bucket"):
+        await run(_stopped())
+
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
+    named = [line for line in lines if "a-temp-bucket" in json.dumps(line)]
+    assert named, "the boot failure must name the bucket it could not reach"
+    assert any("not usable" in line.get("message", "") for line in named)

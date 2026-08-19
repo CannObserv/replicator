@@ -140,8 +140,12 @@ curl -s localhost:8041/health | jq
 uv run pytest                              # full suite, coverage gate active
 uv run pytest --no-cov tests/worker/       # subset; skip the gate (it measures all of src/)
 uv run pytest --no-cov -m integration      # requires the live VM Redis; skip the gate
-uv run pytest --no-cov -m gcs              # the T4 rows against the real bucket; skips unless
-                                           # REPLICATOR_TEST_GCS_{BUCKET,CREDENTIALS} are set (#38, #53)
+uv run pytest --no-cov -m gcs              # the T4 rows against the real replicate bucket, and the
+                                           # temp store against its own (#7). Skips per destination:
+                                           # no REPLICATOR_TEST_GCS_CREDENTIALS skips everything,
+                                           # a missing REPLICATOR_TEST_GCS_BUCKET or
+                                           # REPLICATOR_TEST_BLOB_BUCKET skips only its half,
+                                           # since the two are provisioned separately (#38, #53)
 ```
 
 ## Lint

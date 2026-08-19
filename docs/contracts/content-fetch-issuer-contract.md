@@ -138,7 +138,7 @@ ceilings, the timeout bounds, the header-name folding rule, and the reasoning be
 | `event_type` | `"blob_available"` | |
 | `occurred_at` | `datetime` | UTC, stamped at publish |
 | `content_fingerprint` | `str` | sha256 of the bytes. Content identity, **not** a correlator |
-| `blob_uri` | `str` | `file://<blob_dir>/<ab>/<cd>/<sha256>.bin`. Temporary — MUST-7 |
+| `blob_uri` | `str` | `file://<blob_dir>/<ab>/<cd>/<sha256>.bin` today; `gs://<bucket>/<prefix>/<sha256>.bin` where the object-store backend is enabled (#7). **Read the scheme, do not assume it.** Temporary — MUST-7 |
 | `size_bytes` | `int` | |
 | `media_type` | `str` | Normalized, `charset` dropped; `application/octet-stream` when absent |
 | `url` | `str` | Echoed. Confirmation and debugging only |
@@ -335,8 +335,26 @@ Replicator owns and starts the clock where no consumer can see it. The published
 is recorded as absence rather than guessed.
 [Mechanism](content-fetch-issuer-reference.md#how-the-blob-ttl-clock-runs).
 
-Also: `blob_uri` is a **`file://` URI on Replicator's host** — the contract is VM-local today, a
-consumer elsewhere cannot open it, and nothing on the wire says so.
+Also: `blob_uri` is a **`file://` URI on Replicator's host** wherever the default backend is in use
+— the contract is VM-local there, a consumer elsewhere cannot open it, and nothing on the wire says
+so.
+
+**That is changing, and a consumer must branch on the scheme rather than assume one** (#7).
+Replicator ships an object-store backend behind `REPLICATOR_BLOB_BACKEND`; where an operator enables
+it, `blob_uri` becomes `gs://<bucket>/<prefix>/<sha256>.bin`, readable by any identity granted
+`objectViewer` on that bucket and by nobody without one. The rest of this contract is unchanged: the
+value is still opaque, still temporary, still keyed by the same fingerprint. Two obligations follow
+for a consumer that opens the bytes:
+
+- **Handle a scheme you do not recognize as "cannot read this blob", not as an error to retry.** The
+  remedy is a fresh `content.fetch` under a new `command_id` — MUST-7's remedy, unchanged — and it
+  must be **bounded**. An uncapped re-issue on an unreadable blob turns a scheme change into an
+  unbounded re-fetch loop against the origin, which is a live defect in one consumer today
+  (CannObserv/watcher#275) rather than a hypothetical.
+- **Under the object-store backend, `blob_expires_at` is a floor and not an exact horizon.** The reap
+  is a bucket lifecycle rule, whose granularity is one day and whose enforcement is asynchronous, so
+  a blob may outlive its announced expiry — sometimes by more than a day. The direction is the same
+  safe one as before (acting on the published value is early, never late); the margin is wider.
 
 ### 8. Do not send a validator until you handle `not_modified`
 
