@@ -54,6 +54,14 @@ class GcsBlobStore:
     # had it all along.
     SPOOL_MAX_BYTES = 8 * 1024 * 1024
 
+    # The key ``preflight`` probes. Under the same prefix as the blobs, so the
+    # check exercises the path the blobs actually take, and shaped so nothing
+    # fetched can ever address it: a blob key is 64 lowercase hex characters and
+    # this is not. It is never written, which is the stronger guarantee — but the
+    # name is chosen so that a future change which *did* write it could still not
+    # collide with content.
+    PREFLIGHT_KEY = "preflight-probe"
+
     def __init__(
         self,
         bucket: str,
@@ -75,6 +83,30 @@ class GcsBlobStore:
         self._bucket = self._client.bucket(bucket)
         self._prefix = prefix.strip("/")
         self._timeout = timeout_seconds
+
+    def preflight(self) -> None:
+        """Prove at boot that this bucket is there and readable by this identity.
+
+        A read of a key nothing ever writes. That answers the three questions a
+        misconfiguration gets wrong — do the credentials resolve, does the bucket
+        resolve, may this identity read it — while writing nothing, leaving
+        nothing to clean up, and needing no permission the store does not already
+        need to do its job.
+
+        **It deliberately does not prove write access**, and a probe object would
+        be the wrong way to buy that: creating one needs no permission the first
+        real ``store`` will not immediately need, and *deleting* it would need
+        ``storage.objects.delete`` — which the worker otherwise never uses,
+        because expiry is the lifecycle rule's job. Widening a service account's
+        grant so a startup check can tidy up after itself is a poor trade for a
+        failure the first fetch reports anyway.
+
+        Nor does it prove the *consumer* can read what we write. That grant is on
+        another service account and is verified where it is made
+        (docs/DEPLOYMENT.md); it is the honest limit of this check, and the price
+        of trading a filesystem coupling for an IAM one.
+        """
+        self._bucket.blob(self._key(self.PREFLIGHT_KEY)).exists()
 
     def store(self, data: bytes, fingerprint: str, media_type: str) -> str:
         """Create the object these bytes address, or confirm the one already there."""
@@ -124,6 +156,15 @@ class GcsBlobStore:
         """
         return f"gs://{self._bucket_name}/{self.key_for(fingerprint)}"
 
+    def _key(self, name: str) -> str:
+        """Apply the prefix to a bare object name.
+
+        Shared by ``key_for`` and ``preflight`` so the probe travels the same
+        path a blob does — a check against a differently-rooted key would pass on
+        a bucket whose prefix nothing can write to.
+        """
+        return f"{self._prefix}/{name}" if self._prefix else name
+
     def key_for(self, fingerprint: str) -> str:
         """The object key for these bytes — flat, unlike the local backend's shards.
 
@@ -134,7 +175,7 @@ class GcsBlobStore:
         the derivation is another way ``uri_for`` and a reader's expectation can
         come apart.
         """
-        return f"{self._prefix}/{fingerprint}.bin" if self._prefix else f"{fingerprint}.bin"
+        return self._key(f"{fingerprint}.bin")
 
     def open(self, fingerprint: str) -> bytes:
         """Read back the bytes stored under ``fingerprint``."""

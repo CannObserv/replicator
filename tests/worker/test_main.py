@@ -830,3 +830,180 @@ async def test_an_unusable_relative_blob_dir_is_named_absolutely(
         assert record["blob_dir"] == str(tmp_path.resolve() / "blobs")
     finally:
         root.handlers, root.level = saved_handlers, saved_level
+
+
+# --------------------------------------------------------------------------
+# Backend selection (#7)
+# --------------------------------------------------------------------------
+
+
+def _gcs_env(monkeypatch, bucket="a-temp-bucket"):
+    monkeypatch.setenv("REPLICATOR_BLOB_BACKEND", "gcs")
+    monkeypatch.setenv("REPLICATOR_BLOB_BUCKET", bucket)
+    get_settings.cache_clear()
+
+
+async def test_the_local_backend_is_what_a_bare_environment_gets(monkeypatch, fake_redis, tmp_path):
+    """The compiled-in default, asserted at the wiring rather than in Settings.
+
+    `tests/core/test_config.py` fixes that the *setting* defaults to `local`. This
+    fixes that the worker built from it actually announces `file://` — the two
+    can come apart in exactly one commit, and the symptom of them coming apart is
+    a fetch storm in another repo (CannObserv/watcher#275).
+    """
+    monkeypatch.delenv("REPLICATOR_BLOB_BACKEND", raising=False)
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    get_settings.cache_clear()
+    built = []
+    monkeypatch.setattr(
+        "src.worker.main.LocalBlobStore",
+        lambda root: built.append(root) or LocalBlobStore(root),
+    )
+
+    await run(_stopped())
+
+    assert built == [(tmp_path / "blobs").resolve()]
+
+
+async def test_the_gcs_backend_builds_an_object_store(monkeypatch, fake_redis, tmp_path):
+    _gcs_env(monkeypatch)
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    built = []
+
+    def fake_store(bucket, *, prefix, client=None):
+        built.append((bucket, prefix))
+        return object()
+
+    monkeypatch.setattr("src.worker.main.GcsBlobStore", fake_store)
+    monkeypatch.setattr("src.worker.main.preflight_object_store", lambda store, settings: None)
+
+    await run(_stopped())
+
+    assert built == [("a-temp-bucket", "blobs")]
+
+
+async def test_the_gcs_backend_does_not_create_a_blob_directory(monkeypatch, fake_redis, tmp_path):
+    """Nothing local is involved, so nothing local should be provisioned.
+
+    A directory created anyway would be harmless and misleading — an operator
+    reading `/var/lib/replicator/blobs` on a host storing to a bucket would find
+    an empty tree that looks like a broken store rather than an unused one.
+    """
+    _gcs_env(monkeypatch)
+    blob_dir = tmp_path / "unwanted"
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(blob_dir))
+    get_settings.cache_clear()
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    monkeypatch.setattr("src.worker.main.GcsBlobStore", lambda *a, **kw: object())
+    monkeypatch.setattr("src.worker.main.preflight_object_store", lambda store, settings: None)
+
+    await run(_stopped())
+
+    assert not blob_dir.exists()
+
+
+async def test_the_gcs_backend_runs_no_sweeper(monkeypatch, fake_redis, tmp_path):
+    """Retention moves to the bucket's lifecycle rule, so this process stops reaping.
+
+    Not an optimisation. A sweep over a bucket would have to LIST every object
+    every cycle — O(n) Class A operations, forever — to re-derive a number the
+    lifecycle rule already acts on. And it would be reaping objects on a clock
+    this worker no longer owns, which is precisely the divergence the local
+    sweep's "one resolved root" comment exists to prevent, one layer up.
+    """
+    _gcs_env(monkeypatch)
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    monkeypatch.setattr("src.worker.main.GcsBlobStore", lambda *a, **kw: object())
+    monkeypatch.setattr("src.worker.main.preflight_object_store", lambda store, settings: None)
+    swept = []
+    monkeypatch.setattr(
+        "src.worker.retention.sweep",
+        lambda root, **kwargs: swept.append(root) or SweepResult(),
+    )
+
+    await run(_stopped())
+
+    assert swept == []
+
+
+async def test_the_gcs_backend_says_the_ceiling_is_unenforced(
+    monkeypatch, fake_redis, tmp_path, capsys
+):
+    """A safety property is being given up, so it is said out loud at boot.
+
+    `blob_max_total_bytes` bounds a shared disk, and a bucket is not one. Nothing
+    replaces it on this backend — the per-blob `REPLICATOR_MAX_BLOB_BYTES` cap
+    still holds and cost is watched by a budget alert, neither of which this
+    process can enforce. An operator who reads the ceiling in the environment
+    and assumes it applies is the failure this line exists to prevent.
+    """
+    _gcs_env(monkeypatch)
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    monkeypatch.setattr("src.worker.main.GcsBlobStore", lambda *a, **kw: object())
+    monkeypatch.setattr("src.worker.main.preflight_object_store", lambda store, settings: None)
+
+    await run(_stopped())
+
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
+    stated = [line for line in lines if "REPLICATOR_BLOB_MAX_TOTAL_BYTES" in json.dumps(line)]
+    assert stated, "the boot log must say the ceiling is not enforced on this backend"
+    # Named by its variable rather than described, because the operator who needs
+    # this line is the one reading that variable in `/etc/replicator/.env` and
+    # concluding the disk-shaped protection it provides is still in force.
+    assert "not enforced" in json.dumps(stated[0])
+
+
+async def test_a_failing_preflight_stops_the_boot(monkeypatch, fake_redis, tmp_path):
+    """The object-store twin of "blob directory is not usable".
+
+    Same argument, same place in the sequence: a store that cannot be reached is
+    a misconfiguration whose only other symptom is in another repo, so it fails
+    at boot rather than at the first command. `warn_if_unreachable` could only
+    warn because a single-user deployment legitimately has unreadable blobs;
+    a bucket this worker cannot write to has no legitimate reading.
+    """
+    _gcs_env(monkeypatch)
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    monkeypatch.setattr("src.worker.main.GcsBlobStore", lambda *a, **kw: object())
+
+    def refuse(store, settings):
+        raise OSError("no such bucket")
+
+    monkeypatch.setattr("src.worker.main.preflight_object_store", refuse)
+
+    with pytest.raises(OSError, match="no such bucket"):
+        await run(_stopped())
+
+
+async def test_the_local_backend_still_checks_traversal(monkeypatch, fake_redis, tmp_path):
+    """`warn_if_unreachable` is not deleted — it is scoped to the backend it is about.
+
+    Its question ("can another service traverse to these bytes") has no meaning
+    against a bucket, where reachability is an IAM grant this process cannot
+    inspect. Running it anyway would put a warning about directory modes in the
+    journal of a worker that writes no directories.
+    """
+    monkeypatch.delenv("REPLICATOR_BLOB_BACKEND", raising=False)
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    get_settings.cache_clear()
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    checked = []
+    monkeypatch.setattr("src.worker.main.warn_if_unreachable", lambda d: checked.append(d))
+
+    await run(_stopped())
+
+    assert checked == [(tmp_path / "blobs").resolve()]
+
+
+async def test_the_gcs_backend_does_not_check_traversal(monkeypatch, fake_redis, tmp_path):
+    _gcs_env(monkeypatch)
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    monkeypatch.setattr("src.worker.main.GcsBlobStore", lambda *a, **kw: object())
+    monkeypatch.setattr("src.worker.main.preflight_object_store", lambda store, settings: None)
+    checked = []
+    monkeypatch.setattr("src.worker.main.warn_if_unreachable", lambda d: checked.append(d))
+
+    await run(_stopped())
+
+    assert checked == []

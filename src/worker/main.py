@@ -28,6 +28,8 @@ from redis.asyncio import Redis
 
 from src.core.config import Settings, get_settings
 from src.core.logging import configure_logging, get_logger
+from src.storage.base import BlobStore
+from src.storage.gcs import GcsBlobStore
 from src.storage.local import LocalBlobStore, ensure_directory
 from src.storage.sweeper import BlobUsage
 from src.worker.aliases import AliasTable, load_alias_table
@@ -93,6 +95,47 @@ def warn_if_unreachable(blob_dir: Path) -> None:
             "detail": "blob_uri will be announced on content.blobs but cannot be opened",
         },
     )
+
+
+def preflight_object_store(store: GcsBlobStore, settings: Settings) -> None:
+    """Fail the boot if the temp bucket is not there to be written to (#7).
+
+    The object-store counterpart of ``ensure_directory`` — asked at startup for
+    the same reason: a storage misconfiguration whose only other symptom is a
+    ``blob_uri`` nobody can open in *another repo* has to fail here, loudly,
+    rather than at the first command.
+
+    Deliberately stricter than ``warn_if_unreachable``, which only warns. That
+    check tolerates its own failure because a single-user deployment where
+    nothing else reads the blobs is a legitimate configuration an operator may
+    have meant. A bucket this worker cannot reach has no such reading — there is
+    no deployment in which storing to an absent bucket is what somebody wanted.
+
+    What ``GcsBlobStore.preflight`` actually proves is narrower than "usable":
+    the credentials resolve, the bucket resolves, and this identity may read it.
+    Write access is left to the first ``store`` and to the grant — see that
+    method for why a probe object would be a bad trade.
+
+    **What it does not check is consumer read access**, and that is the honest
+    limit of it. The coupling #7 removes was a filesystem one and what replaces
+    it is an IAM grant on the consumer's service account — auditable, and
+    host-independent, but not visible from here. ``warn_if_unreachable`` could at
+    least walk the ancestors; this cannot ask Google whether Watcher may read.
+    The grant is verified where it is made (docs/DEPLOYMENT.md), not at this
+    boot.
+    """
+    try:
+        store.preflight()
+    except Exception as exc:
+        logger.error(
+            "temp blob bucket is not usable",
+            extra={
+                "blob_bucket": settings.blob_bucket,
+                "blob_prefix": settings.blob_prefix,
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+        )
+        raise
 
 
 def _unreachable_levels(blob_dir: Path) -> list[tuple[Path, int]]:
@@ -314,6 +357,74 @@ def _log_shutdown_failures(results: list[BaseException | None]) -> None:
             )
 
 
+def _prepare_storage(settings: Settings) -> tuple[BlobStore, Path | None]:
+    """Build the blob store this deployment is configured for, and provision it.
+
+    Returns the local root alongside the store, or ``None`` under the
+    object-store backend — which is how the caller knows *not* to run the three
+    things that only make sense over a filesystem: creating the directory,
+    warning about its traversal modes, and sweeping it.
+
+    Splitting the two backends here rather than inside the store keeps the
+    difference where an operator's configuration lives. Everything downstream
+    takes a ``BlobStore`` and cannot tell which one it got, which is the property
+    #7 is for.
+    """
+    if settings.blob_backend == "gcs":
+        store = GcsBlobStore(settings.blob_bucket, prefix=settings.blob_prefix)
+        preflight_object_store(store, settings)
+        logger.info(
+            "storing blobs in an object store",
+            extra={
+                "blob_bucket": settings.blob_bucket,
+                "blob_prefix": settings.blob_prefix,
+                # Said at boot because the environment still carries the ceiling
+                # and an operator would reasonably assume it applies. It bounds a
+                # shared disk; a bucket is not one, and re-deriving a bucket's
+                # size would mean listing every object every cycle to compute a
+                # number the lifecycle rule already acts on. What still holds is
+                # the per-blob cap; what replaces the rest is a budget alert,
+                # which no process here can enforce.
+                "detail": (
+                    "retention is the bucket lifecycle rule; "
+                    "REPLICATOR_BLOB_MAX_TOTAL_BYTES is not enforced on this backend"
+                ),
+                "max_blob_bytes": settings.max_blob_bytes,
+            },
+        )
+        return store, None
+
+    # systemd's StateDirectory= creates the parent only, so the leaf is ours to
+    # make. Doing it at startup rather than at first write means a
+    # misconfigured path fails loudly on boot, not mid-fetch. The failure is
+    # logged structurally before re-raising: an uncaught OSError would put the
+    # one line that matters into the journal as a bare traceback, unparseable by
+    # a pipeline expecting JSON, right before the unit flaps to its restart
+    # limit.
+    #
+    # ensure_directory rather than a bare mkdir so a directory this process
+    # creates is left readable by the service that reads the blobs, while one
+    # that already exists keeps whatever mode its operator gave it.
+    # Resolved first, and passed to everything that touches the tree. The store
+    # resolves internally so a later chdir cannot move where blobs land; the
+    # sweep has no such protection of its own, and the two reaping and writing
+    # different directories is the kind of divergence nothing reports. Resolving
+    # before the check rather than after also means the failure below names an
+    # absolute path — REPLICATOR_BLOB_DIR defaults to the relative `blobs`, and
+    # "blobs is not usable" is not an actionable line.
+    blob_dir = settings.blob_dir.resolve()
+    try:
+        ensure_directory(blob_dir)
+    except OSError as exc:
+        logger.error(
+            "blob directory is not usable",
+            extra={"blob_dir": str(blob_dir), "errno": exc.errno},
+        )
+        raise
+    warn_if_unreachable(blob_dir)
+    return LocalBlobStore(blob_dir), blob_dir
+
+
 async def run(
     stop: asyncio.Event | None = None,
     *,
@@ -350,16 +461,9 @@ async def run(
     # before the check rather than after also means the failure below names an
     # absolute path — REPLICATOR_BLOB_DIR defaults to the relative `blobs`, and
     # "blobs is not usable" is not an actionable line.
-    blob_dir = settings.blob_dir.resolve()
-    try:
-        ensure_directory(blob_dir)
-    except OSError as exc:
-        logger.error(
-            "blob directory is not usable",
-            extra={"blob_dir": str(blob_dir), "errno": exc.errno},
-        )
-        raise
-    warn_if_unreachable(blob_dir)
+    # `blob_dir` is None under the object-store backend, and every local-only
+    # step goes with it: the directory, the traversal warning, and the sweep.
+    store, blob_dir = _prepare_storage(settings)
 
     owns_signals = stop is None
     client = Redis.from_url(settings.redis_url)
@@ -443,9 +547,9 @@ async def run(
         usage = BlobUsage()
         # One store for both command loops, for the reason `usage` is one object:
         # wired twice, each half would be individually correct and any state a
-        # backend later holds — a client pool, #7's object-store handle — would
-        # silently be two (CR #18).
-        store = LocalBlobStore(blob_dir)
+        # backend holds — the object store's client pool (#7) — would silently be
+        # two (CR #18). Built above, before the broker client, because a storage
+        # misconfiguration should fail the boot before anything is opened.
         # Rebuilt from the stream *before* the consume loop starts, not as the
         # first pass of the tail task (#19). Started as a peer, the loop would
         # fetch its opening commands against an empty map and pace every host at
@@ -515,7 +619,16 @@ async def run(
                 spec=REPLICATE_SPEC,
                 stop=stop,
             ),
-            run_sweeper(root=blob_dir, settings=settings, usage=usage, stop=stop),
+            # Retention is a task only over a filesystem. Under the
+            # object-store backend the window is a bucket lifecycle rule and
+            # `blob_dir` is None, so the sweep is not started rather than started
+            # and made to do nothing — a parked no-op task would still be a
+            # second thing that can end the worker.
+            *(
+                []
+                if blob_dir is None
+                else [run_sweeper(root=blob_dir, settings=settings, usage=usage, stop=stop)]
+            ),
             # Passed last: `_exit_failure` picks the raised failure by argument
             # order, and this task absorbs its own errors anyway, so it should
             # never be the one explaining an exit.

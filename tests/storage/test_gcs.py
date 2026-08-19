@@ -8,6 +8,7 @@ thing a fake cannot check is that the SDK accepts these arguments, which is what
 the marked integration test in ``test_gcs_integration.py`` is for.
 """
 
+import re
 from io import BytesIO
 
 import pytest
@@ -16,6 +17,12 @@ from google.api_core.exceptions import NotFound, PreconditionFailed
 from src.storage.gcs import GcsBlobStore
 
 FINGERPRINT = "9f2a7c1e" + "0" * 56
+
+# The shape `src.worker.replicate` validates a `blob_uri`'s fingerprint against.
+# Spelled again here rather than imported: this module is about the store, and a
+# test that the probe key cannot be mistaken for content should not pass merely
+# because the guard's regex was loosened.
+_FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class FakeBlob:
@@ -66,8 +73,11 @@ class FakeBucket:
         self.custom_times: dict[str, object] = {}
         self.timeouts: list[float | None] = []
         self.reloaded = 0
+        self.probed: list[str] = []
 
     def blob(self, name):
+        if name.endswith(GcsBlobStore.PREFLIGHT_KEY):
+            self.probed.append(name)
         return FakeBlob(self, name)
 
     def reload(self, timeout=None):
@@ -317,3 +327,36 @@ def test_download_to_file_receives_a_real_handle(store, bucket):
     bucket.blob(store.key_for(FINGERPRINT)).download_to_file(sink)
 
     assert sink.getvalue() == b"hello"
+
+
+def test_preflight_probes_the_bucket(store, bucket):
+    """A boot-time question with a wrong answer available: does this bucket exist?
+
+    The probe is a read of a key nothing ever writes. That is enough to prove the
+    three things a misconfiguration gets wrong — credentials resolve, the bucket
+    resolves, and this identity may read it — while writing nothing and leaving
+    nothing to clean up.
+    """
+    store.preflight()
+
+    assert bucket.probed == [f"blobs/{GcsBlobStore.PREFLIGHT_KEY}"]
+
+
+def test_preflight_raises_when_the_bucket_is_not_there(store, bucket):
+    def missing(name):
+        raise NotFound("no such bucket")
+
+    bucket.blob = missing
+
+    with pytest.raises(NotFound):
+        store.preflight()
+
+
+def test_the_preflight_key_cannot_collide_with_a_blob(store):
+    """It lives under the same prefix, so it must not be mistakable for content.
+
+    A fingerprint is 64 lowercase hex characters and the probe key is not, so no
+    fetched blob can ever address it — and the object is never created anyway,
+    which is the stronger half.
+    """
+    assert not _FINGERPRINT_RE.match(GcsBlobStore.PREFLIGHT_KEY.removesuffix(".bin"))
