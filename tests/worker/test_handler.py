@@ -479,3 +479,38 @@ async def test_a_failed_publish_still_reaches_the_loop_unchanged(handler, fake_r
 
     with pytest.raises(ResponseError):
         await handler()(command())
+
+
+async def test_the_ceiling_is_not_enforced_when_there_is_no_sweep(handler, fake_redis):
+    """#7: an unswept backend must not accumulate its way into a permanent stop.
+
+    `BlobUsage` has two writers — the sweep's measurement and the byte path's
+    running estimate between sweeps — and only the first can ever bring the
+    number *down*. Under the object-store backend there is no sweep, so the
+    estimate rises forever and crosses any ceiling given enough traffic. What
+    that produced was not a slow degradation: every subsequent fetch raises
+    `TransientFetchError`, which is exempt from the delivery ceiling, so commands
+    park in the PEL and return via `claim_stale` to be refused again — a worker
+    that has quietly stopped fetching while looking healthy, waiting on a sweep
+    that is never going to run.
+
+    So the ceiling is passed explicitly and is `None` where nothing measures it,
+    rather than being handed a number nothing can satisfy.
+    """
+    usage = BlobUsage()
+    usage.add(10 * 1024 * 1024 * 1024)  # far past any configured ceiling
+
+    await handler(usage=usage, ceiling_bytes=None)(command())
+
+    # The fact is what proves the fetch happened rather than parking: a ceiling
+    # raise is transient and never reaches the publish.
+    assert len(await published_facts(fake_redis)) == 1
+
+
+async def test_the_ceiling_still_stops_the_byte_path_when_it_is_measured(handler, fake_redis):
+    """The local backend's guard, unchanged — the reason the parameter is not just dropped."""
+    usage = BlobUsage()
+    usage.add(10 * 1024 * 1024 * 1024)
+
+    with pytest.raises(TransientFetchError):
+        await handler(usage=usage, ceiling_bytes=1024)(command())

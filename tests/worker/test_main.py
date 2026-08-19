@@ -1036,3 +1036,50 @@ async def test_a_preflight_failure_names_the_bucket_in_the_journal(
     named = [line for line in lines if "a-temp-bucket" in json.dumps(line)]
     assert named, "the boot failure must name the bucket it could not reach"
     assert any("not usable" in line.get("message", "") for line in named)
+
+
+async def test_the_gcs_backend_hands_the_byte_path_no_ceiling(monkeypatch, fake_redis, tmp_path):
+    """The boot log's claim, made true in the wiring rather than only in the journal.
+
+    Saying "not enforced" while still passing the number would be the worse of
+    the two failures: `BlobUsage` only ever falls when a sweep re-measures it,
+    and there is no sweep here, so the estimate would climb to the ceiling and
+    stay there — every fetch refused transiently, every command parked in the
+    PEL waiting on a sweep that will never run.
+    """
+    _gcs_env(monkeypatch)
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    monkeypatch.setattr("src.worker.main.GcsBlobStore", lambda *a, **kw: object())
+    monkeypatch.setattr("src.worker.main.preflight_object_store", lambda store, settings: None)
+    seen = {}
+    real = src.worker.main.build_handler
+
+    def recording(**kwargs):
+        seen.update(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr("src.worker.main.build_handler", recording)
+
+    await run(_stopped())
+
+    assert seen["ceiling_bytes"] is None
+
+
+async def test_the_local_backend_still_hands_over_its_ceiling(monkeypatch, fake_redis, tmp_path):
+    monkeypatch.delenv("REPLICATOR_BLOB_BACKEND", raising=False)
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setenv("REPLICATOR_BLOB_MAX_TOTAL_BYTES", "4096")
+    get_settings.cache_clear()
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    seen = {}
+    real = src.worker.main.build_handler
+
+    def recording(**kwargs):
+        seen.update(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr("src.worker.main.build_handler", recording)
+
+    await run(_stopped())
+
+    assert seen["ceiling_bytes"] == 4096

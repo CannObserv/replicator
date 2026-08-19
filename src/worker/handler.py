@@ -39,6 +39,12 @@ from src.worker.pacing import HostPacer, HostPolicy
 
 logger = get_logger(__name__)
 
+# "the caller said nothing", distinct from an explicit ``None`` — which is a
+# meaningful value for ``ceiling_bytes`` and means *do not enforce one* (#7). A
+# plain ``None`` default would collapse the two and make the object-store
+# backend's posture the accidental default for every direct caller.
+_CEILING_FROM_SETTINGS = object()
+
 # What a response with no usable Content-Type is stored and announced as.
 DEFAULT_MEDIA_TYPE = "application/octet-stream"
 
@@ -200,6 +206,7 @@ def build_handler(
     client: Redis,
     settings: Settings,
     usage: BlobUsage | None = None,
+    ceiling_bytes: int | None = _CEILING_FROM_SETTINGS,
     policy: HostPolicy | None = None,
     pacer: HostPacer | None = None,
     park_above_seconds: float | None = None,
@@ -213,6 +220,16 @@ def build_handler(
     standing between a burst and a full disk on a shared VM. Left unset it is
     private to this handler, which only makes the ceiling later to notice; the
     worker passes the shared instance.
+
+    ``ceiling_bytes`` is what that measurement is compared against, and **``None``
+    means nothing measures it** — the object-store backend, where there is no
+    sweep and no shared disk to protect (#7). Passed explicitly rather than read
+    from ``settings`` here, because the two writers of ``usage`` are not
+    symmetrical: only the sweep can bring the number *down*, so an unswept
+    backend accumulates past any ceiling given enough traffic and then refuses
+    every fetch transiently — parking commands in the PEL to wait on a sweep that
+    will never run. A worker that has silently stopped fetching while every
+    health signal looks fine.
 
     ``pacer`` is per-host politeness (#12). Built from ``settings`` when not
     injected, deliberately: unwired it fails *open*, and a byte path that
@@ -243,6 +260,9 @@ def build_handler(
     """
     publisher = AsyncBusPublisher(client)
     usage = usage if usage is not None else BlobUsage()
+    ceiling = (
+        settings.blob_max_total_bytes if ceiling_bytes is _CEILING_FROM_SETTINGS else ceiling_bytes
+    )
     pacer = (
         pacer if pacer is not None else HostPacer(settings.min_host_interval_seconds, policy=policy)
     )
@@ -256,7 +276,7 @@ def build_handler(
         # sweep frees space. A command that can never succeed must not wait a
         # sweep interval to reach a conclusion available immediately.
         options = _request_options(command, settings.max_fetch_timeout_seconds)
-        _raise_for_ceiling(usage, settings.blob_max_total_bytes)
+        _raise_for_ceiling(usage, ceiling)
         # Last of the three, and after the ceiling on purpose: spending a wait to
         # reach a check that was going to park the message anyway is a wait the
         # origin never benefits from. The cost of that ordering is that the tree
@@ -745,8 +765,14 @@ def _retry_after_seconds(value: str | None, now: datetime) -> float | None:
     return (when - now).total_seconds()
 
 
-def _raise_for_ceiling(usage: BlobUsage, ceiling_bytes: int) -> None:
+def _raise_for_ceiling(usage: BlobUsage, ceiling_bytes: int | None) -> None:
     """Stop fetching once the blob tree has grown past what this deployment holds.
+
+    ``None`` means this deployment has no such bound to enforce — the
+    object-store backend (#7), where the bytes are not on a disk anyone shares
+    and nothing re-measures what is held. Skipping the check there is not a
+    relaxation: the alternative is a running estimate that only ever rises,
+    against a ceiling nothing can bring it back under.
 
     Backpressure rather than reaping. Freeing space by deleting blobs still
     inside their TTL would convert a local disk problem into a ``blob_uri`` that
@@ -758,6 +784,8 @@ def _raise_for_ceiling(usage: BlobUsage, ceiling_bytes: int) -> None:
     once a sweep brings the tree back under. Checked before the fetch, since the
     bytes are resident the moment the driver returns them.
     """
+    if ceiling_bytes is None:
+        return
     if usage.is_over(ceiling_bytes):
         raise TransientFetchError(
             f"blob directory holds {usage.total_bytes} bytes, "

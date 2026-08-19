@@ -571,6 +571,13 @@ async def run(
                 handler=build_handler(
                     fetcher=fetcher,
                     store=store,
+                    # None where nothing measures the store (#7). The ceiling
+                    # bounds a shared disk, and `BlobUsage` only ever falls when
+                    # a sweep re-measures it — so passing the number to a
+                    # backend with no sweep would let the byte path's own
+                    # estimate climb to it and park every command there,
+                    # permanently, waiting on a sweep that does not exist.
+                    ceiling_bytes=(None if blob_dir is None else settings.blob_max_total_bytes),
                     client=client,
                     settings=settings,
                     usage=usage,

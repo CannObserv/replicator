@@ -199,17 +199,29 @@ async def published_facts(client, topic: str = streams.CONTENT_BLOBS) -> list[Bl
     return facts
 
 
+_UNSET = object()
+
+
 @pytest.fixture
 def handler(fake_redis, tmp_path):
     """The real handler over a real store and publisher, with the fetch faked."""
 
-    def build(fetcher=None, blobs_topic: str | None = None, usage: BlobUsage | None = None):
+    def build(
+        fetcher=None,
+        blobs_topic: str | None = None,
+        usage: BlobUsage | None = None,
+        ceiling_bytes: int | None = _UNSET,
+    ):
         return build_handler(
             fetcher=fetcher or FakeFetcher(),
             store=LocalBlobStore(tmp_path),
             client=fake_redis,
             settings=get_settings(),
             usage=usage,
+            # `None` is a meaningful value here — it is what the object-store
+            # backend passes — so the "caller said nothing" case needs a sentinel
+            # of its own rather than borrowing it (#7).
+            **({} if ceiling_bytes is _UNSET else {"ceiling_bytes": ceiling_bytes}),
             **({} if blobs_topic is None else {"blobs_topic": blobs_topic}),
         )
 
