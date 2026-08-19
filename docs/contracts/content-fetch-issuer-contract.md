@@ -156,8 +156,9 @@ The six enriched fields (cannobserv#271, `final_url` sourced by cannobserv#279, 
 carry what Replicator holds at publish time and a broadcast consumer cannot recover once fetching
 lives here rather than in Watcher. Three rules govern reading them — **`None` means nobody said,
 never "the default"**; **`status_code` is always 2xx here**, so it is not a success branch;
-**"verbatim" excludes surrounding whitespace**, and an over-long value is dropped rather than
-truncated — and one rule governs *acting* on them: replaying `etag` or `last_modified` **is**
+**"verbatim" excludes surrounding whitespace**, and a value Replicator cannot stand behind — an
+over-long one, or a validator it could not send back — is dropped rather than repaired — and one
+rule governs *acting* on them: replaying `etag` or `last_modified` **is**
 conditional GET, so it is gated on your own consumer rather than on Replicator, and
 [MUST-8](#8-do-not-send-a-validator-until-you-handle-not_modified) states the gate. All four, with
 the reasoning, in [the reference](content-fetch-issuer-reference.md#the-enriched-blob_available-fields).

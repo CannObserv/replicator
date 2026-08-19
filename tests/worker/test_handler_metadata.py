@@ -234,6 +234,53 @@ async def test_an_oversized_content_type_still_normalizes_to_a_media_type(handle
     assert fact.media_type == "application/octet-stream"
 
 
+# Header values that pass every bound the passthrough checks and still cannot be
+# put back on the wire: httpx encodes request header values as ASCII, so obs-text
+# raises ``UnicodeEncodeError``, and an interior HTAB survives ``.strip()``
+# untouched. The request guard refuses both up front (#11 CR #1, CR #3), which is
+# what makes publishing one a wedge rather than a wasted request (#60).
+UNSENDABLE_VALUES = [
+    pytest.param('W/"caf\xe9-1"', id="obs-text"),
+    pytest.param('W/"abc\t123"', id="interior-htab"),
+]
+
+
+@pytest.mark.parametrize("value", UNSENDABLE_VALUES)
+@pytest.mark.parametrize("name", ["etag", "last-modified"])
+async def test_a_validator_replicator_could_not_send_back_is_dropped(
+    handler, fake_redis, name, value
+):
+    """Publishing one wedges the item, and the wedge is terminal.
+
+    Both fields exist to be replayed in a conditional GET, and Replicator refuses
+    a request header outside printable US-ASCII with ``invalid_request_options``
+    — pre-request and not retryable. An issuer that stores what we published
+    re-derives the same unsendable value every cycle and never fetches that URL
+    again. Dropped for the same reason the over-length value is: a validator that
+    cannot be *sent* is worse than no validator at all.
+    """
+    fetcher = FakeFetcher(fetch_result(headers={"content-type": "text/html", name: value}))
+
+    await handler(fetcher)(command())
+
+    (fact,) = await published_facts(fake_redis)
+    assert getattr(fact, name.replace("-", "_")) is None
+
+
+@pytest.mark.parametrize("value", UNSENDABLE_VALUES)
+async def test_an_unsendable_content_type_is_still_published_raw(handler, fake_redis, value):
+    """The asymmetry is the point. ``content_type_raw`` is never replayed, so no
+    refusal can be built out of it, and Watcher stores it as an observed fact
+    (watcher#168) — filtering it would suppress a real observation for no gain.
+    """
+    fetcher = FakeFetcher(fetch_result(headers={"content-type": value}))
+
+    await handler(fetcher)(command())
+
+    (fact,) = await published_facts(fake_redis)
+    assert fact.content_type_raw == value
+
+
 async def test_the_blob_lifetime_is_announced(handler, fake_redis):
     """A consumer cannot observe the TTL clock, so the fact carries the horizon.
 
