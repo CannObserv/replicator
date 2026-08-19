@@ -78,7 +78,7 @@ For local work, load both:
 set -a; . /etc/replicator/.env 2>/dev/null; . .env 2>/dev/null; set +a
 ```
 
-Variables the service uses all live in `/etc/replicator/.env`. **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+Variables the service uses all live in `/etc/replicator/.env`. **[docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)
 is the authoritative reference** — every variable, its default, and the reasoning behind
 each one. Below is only what this deployment actually overrides; anything absent from
 `/etc/replicator/.env` runs on the default baked into `src/core/config.py`.
@@ -108,7 +108,7 @@ rather than deleting bytes a consumer was promised.
 `BUILD_ID` is stamped by the unit's `ExecStartPre` rather than set in the env file. Every
 other `REPLICATOR_*` setting — the blob TTL and ceilings, the consumer group and start id,
 the read window and pacing fallback, the reclaim and backoff numbers — is on its default;
-see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for what each one is and why.
+see [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) for what each one is and why.
 
 ## Seeding a fetch
 

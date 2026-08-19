@@ -7,3 +7,16 @@ disproven :: enforces eight charter invariants in CI; change a
 # strings on a stream nothing trims", the terminal/pre-request wedge) are already in
 # docs/contracts/content-fetch-issuer-reference.md, which AGENTS.md links.
 docs/ARCHITECTURE.md :: duplicate :: dropped over `MAX_HEADER_VALUE_LENGTH`, never truncated
+
+# 2026-08-19 curation (#67). Bus Conventions -> docs/STREAMS.md and Environment
+# Variables -> docs/ENVIRONMENT.md. Four lines dropped because DEPLOYMENT.md
+# already carries the #52 dev-worker guard in full (its "The dev worker asks the
+# same question, at the writer" subsection); three rewritten because this same
+# change moved what they point at.
+AGENTS.md :: duplicate :: A **dev** worker runs no
+AGENTS.md :: duplicate :: so `build_writers` asks the same script directly
+AGENTS.md :: duplicate :: provider writer on a checkout it rejects (#52)
+AGENTS.md :: duplicate :: refused `provider_disabled`.
+AGENTS.md :: retarget :: - What each stream carries — [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+AGENTS.md :: retarget :: founding design, module-by-module layout, and what each stream carries
+AGENTS.md :: retarget :: the systemd unit's lifecycle, and every environment variable the service reads

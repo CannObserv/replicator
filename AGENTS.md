@@ -31,7 +31,7 @@ Python ≥3.12, uv, pytest, ruff. `ty` is available as a **non-gating** type che
 uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
 ```
 
-Auth is ADC: on the VM the SA key at `GOOGLE_APPLICATION_CREDENTIALS` (`/etc/replicator/co-pypi-reader.json`), in CI a keyless WIF token. Pin the current minor — `>=0.10,<0.11`. The **patch** floor is load-bearing, not tidiness: the change-bus payloads are `extra="ignore"`, so on an older wheel a model constructed with fields it does not have yet succeeds and silently discards them. Raise the floor with every co-core feature the code starts depending on, or a version skew publishes facts that look right and carry nothing (#10). Both floors since fail *loudly* instead — a ValidationError at construction (0.8.0 requires `info_source_id` on all three fetch payloads, #19/#28) or an ImportError at load, never reaching a running worker (0.9.4 cuts the replicate contracts, #29).
+Auth is ADC. Pin the current minor — `>=0.10,<0.11` — and raise the **patch** floor with every co-core feature the code starts depending on: the reasoning, and the three ways a skew has already failed, in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 <!-- BEGIN socraticode-policy -->
 ## Code Exploration Policy
@@ -95,10 +95,8 @@ test a branch with `uv run python -m src.worker.main` under a distinct
 `daemon-reload` alone silently re-reads the old file and the mismatch has no
 symptom until a directive matters. **Refuses to start off `main`, or off
 unpushed commits** (#37, #48) — `scripts/check_main_checkout.sh`;
-`REPLICATOR_ALLOW_ANY_CHECKOUT=1` overrides. A **dev** worker runs no
-`ExecStartPre`, so `build_writers` asks the same script directly and builds no
-provider writer on a checkout it rejects (#52) — fetch untouched, the alias
-refused `provider_disabled`.
+`REPLICATOR_ALLOW_ANY_CHECKOUT=1` overrides; a dev worker asks the same
+question at the writer (#52).
 Full lifecycle table and the dev-server invocation:
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
@@ -116,7 +114,7 @@ For shell commands (dev only), load both — the snippet is under Common Command
 Replicator-owned settings carry the `REPLICATOR_` prefix so they never collide with a sibling service on the shared VM. `BUILD_ID` is deliberately unprefixed — the systemd unit stamps it generically.
 
 Every variable the service reads, with the reasoning behind each default:
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+[docs/ENVIRONMENT.md](docs/ENVIRONMENT.md).
 
 ## Bus Conventions
 
@@ -165,7 +163,7 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
 
 Where the reasoning lives:
 
-- What each stream carries — [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- What each stream carries — [docs/STREAMS.md](docs/STREAMS.md)
 - The rules common to all of them — [docs/CONVENTIONS.md](docs/CONVENTIONS.md)
 - Blob paths, modes, and the retention sweep — [docs/STORAGE.md](docs/STORAGE.md)
 - Fakeredis's divergences, the keys an integration run may touch, and why production `co-gcs-replication` is refused from every test — [docs/TESTING.md](docs/TESTING.md)
@@ -238,10 +236,12 @@ are deliberately not JSON: [docs/STYLE.md](docs/STYLE.md).
 
 ## Detail Docs
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — founding design, module-by-module layout, and what each stream carries; read before changing one
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — founding design and the module-by-module layout; read before changing one
+- [docs/STREAMS.md](docs/STREAMS.md) — what each stream carries, one bullet per rule `AGENTS.md` states in a line
 - [docs/CONVENTIONS.md](docs/CONVENTIONS.md) — the co-core/Redis Streams rules common to every stream: idempotency, validation, DLQ, `claim_stale`
 - [docs/STORAGE.md](docs/STORAGE.md) — blob paths and modes, the three populations under `REPLICATOR_BLOB_DIR`, TTL and ceiling semantics
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — VM topology, ports, the systemd unit's lifecycle, and every environment variable the service reads
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — VM topology, ports, the systemd unit's lifecycle, and the co-core pin
+- [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) — every variable either env file carries, and the boundary between them
 - [docs/TESTING.md](docs/TESTING.md) — where fakeredis diverges from the live broker, which keys an integration run may create, and why production `co-gcs-replication` is unreachable from every test (#38)
 - [docs/STYLE.md](docs/STYLE.md) — the logging stack: formatter, installers, and the non-JSON journald lines
 - [docs/COMMANDS.md](docs/COMMANDS.md) — every runnable command, with flags

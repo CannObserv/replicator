@@ -52,3 +52,15 @@ docs/contracts/content-fetch-issuer-reference.md :: Request options: what Replic
 docs/contracts/content-replicate-issuer-contract.md :: T3a — the *source* is a path too, and it is the sharper half (#29)
 docs/contracts/replicator-boundaries.md :: The policy stream (shipped, #19)
 docs/contracts/replicator-boundaries.md :: The fallback default (was the interim, #12 → #19)
+
+# 2026-08-19 curation (#67). The split's own back-references: the ARCHITECTURE.md
+# stub and the intro line that moved with the section both name AGENTS.md because
+# they say what AGENTS.md states in one line — true before the split, true after.
+docs/ARCHITECTURE.md :: What each stream carries, and the reasoning behind each rule
+docs/STREAMS.md :: Each rule `AGENTS.md` states in one line, with the reasoning
+# Pre-existing, unrelated to the split: provenance in a heading is legitimate here —
+# the two issue numbers are what distinguishes this bucket from the production one.
+docs/DEPLOYMENT.md :: The GCS test bucket — the opposite grant, on purpose
+# The GCS test bucket stayed in DEPLOYMENT.md's Infrastructure section through the
+# #67 split — this pointer still resolves to what it names.
+docs/TESTING.md :: The bucket and the SA are provisioned (#50)

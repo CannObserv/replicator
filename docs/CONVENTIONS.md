@@ -3,7 +3,7 @@
 The co-core / Redis Streams rules that hold for **every** stream Replicator
 touches, with the reasoning that makes each one non-negotiable. `AGENTS.md`
 states them in one line each; what a *particular* stream carries, and why, is in
-[ARCHITECTURE.md](ARCHITECTURE.md).
+[STREAMS.md](STREAMS.md).
 
 - **Consumers must be idempotent; producers own the outbox.** The cluster split (parent strategy, "Delivery + correctness") assigns the transactional outbox to producers with a DB system of record. Replicator has none — its durable record of intent is the consumer group's PEL, recovered via `claim_stale`. Do not add a Postgres outbox to the consume path.
 - **Validation posture:** use the canonical `extra="ignore"` models; **branch on `schema_version` before destructuring**; tolerate additive producer fields. Never use the strict `*Emit` classes on the consume path.
@@ -36,7 +36,7 @@ states them in one line each; what a *particular* stream carries, and why, is in
   publishes no fact at all, so misclassifying one strands the issuer forever
   (#29 CR #26, #27).
   The mechanism in full — the four outcomes, the guard order, why the writers are
-  keyed by alias — is [ARCHITECTURE.md](ARCHITECTURE.md); this bullet is the rule
+  keyed by alias — is [STREAMS.md](STREAMS.md); this bullet is the rule
   an agent needs before touching the replicate path.
 - **A 429 or a 503 escalates that host's spacing, and only those two (#25).** The
   adaptive politeness Watcher ran on its own fetch path and lost at the Phase 4
