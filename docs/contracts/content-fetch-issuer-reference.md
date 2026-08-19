@@ -13,9 +13,12 @@ the MUSTs, each of which states its rule there and explains itself here. The spl
 contract stays short enough to read start to finish; both files are normative, and a rule does not
 become advisory by living here.
 
-**Changing this document.** The same rule the contract states applies: a change to the failure
-taxonomy or to the refusal rules is announced on the issuer repos' trackers in the same change that
+**Changing this document.** The same rule the contract states applies, and it covers the *guidance*
+here as well as the rules: a change to the failure taxonomy, to the refusal rules, or to what an
+issuer is told to do about either is announced on the issuer repos' trackers in the same change that
 edits this file — see [the contract](content-fetch-issuer-contract.md) for how to pick the issue.
+Guidance is the half an issuer actually implements, so "the rules did not change" is not a reason to
+skip the announcement.
 
 ---
 
@@ -85,10 +88,17 @@ So take both halves, because they defend different things:
   backstop for values that were stored under an older screen — including any stored before the
   screen existed — and it is what makes the wedge self-healing rather than operator-driven.
 
-Watcher runs both: `sendable_validator()` refuses to mint an unsendable value, and
-`clear_validators()` fires on this reason and no other. An unsendable value that only a human can
-clear is an item that stops being fetched until a human notices, which is the failure mode this
-refusal is least likely to advertise.
+Watcher runs both: `sendable_validator()` refuses to mint an unsendable value, and of the
+`fetch_failed` reasons, `clear_validators()` fires on this one alone. An unsendable value that only
+a human can clear is an item that stops being fetched until a human notices, which is the failure
+mode this refusal is least likely to advertise.
+
+**One more condition clears a stored pair, and it is not a refusal.** Watcher also forgets the
+validators when bytes *arrive* and fail extraction. The reasoning generalizes to any consumer that
+inherits a fingerprint across 304s: a matching validator produces no bytes, so nothing is extracted
+and no fingerprint is recomputed — which means a broken extraction would be re-confirmed as a
+*successful* check for as long as the origin keeps answering 304. Forgetting the pair forces the
+next command to fetch in full and re-assert the failure.
 
 ---
 
@@ -186,8 +196,8 @@ Every `fetch_failed` row carries `terminal=True` — the command is closed and n
 loss is the single most likely way to misread this stream. It is also the only closed command that
 leaves **no `content.fetch.dlq` entry** — a successful no-change check is not operator-actionable,
 and wherever conditional GET is in use it is the common outcome, so copying each one there would
-bury the entries that matter. The cost, stated once: **`fetch_failed` volume is no longer a failure signal.** Alert on
-`fetch_failed where reason != "not_modified"`.
+bury the entries that matter. The cost, stated once: **`fetch_failed` volume is no longer a
+failure signal.** Alert on `fetch_failed where reason != "not_modified"`.
 
 The "nothing" rows are not one problem, and the reaper is not the answer to all of them:
 
