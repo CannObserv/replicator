@@ -2,9 +2,10 @@
 
 Founding design: `docs/plans/2026-06-25-replicator-mvp-design.md`. Parent strategy lives in archiver (`docs/plans/2026-06-25-observer-cluster-integration-strategy-design.md`); Replicator is its Phase 3.
 
-Module layout and the bus contracts the worker consumes and publishes.
-`AGENTS.md` keeps the rules needed on nearly every task; the reasoning that makes
-each one non-negotiable lives here. Blob-tree and retention rules are in
+Module layout: what each file under `src/` owns, and where everything else in
+the tree sits. `AGENTS.md` keeps the rules needed on nearly every task; what each
+bus stream carries is in [STREAMS.md](STREAMS.md), the rules common to all of
+them in [CONVENTIONS.md](CONVENTIONS.md), and blob-tree and retention rules in
 [STORAGE.md](STORAGE.md).
 
 ## Project Layout

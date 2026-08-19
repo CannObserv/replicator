@@ -20,3 +20,14 @@ AGENTS.md :: duplicate :: refused `provider_disabled`.
 AGENTS.md :: retarget :: - What each stream carries — [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 AGENTS.md :: retarget :: founding design, module-by-module layout, and what each stream carries
 AGENTS.md :: retarget :: the systemd unit's lifecycle, and every environment variable the service reads
+
+# 2026-08-19, #67 CR #10 and #11. Each file's preamble is a pointer at its own
+# contents, and this same change moved what both pointed at: the bus-contract
+# reasoning to docs/STREAMS.md, the variable inventory to docs/ENVIRONMENT.md.
+# Left as written, both promised content the file no longer holds.
+docs/ARCHITECTURE.md :: retarget :: Module layout and the bus contracts the worker consumes and publishes.
+docs/ARCHITECTURE.md :: retarget :: keeps the rules needed on nearly every task; the reasoning that makes
+docs/ARCHITECTURE.md :: retarget :: each one non-negotiable lives here. Blob-tree and retention rules are in
+docs/DEPLOYMENT.md :: retarget :: Single-VM topology, the systemd unit's lifecycle, and every environment variable
+docs/DEPLOYMENT.md :: retarget :: the service reads. `AGENTS.md` keeps the two-env-file boundary and the restart
+docs/DEPLOYMENT.md :: retarget :: command; the per-variable reasoning is here.

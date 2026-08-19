@@ -4,15 +4,15 @@
 # repo-wide figure in .skills/context-token-ratio, falling back to it for a
 # file never counted exactly or since drifted far from the size recorded here.
 14507 5929 AGENTS.md
-3509 1359 docs/ARCHITECTURE.md
+3600 1404 docs/ARCHITECTURE.md
 10311 4056 docs/COMMANDS.md
 11277 4192 docs/CONVENTIONS.md
-16314 6016 docs/DEPLOYMENT.md
-13587 5311 docs/ENVIRONMENT.md
+16640 6165 docs/DEPLOYMENT.md
+14028 5480 docs/ENVIRONMENT.md
 15846 6006 docs/SKILLS.md
 4796 1847 docs/SOCRATICODE.md
 5686 2097 docs/STORAGE.md
-24141 8705 docs/STREAMS.md
+24150 8707 docs/STREAMS.md
 3425 1244 docs/STYLE.md
 7856 2927 docs/TESTING.md
 28414 10615 docs/contracts/content-fetch-issuer-contract.md

@@ -1,4 +1,4 @@
-# Bus Conventions
+# What Each Stream Carries
 
 Each rule `AGENTS.md` states in one line, with the reasoning that makes it non-negotiable.
 The rules that hold for *every* stream — idempotency posture, validation, DLQ,

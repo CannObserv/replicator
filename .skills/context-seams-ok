@@ -12,11 +12,11 @@
 # --- back-references describing the AGENTS.md <-> docs relationship itself.
 # Each states the split that this skill maintains, so each is made MORE true by
 # a demotion, not less. They point at the arrangement, never at a given block.
-docs/ARCHITECTURE.md :: keeps the rules needed on nearly every task; the reasoning that makes
+docs/ARCHITECTURE.md :: keeps the rules needed on nearly every task; what each
 docs/ARCHITECTURE.md :: Reference docs; the Detail Docs index in AGENTS.md is the roster
 docs/ARCHITECTURE.md :: Each rule `AGENTS.md` states in one line, with the reasoning that makes it non-negotiable.
 docs/CONVENTIONS.md :: touches, with the reasoning that makes each one non-negotiable.
-docs/DEPLOYMENT.md :: keeps the two-env-file boundary and the restart
+docs/DEPLOYMENT.md :: keeps the two-env-file boundary and the
 docs/STYLE.md :: Code style beyond the conventions `AGENTS.md` keeps inline. Today that is the
 
 # --- narrative, not a pointer: the 2026-08-14 branch-deploy incident that #37
@@ -64,3 +64,6 @@ docs/DEPLOYMENT.md :: The GCS test bucket — the opposite grant, on purpose
 # The GCS test bucket stayed in DEPLOYMENT.md's Infrastructure section through the
 # #67 split — this pointer still resolves to what it names.
 docs/TESTING.md :: The bucket and the SA are provisioned (#50)
+# 2026-08-19, #67 CR #14. The new ENVIRONMENT.md preamble points back at
+# DEPLOYMENT.md for the lifecycle and the unit — neither moved in this split.
+docs/ENVIRONMENT.md :: and the unit itself are in [DEPLOYMENT.md](DEPLOYMENT.md).

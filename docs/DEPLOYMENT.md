@@ -1,8 +1,10 @@
 # Replicator Deployment
 
-Single-VM topology, the systemd unit's lifecycle, and every environment variable
-the service reads. `AGENTS.md` keeps the two-env-file boundary and the restart
-command; the per-variable reasoning is here.
+Single-VM topology, the systemd unit's lifecycle and the guards it starts
+behind, and the co-core pin. `AGENTS.md` keeps the two-env-file boundary and the
+restart command; the reasoning behind each of them is here. The variables
+themselves — every one either env file carries — are in
+[ENVIRONMENT.md](ENVIRONMENT.md).
 
 ## Infrastructure
 
@@ -80,6 +82,10 @@ Usage, the marker, and the two variables: **Testing the write path** in [TESTING
 The copy is deliberate, for the same reason `/etc/replicator/.env` is not read from the repo: the live unit must survive a repo reset, a worktree switch, or a branch checkout that happens to be mid-edit.
 
 ### The co-core pin, and why the patch floor is load-bearing
+
+`co-core` and `co-core-aio` come from the private GCS index `gs://co-gcs-pypi`,
+mirrored into `./.wheelhouse` by `scripts/sync_wheelhouse.py` and resolved
+through `[tool.uv] find-links` — never from PyPI.
 
 Auth is ADC: on the VM the SA key at `GOOGLE_APPLICATION_CREDENTIALS` (`/etc/replicator/co-pypi-reader.json`), in CI a keyless WIF token. Pin the current minor — `>=0.10,<0.11`. The **patch** floor is load-bearing, not tidiness: the change-bus payloads are `extra="ignore"`, so on an older wheel a model constructed with fields it does not have yet succeeds and silently discards them. Raise the floor with every co-core feature the code starts depending on, or a version skew publishes facts that look right and carry nothing (#10). Both floors since fail *loudly* instead — a ValidationError at construction (0.8.0 requires `info_source_id` on all three fetch payloads, #19/#28) or an ImportError at load, never reaching a running worker (0.9.4 cuts the replicate contracts, #29).
 

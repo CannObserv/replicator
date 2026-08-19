@@ -1,5 +1,12 @@
 # Environment Variables
 
+Every variable Replicator reads, with the reasoning behind each default. Two env
+files carry them, and the boundary between the two is hard:
+`/etc/replicator/.env` is the **only** file `replicator.service` reads, and the
+repo `.env` holds dev/agent secrets the worker has no use for — org-wide PATs
+whose blast radius a process that fetches public URLs must not widen. Lifecycle
+and the unit itself are in [DEPLOYMENT.md](DEPLOYMENT.md).
+
 In `.env` (dev/agent only — never read by the service):
 - `GH_TOKEN` — GitHub PAT for this repo (used by `gh` CLI)
 - `GH_TOKEN_ARCHIVER` / `GH_TOKEN_WATCHER` / `GH_TOKEN_CANNOBSERV` / `GH_TOKEN_SKILLS` — per-repo PATs. Cross-repo work is **filed as an issue**, never edited directly: each repo owns its own review, CI, and deploy cycle, and `main` is the deployed code. Pass the right one as `GH_TOKEN` for a given `gh` call.
