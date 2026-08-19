@@ -258,7 +258,7 @@ domain vocabulary: the second of the three permitted state shapes, twice.
 synchronously before the consume loop starts, or the worker's opening commands are paced against
 an empty map — safe only because the fallback is the stricter number, and that is the one
 assumption not worth spending on startup ordering. Mechanism, including why a failed replay is
-absorbed rather than fatal: [ARCHITECTURE.md](../ARCHITECTURE.md).
+absorbed rather than fatal: [STREAMS.md](../STREAMS.md).
 
 **Known limitation, still open after #19: the host asked for is not always the host
 reached.** httpx follows redirects inside the driver, so a URL that 301s elsewhere is paced under

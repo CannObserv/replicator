@@ -38,7 +38,12 @@
     {
       "name": "architecture",
       "path": "./docs/ARCHITECTURE.md",
-      "description": "Founding-design pointers, module-by-module layout of src/ (worker, storage, api, core) with the job each file owns, and the reasoning behind what each individual stream carries: the issuer contract and boundaries charter pointers, content.blobs carrying both blob_available and fetch_failed, the seven optional passthrough fields on blob_available and why None means nobody said it, one run_loop over N command streams parameterized by CommandSpec, the content.replicate loop and its create-if-absent write for gcs, alias-keyed writers and the allow-list guard order, the FailureReporter seam, per-command headers/timeout_seconds validation and why unsendable options are refused rather than clamped, the pacing split between sleeping and parking, the groupless content.fetch-policy reader and the four ways to apply a policy message wrongly, the per-occurrence fact keys, and info_source_id as an echoed field. Read this before changing what any stream carries. The rules common to every stream are in docs/CONVENTIONS.md."
+      "description": "Founding-design pointers and the module-by-module layout of src/ (worker, storage, api, core) with the job each file owns, plus the directory map of scripts/, tests/, deploy/ and the wheelhouse. What each individual stream carries is in docs/STREAMS.md; the rules common to every stream are in docs/CONVENTIONS.md."
+    },
+    {
+      "name": "streams",
+      "path": "./docs/STREAMS.md",
+      "description": "The reasoning behind what each individual stream carries: the issuer contract and boundaries charter pointers, content.blobs carrying both blob_available and fetch_failed, the seven optional passthrough fields on blob_available and why None means nobody said it, one run_loop over N command streams parameterized by CommandSpec, the content.replicate loop and its create-if-absent write for gcs, alias-keyed writers and the allow-list guard order, the FailureReporter seam, per-command headers/timeout_seconds validation and why unsendable options are refused rather than clamped, the pacing split between sleeping and parking, the groupless content.fetch-policy reader and the four ways to apply a policy message wrongly, the per-occurrence fact keys, and info_source_id as an echoed field. Read this before changing what any stream carries. Split out of docs/ARCHITECTURE.md; the rules common to every stream are in docs/CONVENTIONS.md."
     },
     {
       "name": "bus-conventions",
@@ -53,7 +58,12 @@
     {
       "name": "deployment-reference",
       "path": "./docs/DEPLOYMENT.md",
-      "description": "Single-VM topology and port allocation (worker binds none, 8040 reserved, 8041 dev; neighbours watcher 8000/8001, archiver 8020/8021, notifier 9000/9001), Archiver's ownership of the Redis broker and the >=7.0 server floor, the replicator.service lifecycle table, why /etc/systemd/system/replicator.service is a copy rather than a symlink, the dev-server invocation, and the complete REPLICATOR_-prefixed environment-variable reference with the reasoning behind every default."
+      "description": "VM topology and ports, the systemd unit's lifecycle and its ExecStartPre guards, the checkout guard, and the co-core pin. The environment variables themselves are in docs/ENVIRONMENT.md."
+    },
+    {
+      "name": "environment-variables",
+      "path": "./docs/ENVIRONMENT.md",
+      "description": "Every environment variable Replicator reads, with the reasoning behind each default, and the hard boundary between /etc/replicator/.env (the only file the service reads) and the repo .env (dev/agent secrets). Split out of docs/DEPLOYMENT.md."
     },
     {
       "name": "testing-reference",

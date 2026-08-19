@@ -7,3 +7,27 @@ disproven :: enforces eight charter invariants in CI; change a
 # strings on a stream nothing trims", the terminal/pre-request wedge) are already in
 # docs/contracts/content-fetch-issuer-reference.md, which AGENTS.md links.
 docs/ARCHITECTURE.md :: duplicate :: dropped over `MAX_HEADER_VALUE_LENGTH`, never truncated
+
+# 2026-08-19 curation (#67). Bus Conventions -> docs/STREAMS.md and Environment
+# Variables -> docs/ENVIRONMENT.md. Four lines dropped because DEPLOYMENT.md
+# already carries the #52 dev-worker guard in full (its "The dev worker asks the
+# same question, at the writer" subsection); three rewritten because this same
+# change moved what they point at.
+AGENTS.md :: duplicate :: A **dev** worker runs no
+AGENTS.md :: duplicate :: so `build_writers` asks the same script directly
+AGENTS.md :: duplicate :: provider writer on a checkout it rejects (#52)
+AGENTS.md :: duplicate :: refused `provider_disabled`.
+AGENTS.md :: retarget :: - What each stream carries — [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+AGENTS.md :: retarget :: founding design, module-by-module layout, and what each stream carries
+AGENTS.md :: retarget :: the systemd unit's lifecycle, and every environment variable the service reads
+
+# 2026-08-19, #67 CR #10 and #11. Each file's preamble is a pointer at its own
+# contents, and this same change moved what both pointed at: the bus-contract
+# reasoning to docs/STREAMS.md, the variable inventory to docs/ENVIRONMENT.md.
+# Left as written, both promised content the file no longer holds.
+docs/ARCHITECTURE.md :: retarget :: Module layout and the bus contracts the worker consumes and publishes.
+docs/ARCHITECTURE.md :: retarget :: keeps the rules needed on nearly every task; the reasoning that makes
+docs/ARCHITECTURE.md :: retarget :: each one non-negotiable lives here. Blob-tree and retention rules are in
+docs/DEPLOYMENT.md :: retarget :: Single-VM topology, the systemd unit's lifecycle, and every environment variable
+docs/DEPLOYMENT.md :: retarget :: the service reads. `AGENTS.md` keeps the two-env-file boundary and the restart
+docs/DEPLOYMENT.md :: retarget :: command; the per-variable reasoning is here.
