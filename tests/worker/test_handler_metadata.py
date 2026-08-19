@@ -245,10 +245,19 @@ UNSENDABLE_VALUES = [
 ]
 
 
+# The two passthroughs that are replayed, each paired with the field it lands on.
+# Spelled out rather than derived from the header name: an implementation that
+# looked up the wrong header would satisfy an ``is None`` assertion exactly as
+# well as a correct one, which is the vacuity ``PASSTHROUGHS`` exists to avoid.
+VALIDATORS = [("etag", "etag"), ("last-modified", "last_modified")]
+
+A_GOOD_LAST_MODIFIED = "Wed, 21 Oct 2015 07:28:00 GMT"
+
+
 @pytest.mark.parametrize("value", UNSENDABLE_VALUES)
-@pytest.mark.parametrize("name", ["etag", "last-modified"])
+@pytest.mark.parametrize(("name", "attribute"), VALIDATORS)
 async def test_a_validator_replicator_could_not_send_back_is_dropped(
-    handler, fake_redis, name, value
+    handler, fake_redis, name, attribute, value
 ):
     """Publishing one wedges the item, and the wedge is terminal.
 
@@ -264,7 +273,36 @@ async def test_a_validator_replicator_could_not_send_back_is_dropped(
     await handler(fetcher)(command())
 
     (fact,) = await published_facts(fake_redis)
-    assert getattr(fact, name.replace("-", "_")) is None
+    assert getattr(fact, attribute) is None
+
+
+@pytest.mark.parametrize("value", UNSENDABLE_VALUES)
+async def test_an_unsendable_validator_does_not_take_the_other_one_with_it(
+    handler, fake_redis, value
+):
+    """The filter is per field, and only a positive assertion can show it.
+
+    Every other case here asserts ``None``, which a filter that over-triggered
+    and dropped both validators would satisfy too — the regression shape this
+    code actually invites is the check being hoisted to cover the whole fact
+    rather than the two fields it belongs on. An origin that sends one bad
+    validator and one good one must still hand the issuer the good one.
+    """
+    fetcher = FakeFetcher(
+        fetch_result(
+            headers={
+                "content-type": "text/html",
+                "etag": value,
+                "last-modified": A_GOOD_LAST_MODIFIED,
+            }
+        )
+    )
+
+    await handler(fetcher)(command())
+
+    (fact,) = await published_facts(fake_redis)
+    assert fact.etag is None
+    assert fact.last_modified == A_GOOD_LAST_MODIFIED
 
 
 @pytest.mark.parametrize("value", UNSENDABLE_VALUES)

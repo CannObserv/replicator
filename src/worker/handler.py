@@ -905,9 +905,11 @@ def _replayable(headers: dict[str, str], name: str) -> str | None:
     initiative (#58).
 
     Dropped rather than repaired, the same posture as the over-length case and
-    for the same shape of reason: there is the value the origin sent and there is
-    nothing, and a scrubbed ETag is neither. What it *would* be is a validator
-    that can never match — see :data:`MAX_HEADER_VALUE_LENGTH`.
+    for the same shape of reason. There is the value the origin sent and there is
+    nothing; a *scrubbed* ETag is neither, and it fails the same way a truncated
+    one does — it is a value the origin never sent, so it can never match, and
+    the issuer believes it asked conditionally while the origin answers 200 every
+    time. See :data:`MAX_HEADER_VALUE_LENGTH` for that argument in full.
     """
     value = _passthrough(headers, name)
     if value is None or not _HEADER_VALUE.match(value):

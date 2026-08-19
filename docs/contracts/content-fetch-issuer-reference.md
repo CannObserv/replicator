@@ -95,7 +95,9 @@ mode this refusal is least likely to advertise.
 
 **Replicator no longer supplies this input from its own side (#60).** `etag` and `last_modified`
 are screened against the refusal rules *before* they are published, so a validator replayed
-verbatim off a `blob_available` is sendable by construction. Both halves above still stand: a
+verbatim off a `blob_available` passes the **value** rule by construction. The header count and
+the byte total remain yours: they are computed across your whole command, and no screening
+Replicator does on one value can speak for them. Both halves above still stand: a
 consumer can be holding a value published before that fix, and the refusal set is versioned in
 Replicator's code rather than on the wire, so a rule that narrows later would refuse a validator
 minted under the old one.
@@ -144,8 +146,8 @@ are the whole value of the six:
   could not send back as a request header (#60). The last two are dropped rather than adjusted,
   and for the same shape of reason: these are origin-controlled strings on a broadcast stream
   nothing trims, and a *truncated* ETag replayed in an `If-None-Match` is a validator that can
-  never match, while an *unsendable* one is a validator that never leaves the building — both
-  worse than none. The unsendable set is the request-options set above: anything outside printable
+  never match, while an *unsendable* one is one the request never carries, because Replicator
+  refuses the command before contacting the origin — both worse than none. The unsendable set is the request-options set above: anything outside printable
   US-ASCII, interior HTAB and obs-text included.
 
   The asymmetry on the fourth case is deliberate. `content_type_raw` is published whatever it
