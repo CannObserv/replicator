@@ -46,11 +46,14 @@ from pathlib import Path
 import pytest
 from co_core_aio.gcs import AsyncGcsDriver
 
+from src.storage.gcs import GcsBlobStore
 from tests.conftest import (
     PRODUCTION_ENV,
+    TEST_BLOB_BUCKET_ENV,
     TEST_BUCKET_ENV,
     TEST_CREDENTIALS_ENV,
     guarded_init,
+    resolve_test_blob_bucket,
     resolve_test_bucket,
 )
 
@@ -275,3 +278,87 @@ def test_a_marked_test_reaches_the_test_bucket_and_nothing_else(gcs_bucket):
 
     with pytest.raises(AssertionError, match="may only reach"):
         AsyncGcsDriver("some-other-bucket")
+
+
+def test_an_unmarked_test_cannot_construct_a_real_blob_store():
+    """The same refusal, one store over (#7).
+
+    `GcsBlobStore.__init__` builds `storage.Client()` in its own body exactly as
+    `AsyncGcsDriver.__init__` does, so it is reachable by the same accident and
+    has to be refused by the same wrapper. The guard is here rather than in
+    `tests/storage/test_gcs.py` because the property is about the *suite* — no
+    test anywhere constructs one — which no module about the store could assert.
+    """
+    with pytest.raises(AssertionError, match="not marked"):
+        GcsBlobStore("any-bucket-at-all")
+
+
+def test_the_two_stores_are_guarded_against_different_buckets():
+    """One variable per destination, because the two grants are opposites.
+
+    The replicate bucket's SA deliberately holds **no delete** — that is what
+    enforces T4's "never overwrite, never delete" at IAM rather than only in our
+    code. A temp store whose whole job is to expire its objects needs the
+    opposite posture. Pointing both at one bucket would mean either the temp
+    store cannot expire or the permanent one can be erased, and the second
+    failure is unrecoverable.
+    """
+    assert TEST_BUCKET_ENV != TEST_BLOB_BUCKET_ENV
+
+
+def test_the_blob_bucket_variable_has_no_fallback():
+    """Absent means skip, never "use the default" — #50's rule, second bucket."""
+    assert resolve_test_blob_bucket({}) is None
+    assert resolve_test_blob_bucket({TEST_BLOB_BUCKET_ENV: "some-bucket"}) == "some-bucket"
+
+
+def test_the_blob_store_guard_names_its_own_variable():
+    """A refusal that named the wrong variable would send an operator to the wrong line."""
+    guarded = guarded_init(
+        lambda self, bucket, **kw: None,
+        "co-gcs-test-blobs",
+        label="GcsBlobStore",
+        env_name=TEST_BLOB_BUCKET_ENV,
+    )
+
+    with pytest.raises(AssertionError, match=TEST_BLOB_BUCKET_ENV):
+        guarded(object(), "some-other-bucket")
+
+
+def test_the_guard_admits_an_injected_client():
+    """A supplied client resolves no credential and reaches no bucket by name.
+
+    The refusal is aimed at a constructor that builds `storage.Client()` itself.
+    Refusing an injected one too would force every unit test of store *decisions*
+    — which key, which precondition, what a lost race means — to be marked `gcs`
+    and skipped on an unprovisioned host, which is how a mark stops meaning
+    "touches the network" and starts meaning "constructs this class".
+    """
+    seen = []
+    guarded = guarded_init(lambda self, bucket, **kw: seen.append(bucket), None)
+
+    guarded(object(), "any-bucket-at-all", client=object())
+
+    assert seen == ["any-bucket-at-all"]
+
+
+def test_the_guard_still_refuses_a_bare_construction_beside_it():
+    """The admission above is about the client, not about relaxing the rule."""
+    guarded = guarded_init(lambda self, bucket, **kw: None, None)
+
+    with pytest.raises(AssertionError, match="not marked"):
+        guarded(object(), "any-bucket-at-all", client=None)
+
+
+def test_the_injected_client_carve_out_does_not_reach_a_marked_test():
+    """CR #4: the admission is for tests that reach no network, not for any client.
+
+    Ahead of the bucket comparison it also admitted a `@pytest.mark.gcs` test —
+    the one state with a credential actually resolved — so a driver could be
+    constructed against any bucket by handing it a client. The carve-out belongs
+    to the unmarked state, where nothing is expected because nothing is allowed.
+    """
+    guarded = guarded_init(lambda self, bucket, **kw: None, TEST_BUCKET, marked=True)
+
+    with pytest.raises(AssertionError, match="may only reach"):
+        guarded(object(), "some-other-bucket", client=object())

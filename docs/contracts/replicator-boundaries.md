@@ -313,9 +313,26 @@ tokens Replicator emits is the contract working.
 `blob_uri` is a host-local `file://` path and nothing on the wire says so. Any consumer must
 live on Replicator's VM — a shared-filesystem data-plane coupling in a service otherwise
 reached only through the broker, and a constraint on the *issuer's* deployment topology that
-the issuer never agreed to. Tracked in #7 (object-store blob backend), and **pinned by a
-characterization test** so #7 flips a written line rather than quietly satisfying an unstated
-one.
+the issuer never agreed to. It is not theoretical: Watcher parses the URI into a path and
+reads the bytes off this filesystem today.
+
+**#7 built the way out and deliberately did not take it.** An object-store backend now
+satisfies the same `BlobStore` seam and announces `gs://`, but `REPLICATOR_BLOB_BACKEND`
+still defaults to `local`, so what every running worker announces is unchanged. The violation
+closes when two things happen that this repo cannot do alone: a consumer that can read the
+new scheme without an uncapped re-fetch loop (CannObserv/watcher#275), and an operator
+flipping `/etc/replicator/.env`. Until both, this section stands.
+
+**Pinned by a characterization test in both directions** — that the default backend still
+announces `file://`, and that the object store announces a host-independent URI. The first
+alone would let the remedy rot unnoticed; a charter that named a way out nobody could execute
+would be decorative one step later than one that claimed the problem was solved.
+
+**What closing it buys, stated precisely.** The data plane stops being host-local: a consumer
+no longer has to share this VM. It does **not** become uncoupled — the filesystem mode is
+replaced by an IAM grant on the consumer's service account, which is auditable and
+host-independent but is still something an operator must hold up. That is a better coupling,
+not the absence of one, and the charter should not be read as claiming otherwise.
 
 Recorded here rather than omitted: a charter that asserts an isolation the code does not have
 teaches its readers that the document is decorative.

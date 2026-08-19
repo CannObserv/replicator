@@ -15,8 +15,9 @@ the systemd unit's ``ExecStartPre``.
 import socket
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Also the default of ``build_replicate_handler``'s ``write_timeout_seconds``,
@@ -24,6 +25,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # with two spellings drifts into two numbers, and the handler's default is what a
 # directly-constructed handler gets while the field below is what the worker gets.
 DEFAULT_WRITE_TIMEOUT_SECONDS = 120
+
+# The object store's per-operation timeout, imported by ``src.storage.gcs`` so a
+# directly constructed store and the worker's agree by construction rather than
+# by two literals staying equal (CR #8) — the same arrangement
+# ``DEFAULT_WRITE_TIMEOUT_SECONDS`` has with the replicate handler.
+DEFAULT_BLOB_TIMEOUT_SECONDS = 30.0
 
 
 def _default_consumer_name() -> str:
@@ -48,6 +55,61 @@ class Settings(BaseSettings):
     # guard checks the same broker the worker will actually connect to.
     redis_url: str = Field(
         default="redis://localhost:6379/0", validation_alias="REPLICATOR_REDIS_URL"
+    )
+
+    # Which backend holds the fetched bytes, and therefore what scheme
+    # ``blob_available.blob_uri`` carries (#7).
+    #
+    # **``local`` is the compiled-in default and stays that way until the cluster
+    # is ready.** A `file://` URI makes every consumer share this host — the
+    # data-plane coupling #7 exists to remove — but the flip is not Replicator's
+    # alone to make: Watcher parses the URI into a path and re-issues the fetch,
+    # *uncapped*, when it cannot open one (CannObserv/watcher#275). Shipping
+    # `gcs` as the default would turn a deploy into an unbounded re-fetch loop
+    # against live origins. The operator moves this in
+    # ``/etc/replicator/.env`` once the consumers can read the new scheme.
+    #
+    # A Literal rather than a free string: a typo that fell back to a working
+    # backend would be a silent misconfiguration, and the failure it produces —
+    # blobs written where nobody looks — has no local symptom.
+    blob_backend: Literal["local", "gcs"] = Field(
+        default="local", validation_alias="REPLICATOR_BLOB_BACKEND"
+    )
+
+    # The bucket the ``gcs`` backend writes temp blobs into. Empty is legal only
+    # while the backend is ``local`` — the validator below refuses the pairing
+    # that would otherwise announce ``gs:///<key>``.
+    #
+    # Deliberately **not** the replication bucket. These are arbitrary bytes from
+    # arbitrary origins held for days, and the destination for permanent
+    # artifacts is grant-restricted precisely so nothing can delete from it —
+    # which is the opposite of what a temp store needs. Separate bucket, separate
+    # lifecycle rule, separate grant.
+    blob_bucket: str = Field(default="", validation_alias="REPLICATOR_BLOB_BUCKET")
+
+    # Key prefix inside that bucket. Normalized to carry no leading or trailing
+    # slash, because it is joined into an object key and a stray one produces
+    # either ``//`` or a key rooted somewhere ``uri_for`` would not derive — and
+    # ``uri_for`` is what the replicate guard compares a message's ``blob_uri``
+    # against (T3a). A prefix that round-trips differently through the two is a
+    # refusal of a blob this store really did mint.
+    blob_prefix: str = Field(default="blobs", validation_alias="REPLICATOR_BLOB_PREFIX")
+
+    # How long one object-store operation may block before it gives up. A
+    # setting rather than a constant in the store (CR #8) for the reason every
+    # other timeout here is one: it is a property of this host's link to the
+    # provider, and `src/core/config.py` is the single source of env access.
+    #
+    # **It lands directly in the unit's shutdown budget.** Storage runs inside
+    # `asyncio.to_thread`, which puts it beyond cancellation, so SIGTERM waits it
+    # out exactly as it waits out an in-flight sweep — which is why 30 s and not
+    # the fetch ceiling's 120: `TimeoutStopSec` has to cover a poll, a pacing
+    # sleep, the slowest fetch *and* this, and `tests/test_deploy.py` now asserts
+    # the sum (CR #5).
+    blob_timeout_seconds: float = Field(
+        default=DEFAULT_BLOB_TIMEOUT_SECONDS,
+        gt=0,
+        validation_alias="REPLICATOR_BLOB_TIMEOUT_SECONDS",
     )
 
     # Temp-storage root for the local-filesystem blob backend. "Temporary" means
@@ -277,6 +339,30 @@ class Settings(BaseSettings):
 
     # Stamped by the systemd unit's ExecStartPre; "dev" outside systemd.
     build_id: str = Field(default="dev", validation_alias="BUILD_ID")
+
+    @field_validator("blob_prefix")
+    @classmethod
+    def _normalize_blob_prefix(cls, value: str) -> str:
+        """Strip the slashes a key join would otherwise double or root wrongly."""
+        return value.strip("/")
+
+    @model_validator(mode="after")
+    def _gcs_backend_needs_a_bucket(self) -> "Settings":
+        """Refuse the pairing whose only symptom is in another repo.
+
+        Checked here rather than in the store's constructor so it fails at
+        settings construction — before the consumer group is joined and before a
+        command can be read. A worker that boots on this misconfiguration fetches
+        successfully, stores nowhere reachable, and publishes a ``blob_uri`` a
+        consumer cannot tell from a reaped one.
+        """
+        if self.blob_backend == "gcs" and not self.blob_bucket:
+            raise ValueError(
+                "REPLICATOR_BLOB_BACKEND=gcs needs REPLICATOR_BLOB_BUCKET — "
+                "there is no default bucket, and guessing one is how bytes land "
+                "somewhere nobody reads"
+            )
+        return self
 
     @property
     def worst_case_outage_seconds(self) -> float:

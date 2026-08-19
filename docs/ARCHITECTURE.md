@@ -12,16 +12,17 @@ them in [CONVENTIONS.md](CONVENTIONS.md), and blob-tree and retention rules in
 
 ```
 src/worker/     — Bus consumer; the primary process
-src/worker/main.py   — Entry point: client lifetime, consumer group, signals
+src/worker/main.py   — Entry point: client lifetime, consumer group, signals, backend selection
 src/worker/loop.py   — The consume path: poll → dispatch → ack, DLQ, dedupe, recovery; one loop per command stream, parameterized by CommandSpec
 src/worker/handler.py — The byte path behind the Handler seam: fetch → fingerprint → store → publish
 src/worker/reporter.py — The failure fact behind the FailureReporter seam: fetch_failed on content.blobs
 src/worker/retention.py — The sweep task: cadence, usage accounting, ceiling reporting
 src/worker/pacing.py — Per-host request spacing; the mechanism half of politeness (#12, escalating on 429 since #25)
 src/worker/policy.py — The content.fetch-policy consumer: the map, and the groupless tail (#19)
-src/storage/    — Temp storage; BlobStore protocol + the local-FS backend
-src/storage/base.py  — BlobStore protocol (store / exists / open)
+src/storage/    — Temp storage; BlobStore protocol + its two backends
+src/storage/base.py  — BlobStore protocol (store / exists / uri_for / open / open_stream)
 src/storage/local.py — Content-addressed local backend; file:// URIs, sharded paths
+src/storage/gcs.py   — Content-addressed object-store backend; gs:// URIs, flat keys, customTime retention (#7)
 src/storage/sweeper.py — Retention: TTL reap, stale temps, empty shards; the measured size
 src/api/        — FastAPI app (/health only; not part of the MVP loop)
 src/api/main.py — App factory, lifespan, router registration

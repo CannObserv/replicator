@@ -7,7 +7,7 @@ allowed to touch.
 
 ## Test layout
 
-- Test structure mirrors source (`src/foo.py` → `tests/test_foo.py`). A module whose tests outgrow one file splits by concern, not by helper: `tests/worker/test_loop_dlq.py`, `test_loop_recovery.py`, … with the shared wiring in that package's `conftest.py`. Concern is the default axis; **environment** is the one exception — tests needing a live broker split off with an `_integration` suffix (`tests/worker/test_main_integration.py`), and those needing the real GCS bucket with a `_gcs` one (`tests/worker/test_replicate_writer_gcs.py`), so the filename says what the marker enforces
+- Test structure mirrors source (`src/foo.py` → `tests/test_foo.py`). A module whose tests outgrow one file splits by concern, not by helper: `tests/worker/test_loop_dlq.py`, `test_loop_recovery.py`, … with the shared wiring in that package's `conftest.py`. Concern is the default axis; **environment** is the one exception — tests needing a live broker split off with an `_integration` suffix (`tests/worker/test_main_integration.py`), and those needing the real GCS bucket with a `_gcs` one (`tests/worker/test_replicate_writer_gcs.py`), so the filename says what the marker enforces. Where that would double — the module under test is already `gcs.py` — the marked file names the resource instead (`tests/storage/test_gcs_bucket.py`), never `_integration`, which is the other marker's suffix
 
 ## Testing the bus
 
@@ -42,10 +42,29 @@ makes production untestable (#38).
 - **The fixtures** (`tests/conftest.py`, autouse). `REPLICATOR_REPLICATION_ALIASES_FILE`
   and `GOOGLE_APPLICATION_CREDENTIALS` are removed from the environment of every
   test — the Common Commands snippet sources `/etc/replicator/.env`, so `uv run
-  pytest` inherits both — and `AsyncGcsDriver.__init__` is patched to refuse any
-  bucket. The refusal precedes the call through, because the real `__init__`
-  resolves ADC in its own body; checking afterwards would authenticate first and
-  object second.
+  pytest` inherits both — and `AsyncGcsDriver.__init__` **and
+  `GcsBlobStore.__init__`** are patched to refuse any bucket. The refusal
+  precedes the call through, because both constructors resolve ADC in their own
+  body; checking afterwards would authenticate first and object second.
+
+  **An unmarked constructor handed a `client=` is admitted.** What the guard is
+  aimed at is a constructor that resolves credentials itself and reaches a bucket
+  by name — a caller supplying the client has already made that impossible, and
+  an unmarked test cannot build a real client anyway with the identity scrubbed.
+  Without the carve-out, `tests/storage/test_gcs.py` would have to claim the
+  `gcs` mark to test decisions that touch no network, which is how a marker stops
+  meaning "writes to a bucket" and starts meaning "constructs this class".
+
+  **It is scoped to the unmarked state on purpose.** Placed ahead of the bucket
+  comparison it also admitted a *marked* test — the one state with a credential
+  actually resolved — so a driver could be pointed at any bucket by handing it a
+  client. The moment a destination is expected, the destination is checked.
+
+  **The fakes live in `tests/storage/conftest.py`**, not in whichever test module
+  defined them first, and they mirror the SDK rather than the tests: `exists()`
+  returns `False` for anything absent because the real one swallows `NotFound`,
+  which is the behaviour that made an existence-based preflight untestable and
+  wrong at the same time.
 
 The bucket and the SA are provisioned (#50) — `gs://co-gcs-test-replication` and `co-gcs-test-replicator@co-gcs.iam.gserviceaccount.com`, with `roles/storage.objectAdmin` on that bucket and no write on production. The resource, what it deliberately differs from production in, and how each property was verified: **The GCS test bucket** in [DEPLOYMENT.md](DEPLOYMENT.md).
 
@@ -84,16 +103,27 @@ ordinary unit test's blast radius does not widen to buy three tests' coverage. A
 skip there would be a green run with no verification, so the job asserts the
 credentials file resolved before it runs pytest.
 
-Two variables, **neither with a default** — absent means skip, never "use
+Three variables, **none with a default** — absent means skip, never "use
 whatever the code would have picked":
 
 | Variable | What it names |
 |---|---|
-| `REPLICATOR_TEST_GCS_BUCKET` | the provisioned test bucket |
+| `REPLICATOR_TEST_GCS_BUCKET` | the provisioned replicate test bucket |
+| `REPLICATOR_TEST_BLOB_BUCKET` | the temp-blob test bucket (#7); unprovisioned today, so `tests/storage/test_gcs_bucket.py` skips |
 | `REPLICATOR_TEST_GCS_CREDENTIALS` | the test SA key; the fixture maps it onto `GOOGLE_APPLICATION_CREDENTIALS` for marked tests only |
 
-Both are dev-only and belong in the repo `.env` or the invoking shell — never in
-`/etc/replicator/.env`, which is the file the service reads. Contrast
+**Two buckets, because the grants are opposites.** The replicate destination's SA
+holds no `delete` — the property that puts T4 at IAM rather than only in our code
+— while the temp-store tests create objects and clean up after themselves. One
+bucket serving both would mean either those tests cannot tidy or the permanent
+store can be erased, and only one of those failures is recoverable. The missing
+*bucket* therefore skips in the fixture that hands it over rather than in the
+autouse one: the two destinations are provisioned independently, and a host with
+one should still run the tests it can. A missing *identity* still skips
+everything, since nothing marked can run without it.
+
+All three are dev-only and belong in the repo `.env` or the invoking shell —
+never in `/etc/replicator/.env`, which is the file the service reads. Contrast
 `REPLICATOR_TEST_REDIS_URL`, which *does* default: db 15 on localhost cannot be
 the live database, and `real_redis` refuses db 0 outright. No bucket name has
 that property.

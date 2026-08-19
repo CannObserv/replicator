@@ -67,8 +67,10 @@ Full tool table, prefetch query, per-tool guidance, cross-repo search:
 `src/worker/` is the primary process — the bus consumer, with the byte path, the
 failure fact, the retention sweep, the pacer, and the `content.fetch-policy` reader
 each behind their own seam. `src/storage/` is the content-addressed temp store behind
-the `BlobStore` protocol; `src/api/` is the dev-only `/health` app; `src/core/` holds
-config, logging, and the consume path's failure vocabulary. `tests/` mirrors
+the `BlobStore` protocol — **two backends now** (`local`, `gcs`), selected by
+`REPLICATOR_BLOB_BACKEND` and defaulting to `local` (#7); `src/api/` is the dev-only
+`/health` app; `src/core/` holds config, logging, and the consume path's failure
+vocabulary. `tests/` mirrors
 `src/`. Every module with the job it owns:
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -127,6 +129,17 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
   rides both and is **echoed, never read**, as is replicate's
   `info_item_rep_spec_id`: each `test_boundaries.py` carve-out is one field
   wide, and adding one edits the charter (#28, #29).
+- **Two blob backends, one seam, and the flip is not ours alone.** `local` announces
+  `file://` and `gcs` announces `gs://`; `local` is the compiled-in default and stays
+  that way until a consumer can read the other scheme without an uncapped re-fetch
+  loop (CannObserv/watcher#275). Every `BlobStore` call from a coroutine goes through
+  `asyncio.to_thread` — which puts it in the unit's shutdown budget, not just the
+  handler's. Under `gcs` there is no sweep and `REPLICATOR_BLOB_MAX_TOTAL_BYTES`
+  is **not enforced** — retention is a bucket lifecycle rule on `customTime`, and
+  `blob_expires_at` becomes a floor. A missing blob is a `FileNotFoundError` on
+  both backends; every other provider failure carries its status for the caller
+  to classify (`is_terminal_provider_status`). Read
+  [docs/STORAGE.md](docs/STORAGE.md) before touching either store.
 - **Store, then publish — never the reverse.** A fact pointing at bytes that are
   not there is unrepairable by the consumer; stored bytes with no fact repair
   themselves on the reclaim.

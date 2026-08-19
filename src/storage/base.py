@@ -1,11 +1,23 @@
 """The temp-storage seam.
 
 A ``Protocol`` rather than a base class: the loop depends on the shape, not on an
-inheritance relationship, and a GCS or GDrive backend added when durable
-replication lands satisfies it without importing anything from here.
+inheritance relationship. **Two implementations satisfy it** (CR #7) —
+``src.storage.local.LocalBlobStore``, which announces ``file://``, and
+``src.storage.gcs.GcsBlobStore``, which announces ``gs://`` (#7) — and the second
+was added without importing anything from here, which was the design claim and is
+now a fact rather than a plan. ``REPLICATOR_BLOB_BACKEND`` chooses; nothing
+downstream can tell which one it got.
 
 ``backend_uri`` is opaque to consumers — it travels as ``blob_available.blob_uri``
 and nothing downstream parses it.
+
+**A missing blob is a ``FileNotFoundError``, whatever the backend** (CR #3). That
+is the one piece of vocabulary this protocol imposes beyond the signatures: the
+filesystem raises it natively and the object store translates the SDK's
+``NotFound`` into it, so the consume path keeps a single catch for "these bytes
+are gone" instead of one per backend. Every other failure propagates as the
+backend raised it, carrying whatever status it has, for the caller to classify
+(``src.core.errors.is_terminal_provider_status``).
 """
 
 from typing import IO, Protocol
@@ -43,7 +55,11 @@ class BlobStore(Protocol):
         ...
 
     def open(self, fingerprint: str) -> bytes:
-        """Read back the bytes stored under ``fingerprint``."""
+        """Read back the bytes stored under ``fingerprint``.
+
+        Raises ``FileNotFoundError`` when they are gone — see the module
+        docstring on why that is the protocol's word rather than each backend's.
+        """
         ...
 
     def open_stream(self, fingerprint: str) -> IO[bytes]:

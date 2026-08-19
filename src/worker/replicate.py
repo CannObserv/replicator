@@ -25,6 +25,7 @@ obvious shape for both and lose the same way ``tests/test_boundaries.py``'s echo
 scan lost three times: they are only ever as complete as the last probe.
 """
 
+import asyncio
 import re
 import string
 from collections.abc import Awaitable, Callable, Mapping
@@ -40,12 +41,24 @@ from src.core.errors import (
     PermanentReplicateError,
     ReplicateReason,
     TransientReplicateError,
+    is_terminal_provider_status,
 )
 from src.core.logging import get_logger
 from src.storage.base import BlobStore
 from src.worker.aliases import AliasBinding, AliasTable
 
 logger = get_logger(__name__)
+
+# The schemes a ``blob_uri`` may carry, one per ``BlobStore`` backend:
+# ``file://`` from ``LocalBlobStore``, ``gs://`` from ``GcsBlobStore`` (#7). A
+# tuple rather than a check against the configured backend on purpose — this
+# worker can be redeployed onto the other backend while commands naming the
+# previous one are still in the PEL. Those have to parse far enough to be
+# recognized as *a blob reference from the other backend*, which
+# ``locate_blob`` then reports as expired rather than invalid; refusing them
+# here on the scheme would collapse that distinction and tell the issuer to
+# stop trying.
+_BLOB_URI_SCHEMES = ("file", "gs")
 
 # A sha256 as the blob tree spells it. Lower-case only: the store derives paths
 # from this exact string, so accepting upper-case would make two spellings of one
@@ -94,7 +107,25 @@ def locate_blob(blob_uri: str, *, store: BlobStore) -> str:
     inverted — for replicate the scheduling obligation is the issuer's).
     """
     fingerprint = _fingerprint_in(blob_uri)
-    if fingerprint is None or store.uri_for(fingerprint) != blob_uri:
+    minted = store.uri_for(fingerprint) if fingerprint is not None else None
+    if fingerprint is None or minted != blob_uri:
+        if fingerprint is not None and _names_another_backend(blob_uri, minted):
+            # The one exception to the paragraph below, and it is about #7's flip
+            # rather than about issuers. A worker restarted onto the other
+            # backend still has commands in its PEL naming the previous one;
+            # those blobs are genuinely unreachable, but a fresh fetch does
+            # produce them. Reporting `invalid_source` there tells the issuer the
+            # opposite — and Archiver, the replicate issuer, has no fetch path of
+            # its own to disregard the advice with, so the occasion is lost
+            # permanently (archiver#175).
+            #
+            # Narrow on purpose: the value still has to be well-formed for a
+            # backend we know and still has to end in a valid fingerprint. No
+            # byte is read on either branch.
+            raise _refuse(
+                "blob_uri names a blob from a storage backend this worker no longer reads",
+                ReplicateReason.BLOB_EXPIRED,
+            )
         # One branch for "not a fingerprint" and "not our URI" on purpose: both
         # mean the same thing to an issuer — this is not a reference we handed
         # out — and splitting them would invite a caller to treat the second as
@@ -109,20 +140,51 @@ def locate_blob(blob_uri: str, *, store: BlobStore) -> str:
     return fingerprint
 
 
-def _fingerprint_in(blob_uri: str) -> str | None:
-    """The fingerprint a ``file://`` blob URI ends with, if it is one at all.
+def _names_another_backend(blob_uri: str, minted: str) -> bool:
+    """Whether these two URIs come from different ``BlobStore`` backends.
 
-    Scheme-checked here rather than by the caller because #7 (object-store
-    backend) changes what a valid ``blob_uri`` looks like, and co-core leaves the
-    scheme "the consumer's business" precisely so this stays one decision in one
-    place. When #7 lands this grows a branch; the comparison against
-    ``store.uri_for`` above does not change at all.
+    Answered by comparing schemes rather than by asking the store what it is:
+    ``BlobStore`` is a ``Protocol`` describing what a store *does*, and a
+    ``backend`` member added for one caller's benefit would be the first thing on
+    it that is about identity instead. The scheme is already the observable
+    difference, and it is one ``uri_for`` hands over for free.
+
+    Neither guard the first cut carried survived: this is reached only where
+    ``_fingerprint_in`` already returned a fingerprint, which means ``blob_uri``
+    parsed and ``minted`` exists. A ``None`` check and a ``ValueError`` catch for
+    states the caller has already excluded are lines nothing can execute, and
+    coverage said so.
+    """
+    return urlsplit(blob_uri).scheme != urlsplit(minted).scheme
+
+
+def _fingerprint_in(blob_uri: str) -> str | None:
+    """The fingerprint a blob URI ends with, if it is one at all.
+
+    Scheme-checked here rather than by the caller because the backend decides
+    what a valid ``blob_uri`` looks like, and co-core leaves the scheme "the
+    consumer's business" precisely so this stays one decision in one place. #7
+    grew the branch this was written for: ``gs://`` joined ``file://``, and the
+    comparison against ``store.uri_for`` above did not change at all — which is
+    the payoff for never having parsed the value into a path.
+
+    **The scheme list is a filter, not the check.** Both spellings reach the same
+    two lines, and neither is trusted: a ``file://`` URI put to a store backed by
+    a bucket fails the ``uri_for`` comparison exactly as a stranger's bucket
+    does. What this function decides is only whether the string ends in something
+    shaped like a fingerprint — the store decides whether that fingerprint is
+    one it minted.
+
+    The extraction is deliberately identical for both. A bucket key has no
+    directory semantics, so ``..`` in one means nothing and is refused by the
+    comparison rather than by a normalization step that would have to be correct
+    for two different path grammars.
     """
     try:
         parts = urlsplit(blob_uri)
     except ValueError:
         return None
-    if parts.scheme != "file" or not parts.path:
+    if parts.scheme not in _BLOB_URI_SCHEMES or not parts.path:
         return None
     stem = parts.path.rsplit("/", 1)[-1].removesuffix(".bin")
     return stem if _FINGERPRINT.match(stem) else None
@@ -231,12 +293,6 @@ class ConditionalWriter(Protocol):
 _GCS_OPTIONS = ("cache_control", "content_disposition", "storage_class")
 
 
-# HTTP statuses that mean "come back later" rather than "this is wrong" (CR #27).
-# Everything else in 4xx closes the command; everything in 5xx, and everything
-# with no status at all, leaves it open.
-_RETRYABLE_STATUSES = frozenset({408, 429})
-
-
 # The handler seam the loop dispatches to, matching ``src.worker.handler``'s.
 type ReplicateHandler = Callable[[ContentReplicateCommand], Awaitable[None]]
 
@@ -313,7 +369,10 @@ def build_replicate_handler(
         # Located, not read: the guard answers "is this ours, still here" without
         # touching the bytes (CR #15). The stream below is the read, and it is
         # handed straight to the driver rather than materialized here.
-        fingerprint = locate_blob(command.blob_uri, store=store)
+        # Off the loop thread: the guard's ``exists`` check is a ``stat`` on the
+        # local backend and a network round trip on the object store (#7). Same
+        # rule as the byte path — ``tests/worker/test_storage_offloop.py``.
+        fingerprint = await asyncio.to_thread(locate_blob, command.blob_uri, store=store)
 
         result = await _write(
             writer,
@@ -413,13 +472,23 @@ async def _write(
     options = {name: supplied.get(name) for name in _GCS_OPTIONS}
 
     try:
-        data = store.open_stream(fingerprint)
+        # The heaviest ``BlobStore`` call there is, and therefore the one that
+        # least belongs on the loop: on the object store this downloads the
+        # entire blob before the handle is usable (#7).
+        data = await asyncio.to_thread(store.open_stream, fingerprint)
     except FileNotFoundError as exc:
         # The retention sweep runs concurrently with this loop, so the window
         # between ``locate_blob``'s existence check and this open is real
         # (CR #33). Uncaught, it closed the command as ``handler_error`` after
         # burning the ceiling — losing the one reason whose remedy the issuer
         # owns, which is to fetch again under a new command_id.
+        #
+        # One catch for both backends because the *store* translates: the object
+        # backend raises this rather than the SDK's ``NotFound`` (CR #3), which
+        # keeps ``google.api_core`` out of a provider-agnostic module and keeps
+        # this from growing a catch per backend. Under the object store the
+        # window is *wider* rather than narrower — lifecycle deletion is
+        # asynchronous and owes us no notice.
         raise _refuse(
             "the blob for this command was swept before it could be read",
             ReplicateReason.BLOB_EXPIRED,
@@ -428,6 +497,13 @@ async def _write(
         # A disk that is full, read-only or gone: this host's problem, not the
         # command's, and a different host may well succeed.
         raise TransientReplicateError(f"the blob could not be opened: {exc}") from exc
+    except Exception as exc:
+        # The object-store backend's failures, classified the same way the write
+        # path classifies the same provider's (CR #3). Unclassified, a 503 while
+        # reading the blob became a `handler_error` fact with the delivery
+        # ceiling burnt — a terminal answer to a command that a retry would have
+        # completed, for the one issuer that cannot re-fetch (archiver#175).
+        raise _classify_source_failure(exc) from exc
 
     with data:
         try:
@@ -447,6 +523,26 @@ async def _write(
             raise
         except Exception as exc:
             raise _classify_provider_failure(exc) from exc
+
+
+def _classify_source_failure(exc: Exception) -> Exception:
+    """A failure reading the blob out of temp storage (CR #3).
+
+    **Only the transient half is claimed**, matching the byte path's
+    ``_in_store``. 5xx, 408/429 and anything with no status stay open — the retry
+    is free and T4 makes it safe. A terminal status is re-raised unclassified,
+    which is today's path: the delivery ceiling, then ``handler_error``. The
+    accurate alternative would be a new ``ReplicateReason`` for "this worker
+    cannot read its own temp store", and the existing tokens all describe the
+    *destination* — ``provider_disabled`` on a source failure would tell an
+    issuer its destination is unavailable, which is worse than a generic answer.
+    A new token is a contract edit, not a review fix.
+    """
+    if is_terminal_provider_status(exc):
+        return exc
+    return TransientReplicateError(
+        f"the blob could not be read from temp storage: {type(exc).__name__}: {exc}"
+    )
 
 
 def _classify_provider_failure(exc: Exception) -> Exception:
@@ -471,16 +567,13 @@ def _classify_provider_failure(exc: Exception) -> Exception:
       status at all (a socket dying mid-upload) — stays open. T4 makes retrying
       the write safe, which is what lets this default be the generous one.
 
-    Read as a number rather than caught as ``google.api_core.exceptions.*`` for
-    two reasons: that package is a transitive dependency this project never
-    declares, and ``ConditionalWriter`` is a provider-agnostic seam, so a second
-    provider raising its own error type with an HTTP status is classified
-    correctly without touching this function. 408 in particular has no named
-    class in api_core at all.
+    The status is read as a number rather than caught as
+    ``google.api_core.exceptions.*``; the reasoning moved to
+    ``is_terminal_provider_status`` when the storage path became a second caller
+    (CR #3).
     """
     status = getattr(exc, "code", None)
-    terminal = isinstance(status, int) and 400 <= status < 500 and status not in _RETRYABLE_STATUSES
-    if not terminal:
+    if not is_terminal_provider_status(exc):
         return TransientReplicateError(f"the provider write failed: {type(exc).__name__}: {exc}")
     reason = (
         ReplicateReason.INVALID_DESTINATION if status == 400 else ReplicateReason.PROVIDER_DISABLED

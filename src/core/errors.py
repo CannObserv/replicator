@@ -29,6 +29,36 @@ straight back on the dead-letter path.
 
 from enum import StrEnum
 
+# HTTP statuses that mean "come back later" rather than "this is wrong" (CR #27).
+# Everything else in 4xx closes the command; everything in 5xx, and everything
+# with no status at all, leaves it open.
+_RETRYABLE_STATUSES = frozenset({408, 429})
+
+
+def is_terminal_provider_status(exc: Exception) -> bool:
+    """Whether a provider failure will fail the same way on every retry (CR #27).
+
+    Shared by the replicate *write* path and the object-store *storage* path,
+    which classify the same provider's failures into different error families —
+    so the decision lives here and each caller keeps its own vocabulary. It was
+    written for the write path and left there; a second caller is what makes a
+    common home the right place rather than a speculative one.
+
+    The status is read as a **number off the exception** rather than matched
+    against ``google.api_core.exceptions.*``, and that is deliberate twice over:
+    that package is a transitive dependency this project never declares, and both
+    call sites sit behind provider-agnostic seams, so a second provider raising
+    its own error type with an HTTP status is classified correctly without
+    touching this function. 408 in particular has no named class in api_core at
+    all.
+
+    Anything with no status — a socket dying mid-upload — is **not** terminal.
+    The generous default is what makes an unrecognized failure retry rather than
+    close a command an issuer is waiting on.
+    """
+    status = getattr(exc, "code", None)
+    return isinstance(status, int) and 400 <= status < 500 and status not in _RETRYABLE_STATUSES
+
 
 class FailureReason(StrEnum):
     """Reason tokens: ``content.fetch``'s, plus the two the loop owns.
