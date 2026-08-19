@@ -296,12 +296,10 @@ depth of confidence does not raise accuracy.
 
 ## Deferred items
 
-- ~~**Removing the "do not attempt conditional GET yet" warning** from both contract docs.
+- **Removing the "do not attempt conditional GET yet" warning** from both contract docs.
   Gated on CannObserv/watcher#249 teaching `apply_fetch_blob` a no-bytes branch, and on
   cannobserv#298 documenting the token in `FetchFailedEvent`'s docstring. #17 downgrades the
-  warning; a follow-on removes it.~~ **Done 2026-08-18 (#58).** Both gates cleared; the warning
-  came out as MUST-8 rather than as a deletion — the failure mode it described is real for any
-  new consumer, so it survives as an obligation on issuers that send a validator.
+  warning; a follow-on removes it.
 - **`content_unchanged` as a dedicated fact (shape B in #17).** Not minted. Costs a co-core
   model, a `ChangeEventPayload` union member, an `idempotency_key` rule, a `from_wire` entry
   and a version floor, for consumer-side handling that is byte-for-byte what shape A already

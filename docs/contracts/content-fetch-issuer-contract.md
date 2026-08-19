@@ -16,7 +16,8 @@ settles the *service* — what Replicator is allowed to become, and therefore wh
 this contract will never grow. Read it before proposing a payload addition (#12).
 
 **Changing this document.** "Link, don't copy" only holds if a change reaches the issuers, so a
-change to any MUST or to the failure taxonomy is announced on the issuer repos' trackers in the
+change to any MUST, to the failure taxonomy, or to the guidance an issuer is expected to act on —
+in this file or in the reference — is announced on the issuer repos' trackers in the
 same change that edits this file — on the open issue for the capability it touches where there is
 one, and as a fresh issue where there is not. Do not pin a standing tracker here: the Phase 4
 build-out issue ([CannObserv/watcher#241](https://github.com/CannObserv/watcher/issues/241)) held
