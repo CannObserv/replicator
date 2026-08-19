@@ -293,7 +293,7 @@ def build_handler(
         # count it, and a sweep reaping between the two calls means a genuinely
         # new write goes uncounted. Both drifts are bounded by the sweep
         # interval, after which observe() replaces the estimate outright.
-        is_new = not store.exists(fingerprint)
+        is_new = not await asyncio.to_thread(store.exists, fingerprint)
         # Read *before* the store, so the horizon published below can only be
         # earlier than the blob's real one. store() stamps the mtime the sweep
         # measures against, and mtime >= stored_at by however long the write
@@ -301,7 +301,14 @@ def build_handler(
         # announced expiry past the real one, which is the direction that leaves
         # a consumer holding a dead blob_uri.
         stored_at = datetime.now(UTC)
-        blob_uri = store.store(result.content, fingerprint, media_type)
+        # Off the loop thread, like every other ``BlobStore`` call from a
+        # coroutine (#7). The seam is synchronous by design and both backends
+        # block in it — GCS on a network round trip for the whole body, the local
+        # one on the ``fsync`` that makes the write survive a crashed machine.
+        # Awaiting it here is what keeps one command's storage from being a lien
+        # on every other command's poll. ``tests/worker/test_storage_offloop.py``
+        # holds the rule by watching which thread the store ran on.
+        blob_uri = await asyncio.to_thread(store.store, result.content, fingerprint, media_type)
         if is_new:
             usage.add(len(result.content))
         await _publish(

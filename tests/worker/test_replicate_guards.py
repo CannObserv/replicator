@@ -20,9 +20,11 @@ import io
 import pytest
 
 from src.core.errors import PermanentReplicateError, ReplicateReason
+from src.storage.gcs import GcsBlobStore
 from src.storage.local import LocalBlobStore
 from src.worker.aliases import AliasBinding
 from src.worker.replicate import locate_blob, validate_destination
+from tests.storage.test_gcs import FakeBucket, FakeClient
 
 FINGERPRINT = "a" * 64
 GCS_ROOT = AliasBinding(provider="gcs", bucket="co-artifacts", prefix="reps")
@@ -83,7 +85,12 @@ def test_locating_a_blob_reads_none_of_it(store, stored, monkeypatch):
         pytest.param(f"file:///tmp/{FINGERPRINT}.bin", id="right-name-wrong-root"),
         # Not a file URI at all.
         pytest.param(f"https://example.test/{FINGERPRINT}.bin", id="http"),
-        pytest.param(f"gs://someone-elses-bucket/{FINGERPRINT}.bin", id="object-store"),
+        # `gs://` used to belong on this list, and #7 moved it: a well-formed URI
+        # from the *other* backend is now `blob_expired`, because after a backend
+        # flip that is what it is — see
+        # `test_a_uri_from_the_other_backend_is_expired_not_invalid`. What stays
+        # here is the same scheme carrying something that was never a reference.
+        pytest.param("gs://someone-elses-bucket/not-a-fingerprint.bin", id="object-store"),
         # Malformed and empty.
         pytest.param("", id="empty"),
         pytest.param("file://", id="no-path"),
@@ -275,3 +282,127 @@ def test_a_long_disallowed_segment_is_bounded_in_the_refusal(binding=GCS_ROOT):
         validate_destination("!" * 5000 + ".pdf", binding=binding)
 
     assert len(str(caught.value)) < 500
+
+
+# --------------------------------------------------------------------------
+# T3a — the source, with the object-store backend (#7)
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def gcs_store():
+    """A `GcsBlobStore` over a fake bucket — the guard never touches the network."""
+    return GcsBlobStore(
+        "a-temp-bucket", prefix="blobs", client=FakeClient(FakeBucket("a-temp-bucket"))
+    )
+
+
+@pytest.fixture
+def gcs_stored(gcs_store):
+    return gcs_store.store(b"artifact bytes", FINGERPRINT, "application/pdf")
+
+
+def test_a_gs_uri_this_store_minted_locates_its_fingerprint(gcs_store, gcs_stored):
+    assert gcs_stored.startswith("gs://")
+    assert locate_blob(gcs_stored, store=gcs_store) == FINGERPRINT
+
+
+@pytest.mark.parametrize(
+    "blob_uri",
+    [
+        # A `file://` value that was never a blob reference. The well-formed
+        # other-backend URI is deliberately absent — it is `blob_expired` now,
+        # asserted below.
+        pytest.param("file:///etc/replicator/co-pypi-reader.json", id="a-real-secret"),
+        pytest.param(f"gs://someone-elses-bucket/blobs/{FINGERPRINT}.bin", id="wrong-bucket"),
+        pytest.param(f"gs://a-temp-bucket/elsewhere/{FINGERPRINT}.bin", id="wrong-prefix"),
+        pytest.param(f"gs://a-temp-bucket/blobs/{FINGERPRINT}", id="no-suffix"),
+        pytest.param(f"gs://a-temp-bucket/blobs/{'A' * 64}.bin", id="uppercase-hex"),
+        pytest.param(f"gs://a-temp-bucket/blobs/{'z' * 64}.bin", id="not-hex"),
+        pytest.param("gs://a-temp-bucket/blobs/abc.bin", id="too-short"),
+        pytest.param("gs://", id="no-path"),
+        pytest.param("gs://a-temp-bucket", id="bucket-only"),
+        # The traversal shapes, which mean nothing to a bucket and are refused
+        # anyway — the guard never resolves the value, so there is no path here
+        # to escape from and nothing to normalize.
+        pytest.param(f"gs://a-temp-bucket/blobs/../../{FINGERPRINT}.bin", id="dots"),
+        pytest.param("gs://a-temp-bucket/../etc/passwd", id="a-classic"),
+    ],
+)
+def test_a_gs_uri_this_store_did_not_mint_is_refused(gcs_store, gcs_stored, blob_uri):
+    with pytest.raises(PermanentReplicateError) as caught:
+        locate_blob(blob_uri, store=gcs_store)
+
+    assert caught.value.reason is ReplicateReason.INVALID_SOURCE
+
+
+def test_a_gone_gs_blob_is_expired_not_invalid(gcs_store):
+    """Same split as the filesystem backend, and the remedies are still opposite.
+
+    `invalid_source` means re-fetching fixes nothing; `blob_expired` means the
+    issuer named the right blob too late, which a fresh fetch does fix. An object
+    store makes the second case *more* common rather than less — lifecycle
+    deletion is asynchronous, so the horizon a consumer was told is a floor.
+    """
+    minted = gcs_store.uri_for(FINGERPRINT)
+
+    with pytest.raises(PermanentReplicateError) as caught:
+        locate_blob(minted, store=gcs_store)
+
+    assert caught.value.reason is ReplicateReason.BLOB_EXPIRED
+
+
+def test_the_guard_never_parses_the_message_value_into_a_key(gcs_store, gcs_stored, monkeypatch):
+    """The property T3a is actually about, asserted rather than described.
+
+    A refusal that happened to fire on every probe above would still be wrong if
+    it worked by turning the URI into a key and inspecting it. What makes the
+    guard sound is that the only string reaching the bucket is one the store
+    derived from a validated fingerprint — so `key_for` must never see anything
+    the message carried.
+    """
+    seen = []
+    original = gcs_store.key_for
+    monkeypatch.setattr(gcs_store, "key_for", lambda fp: seen.append(fp) or original(fp))
+
+    locate_blob(gcs_stored, store=gcs_store)
+
+    assert seen == [FINGERPRINT] * len(seen)
+    assert seen
+
+
+def test_a_uri_from_the_other_backend_is_expired_not_invalid(gcs_store):
+    """The flip window, and the one consumer that cannot recover from getting it wrong.
+
+    Phase C of #7 moves a live worker from one backend to the other. Commands
+    naming the previous backend are still in the PEL when it restarts, and their
+    blobs really are unreachable — but the *remedy* is a fresh fetch, which is
+    what `blob_expired` says and what `invalid_source` denies. Archiver is the
+    replicate issuer and has no fetch path of its own, so an issuer told
+    "re-fetching fixes nothing" stops trying and that revision is never
+    replicated (archiver#175).
+
+    Deliberately narrow: only a URI that is well-formed for a *known* backend and
+    ends in a valid fingerprint gets this reading. Everything else stays
+    `invalid_source`, and neither reading reads a byte — both refuse before any
+    credential is touched.
+    """
+    other_backend = LocalBlobStore("/var/lib/replicator/blobs").uri_for(FINGERPRINT)
+
+    with pytest.raises(PermanentReplicateError) as caught:
+        locate_blob(other_backend, store=gcs_store)
+
+    assert caught.value.reason is ReplicateReason.BLOB_EXPIRED
+
+
+def test_a_junk_path_under_the_other_scheme_is_still_invalid(gcs_store):
+    """The narrowness above, asserted from the other side.
+
+    `file:///etc/passwd` is not "a blob from the previous backend" — it is a
+    value that was never a reference at all, and reporting it as expired would
+    invite an issuer to keep re-fetching against it.
+    """
+    with pytest.raises(PermanentReplicateError) as caught:
+        locate_blob("file:///etc/passwd", store=gcs_store)
+
+    assert caught.value.reason is ReplicateReason.INVALID_SOURCE

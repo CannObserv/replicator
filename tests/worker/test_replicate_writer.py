@@ -494,6 +494,33 @@ async def test_a_blob_swept_between_the_guard_and_the_open_is_expired(store, blo
     assert writer.effects == []
 
 
+async def test_an_object_deleted_between_the_guard_and_the_open_is_expired(
+    store, blob_uri, monkeypatch
+):
+    """The same window, in the object store's vocabulary (#7).
+
+    Under the ``gcs`` backend the sweep is a bucket lifecycle rule rather than
+    this process, so nothing here coordinates with it and it owes no notice —
+    the window is *wider* than the filesystem one, not narrower. What arrives is
+    ``NotFound`` rather than ``FileNotFoundError``, and a catch that named only
+    the second would have left the more likely case unhandled: closed as
+    ``handler_error``, ceiling burnt, and the one remedy the issuer owns —
+    fetch again — never reported.
+    """
+    writer = FakeGcs(result(GcsCreateOutcome.WROTE, public_url=PUBLIC_URL))
+
+    def deleted(self, fingerprint):
+        raise gexc.NotFound(f"no such object: {fingerprint}")
+
+    monkeypatch.setattr(LocalBlobStore, "open_stream", deleted)
+
+    with pytest.raises(PermanentReplicateError) as caught:
+        await handler_for(store, writer)(command(blob_uri))
+
+    assert caught.value.reason is ReplicateReason.BLOB_EXPIRED
+    assert writer.effects == []
+
+
 async def test_a_blob_that_cannot_be_opened_for_another_reason_stays_open(
     store, blob_uri, monkeypatch
 ):
