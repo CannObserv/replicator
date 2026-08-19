@@ -21,6 +21,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from src.core.config import get_settings
+from src.storage.gcs import GcsBlobStore
 
 # Scratch database for live-broker tests. Deliberately not db 0 — see real_redis.
 DEFAULT_TEST_REDIS_URL = "redis://localhost:6379/15"
@@ -47,14 +48,43 @@ PRODUCTION_ENV = ("REPLICATOR_REPLICATION_ALIASES_FILE", "GOOGLE_APPLICATION_CRE
 TEST_BUCKET_ENV = "REPLICATOR_TEST_GCS_BUCKET"
 TEST_CREDENTIALS_ENV = "REPLICATOR_TEST_GCS_CREDENTIALS"
 
+# The temp-blob destination (#7), and deliberately **not** the same bucket as the
+# replicate one. The grants are opposites: the replicate SA holds no `delete` at
+# all, which is what puts T4's "never overwrite, never delete" at IAM rather than
+# only in our code, while a temp store exists to have its objects expire. One
+# bucket serving both means either the temp store cannot reap or the permanent
+# store can be erased — and only one of those two failures is recoverable.
+#
+# No default, for the reason `TEST_BUCKET_ENV` has none: absent means skip, never
+# "use whatever the code would have picked".
+TEST_BLOB_BUCKET_ENV = "REPLICATOR_TEST_BLOB_BUCKET"
+
 
 def resolve_test_bucket(env: Mapping[str, str]) -> str | None:
     """The configured test bucket, or ``None``. Deliberately not a lookup with a default."""
     return env.get(TEST_BUCKET_ENV)
 
 
-def guarded_init(original, expected: str | None):
-    """Wrap ``AsyncGcsDriver.__init__`` so a wrong bucket is refused before ADC.
+def resolve_test_blob_bucket(env: Mapping[str, str]) -> str | None:
+    """The configured temp-blob test bucket, or ``None``. No default, same rule (#7)."""
+    return env.get(TEST_BLOB_BUCKET_ENV)
+
+
+def guarded_init(
+    original,
+    expected: str | None,
+    *,
+    label: str = "AsyncGcsDriver",
+    env_name: str = TEST_BUCKET_ENV,
+    marked: bool = False,
+):
+    """Wrap a bucket-taking ``__init__`` so a wrong bucket is refused before ADC.
+
+    Two constructors are wrapped by this now — ``AsyncGcsDriver`` (replicate
+    destinations) and ``GcsBlobStore`` (#7's temp store) — which is why ``label``
+    and ``env_name`` are parameters. A refusal that named the wrong class, or
+    sent an operator to the wrong environment variable, is a refusal that costs
+    more than it saves.
 
     The refusal has to precede the call through, not follow it: the real
     ``__init__`` builds ``storage.Client()`` in its own body, which reads the key
@@ -73,15 +103,39 @@ def guarded_init(original, expected: str | None):
 
     def refuse(self, *args, **kwargs):
         bucket = args[0] if args else kwargs.get("bucket")
+        if kwargs.get("client") is not None:
+            # An injected client is the whole reason this guard exists, inverted:
+            # what it refuses is a constructor that resolves ADC *in its own
+            # body* and reaches a bucket by name. A caller that supplies the
+            # client has already made that impossible — there is no credential to
+            # resolve and no bucket to reach except the one the client offers —
+            # and a test cannot build a real client here anyway, because the
+            # scrub above leaves no identity for `storage.Client()` to find.
+            #
+            # Without this, `tests/storage/test_gcs.py` would have to be marked
+            # `gcs` to test decisions that touch no network, which is precisely
+            # the mark losing its meaning.
+            return original(self, *args, **kwargs)
+        if expected is None and marked:
+            # Marked, so the intent was legitimate; the host just has not
+            # provisioned *this* destination. Distinguished from the unmarked
+            # refusal because the remedies are opposite — one is a code change,
+            # the other an operator one — and the two destinations are
+            # provisioned independently, so a host with one and not the other is
+            # an ordinary state rather than a broken one.
+            raise AssertionError(
+                f"{label}({bucket!r}) needs {env_name}, which is unset — depend on "
+                f"the bucket fixture, which skips instead of failing"
+            )
         if expected is None:
             raise AssertionError(
                 f"a test that is not marked @pytest.mark.gcs constructed a real "
-                f"AsyncGcsDriver({bucket!r}) — mark it, or use a stub driver"
+                f"{label}({bucket!r}) — mark it, or use a stub"
             )
         if bucket != expected:
             raise AssertionError(
-                f"refusing AsyncGcsDriver({bucket!r}): a gcs test may only reach "
-                f"{expected!r}, the bucket named by {TEST_BUCKET_ENV}"
+                f"refusing {label}({bucket!r}): a gcs test may only reach "
+                f"{expected!r}, the bucket named by {env_name}"
             )
         return original(self, *args, **kwargs)
 
@@ -103,9 +157,12 @@ def _no_production_destination(request, monkeypatch):
     only way a bucket name becomes a write, and it fires before any credential is
     touched (see ``guarded_init``).
 
-    A ``@pytest.mark.gcs`` test opts back in explicitly: it gets the test bucket
-    and the test identity, both from variables with no default, and skips when
-    either is absent.
+    A ``@pytest.mark.gcs`` test opts back in explicitly: it gets the test
+    identity, and whichever of the two test buckets the host has provisioned,
+    all from variables with no default. A missing *identity* skips here; a
+    missing *bucket* skips in the fixture that hands it over, because the
+    replicate destination and #7's temp-blob destination are provisioned
+    independently and a host with one should still run its tests.
 
     Nothing in the tree reaches a real driver today — ``test_main_writers.py``
     stubs it — but that is an accident of how those tests are written rather than
@@ -126,30 +183,68 @@ def _no_production_destination(request, monkeypatch):
     for name in PRODUCTION_ENV:
         monkeypatch.delenv(name, raising=False)
 
-    expected = None
-    if request.node.get_closest_marker("gcs"):
-        expected = resolve_test_bucket(os.environ)
-        if not expected:
-            pytest.skip(f"{TEST_BUCKET_ENV} is unset — no test bucket to write to (#50)")
+    marked = request.node.get_closest_marker("gcs") is not None
+    expected_driver = expected_store = None
+    if marked:
         credentials = os.environ.get(TEST_CREDENTIALS_ENV)
         if not credentials:
             pytest.skip(f"{TEST_CREDENTIALS_ENV} is unset — no test identity to write as (#50)")
         monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", credentials)
+        # Resolved independently, and neither absence skips here: the two
+        # destinations are provisioned separately (#7 adds the second), so a host
+        # with one and not the other must still run the tests for the one it has.
+        # The per-bucket skip belongs to the fixture a test actually depends on.
+        expected_driver = resolve_test_bucket(os.environ)
+        expected_store = resolve_test_blob_bucket(os.environ)
 
-    monkeypatch.setattr(AsyncGcsDriver, "__init__", guarded_init(AsyncGcsDriver.__init__, expected))
+    monkeypatch.setattr(
+        AsyncGcsDriver,
+        "__init__",
+        guarded_init(AsyncGcsDriver.__init__, expected_driver, marked=marked),
+    )
+    monkeypatch.setattr(
+        GcsBlobStore,
+        "__init__",
+        guarded_init(
+            GcsBlobStore.__init__,
+            expected_store,
+            label="GcsBlobStore",
+            env_name=TEST_BLOB_BUCKET_ENV,
+            marked=marked,
+        ),
+    )
 
 
 @pytest.fixture
 def gcs_bucket(request) -> str:
-    """The provisioned test bucket, for a ``@pytest.mark.gcs`` test.
+    """The provisioned replicate test bucket, for a ``@pytest.mark.gcs`` test.
 
-    The skip and the credential swap already happened in the autouse fixture
-    above — this is only the name, so a test does not read the environment
-    itself and cannot read it with a fallback.
+    The credential swap already happened in the autouse fixture above. The skip
+    lives here rather than there because #7 added a second destination with its
+    own variable: skipping every marked test when *either* is unset would tie
+    two provisionings that have nothing to do with each other.
+
+    A test still never reads the environment itself, and so still cannot read it
+    with a fallback.
     """
     assert request.node.get_closest_marker("gcs"), "gcs_bucket requires @pytest.mark.gcs"
     bucket = resolve_test_bucket(os.environ)
-    assert bucket
+    if not bucket:
+        pytest.skip(f"{TEST_BUCKET_ENV} is unset — no test bucket to write to (#50)")
+    return bucket
+
+
+@pytest.fixture
+def gcs_blob_bucket(request) -> str:
+    """The provisioned temp-blob test bucket, for a ``@pytest.mark.gcs`` test (#7).
+
+    Its twin above, one destination over. Separate because the grants are
+    opposites — see ``TEST_BLOB_BUCKET_ENV``.
+    """
+    assert request.node.get_closest_marker("gcs"), "gcs_blob_bucket requires @pytest.mark.gcs"
+    bucket = resolve_test_blob_bucket(os.environ)
+    if not bucket:
+        pytest.skip(f"{TEST_BLOB_BUCKET_ENV} is unset — no temp-blob bucket to write to (#7)")
     return bucket
 
 

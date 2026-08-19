@@ -145,3 +145,55 @@ def test_an_out_of_range_blob_ttl_fails_at_startup(monkeypatch, value):
 
     with pytest.raises(ValidationError):
         Settings()
+
+
+def test_the_blob_backend_defaults_to_local(monkeypatch):
+    """#7 ships the object store dark: the compiled-in default does not move.
+
+    Watcher parses ``blob_uri`` into a filesystem path and re-issues — uncapped —
+    when it cannot open one (CannObserv/watcher#275). A default that flipped with
+    the code would turn every deploy of this branch into an unbounded re-fetch
+    loop against real origins. The backend moves when an operator moves it.
+    """
+    for var in ("REPLICATOR_BLOB_BACKEND", "REPLICATOR_BLOB_BUCKET", "REPLICATOR_BLOB_PREFIX"):
+        monkeypatch.delenv(var, raising=False)
+
+    settings = get_settings()
+    assert settings.blob_backend == "local"
+    assert settings.blob_bucket == ""
+    assert settings.blob_prefix == "blobs"
+
+
+def test_the_gcs_backend_is_selected_by_env(monkeypatch):
+    monkeypatch.setenv("REPLICATOR_BLOB_BACKEND", "gcs")
+    monkeypatch.setenv("REPLICATOR_BLOB_BUCKET", "a-temp-bucket")
+    monkeypatch.setenv("REPLICATOR_BLOB_PREFIX", "/tmp-blobs/")
+
+    settings = get_settings()
+    assert settings.blob_backend == "gcs"
+    assert settings.blob_bucket == "a-temp-bucket"
+    # Normalized at the edge: the prefix is joined into an object key, and a
+    # stray slash either side produces `//` or a key rooted differently from the
+    # one `uri_for` derives — which is the comparison the replicate guard makes.
+    assert settings.blob_prefix == "tmp-blobs"
+
+
+def test_an_unknown_blob_backend_fails_at_startup(monkeypatch):
+    """A typo must not fall back to a working backend and hide itself."""
+    monkeypatch.setenv("REPLICATOR_BLOB_BACKEND", "gcs2")
+
+    with pytest.raises(ValidationError):
+        get_settings()
+
+
+def test_the_gcs_backend_without_a_bucket_fails_at_startup(monkeypatch):
+    """No bucket, no store — and the failure belongs at boot, not at the first fetch.
+
+    Deferring it would announce `gs:///<key>` on `content.blobs`, a URI no
+    consumer can open and none can distinguish from a reaped blob.
+    """
+    monkeypatch.setenv("REPLICATOR_BLOB_BACKEND", "gcs")
+    monkeypatch.delenv("REPLICATOR_BLOB_BUCKET", raising=False)
+
+    with pytest.raises(ValidationError, match="REPLICATOR_BLOB_BUCKET"):
+        get_settings()
