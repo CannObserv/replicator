@@ -47,13 +47,24 @@ makes production untestable (#38).
   precedes the call through, because both constructors resolve ADC in their own
   body; checking afterwards would authenticate first and object second.
 
-  **A constructor handed a `client=` is admitted.** What the guard is aimed at is
-  a constructor that resolves credentials itself and reaches a bucket by name —
-  a caller supplying the client has already made that impossible, and cannot
-  build a real one anyway with the identity scrubbed. Without that carve-out,
-  `tests/storage/test_gcs.py` would have to claim the `gcs` mark to test
-  decisions that touch no network, which is how a marker stops meaning "writes
-  to a bucket" and starts meaning "constructs this class".
+  **An unmarked constructor handed a `client=` is admitted.** What the guard is
+  aimed at is a constructor that resolves credentials itself and reaches a bucket
+  by name — a caller supplying the client has already made that impossible, and
+  an unmarked test cannot build a real client anyway with the identity scrubbed.
+  Without the carve-out, `tests/storage/test_gcs.py` would have to claim the
+  `gcs` mark to test decisions that touch no network, which is how a marker stops
+  meaning "writes to a bucket" and starts meaning "constructs this class".
+
+  **It is scoped to the unmarked state on purpose.** Placed ahead of the bucket
+  comparison it also admitted a *marked* test — the one state with a credential
+  actually resolved — so a driver could be pointed at any bucket by handing it a
+  client. The moment a destination is expected, the destination is checked.
+
+  **The fakes live in `tests/storage/conftest.py`**, not in whichever test module
+  defined them first, and they mirror the SDK rather than the tests: `exists()`
+  returns `False` for anything absent because the real one swallows `NotFound`,
+  which is the behaviour that made an existence-based preflight untestable and
+  wrong at the same time.
 
 The bucket and the SA are provisioned (#50) — `gs://co-gcs-test-replication` and `co-gcs-test-replicator@co-gcs.iam.gserviceaccount.com`, with `roles/storage.objectAdmin` on that bucket and no write on production. The resource, what it deliberately differs from production in, and how each property was verified: **The GCS test bucket** in [DEPLOYMENT.md](DEPLOYMENT.md).
 

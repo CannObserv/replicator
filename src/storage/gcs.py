@@ -5,6 +5,13 @@ so ``blob_available.blob_uri`` becomes ``gs://<bucket>/<key>`` and a consumer no
 longer has to live on this host to read it. Same ``BlobStore`` shape as
 ``LocalBlobStore``; the loop is untouched.
 
+**This module holds no policy.** A missing object is translated into the
+protocol's ``FileNotFoundError`` and everything else — a 503, a 403, a socket
+dying mid-upload — propagates with its status intact, for the *callers* to
+classify (``src.core.errors.is_terminal_provider_status``). Deciding here whether
+a failure is worth retrying would put the consume path's retry semantics in the
+one module that cannot see which command is in flight.
+
 **Every method here blocks.** ``google-cloud-storage`` ships no async client, and
 this module deliberately does not grow one: the seam is a synchronous
 ``Protocol`` and the callers wrap it in ``asyncio.to_thread``, which keeps the
@@ -32,15 +39,16 @@ from typing import IO
 from google.api_core.exceptions import NotFound, PreconditionFailed
 from google.cloud import storage
 
+from src.core.config import DEFAULT_BLOB_TIMEOUT_SECONDS
 from src.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-# How long a single object operation may block the thread it runs on. Sized well
-# under the fetch timeout ceiling rather than at it: this is the *storage* half
-# of a command whose network half has already happened, and a store that hangs
-# holds a worker slot the same way a slow origin does.
-DEFAULT_TIMEOUT_SECONDS = 120.0
+# How long a single object operation may block, when the caller does not say.
+# Imported from ``src.core.config`` rather than spelled again so a directly
+# constructed store and the worker's cannot drift (CR #8); the reasoning for the
+# number — it lands in the unit's shutdown budget, because ``asyncio.to_thread``
+# puts it beyond cancellation — is on the setting.
 
 
 class GcsBlobStore:
@@ -54,21 +62,13 @@ class GcsBlobStore:
     # had it all along.
     SPOOL_MAX_BYTES = 8 * 1024 * 1024
 
-    # The key ``preflight`` probes. Under the same prefix as the blobs, so the
-    # check exercises the path the blobs actually take, and shaped so nothing
-    # fetched can ever address it: a blob key is 64 lowercase hex characters and
-    # this is not. It is never written, which is the stronger guarantee — but the
-    # name is chosen so that a future change which *did* write it could still not
-    # collide with content.
-    PREFLIGHT_KEY = "preflight-probe"
-
     def __init__(
         self,
         bucket: str,
         *,
         prefix: str = "blobs",
         client: storage.Client | None = None,
-        timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+        timeout_seconds: float = DEFAULT_BLOB_TIMEOUT_SECONDS,
     ) -> None:
         # Bucket positional, client by keyword: the same call shape as
         # ``AsyncGcsDriver``, which is what lets ``tests/conftest.py`` guard both
@@ -87,54 +87,78 @@ class GcsBlobStore:
     def preflight(self) -> None:
         """Prove at boot that this bucket is there and readable by this identity.
 
-        A read of a key nothing ever writes. That answers the three questions a
-        misconfiguration gets wrong — do the credentials resolve, does the bucket
-        resolve, may this identity read it — while writing nothing, leaving
-        nothing to clean up, and needing no permission the store does not already
-        need to do its job.
+        **A one-object listing, not an existence check** (CR #1). The obvious
+        probe — ``blob.exists()`` on a key nothing writes — cannot fail: the SDK
+        catches ``NotFound`` and returns ``False``, so a missing or misspelled
+        bucket answers 404, gets swallowed, and boots clean. That is precisely
+        the misconfiguration this exists to catch, and it was the one shape it
+        could not see. Listing raises instead.
+
+        The listing is lazy, which is why the iterator is advanced: untouched, no
+        request is made at all and this would be a check that ran nothing.
+
+        ``storage.objects.list`` is held by both ``objectViewer`` and
+        ``objectAdmin``, so this widens no grant. It writes nothing and leaves
+        nothing to clean up.
 
         **It deliberately does not prove write access**, and a probe object would
-        be the wrong way to buy that: creating one needs no permission the first
-        real ``store`` will not immediately need, and *deleting* it would need
-        ``storage.objects.delete`` — which the worker otherwise never uses,
-        because expiry is the lifecycle rule's job. Widening a service account's
-        grant so a startup check can tidy up after itself is a poor trade for a
-        failure the first fetch reports anyway.
+        be the wrong way to buy that: *deleting* one would need
+        ``storage.objects.delete``, which the worker otherwise never uses because
+        expiry is the lifecycle rule's job. Widening a service account's grant so
+        a startup check can tidy up after itself is a poor trade for a failure
+        the first fetch reports anyway.
 
         Nor does it prove the *consumer* can read what we write. That grant is on
         another service account and is verified where it is made
         (docs/DEPLOYMENT.md); it is the honest limit of this check, and the price
         of trading a filesystem coupling for an IAM one.
         """
-        self._bucket.blob(self._key(self.PREFLIGHT_KEY)).exists()
+        next(
+            iter(
+                self._client.list_blobs(
+                    self._bucket,
+                    max_results=1,
+                    prefix=self._prefix or None,
+                    timeout=self._timeout,
+                )
+            ),
+            None,
+        )
 
     def store(self, data: bytes, fingerprint: str, media_type: str) -> str:
-        """Create the object these bytes address, or confirm the one already there."""
+        """Create the object these bytes address, or confirm the one already there.
+
+        **One round trip on the happy path, and the precondition is the check**
+        (CR #6). An ``exists()`` before the upload was both a second network call
+        per command on a serial consume path *and* weaker: check-then-write is
+        not atomic, while ``if_generation_match=0`` is. The already-stored case
+        arrives as a 412 either way, and it is handled below.
+        """
         blob = self._blob(fingerprint)
-        # Content-addressed, so an object at this key is already the right bytes.
-        # Asked before writing for the reason the local backend asks: the caller
-        # publishes a fresh fact either way, and the clock has to move for it.
-        if blob.exists():
-            self._touch(blob)
-            return self.uri_for(fingerprint)
         blob.custom_time = datetime.now(UTC)
         try:
             blob.upload_from_string(
                 data,
                 content_type=media_type,
-                # A create, never a put. Two workers can reach this line for the
-                # same new fingerprint, and the loser must not overwrite an
-                # object a reader may already be streaming.
+                # A create, never a put. Content-addressed, so an object at this
+                # key already holds these bytes; overwriting one a reader may be
+                # streaming buys nothing and risks something.
                 if_generation_match=0,
                 timeout=self._timeout,
             )
         except PreconditionFailed:
-            # Lost the race above. The winner wrote the same bytes — that is what
-            # content-addressing means — so this is a success with a different
-            # author, not a conflict. Raising would dead-letter a command whose
-            # blob is sitting at the key it names.
+            # Already there — a redelivery, or a concurrent worker that got here
+            # first. Both are successes: the bytes at a content-addressed key are
+            # the right bytes by construction. Raising would dead-letter a
+            # command whose blob is sitting at the key it names.
+            #
+            # The clock still has to move. The caller publishes a fresh
+            # ``blob_available`` on this path too, and a fact pointing at an
+            # object partway through its window is the failure ``_touch`` exists
+            # to prevent — the same reason the local backend calls ``os.utime``
+            # on its short-circuit.
             logger.debug(
-                "another worker created this blob first",
+                "blob already stored; restarting its retention clock",
                 extra={"content_fingerprint": fingerprint},
             )
             self._touch(self._blob(fingerprint))
@@ -156,15 +180,6 @@ class GcsBlobStore:
         """
         return f"gs://{self._bucket_name}/{self.key_for(fingerprint)}"
 
-    def _key(self, name: str) -> str:
-        """Apply the prefix to a bare object name.
-
-        Shared by ``key_for`` and ``preflight`` so the probe travels the same
-        path a blob does — a check against a differently-rooted key would pass on
-        a bucket whose prefix nothing can write to.
-        """
-        return f"{self._prefix}/{name}" if self._prefix else name
-
     def key_for(self, fingerprint: str) -> str:
         """The object key for these bytes — flat, unlike the local backend's shards.
 
@@ -175,11 +190,22 @@ class GcsBlobStore:
         the derivation is another way ``uri_for`` and a reader's expectation can
         come apart.
         """
-        return self._key(f"{fingerprint}.bin")
+        return f"{self._prefix}/{fingerprint}.bin" if self._prefix else f"{fingerprint}.bin"
 
     def open(self, fingerprint: str) -> bytes:
-        """Read back the bytes stored under ``fingerprint``."""
-        return self._blob(fingerprint).download_as_bytes(timeout=self._timeout)
+        """Read back the bytes stored under ``fingerprint``.
+
+        A missing object raises ``FileNotFoundError``, not the SDK's ``NotFound``
+        — the ``BlobStore`` protocol's vocabulary for "these bytes are gone"
+        (CR #3). Translating here is what lets ``src.worker.replicate`` keep one
+        catch for a swept blob instead of one per backend, and keeps
+        ``google.api_core`` out of a module that is deliberately
+        provider-agnostic.
+        """
+        try:
+            return self._blob(fingerprint).download_as_bytes(timeout=self._timeout)
+        except NotFound as exc:
+            raise FileNotFoundError(self.key_for(fingerprint)) from exc
 
     def open_stream(self, fingerprint: str) -> IO[bytes]:
         """A **seekable binary** handle on these bytes; the caller closes it.
@@ -194,6 +220,10 @@ class GcsBlobStore:
         handle = tempfile.SpooledTemporaryFile(max_size=self.SPOOL_MAX_BYTES)
         try:
             self._blob(fingerprint).download_to_file(handle, timeout=self._timeout)
+        except NotFound as exc:
+            # Same translation as ``open`` — the protocol's word for gone (CR #3).
+            handle.close()
+            raise FileNotFoundError(self.key_for(fingerprint)) from exc
         except BaseException:
             handle.close()
             raise

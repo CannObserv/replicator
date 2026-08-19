@@ -371,13 +371,33 @@ def _prepare_storage(settings: Settings) -> tuple[BlobStore, Path | None]:
     #7 is for.
     """
     if settings.blob_backend == "gcs":
-        store = GcsBlobStore(settings.blob_bucket, prefix=settings.blob_prefix)
+        store = GcsBlobStore(
+            settings.blob_bucket,
+            prefix=settings.blob_prefix,
+            timeout_seconds=settings.blob_timeout_seconds,
+        )
         preflight_object_store(store, settings)
         logger.info(
             "storing blobs in an object store",
             extra={
                 "blob_bucket": settings.blob_bucket,
                 "blob_prefix": settings.blob_prefix,
+                # The horizon this worker will publish on every blob_available,
+                # logged beside the bucket because the thing that actually reaps
+                # is a lifecycle rule configured somewhere this process cannot
+                # see (CR #11). Nothing keeps the two in step, and a rule shorter
+                # than this number announces a window the bucket will not honour
+                # — the one way blob_expires_at can be wrong in the direction
+                # that leaves a consumer holding a dead blob_uri. Greppable at
+                # boot is not a guard, but it is the difference between an
+                # operator comparing two numbers and an operator guessing one.
+                "blob_ttl_seconds": settings.blob_ttl_seconds,
+                "blob_timeout_seconds": settings.blob_timeout_seconds,
+                "detail_lifecycle": (
+                    "reaping is the bucket lifecycle rule on daysSinceCustomTime; "
+                    "it must be at least blob_ttl_seconds or the published "
+                    "blob_expires_at is longer than the bucket will honour"
+                ),
                 # Said at boot because the environment still carries the ceiling
                 # and an operator would reasonably assume it applies. It bounds a
                 # shared disk; a bucket is not one, and re-deriving a bucket's

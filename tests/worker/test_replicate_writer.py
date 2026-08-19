@@ -494,31 +494,57 @@ async def test_a_blob_swept_between_the_guard_and_the_open_is_expired(store, blo
     assert writer.effects == []
 
 
-async def test_an_object_deleted_between_the_guard_and_the_open_is_expired(
-    store, blob_uri, monkeypatch
-):
-    """The same window, in the object store's vocabulary (#7).
+async def test_a_provider_failure_reading_the_blob_stays_open(store, blob_uri, monkeypatch):
+    """CR #3: a 503 from temp storage is a retry, not a terminal answer.
 
-    Under the ``gcs`` backend the sweep is a bucket lifecycle rule rather than
-    this process, so nothing here coordinates with it and it owes no notice —
-    the window is *wider* than the filesystem one, not narrower. What arrives is
-    ``NotFound`` rather than ``FileNotFoundError``, and a catch that named only
-    the second would have left the more likely case unhandled: closed as
-    ``handler_error``, ceiling burnt, and the one remedy the issuer owns —
-    fetch again — never reported.
+    Replaces a test that asserted the SDK's `NotFound` reached this catch. It no
+    longer does, and should not: the *store* translates a missing object into
+    `FileNotFoundError` now, so this path keeps one catch for a swept blob rather
+    than one per backend, and `google.api_core` stays out of a provider-agnostic
+    module.
+
+    What is worth asserting instead is the failure that was genuinely mishandled.
+    Unclassified, a 503 while reading the blob became a `handler_error` fact with
+    the delivery ceiling burnt — a terminal answer to a command a retry would
+    have completed, delivered to the one issuer that cannot re-fetch
+    (archiver#175). The same provider's failures on the *write* path have been
+    classified by status since CR #27; this is that rule, one call earlier.
     """
     writer = FakeGcs(result(GcsCreateOutcome.WROTE, public_url=PUBLIC_URL))
 
-    def deleted(self, fingerprint):
-        raise gexc.NotFound(f"no such object: {fingerprint}")
+    def unavailable(self, fingerprint):
+        raise gexc.ServiceUnavailable("backend error")
 
-    monkeypatch.setattr(LocalBlobStore, "open_stream", deleted)
+    monkeypatch.setattr(LocalBlobStore, "open_stream", unavailable)
 
-    with pytest.raises(PermanentReplicateError) as caught:
+    with pytest.raises(TransientReplicateError):
         await handler_for(store, writer)(command(blob_uri))
 
-    assert caught.value.reason is ReplicateReason.BLOB_EXPIRED
     assert writer.effects == []
+
+
+async def test_a_terminal_provider_status_reading_the_blob_is_left_unclassified(
+    store, blob_uri, monkeypatch
+):
+    """The deliberate other half (CR #3).
+
+    A 403 on the temp store is a misprovisioned grant — an operator's to fix, and
+    not something any `ReplicateReason` describes: every existing token names the
+    *destination*, so `provider_disabled` here would tell an issuer its
+    destination is unavailable when its destination is fine. Rather than invent a
+    wire token in a review pass, this keeps today's path — unclassified, the
+    delivery ceiling, then `handler_error` — which also gives the operator the
+    reclaim window to fix the grant before anything is closed.
+    """
+    writer = FakeGcs(result(GcsCreateOutcome.WROTE, public_url=PUBLIC_URL))
+
+    def forbidden(self, fingerprint):
+        raise gexc.Forbidden("no storage.objects.get on the temp bucket")
+
+    monkeypatch.setattr(LocalBlobStore, "open_stream", forbidden)
+
+    with pytest.raises(gexc.Forbidden):
+        await handler_for(store, writer)(command(blob_uri))
 
 
 async def test_a_blob_that_cannot_be_opened_for_another_reason_stays_open(

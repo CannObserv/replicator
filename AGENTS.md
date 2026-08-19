@@ -133,9 +133,12 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
   `file://` and `gcs` announces `gs://`; `local` is the compiled-in default and stays
   that way until a consumer can read the other scheme without an uncapped re-fetch
   loop (CannObserv/watcher#275). Every `BlobStore` call from a coroutine goes through
-  `asyncio.to_thread`. Under `gcs` there is no sweep and
-  `REPLICATOR_BLOB_MAX_TOTAL_BYTES` is **not enforced** — retention is a bucket
-  lifecycle rule on `customTime`, and `blob_expires_at` becomes a floor. Read
+  `asyncio.to_thread` — which puts it in the unit's shutdown budget, not just the
+  handler's. Under `gcs` there is no sweep and `REPLICATOR_BLOB_MAX_TOTAL_BYTES`
+  is **not enforced** — retention is a bucket lifecycle rule on `customTime`, and
+  `blob_expires_at` becomes a floor. A missing blob is a `FileNotFoundError` on
+  both backends; every other provider failure carries its status for the caller
+  to classify (`is_terminal_provider_status`). Read
   [docs/STORAGE.md](docs/STORAGE.md) before touching either store.
 - **Store, then publish — never the reverse.** A fact pointing at bytes that are
   not there is unrepairable by the consumer; stored bytes with no fact repair

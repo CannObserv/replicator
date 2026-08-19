@@ -197,3 +197,27 @@ def test_the_gcs_backend_without_a_bucket_fails_at_startup(monkeypatch):
 
     with pytest.raises(ValidationError, match="REPLICATOR_BLOB_BUCKET"):
         get_settings()
+
+
+def test_the_blob_timeout_is_configurable_and_below_the_shutdown_budget(monkeypatch):
+    """CR #8: the store's timeout is host configuration, like every other timeout.
+
+    It is also the one that runs beyond cancellation — `asyncio.to_thread` — so
+    it lands in the unit's `TimeoutStopSec` budget rather than merely bounding a
+    handler. `tests/test_deploy.py` asserts the sum; this fixes the default it
+    sums.
+    """
+    monkeypatch.delenv("REPLICATOR_BLOB_TIMEOUT_SECONDS", raising=False)
+    assert get_settings().blob_timeout_seconds == 30.0
+
+    monkeypatch.setenv("REPLICATOR_BLOB_TIMEOUT_SECONDS", "45")
+    get_settings.cache_clear()
+    assert get_settings().blob_timeout_seconds == 45.0
+
+
+def test_a_non_positive_blob_timeout_fails_at_startup(monkeypatch):
+    """Zero is not "no timeout" — it is an operation that can never complete."""
+    monkeypatch.setenv("REPLICATOR_BLOB_TIMEOUT_SECONDS", "0")
+
+    with pytest.raises(ValidationError):
+        get_settings()

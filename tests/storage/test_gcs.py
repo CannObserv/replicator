@@ -8,99 +8,25 @@ thing a fake cannot check is that the SDK accepts these arguments, which is what
 the marked test in ``test_gcs_bucket.py`` is for.
 """
 
+import io
 import re
-from io import BytesIO
 
 import pytest
-from google.api_core.exceptions import NotFound, PreconditionFailed
+from google.api_core.exceptions import NotFound, PreconditionFailed, ServiceUnavailable
 
 from src.storage.gcs import GcsBlobStore
 
-FINGERPRINT = "9f2a7c1e" + "0" * 56
+# `FakeBlob`, `FakeBucket`, `FakeClient` and the `store` / `bucket` / `client`
+# fixtures live in `tests/storage/conftest.py` (CR #10) — three modules build a
+# store now, and a fake defined in whichever one got there first is a fake whose
+# edits reach further than its author can see.
+from tests.storage.conftest import FINGERPRINT, FakeBlob, FakeClient
 
 # The shape `src.worker.replicate` validates a `blob_uri`'s fingerprint against.
 # Spelled again here rather than imported: this module is about the store, and a
 # test that the probe key cannot be mistaken for content should not pass merely
 # because the guard's regex was loosened.
 _FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
-
-
-class FakeBlob:
-    """Just enough ``google.cloud.storage.Blob`` to answer this module's questions."""
-
-    def __init__(self, bucket, name):
-        self._bucket = bucket
-        self.name = name
-        self.custom_time = None
-        self.content_type = None
-        self.patched = 0
-
-    def exists(self):
-        return self.name in self._bucket.objects
-
-    def upload_from_string(self, data, content_type=None, if_generation_match=None, timeout=None):
-        if if_generation_match == 0 and self.name in self._bucket.objects:
-            raise PreconditionFailed("object already exists")
-        self._bucket.objects[self.name] = data
-        self.content_type = content_type
-        self._bucket.content_types[self.name] = content_type
-        # Set at creation by the real SDK too: ``custom_time`` is object metadata
-        # on the upload, not a second call. Recorded here so the clock assertions
-        # read the same field on both paths.
-        self._bucket.custom_times[self.name] = self.custom_time
-        self._bucket.timeouts.append(timeout)
-
-    def patch(self):
-        if self.name not in self._bucket.objects:
-            raise NotFound("no such object")
-        self.patched += 1
-        self._bucket.custom_times[self.name] = self.custom_time
-
-    def download_as_bytes(self, timeout=None):
-        if self.name not in self._bucket.objects:
-            raise NotFound("no such object")
-        return self._bucket.objects[self.name]
-
-    def download_to_file(self, handle, timeout=None):
-        handle.write(self.download_as_bytes())
-
-
-class FakeBucket:
-    def __init__(self, name):
-        self.name = name
-        self.objects: dict[str, bytes] = {}
-        self.content_types: dict[str, str | None] = {}
-        self.custom_times: dict[str, object] = {}
-        self.timeouts: list[float | None] = []
-        self.reloaded = 0
-        self.probed: list[str] = []
-
-    def blob(self, name):
-        if name.endswith(GcsBlobStore.PREFLIGHT_KEY):
-            self.probed.append(name)
-        return FakeBlob(self, name)
-
-    def reload(self, timeout=None):
-        self.reloaded += 1
-
-
-class FakeClient:
-    def __init__(self, bucket=None):
-        self._bucket = bucket if bucket is not None else FakeBucket("a-temp-bucket")
-
-    def bucket(self, name):
-        assert name == self._bucket.name
-        return self._bucket
-
-
-@pytest.fixture
-def bucket():
-    return FakeBucket("a-temp-bucket")
-
-
-@pytest.fixture
-def store(bucket):
-    return GcsBlobStore("a-temp-bucket", prefix="blobs", client=FakeClient(bucket))
 
 
 def test_store_writes_the_bytes_under_a_flat_content_addressed_key(store, bucket):
@@ -164,7 +90,6 @@ def test_store_never_overwrites_an_existing_object(store, bucket):
     than a truncated one at a name that asserts a sha256.
     """
     store.store(b"hello", FINGERPRINT, "text/plain")
-    bucket.objects[f"blobs/{FINGERPRINT}.bin"] = b"hello"
 
     uri = store.store(b"hello", FINGERPRINT, "text/plain")
 
@@ -172,22 +97,28 @@ def test_store_never_overwrites_an_existing_object(store, bucket):
     assert bucket.objects[f"blobs/{FINGERPRINT}.bin"] == b"hello"
 
 
-def test_a_lost_create_race_is_a_success(bucket):
-    """Two workers can store the same new fingerprint at once; the loser is not wrong.
+def test_store_takes_one_round_trip_when_the_blob_is_new(store, bucket):
+    """CR #6: the precondition *is* the existence check.
 
-    ``exists`` says no to both, both upload with ``if_generation_match=0``, and
-    one gets a 412. The bytes at that key are the same bytes by construction, so
-    the only correct outcome is the URI — raising would dead-letter a command
-    whose blob is sitting right there.
+    An `exists()` first was a second network call on every command of a serial
+    consume path, and it was the weaker construction besides — check-then-write
+    races where `if_generation_match=0` cannot.
     """
-    store = GcsBlobStore("a-temp-bucket", prefix="blobs", client=FakeClient(bucket))
+    store.store(b"hello", FINGERPRINT, "text/plain")
+
+    assert bucket.timeouts == [store._timeout]  # exactly one upload, no probe before it
+
+
+def test_a_lost_create_race_is_a_success(store, bucket):
+    """Two workers store the same new fingerprint at once; the loser is not wrong.
+
+    Both upload with ``if_generation_match=0`` and one gets a 412. The bytes at
+    that key are the same bytes by construction, so the only correct outcome is
+    the URI — raising would dead-letter a command whose blob is sitting right
+    there. Indistinguishable from an ordinary redelivery from here, which is
+    why one branch serves both.
+    """
     bucket.objects[f"blobs/{FINGERPRINT}.bin"] = b"hello"
-
-    class RacingBlob(FakeBlob):
-        def exists(self):
-            return False  # the state both workers observed before either wrote
-
-    bucket.blob = lambda name: RacingBlob(bucket, name)
 
     assert store.store(b"hello", FINGERPRINT, "text/plain") == store.uri_for(FINGERPRINT)
 
@@ -212,16 +143,21 @@ def test_storing_an_existing_blob_restarts_the_retention_clock(store, bucket):
 
 
 def test_a_touch_on_a_vanished_object_is_swallowed(store, bucket):
-    """Lifecycle can delete between the existence check and the patch.
+    """Lifecycle can delete between the 412 and the patch that follows it.
 
     Same window `LocalBlobStore._touch` swallows `FileNotFoundError` for, same
     verdict: the fallout is a `blob_uri` the reader re-issues against, where
-    raising would dead-letter a command whose bytes were fine when we looked.
+    raising would dead-letter a command whose bytes were fine a moment earlier.
     """
 
     class VanishingBlob(FakeBlob):
-        def exists(self):
-            return True
+        def upload_from_string(self, *args, **kwargs):
+            # The object was there when the precondition was evaluated...
+            raise PreconditionFailed("object already exists")
+
+        def patch(self):
+            # ...and gone by the time its clock was restarted.
+            raise NotFound("no such object")
 
     bucket.blob = lambda name: VanishingBlob(bucket, name)
 
@@ -322,44 +258,77 @@ def test_reads_do_not_go_through_a_shared_handle(store, bucket):
 def test_download_to_file_receives_a_real_handle(store, bucket):
     """Guards the shape the SDK is handed, which the fake would otherwise fake away."""
     store.store(b"hello", FINGERPRINT, "text/plain")
-    sink = BytesIO()
+    sink = io.BytesIO()
 
     bucket.blob(store.key_for(FINGERPRINT)).download_to_file(sink)
 
     assert sink.getvalue() == b"hello"
 
 
-def test_preflight_probes_the_bucket(store, bucket):
-    """A boot-time question with a wrong answer available: does this bucket exist?
+def test_preflight_probes_with_a_one_object_listing(store, client):
+    """CR #1: the probe has to be able to fail.
 
-    The probe is a read of a key nothing ever writes. That is enough to prove the
-    three things a misconfiguration gets wrong — credentials resolve, the bucket
-    resolves, and this identity may read it — while writing nothing and leaving
-    nothing to clean up.
+    A listing scoped to the store's own prefix, capped at one object, and
+    **iterated** — the SDK's listing is lazy, so a probe that never advances the
+    iterator issues no request at all and checks nothing.
     """
     store.preflight()
 
-    assert bucket.probed == [f"blobs/{GcsBlobStore.PREFLIGHT_KEY}"]
+    assert client.listings == [{"max_results": 1, "prefix": "blobs", "timeout": store._timeout}]
 
 
-def test_preflight_raises_when_the_bucket_is_not_there(store, bucket):
-    def missing(name):
-        raise NotFound("no such bucket")
+def test_preflight_raises_when_the_bucket_is_not_there(bucket):
+    """The failure the old probe could not see, and the reason it is a listing.
 
-    bucket.blob = missing
+    `Blob.exists()` catches `NotFound` and returns `False` — for a missing bucket
+    exactly as for a missing object — so an existence-based preflight passed on a
+    misspelled `REPLICATOR_BLOB_BUCKET` and the worker booted announcing a
+    `blob_uri` into a bucket that does not exist. Listing raises.
+    """
+    store = GcsBlobStore("a-temp-bucket", prefix="blobs", client=FakeClient(bucket, missing=True))
 
     with pytest.raises(NotFound):
         store.preflight()
 
 
-def test_the_preflight_key_cannot_collide_with_a_blob(store):
-    """It lives under the same prefix, so it must not be mistakable for content.
+def test_preflight_passes_on_an_empty_bucket(store):
+    """Empty is a healthy state, not a missing one — a fresh deployment's normal case."""
+    store.preflight()
 
-    A fingerprint is 64 lowercase hex characters and the probe key is not, so no
-    fetched blob can ever address it — and the object is never created anyway,
-    which is the stronger half.
+
+def test_a_missing_object_reads_as_a_file_not_found(store):
+    """CR #3: the protocol's vocabulary for gone, not the SDK's.
+
+    `src.worker.replicate` catches one exception for a swept blob. Translating
+    here is what keeps that a single catch instead of one per backend — and keeps
+    `google.api_core` out of a module that is deliberately provider-agnostic.
     """
-    assert not _FINGERPRINT_RE.match(GcsBlobStore.PREFLIGHT_KEY.removesuffix(".bin"))
+    with pytest.raises(FileNotFoundError):
+        store.open(FINGERPRINT)
+
+    with pytest.raises(FileNotFoundError):
+        store.open_stream(FINGERPRINT)
+
+
+def test_a_provider_failure_keeps_its_status_for_the_caller_to_classify(store, bucket):
+    """Everything that is not "gone" propagates intact (CR #3).
+
+    The store holds no retry policy: a 503 is transient and a 403 is not, and
+    which one closes a command is a decision that needs to know which command is
+    in flight. `src.core.errors.is_terminal_provider_status` is where that is
+    made, from the status this exception still carries.
+    """
+
+    class Unavailable(FakeBlob):
+        def download_as_bytes(self, timeout=None):
+            raise ServiceUnavailable("backend error")
+
+    bucket.blob = lambda name: Unavailable(bucket, name)
+
+    with pytest.raises(ServiceUnavailable) as caught:
+        store.open(FINGERPRINT)
+
+    assert caught.value.code == 503
 
 
 def test_a_failed_download_does_not_leak_its_spool_file(store, bucket, monkeypatch):
@@ -375,11 +344,14 @@ def test_a_failed_download_does_not_leak_its_spool_file(store, bucket, monkeypat
     class Failing(FakeBlob):
         def download_to_file(self, handle, timeout=None):
             monkeypatch.setattr(handle, "close", lambda: closed.append(True))
-            raise NotFound("gone mid-read")
+            # A provider failure rather than a missing object: both close the
+            # handle, and this one keeps the assertion about *leaking* separate
+            # from the translation `NotFound` now gets (CR #3).
+            raise ServiceUnavailable("backend error mid-read")
 
     bucket.blob = lambda name: Failing(bucket, name)
 
-    with pytest.raises(NotFound):
+    with pytest.raises(ServiceUnavailable):
         store.open_stream(FINGERPRINT)
 
     assert closed == [True]

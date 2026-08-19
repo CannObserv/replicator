@@ -57,7 +57,7 @@ What has to exist, and why each part:
 | Same region as the VM | Consumer reads from GCE in-region are not egress-billed; cross-region reads are, per blob, per consumer |
 | A lifecycle rule on **`daysSinceCustomTime`** | Not `age`. The store stamps `customTime` on every re-reference, which is what makes "TTL since last referenced" expressible — an age rule would reap a blob announced moments ago, invisibly, because re-fetching unchanged bytes never rewrites the object |
 | The rule's day count ≥ `REPLICATOR_BLOB_TTL_SECONDS` | The two are configured in different places and nothing keeps them in step. A rule shorter than the published horizon announces a window the bucket will not honour |
-| `objectAdmin`-equivalent for the worker's SA | It creates objects and reads them back. It needs no `delete`: expiry is the lifecycle rule's job, which is also why the boot preflight is a read rather than a write-and-clean-up |
+| `objectAdmin`-equivalent for the worker's SA | It creates objects, reads them back, and **lists** — the boot preflight is a one-object listing, because an existence check cannot detect a missing bucket (the SDK swallows the 404). `storage.objects.list` is in both `objectViewer` and `objectAdmin`, so this widens nothing. It needs no `delete`: expiry is the lifecycle rule's job, which is also why the preflight is a read rather than a write-and-clean-up |
 | `objectViewer` for **each consumer's** SA | This is the grant that replaces the filesystem coupling, and the one thing the worker cannot verify at boot. Watcher's SA is the one that matters today — it is the service that opens the bytes |
 
 Lifecycle granularity is **one day** and enforcement is asynchronous, so a blob

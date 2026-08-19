@@ -35,13 +35,13 @@ from urllib.parse import urlsplit
 from co_core.effects.gcs import GcsCreateIfAbsent, GcsCreateResult
 from co_core.pure.models.changes import ContentReplicateCommand
 from co_core.pure.util.gcs import GcsCreateOutcome
-from google.api_core.exceptions import NotFound
 
 from src.core.config import DEFAULT_WRITE_TIMEOUT_SECONDS
 from src.core.errors import (
     PermanentReplicateError,
     ReplicateReason,
     TransientReplicateError,
+    is_terminal_provider_status,
 )
 from src.core.logging import get_logger
 from src.storage.base import BlobStore
@@ -140,7 +140,7 @@ def locate_blob(blob_uri: str, *, store: BlobStore) -> str:
     return fingerprint
 
 
-def _names_another_backend(blob_uri: str, minted: str | None) -> bool:
+def _names_another_backend(blob_uri: str, minted: str) -> bool:
     """Whether these two URIs come from different ``BlobStore`` backends.
 
     Answered by comparing schemes rather than by asking the store what it is:
@@ -148,13 +148,14 @@ def _names_another_backend(blob_uri: str, minted: str | None) -> bool:
     ``backend`` member added for one caller's benefit would be the first thing on
     it that is about identity instead. The scheme is already the observable
     difference, and it is one ``uri_for`` hands over for free.
+
+    Neither guard the first cut carried survived: this is reached only where
+    ``_fingerprint_in`` already returned a fingerprint, which means ``blob_uri``
+    parsed and ``minted`` exists. A ``None`` check and a ``ValueError`` catch for
+    states the caller has already excluded are lines nothing can execute, and
+    coverage said so.
     """
-    if minted is None:
-        return False
-    try:
-        return urlsplit(blob_uri).scheme != urlsplit(minted).scheme
-    except ValueError:
-        return False
+    return urlsplit(blob_uri).scheme != urlsplit(minted).scheme
 
 
 def _fingerprint_in(blob_uri: str) -> str | None:
@@ -290,12 +291,6 @@ class ConditionalWriter(Protocol):
 # error, and reading a fixed set keeps this a pass-through rather than an
 # interpretation — Replicator never learns what a storage class *means*.
 _GCS_OPTIONS = ("cache_control", "content_disposition", "storage_class")
-
-
-# HTTP statuses that mean "come back later" rather than "this is wrong" (CR #27).
-# Everything else in 4xx closes the command; everything in 5xx, and everything
-# with no status at all, leaves it open.
-_RETRYABLE_STATUSES = frozenset({408, 429})
 
 
 # The handler seam the loop dispatches to, matching ``src.worker.handler``'s.
@@ -481,19 +476,19 @@ async def _write(
         # least belongs on the loop: on the object store this downloads the
         # entire blob before the handle is usable (#7).
         data = await asyncio.to_thread(store.open_stream, fingerprint)
-    except (FileNotFoundError, NotFound) as exc:
+    except FileNotFoundError as exc:
         # The retention sweep runs concurrently with this loop, so the window
         # between ``locate_blob``'s existence check and this open is real
         # (CR #33). Uncaught, it closed the command as ``handler_error`` after
         # burning the ceiling — losing the one reason whose remedy the issuer
         # owns, which is to fetch again under a new command_id.
         #
-        # Two exception types for one condition because each backend reports a
-        # vanished blob in its own vocabulary: ``FileNotFoundError`` from the
-        # filesystem, ``NotFound`` from the GCS SDK (#7). Under the object store
-        # the window is *wider* rather than narrower — lifecycle deletion is
-        # asynchronous and owes us no notice — so catching only the first would
-        # have made the more likely case the unhandled one.
+        # One catch for both backends because the *store* translates: the object
+        # backend raises this rather than the SDK's ``NotFound`` (CR #3), which
+        # keeps ``google.api_core`` out of a provider-agnostic module and keeps
+        # this from growing a catch per backend. Under the object store the
+        # window is *wider* rather than narrower — lifecycle deletion is
+        # asynchronous and owes us no notice.
         raise _refuse(
             "the blob for this command was swept before it could be read",
             ReplicateReason.BLOB_EXPIRED,
@@ -502,6 +497,13 @@ async def _write(
         # A disk that is full, read-only or gone: this host's problem, not the
         # command's, and a different host may well succeed.
         raise TransientReplicateError(f"the blob could not be opened: {exc}") from exc
+    except Exception as exc:
+        # The object-store backend's failures, classified the same way the write
+        # path classifies the same provider's (CR #3). Unclassified, a 503 while
+        # reading the blob became a `handler_error` fact with the delivery
+        # ceiling burnt — a terminal answer to a command that a retry would have
+        # completed, for the one issuer that cannot re-fetch (archiver#175).
+        raise _classify_source_failure(exc) from exc
 
     with data:
         try:
@@ -521,6 +523,26 @@ async def _write(
             raise
         except Exception as exc:
             raise _classify_provider_failure(exc) from exc
+
+
+def _classify_source_failure(exc: Exception) -> Exception:
+    """A failure reading the blob out of temp storage (CR #3).
+
+    **Only the transient half is claimed**, matching the byte path's
+    ``_in_store``. 5xx, 408/429 and anything with no status stay open — the retry
+    is free and T4 makes it safe. A terminal status is re-raised unclassified,
+    which is today's path: the delivery ceiling, then ``handler_error``. The
+    accurate alternative would be a new ``ReplicateReason`` for "this worker
+    cannot read its own temp store", and the existing tokens all describe the
+    *destination* — ``provider_disabled`` on a source failure would tell an
+    issuer its destination is unavailable, which is worse than a generic answer.
+    A new token is a contract edit, not a review fix.
+    """
+    if is_terminal_provider_status(exc):
+        return exc
+    return TransientReplicateError(
+        f"the blob could not be read from temp storage: {type(exc).__name__}: {exc}"
+    )
 
 
 def _classify_provider_failure(exc: Exception) -> Exception:
@@ -545,16 +567,13 @@ def _classify_provider_failure(exc: Exception) -> Exception:
       status at all (a socket dying mid-upload) — stays open. T4 makes retrying
       the write safe, which is what lets this default be the generous one.
 
-    Read as a number rather than caught as ``google.api_core.exceptions.*`` for
-    two reasons: that package is a transitive dependency this project never
-    declares, and ``ConditionalWriter`` is a provider-agnostic seam, so a second
-    provider raising its own error type with an HTTP status is classified
-    correctly without touching this function. 408 in particular has no named
-    class in api_core at all.
+    The status is read as a number rather than caught as
+    ``google.api_core.exceptions.*``; the reasoning moved to
+    ``is_terminal_provider_status`` when the storage path became a second caller
+    (CR #3).
     """
     status = getattr(exc, "code", None)
-    terminal = isinstance(status, int) and 400 <= status < 500 and status not in _RETRYABLE_STATUSES
-    if not terminal:
+    if not is_terminal_provider_status(exc):
         return TransientReplicateError(f"the provider write failed: {type(exc).__name__}: {exc}")
     reason = (
         ReplicateReason.INVALID_DESTINATION if status == 400 else ReplicateReason.PROVIDER_DISABLED

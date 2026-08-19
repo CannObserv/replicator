@@ -1,8 +1,11 @@
 """The byte path behind the loop's handler seam: fetch, fingerprint, store, publish."""
 
+import errno
+
 import httpx
 import pytest
 from co_core.pure.util.hashing import sha256
+from google.api_core import exceptions as gexc
 from redis.exceptions import ResponseError
 
 from src.core.config import get_settings
@@ -514,3 +517,75 @@ async def test_the_ceiling_still_stops_the_byte_path_when_it_is_measured(handler
 
     with pytest.raises(TransientFetchError):
         await handler(usage=usage, ceiling_bytes=1024)(command())
+
+
+async def test_a_provider_failure_storing_the_blob_is_transient(handler, fake_redis, monkeypatch):
+    """CR #3: a 503 from temp storage must not walk the command into the DLQ.
+
+    Unclassified, a storage failure burns `times_delivered` — which only ever
+    advances — so a few reclaims through a routine provider blip dead-letter a
+    command whose bytes were fetched perfectly well, and publish `handler_error`
+    to the issuer. Transient is exempt from the ceiling: the entry stays pending
+    and returns via `claim_stale` when the provider does.
+    """
+
+    def unavailable(self, data, fingerprint, media_type):
+        raise gexc.ServiceUnavailable("backend error")
+
+    monkeypatch.setattr(LocalBlobStore, "store", unavailable)
+
+    with pytest.raises(TransientFetchError):
+        await handler()(command())
+
+
+async def test_a_disk_failure_storing_the_blob_is_transient_too(handler, monkeypatch):
+    """The local backend's shape of the same thing: no status, so not terminal.
+
+    A full or read-only disk is this host's problem, and another worker on
+    another host may well succeed — the same reasoning the replicate path has
+    applied to `OSError` since it shipped.
+    """
+
+    def no_space(self, data, fingerprint, media_type):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(LocalBlobStore, "store", no_space)
+
+    with pytest.raises(TransientFetchError):
+        await handler()(command())
+
+
+async def test_a_terminal_provider_status_storing_the_blob_is_left_unclassified(
+    handler, monkeypatch
+):
+    """The deliberate other half (CR #3).
+
+    A 403 on the temp bucket is a misprovisioned grant. Naming it on the wire
+    would need a new `FailureReason` token, which is a contract edit rather than
+    a review fix — and today's unclassified path is the better shape anyway: a
+    few reclaims give an operator the window to fix the grant, after which the
+    command succeeds instead of having been closed against an issuer who could
+    not have acted on it.
+    """
+
+    def forbidden(self, data, fingerprint, media_type):
+        raise gexc.Forbidden("no storage.objects.create on the temp bucket")
+
+    monkeypatch.setattr(LocalBlobStore, "store", forbidden)
+
+    with pytest.raises(gexc.Forbidden):
+        await handler()(command())
+
+
+async def test_the_usage_estimate_is_not_kept_where_nothing_reads_it(handler, monkeypatch):
+    """CR #9: a counter that only rises and is never read is not accounting.
+
+    Under the object-store backend no sweep re-measures and no ceiling consults
+    it, so accumulating leaves a number the next reader would reasonably mistake
+    for a measurement of something.
+    """
+    usage = BlobUsage()
+
+    await handler(usage=usage, ceiling_bytes=None)(command())
+
+    assert usage.total_bytes == 0

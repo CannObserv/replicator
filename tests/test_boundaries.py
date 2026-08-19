@@ -35,7 +35,7 @@ from src.api.main import app
 from src.core.config import Settings
 from src.storage.gcs import GcsBlobStore
 from src.storage.local import LocalBlobStore
-from tests.storage.test_gcs import FakeBucket, FakeClient
+from tests.storage.conftest import FakeBucket, FakeClient
 
 REPO = Path(__file__).resolve().parents[1]
 SRC = REPO / "src"

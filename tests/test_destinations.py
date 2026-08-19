@@ -348,3 +348,17 @@ def test_the_guard_still_refuses_a_bare_construction_beside_it():
 
     with pytest.raises(AssertionError, match="not marked"):
         guarded(object(), "any-bucket-at-all", client=None)
+
+
+def test_the_injected_client_carve_out_does_not_reach_a_marked_test():
+    """CR #4: the admission is for tests that reach no network, not for any client.
+
+    Ahead of the bucket comparison it also admitted a `@pytest.mark.gcs` test —
+    the one state with a credential actually resolved — so a driver could be
+    constructed against any bucket by handing it a client. The carve-out belongs
+    to the unmarked state, where nothing is expected because nothing is allowed.
+    """
+    guarded = guarded_init(lambda self, bucket, **kw: None, TEST_BUCKET, marked=True)
+
+    with pytest.raises(AssertionError, match="may only reach"):
+        guarded(object(), "some-other-bucket", client=object())

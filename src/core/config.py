@@ -26,6 +26,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # directly-constructed handler gets while the field below is what the worker gets.
 DEFAULT_WRITE_TIMEOUT_SECONDS = 120
 
+# The object store's per-operation timeout, imported by ``src.storage.gcs`` so a
+# directly constructed store and the worker's agree by construction rather than
+# by two literals staying equal (CR #8) — the same arrangement
+# ``DEFAULT_WRITE_TIMEOUT_SECONDS`` has with the replicate handler.
+DEFAULT_BLOB_TIMEOUT_SECONDS = 30.0
+
 
 def _default_consumer_name() -> str:
     """Identify this worker within the consumer group.
@@ -88,6 +94,23 @@ class Settings(BaseSettings):
     # against (T3a). A prefix that round-trips differently through the two is a
     # refusal of a blob this store really did mint.
     blob_prefix: str = Field(default="blobs", validation_alias="REPLICATOR_BLOB_PREFIX")
+
+    # How long one object-store operation may block before it gives up. A
+    # setting rather than a constant in the store (CR #8) for the reason every
+    # other timeout here is one: it is a property of this host's link to the
+    # provider, and `src/core/config.py` is the single source of env access.
+    #
+    # **It lands directly in the unit's shutdown budget.** Storage runs inside
+    # `asyncio.to_thread`, which puts it beyond cancellation, so SIGTERM waits it
+    # out exactly as it waits out an in-flight sweep — which is why 30 s and not
+    # the fetch ceiling's 120: `TimeoutStopSec` has to cover a poll, a pacing
+    # sleep, the slowest fetch *and* this, and `tests/test_deploy.py` now asserts
+    # the sum (CR #5).
+    blob_timeout_seconds: float = Field(
+        default=DEFAULT_BLOB_TIMEOUT_SECONDS,
+        gt=0,
+        validation_alias="REPLICATOR_BLOB_TIMEOUT_SECONDS",
+    )
 
     # Temp-storage root for the local-filesystem blob backend. "Temporary" means
     # the bytes live long enough for durable replication to collect them — see

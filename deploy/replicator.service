@@ -106,6 +106,18 @@ RestartSec=5
 # be cancelled, so shutdown waits out whatever walk is in flight. Fast at the
 # volumes the ceiling permits (REPLICATOR_BLOB_MAX_TOTAL_BYTES), but revisit this
 # alongside any change that lets the tree hold far more files.
+#
+# Storage is the fourth (#7). Under REPLICATOR_BLOB_BACKEND=gcs a store is a
+# network round trip bounded by REPLICATOR_BLOB_TIMEOUT_SECONDS (30s), also in
+# asyncio.to_thread and also beyond cancellation — so it is now summed by
+# tests/test_deploy.py alongside the poll, the pacing sleep and the fetch: 160s
+# against this 180s.
+#
+# That leaves 20s of margin rather than the 50s the sweep used to have, and the
+# margin is honest because **the third and fourth terms are mutually exclusive**:
+# the sweep runs only on the local backend and the storage round trip only on the
+# object-store one, so no single shutdown pays both. The sum deliberately
+# overcounts rather than encoding that in a test nobody would revisit.
 TimeoutStopSec=180
 
 [Install]

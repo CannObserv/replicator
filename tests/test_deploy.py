@@ -97,7 +97,7 @@ def test_the_stop_timeout_outlasts_the_slowest_fetch_a_command_may_ask_for():
 
 
 def test_the_stop_timeout_absorbs_a_pacing_wait_as_well():
-    """The #12 term.
+    """The #12 and #7 terms.
 
     A handler may now sleep out a per-host politeness window before it fetches,
     bounded by the poll window (``build_handler``'s ``park_above_seconds``
@@ -112,6 +112,13 @@ def test_the_stop_timeout_absorbs_a_pacing_wait_as_well():
         settings.read_block_ms / 1000  # a poll already in flight
         + settings.read_block_ms / 1000  # the pacing sleep bound, derived from it
         + settings.max_fetch_timeout_seconds  # the slowest fetch a command may ask for
+        # The #7 term. Storage runs inside ``asyncio.to_thread``, which puts it
+        # beyond cancellation exactly as the sweep is, so SIGTERM waits out an
+        # upload in flight. Added when the object-store backend made this a
+        # network round trip rather than a write to local disk (CR #5) — the
+        # docstring's "three separately-reasonable numbers" became four, which
+        # is the failure it predicted.
+        + settings.blob_timeout_seconds
     )
 
     assert timeout_stop > worst_case

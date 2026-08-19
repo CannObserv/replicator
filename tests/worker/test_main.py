@@ -871,8 +871,8 @@ async def test_the_gcs_backend_builds_an_object_store(monkeypatch, fake_redis, t
     monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
     built = []
 
-    def fake_store(bucket, *, prefix, client=None):
-        built.append((bucket, prefix))
+    def fake_store(bucket, *, prefix, timeout_seconds=None, client=None):
+        built.append((bucket, prefix, timeout_seconds))
         return object()
 
     monkeypatch.setattr("src.worker.main.GcsBlobStore", fake_store)
@@ -880,7 +880,10 @@ async def test_the_gcs_backend_builds_an_object_store(monkeypatch, fake_redis, t
 
     await run(_stopped())
 
-    assert built == [("a-temp-bucket", "blobs")]
+    # The timeout is threaded from settings rather than left to the store's own
+    # default (CR #8): it lands in the unit's shutdown budget, so the number the
+    # operator configures has to be the number that runs.
+    assert built == [("a-temp-bucket", "blobs", get_settings().blob_timeout_seconds)]
 
 
 async def test_the_gcs_backend_does_not_create_a_blob_directory(monkeypatch, fake_redis, tmp_path):
@@ -1083,3 +1086,31 @@ async def test_the_local_backend_still_hands_over_its_ceiling(monkeypatch, fake_
     await run(_stopped())
 
     assert seen["ceiling_bytes"] == 4096
+
+
+async def test_the_gcs_boot_log_states_the_horizon_it_will_publish(
+    monkeypatch, fake_redis, tmp_path, capsys
+):
+    """CR #11: the two halves of the TTL are configured in different places.
+
+    `REPLICATOR_BLOB_TTL_SECONDS` sets what every `blob_available` announces; the
+    bucket lifecycle rule sets what is actually reaped, and nothing keeps them in
+    step. A rule shorter than the published horizon is the one way
+    `blob_expires_at` can be wrong in the unsafe direction — a consumer holding a
+    `blob_uri` the bucket has already deleted. Logging the number at boot does
+    not enforce the pairing, but it puts both halves within reach of one grep.
+    """
+    _gcs_env(monkeypatch)
+    monkeypatch.setenv("REPLICATOR_BLOB_TTL_SECONDS", "604800")
+    get_settings.cache_clear()
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    monkeypatch.setattr("src.worker.main.GcsBlobStore", lambda *a, **kw: object())
+    monkeypatch.setattr("src.worker.main.preflight_object_store", lambda store, settings: None)
+
+    await run(_stopped())
+
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
+    stated = [line for line in lines if line.get("message") == "storing blobs in an object store"]
+    assert stated, "the object-store boot line is missing"
+    assert stated[0]["blob_ttl_seconds"] == 604800.0
+    assert "daysSinceCustomTime" in json.dumps(stated[0])

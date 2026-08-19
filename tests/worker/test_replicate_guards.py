@@ -24,7 +24,7 @@ from src.storage.gcs import GcsBlobStore
 from src.storage.local import LocalBlobStore
 from src.worker.aliases import AliasBinding
 from src.worker.replicate import locate_blob, validate_destination
-from tests.storage.test_gcs import FakeBucket, FakeClient
+from tests.storage.conftest import FakeBucket, FakeClient
 
 FINGERPRINT = "a" * 64
 GCS_ROOT = AliasBinding(provider="gcs", bucket="co-artifacts", prefix="reps")

@@ -20,7 +20,8 @@ the second backend.
 | Write safety | temp file + `os.replace` + `fsync` | `if_generation_match=0` — a create, never a put |
 | Retention | the in-worker sweep, on `mtime` | the bucket **lifecycle rule**, on `customTime` |
 | Size ceiling | `REPLICATOR_BLOB_MAX_TOTAL_BYTES` | **not enforced** — see below |
-| Reachability check | `warn_if_unreachable` walks the ancestors | `preflight_object_store` fails the boot |
+| Reachability check | `warn_if_unreachable` walks the ancestors | `preflight_object_store` fails the boot on a one-object listing |
+| Per-operation timeout | n/a (local I/O) | `REPLICATOR_BLOB_TIMEOUT_SECONDS`, and it is in the unit's shutdown budget |
 
 **`local` is still the default, and the flip is not this repo's alone to make.**
 Watcher parses `blob_uri` into a filesystem path and re-issues the fetch when it
@@ -38,12 +39,37 @@ to an IAM grant it cannot. `preflight_object_store` proves the bucket is there
 and readable *by the worker*; whether the consumer may read is verified where
 the grant is made ([DEPLOYMENT.md](DEPLOYMENT.md)), not at boot.
 
+**A missing blob is a `FileNotFoundError` on both backends.** The object store
+translates the SDK's `NotFound`, so the consume path keeps one catch for "these
+bytes are gone" rather than one per backend, and `src/worker/replicate.py` stays
+free of `google.api_core`. Every *other* provider failure propagates with its
+status intact and is classified by the caller through
+`src.core.errors.is_terminal_provider_status` — the same status rule the replicate
+*write* path has used since CR #27. Only the transient half is claimed: 5xx,
+408/429 and anything with no status become a transient error that parks the
+command; a terminal 4xx (a misprovisioned grant) stays unclassified and takes the
+existing ceiling-then-DLQ path, which is what gives an operator a reclaim window
+to fix the grant before anything is closed against an issuer.
+
+**The preflight is a one-object listing, not an existence check.** `Blob.exists()`
+catches `NotFound` and returns `False` — for a missing *bucket* exactly as for a
+missing object — so an existence-based probe cannot see the likeliest
+misconfiguration there is, a typo in `REPLICATOR_BLOB_BUCKET`. Listing raises, and
+needs only `storage.objects.list`, which both grants already carry.
+
 **Every `BlobStore` call from a coroutine goes through `asyncio.to_thread`.** The
 seam is synchronous — an async twin would be a wide refactor for no behavioural
 gain, and `AsyncGcsDriver` is itself `to_thread` around a blocking SDK — so the
 rule lives at the call sites and is held by `tests/worker/test_storage_offloop.py`,
 which watches which thread the store actually ran on. It was already needed
 before the object store: `_write_atomically` ends in an `fsync`.
+
+The cost of that is a **fourth term in the unit's shutdown budget**: `to_thread`
+puts a store beyond cancellation, so SIGTERM waits out an upload in flight
+exactly as it waits out a sweep. `tests/test_deploy.py` sums the poll window, the
+pacing sleep, the fetch ceiling and `REPLICATOR_BLOB_TIMEOUT_SECONDS` against
+`TimeoutStopSec`. The sweep and the storage term are mutually exclusive in
+practice — one per backend — so the sum deliberately overcounts.
 
 ## The blob tree
 

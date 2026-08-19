@@ -10,6 +10,7 @@ message pending for the next reclaim, and since #17
 import asyncio
 import math
 import re
+from collections.abc import Awaitable
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from typing import NamedTuple, Protocol
@@ -30,6 +31,7 @@ from src.core.errors import (
     FailureReason,
     PermanentFetchError,
     TransientFetchError,
+    is_terminal_provider_status,
 )
 from src.core.logging import get_logger
 from src.storage.base import BlobStore
@@ -313,7 +315,7 @@ def build_handler(
         # count it, and a sweep reaping between the two calls means a genuinely
         # new write goes uncounted. Both drifts are bounded by the sweep
         # interval, after which observe() replaces the estimate outright.
-        is_new = not await asyncio.to_thread(store.exists, fingerprint)
+        is_new = not await _in_store(asyncio.to_thread(store.exists, fingerprint))
         # Read *before* the store, so the horizon published below can only be
         # earlier than the blob's real one. store() stamps the mtime the sweep
         # measures against, and mtime >= stored_at by however long the write
@@ -328,8 +330,15 @@ def build_handler(
         # Awaiting it here is what keeps one command's storage from being a lien
         # on every other command's poll. ``tests/worker/test_storage_offloop.py``
         # holds the rule by watching which thread the store ran on.
-        blob_uri = await asyncio.to_thread(store.store, result.content, fingerprint, media_type)
-        if is_new:
+        blob_uri = await _in_store(
+            asyncio.to_thread(store.store, result.content, fingerprint, media_type)
+        )
+        if is_new and ceiling is not None:
+            # Only counted where something reads it (CR #9). Under the
+            # object-store backend nothing measures the store and nothing ever
+            # brings this number down, so accumulating would leave a counter
+            # that only rises and means nothing — which the next reader would
+            # reasonably mistake for a measurement.
             usage.add(len(result.content))
         await _publish(
             publisher,
@@ -763,6 +772,46 @@ def _retry_after_seconds(value: str | None, now: datetime) -> float | None:
         # would raise on subtraction. Everything in this service is UTC.
         when = when.replace(tzinfo=UTC)
     return (when - now).total_seconds()
+
+
+async def _in_store[T](awaitable: Awaitable[T]) -> T:
+    """Run a storage call, classifying what the provider says when it fails (CR #3).
+
+    The local backend raises ``OSError`` and the object store raises the SDK's
+    errors, and neither was anything the loop recognized — so a GCS 503 while
+    storing bytes was an *unclassified* failure, which burns ``times_delivered``
+    and dead-letters the command after a handful of reclaims. A routine provider
+    blip turned into DLQ'd fetches and a ``handler_error`` fact, for work that a
+    retry would have completed.
+
+    **Only the transient half is claimed here, deliberately.** 5xx, 408/429 and
+    anything with no status at all — a local ``OSError``, a socket dying — become
+    ``TransientFetchError``: the command stays in the PEL, exempt from the
+    delivery ceiling, and returns via ``claim_stale``. A terminal provider status
+    (a 403 on a misprovisioned temp bucket) is left *unclassified* on purpose,
+    which is the existing path: a few reclaims, then the DLQ with
+    ``handler_error``. That is the right shape for a host misconfiguration — it
+    gives an operator the reclaim window to fix the grant, and the command then
+    succeeds rather than having been closed against an issuer who cannot act on
+    it anyway. Naming it on the wire instead would mean a new ``FailureReason``
+    token, which is a contract edit (``docs/contracts/…-reference.md``) and not
+    one to make in passing.
+
+    A full or read-only disk lands on the transient branch for the same reason it
+    always did: another worker on another host may well succeed.
+    """
+    try:
+        return await awaitable
+    except Exception as exc:
+        # No passthrough arm for the ``*FetchError`` family: nothing a
+        # ``BlobStore`` raises belongs to it, and a branch guarding against a
+        # store that might one day raise the consume path's own vocabulary is a
+        # line coverage would keep reporting as unreached forever.
+        if is_terminal_provider_status(exc):
+            raise
+        raise TransientFetchError(
+            f"temp storage is unavailable: {type(exc).__name__}: {exc}"
+        ) from exc
 
 
 def _raise_for_ceiling(usage: BlobUsage, ceiling_bytes: int | None) -> None:

@@ -103,18 +103,25 @@ def guarded_init(
 
     def refuse(self, *args, **kwargs):
         bucket = args[0] if args else kwargs.get("bucket")
-        if kwargs.get("client") is not None:
-            # An injected client is the whole reason this guard exists, inverted:
-            # what it refuses is a constructor that resolves ADC *in its own
-            # body* and reaches a bucket by name. A caller that supplies the
-            # client has already made that impossible — there is no credential to
-            # resolve and no bucket to reach except the one the client offers —
-            # and a test cannot build a real client here anyway, because the
-            # scrub above leaves no identity for `storage.Client()` to find.
+        if expected is None and kwargs.get("client") is not None:
+            # An injected client inverts what this guard is aimed at: a
+            # constructor that resolves ADC *in its own body* and reaches a
+            # bucket by name. A caller supplying the client has already made that
+            # impossible — no credential to resolve, no bucket but the one the
+            # client offers — and an unmarked test cannot build a real client
+            # anyway, because the scrub above leaves no identity to resolve.
             #
-            # Without this, `tests/storage/test_gcs.py` would have to be marked
-            # `gcs` to test decisions that touch no network, which is precisely
-            # the mark losing its meaning.
+            # Without it, `tests/storage/test_gcs.py` would have to claim the
+            # `gcs` mark to test decisions that touch no network, which is the
+            # mark losing its meaning.
+            #
+            # **Scoped to `expected is None`, which is the unmarked state**
+            # (CR #4). Ahead of the bucket comparison it also admitted a *marked*
+            # test — the one case with a real credential resolved — so
+            # `AsyncGcsDriver("<production>", client=storage.Client())` would
+            # have passed where it used to be refused. The carve-out is about
+            # tests that reach no network at all; the moment a destination is
+            # expected, the destination is checked.
             return original(self, *args, **kwargs)
         if expected is None and marked:
             # Marked, so the intent was legitimate; the host just has not
