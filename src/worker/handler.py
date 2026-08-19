@@ -348,9 +348,14 @@ def build_handler(
                 final_url=result.final_url or None,
                 status_code=result.status_code,
                 fetched_at=fetched_at,
+                # Raw, unfiltered, on purpose — the asymmetry with the two
+                # below is the point. ``content_type_raw`` is never replayed as
+                # a request header, so no refusal can be built out of it, and
+                # Watcher stores it as an observed fact (watcher#168): filtering
+                # it would suppress a real observation for no gain (#60).
                 content_type_raw=_passthrough(headers, "content-type"),
-                etag=_passthrough(headers, "etag"),
-                last_modified=_passthrough(headers, "last-modified"),
+                etag=_replayable(headers, "etag"),
+                last_modified=_replayable(headers, "last-modified"),
             ),
             command=command,
         )
@@ -872,9 +877,42 @@ def _passthrough(headers: dict[str, str], name: str) -> str | None:
     the value, so stripping it is not a modification.
 
     Over :data:`MAX_HEADER_VALUE_LENGTH` the value is dropped — see the constant.
+
+    This is the whole rule for ``content_type_raw``. The two validators take a
+    second filter on top of it, in :func:`_replayable`.
     """
     value = headers.get(name, "").strip()
     if not value or len(value) > MAX_HEADER_VALUE_LENGTH:
+        return None
+    return value
+
+
+def _replayable(headers: dict[str, str], name: str) -> str | None:
+    """A validator's value, or ``None`` when Replicator could not send it back.
+
+    The publish path and the request guard must agree on what a header value may
+    be, or Replicator emits a validator it will itself refuse (#60). ``etag`` and
+    ``last_modified`` exist to be replayed in a conditional GET's
+    ``If-None-Match`` / ``If-Modified-Since``, and :data:`_HEADER_VALUE` refuses
+    anything outside printable US-ASCII on the way out — obs-text because httpx
+    encodes header values as ASCII and raises rather than sending them, interior
+    HTAB because ``.strip()`` reaches only the ends.
+
+    Publishing one is worse than wasting a request. The refusal is
+    ``invalid_request_options``: pre-request and terminal, so an issuer that
+    stores what we handed it re-derives the same unsendable value every cycle and
+    never fetches that URL again, until it clears its stored validators on its own
+    initiative (#58).
+
+    Dropped rather than repaired, the same posture as the over-length case and
+    for the same shape of reason. There is the value the origin sent and there is
+    nothing; a *scrubbed* ETag is neither, and it fails the same way a truncated
+    one does — it is a value the origin never sent, so it can never match, and
+    the issuer believes it asked conditionally while the origin answers 200 every
+    time. See :data:`MAX_HEADER_VALUE_LENGTH` for that argument in full.
+    """
+    value = _passthrough(headers, name)
+    if value is None or not _HEADER_VALUE.match(value):
         return None
     return value
 

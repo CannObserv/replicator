@@ -93,6 +93,15 @@ Watcher runs both: `sendable_validator()` refuses to mint an unsendable value, a
 a human can clear is an item that stops being fetched until a human notices, which is the failure
 mode this refusal is least likely to advertise.
 
+**Replicator no longer supplies this input from its own side (#60).** `etag` and `last_modified`
+are screened against the refusal rules *before* they are published, so a validator replayed
+verbatim off a `blob_available` passes the **value** rule by construction. The header count and
+the byte total remain yours: they are computed across your whole command, and no screening
+Replicator does on one value can speak for them. Both halves above still stand: a
+consumer can be holding a value published before that fix, and the refusal set is versioned in
+Replicator's code rather than on the wire, so a rule that narrows later would refuse a validator
+minted under the old one.
+
 **One more condition clears a stored pair, and it is not a refusal.** Watcher also forgets the
 validators when bytes *arrive* and fail extraction. The reasoning generalizes to any consumer that
 inherits a fingerprint across 304s: a matching validator produces no bytes, so nothing is extracted
@@ -125,18 +134,26 @@ are the whole value of the six:
 - **`status_code` is always 2xx here.** Every other status closes the command as a `fetch_failed`
   instead, so this field distinguishes 200 from 203 or 206 — it is not a success/failure branch,
   and a branch written as `if status_code == 200` will silently drop a 203.
-- **"Verbatim" excludes surrounding whitespace, and an absurd value is dropped rather than
-  truncated.** On the three header passthroughs — `content_type_raw`, `etag`, `last_modified` —
-  nothing *inside* the value is touched: no case folding, no quote stripping, no date parsing.
-  What is stripped is the whitespace around it, which RFC 9110 excludes from a field value in the
-  first place. Three cases report `None`: an absent header, a blank or whitespace-only one
-  ("present but empty" is not a distinction an issuer can act on), and a value longer than
-  Replicator's `MAX_HEADER_VALUE_LENGTH`
+- **"Verbatim" excludes surrounding whitespace, and a value Replicator cannot stand behind is
+  dropped rather than repaired.** On the three header passthroughs — `content_type_raw`, `etag`,
+  `last_modified` — nothing *inside* the value is touched: no case folding, no quote stripping, no
+  date parsing. What is stripped is the whitespace around it, which RFC 9110 excludes from a field
+  value in the first place. Four cases report `None`: an absent header, a blank or
+  whitespace-only one ("present but empty" is not a distinction an issuer can act on), a value
+  longer than Replicator's `MAX_HEADER_VALUE_LENGTH`
   ([`src/worker/handler.py`](../../src/worker/handler.py); currently 1024 characters, and the
-  constant is authoritative). The last case is dropped rather
-  than truncated because these are origin-controlled strings on a broadcast stream nothing trims,
-  and a *truncated* ETag replayed in an `If-None-Match` is a validator that can never match,
-  which is worse than none.
+  constant is authoritative), and — on `etag` and `last_modified` **only** — a value Replicator
+  could not send back as a request header (#60). The last two are dropped rather than adjusted,
+  and for the same shape of reason: these are origin-controlled strings on a broadcast stream
+  nothing trims, and a *truncated* ETag replayed in an `If-None-Match` is a validator that can
+  never match, while an *unsendable* one is one the request never carries, because Replicator
+  refuses the command before contacting the origin — both worse than none. The unsendable set is the request-options set above: anything outside printable
+  US-ASCII, interior HTAB and obs-text included.
+
+  The asymmetry on the fourth case is deliberate. `content_type_raw` is published whatever it
+  contains, because it is never replayed as a request header — no refusal can be built out of it
+  — and it is recorded as an *observed fact* about the origin, which filtering would suppress for
+  no gain.
 
 > **These are per-*occasion* values, and since cannobserv#300 the fact is keyed per occasion too.**
 > They describe the fetch that produced this fact, not the bytes. Through 0.7.7 the envelope key was

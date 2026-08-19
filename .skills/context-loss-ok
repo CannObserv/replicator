@@ -1,3 +1,9 @@
 # 2026-08-17 curation (#47). Two lines rewritten because a command refuted them.
 disproven :: Auth is ADC: on the VM the SA key at `GOOGLE_APPLICATION_CREDENTIALS` (`/etc/replicator/co-pypi-reader.json`), in CI a keyless WIF token. Pin the current minor
 disproven :: enforces eight charter invariants in CI; change a
+
+# 2026-08-19 curation (#60 CR #1, #7). The `blob_available` bullet was rewritten to
+# carry the second drop condition; the rationale clauses it shed ("origin-controlled
+# strings on a stream nothing trims", the terminal/pre-request wedge) are already in
+# docs/contracts/content-fetch-issuer-reference.md, which AGENTS.md links.
+docs/ARCHITECTURE.md :: duplicate :: dropped over `MAX_HEADER_VALUE_LENGTH`, never truncated
