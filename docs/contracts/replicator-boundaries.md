@@ -328,13 +328,13 @@ example of a violation being *tracked honestly to closure* — recorded while it
 the remedy could not rot, and closed by an auditable operational fact rather than by a merge —
 and the residual coupling below is still true and still worth a reader's attention.
 
-**And the default will not change when it does** (decided 2026-08-20). `REPLICATOR_BLOB_BACKEND`
-stays `local` in the code permanently: a default that moved with the code would let one repo's
-merge make a cluster-wide decision, and `local` is the only backend that works from a fresh
-clone with nothing provisioned, which is what every test run and CI job needs. So this section
-closes on the **deployment** announcing `gs://` — a fact about `/etc/replicator/.env`, verifiable
-in the worker's boot log — and not on anything a test in this repo can assert. That is how it
-closed.
+**And the default did not change when it closed** (decided 2026-08-20, the day of the flip).
+`REPLICATOR_BLOB_BACKEND` stays `local` in the code permanently: a default that moved with the
+code would let one repo's merge make a cluster-wide decision, and `local` is the only backend
+that works from a fresh clone with nothing provisioned, which is what every test run and CI job
+needs. The section therefore closed on the **deployment** announcing `gs://` — a fact about
+`/etc/replicator/.env`, verified in the worker's boot log — and not on anything a test in this
+repo can assert.
 
 That is worth stating plainly rather than leaving as a gap: the charter's own enforcement
 convention is that its claims are pinned by tests, and this one cannot be. What the tests pin
@@ -382,7 +382,7 @@ is failing a PR, not documenting an intention.
 | No locally-defined wire models | no class in `src/` declares an `event_type` field — every wire payload comes from co-core |
 | No issuer SDK | no dependency on a sibling repo's client in the lock |
 | Config surface | every `Settings` field is `REPLICATOR_*`-prefixed except `build_id`, exempted by name; no `env_file`; no configuration or network call at import time |
-| Known violation, pinned | `blob_uri` still starts `file://` (#7) |
+| Known violation, closed 2026-08-20 | the **default** backend still announces `file://` (deliberate — see the section) and the object store announces `gs://`; whether the object store is *deployed* is boot-log state no test here can see |
 
 Three notes on the implementation, because each encodes a decision that a "simplification"
 would undo:

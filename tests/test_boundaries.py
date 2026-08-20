@@ -1245,10 +1245,10 @@ def test_a_blob_uri_is_host_local_on_the_default_backend(tmp_path):
     It stopped being a countdown to a flip and became a pin on a decision: a
     default that moved with the code would let a merge here make a cluster-wide
     choice, and `local` is the only backend that works with nothing provisioned
-    — which is what this very test run needs. The violation closes on the
-    *deployment* naming `gcs` in `/etc/replicator/.env`, which no test in this
-    repo can see, and which is why the charter says so in prose and points at
-    the boot log.
+    — which is what this very test run needs. The violation closed on the
+    *deployment* naming `gcs` in `/etc/replicator/.env` (2026-08-20), which no
+    test in this repo can see, and which is why the charter says so in prose
+    and points at the boot log.
 
     Kept as a pin rather than deleted for that reason: a charter that said
     "resolved" while every worker built from this checkout still announced
@@ -1265,8 +1265,8 @@ def test_a_blob_uri_is_host_local_on_the_default_backend(tmp_path):
 def test_the_object_store_backend_announces_a_host_independent_uri():
     """The other half of the pin: the way out exists and is one variable away.
 
-    Asserted so the charter's "Known violation" section can say *what closes it*
-    and be checked on that, rather than only on the violation still standing. A
+    Asserted so the charter's "Known violation" section could say *what closed
+    it* and be checked on that, rather than only on the violation standing. A
     line that describes a remedy nobody can execute is the same decorative
     failure one step later.
     """

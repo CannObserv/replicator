@@ -364,12 +364,14 @@ Also: `blob_uri` is a **`file://` URI on Replicator's host** wherever the defaul
 — the contract is VM-local there, a consumer elsewhere cannot open it, and nothing on the wire says
 so.
 
-**That is changing, and a consumer must branch on the scheme rather than assume one** (#7).
-Replicator ships an object-store backend behind `REPLICATOR_BLOB_BACKEND`; where an operator enables
-it, `blob_uri` becomes `gs://<bucket>/<prefix>/<sha256>.bin`, readable by any identity granted
-`objectViewer` on that bucket and by nobody without one. The rest of this contract is unchanged: the
-value is still opaque, still temporary, still keyed by the same fingerprint. Two obligations follow
-for a consumer that opens the bytes:
+**That changed on 2026-08-20 for the reference deployment, and a consumer must branch on the
+scheme rather than assume one** (#7). Replicator ships an object-store backend behind
+`REPLICATOR_BLOB_BACKEND`; where an operator enables it — as the shared-VM deployment now does —
+`blob_uri` becomes `gs://<bucket>/<prefix>/<sha256>.bin`, readable by any identity granted
+`objectViewer` on that bucket and by nobody without one. The rest of this contract is unchanged:
+the value **below the scheme** is still opaque — read the scheme, parse nothing else — still
+temporary, still keyed by the same fingerprint. Two obligations follow for a consumer that opens
+the bytes:
 
 - **Handle a scheme you do not recognize as "cannot read this blob", not as an error to retry.** The
   remedy is a fresh `content.fetch` under a new `command_id` — MUST-7's remedy, unchanged — and it
