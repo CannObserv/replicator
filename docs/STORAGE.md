@@ -23,13 +23,24 @@ the second backend.
 | Reachability check | `warn_if_unreachable` walks the ancestors | `preflight_object_store` fails the boot on a one-object listing |
 | Per-operation timeout | n/a (local I/O) | `REPLICATOR_BLOB_TIMEOUT_SECONDS`, and it is in the unit's shutdown budget |
 
-**`local` is still the default, and the flip is not this repo's alone to make.**
-Watcher parses `blob_uri` into a filesystem path and re-issues the fetch when it
-cannot open one — uncapped, on the path that matters (CannObserv/watcher#275) —
-so a worker that started announcing `gs://` before Watcher could read it would
-produce an unbounded re-fetch loop against live origins rather than a broken
-link. Order: Watcher ships, then `/etc/replicator/.env` changes. The boundaries
-charter's *Known violation* section is the thing that closes when it does.
+**`local` is the default and stays the default** (decided 2026-08-20). Not a
+holding position until the cluster catches up — a permanent one, for two reasons
+that outlast the migration:
+
+- **A default that moved with the code would deploy a cluster decision.** A
+  worker announcing `gs://` before its consumers can read it puts every watched
+  item into re-fetch-until-capped against live origins
+  (CannObserv/watcher#275). One repo's merge must not be able to cause that;
+  order is Watcher ships, then `/etc/replicator/.env` changes.
+- **`local` is the only backend that works with nothing provisioned.** The object
+  store needs a bucket, a lifecycle rule and two IAM grants that no checkout
+  carries. Every test run, dev worker and CI job wants the backend that needs no
+  cloud account — and that population is permanently larger than the production
+  deployments.
+
+So the production posture is a deployment's configuration, not a repo's, and the
+boundaries charter's *Known violation* closes on the **deployment** announcing
+`gs://` rather than on the default changing.
 
 **What the object store removes, and what it does not.** It removes the
 host-local data plane: a consumer no longer has to live on this VM, and the

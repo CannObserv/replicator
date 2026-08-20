@@ -321,15 +321,40 @@ reference's [DLQ](content-fetch-issuer-reference.md#reading-the-dlq) and
 
 ### 7. Copy the bytes before the blob expires
 
-`blob_uri` is temporary. A blob is reaped once its mtime is older than
-`REPLICATOR_BLOB_TTL_SECONDS` — currently 7 days, a published commitment to archiver (archiver#118)
-rather than a knob Replicator turns freely, but still a *setting* on its host. Treat it as a floor
-to ask about, not a constant to schedule against: consume the bytes promptly and re-issue if the URI
-fails to open, rather than building a pipeline whose timing assumes seven days.
+`blob_uri` is temporary. **The commitment is: a blob remains retrievable for at least seven days
+after it was last referenced by a fetch.** That is a floor, not an estimate — the mechanisms below
+all push the real reap later than the announced horizon, never earlier — and it is a *contract*
+value rather than a local setting: lowering it is a breaking change to every consumer that
+schedules against it, and is announced here before it happens.
+
+Still: consume the bytes promptly and re-issue if the URI fails to open, rather than building a
+pipeline whose timing assumes the full seven days.
+
+**Why this is now a commitment rather than a number to ask about.** It used to be
+`REPLICATOR_BLOB_TTL_SECONDS` on Replicator's host — a setting, visible to nobody else, changeable
+by an operator with no consumer the wiser. Under the object-store backend the reap is a **bucket
+lifecycle rule**, which is a stated, auditable window rather than an mtime clock that moves for
+reasons no consumer can see. The rule is `daysSinceCustomTime: 8` against a published 7-day
+horizon; the extra day absorbs lifecycle's one-day granularity so the bucket can never reap inside
+the window this contract promises.
+
+**Two consequences worth reading even if you never open a blob.**
+
+- **`blob_expires_at` is a floor under the object-store backend, and the margin is wider than it
+  was.** Lifecycle enforcement is asynchronous and can lag its condition by 24 hours or more, so a
+  blob routinely outlives its announced expiry. The error stays one-way — acting on the horizon is
+  early, never late — but do not treat the value as the moment of deletion.
+- **If your service has no way to re-fetch, this window is the whole of your guarantee.** A
+  `content.fetch` issuer can always re-issue under a fresh `command_id` (MUST-7's remedy). A
+  service that only *consumes* the fact, or that passes `blob_uri` on to
+  `content.replicate` without holding a fetch path of its own, cannot — for it, the blob expiring
+  before the work completes is a permanently missing artifact rather than a late one. Size the gap
+  between receiving the fact and finishing with the bytes against this window, and report when the
+  window is not enough (CannObserv/archiver#175 is that conversation).
 
 The clock runs from **last reference by a fetch**, not last read by a consumer — holding a
-`blob_uri` for a week without a re-fetch loses the bytes. So **record `blob_expires_at` rather than
-re-deriving a horizon** (cannobserv#301, carried since #28): deriving one hard-codes a policy
+`blob_uri` past the window without a re-fetch loses the bytes, and *reading* it does not extend
+anything. So **record `blob_expires_at` rather than re-deriving a horizon** (cannobserv#301, carried since #28): deriving one hard-codes a policy
 Replicator owns and starts the clock where no consumer can see it. The published value can only fall
 **earlier** than the real reap, so acting on it is early, never too late; `None` means unknown, and
 is recorded as absence rather than guessed.

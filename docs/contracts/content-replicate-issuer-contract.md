@@ -272,7 +272,32 @@ document, not summarized here.
 | **4** — correlation is idempotent, one command can yield many facts | **verbatim**, and load-bearing here: T4's no-op row deliberately re-emits a fact for an artifact already written |
 | **5** — do not dedupe facts on `content_fingerprint` | **no analogue** |
 | **6** — handle the failure fact, keep a reaper anyway | **verbatim.** Non-terminal failures are still silent; a command can still close without a fact |
-| **7** — copy the bytes before the blob expires | **inverts.** For fetch this is the consumer's obligation; for replicate it is the issuer's *scheduling* obligation. Issue while the blob lives — the clock runs from last **fetch** reference, not last read — and handle `blob_expired` as terminal. `blob_expires_at` on the `blob_available` fact is the value to schedule against. [#7](https://github.com/CannObserv/replicator/issues/7) changes this calculus |
+| **7** — copy the bytes before the blob expires | **inverts.** For fetch this is the consumer's obligation; for replicate it is the issuer's *scheduling* obligation. Issue while the blob lives — the clock runs from last **fetch** reference, not last read — and handle `blob_expired` as terminal. `blob_expires_at` on the `blob_available` fact is the value to schedule against. The window it is drawn from is stated below |
+
+⚙ **The window you are scheduling against: at least seven days from last fetch reference.**
+Stated here as well as in the fetch contract because a replicate issuer is the party this number
+protects, and it is the party that cannot recover when it runs out (#7).
+
+The asymmetry is worth being explicit about. A `content.fetch` issuer that finds a blob gone
+re-issues under a fresh `command_id` and loses only time. A replicate issuer typically holds no
+fetch path — it received a `blob_available` fact, or a `content_cache_uri` on a revision, and passes
+the reference through. For it, `blob_expired` is not a retry: unless something else re-fetches, that
+revision is never replicated, and for a stable InfoItem the next issuance may never come.
+
+So the obligations are:
+
+- **Issue on receipt, not on a schedule.** The window is a floor under the *whole* gap between
+  learning of the bytes and Replicator finishing with them, not just your queue latency.
+- **Check `blob_expires_at` before issuing**, and record a skip rather than publishing a command you
+  already know will be refused. That converts a silent loss into a visible one.
+- **Say so if the window is not enough.** It is a stated commitment and can be raised; what it
+  cannot do is absorb a consumer whose gap nobody measured
+  ([archiver#175](https://github.com/CannObserv/archiver/issues/175)).
+
+Under the object-store backend the reap is a bucket lifecycle rule rather than a local clock, which
+makes the window auditable rather than merely asserted — and makes `blob_expires_at` a **floor**
+with a wider margin, since lifecycle granularity is one day and enforcement is asynchronous. Detail:
+[the fetch issuer contract's MUST-7](content-fetch-issuer-contract.md#7-copy-the-bytes-before-the-blob-expires).
 
 ⚙ **R1 — render, do not delegate.** Resolve `path_template` against `rep_fields` before publishing,
 and publish the result. A command carrying an unrendered template is refused.
@@ -373,8 +398,12 @@ Settled in a cannobserv `docs/plans/` design doc alongside #303, not here:
 
 - **Fan-out** — one command per (revision, RepSpec) with independent `command_id`s, or one command
   carrying a list. Per-spec is probably right, for MUST-1's reason.
-- **Blob lifetime** — whether an expired blob terminates or triggers a re-issued fetch, and how that
-  sequences against [#7](https://github.com/CannObserv/replicator/issues/7).
+- **Blob lifetime** — whether an expired blob terminates or triggers a re-issued fetch. #7 settled
+  the half that was Replicator's: the window is now a stated commitment with an auditable
+  mechanism behind it (above). What remains open is cluster-level and no single service can decide
+  it — whether *anything* turns "a replication observed an expired blob" into a re-fetch, given
+  that the replicate issuer is not a fetch issuer and the bus edge between them carries
+  announcements, not requests.
 
 ---
 

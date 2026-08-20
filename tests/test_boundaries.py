@@ -1238,15 +1238,21 @@ def test_a_blob_uri_is_host_local_on_the_default_backend(tmp_path):
     never agreed to.
 
     #7 built the way out and did **not** take it. The object store exists and
-    satisfies the same seam, but `REPLICATOR_BLOB_BACKEND` still defaults to
-    `local`, so what a bare deployment announces is unchanged and the violation
-    is still the live one. It closes when an operator flips the environment
-    (Phase C) and Watcher can read the new scheme (CannObserv/watcher#275) —
-    not when the code lands.
+    satisfies the same seam, but `REPLICATOR_BLOB_BACKEND` defaults to `local`,
+    so what a bare deployment announces is unchanged.
 
-    Kept as a pin rather than deleted for exactly that reason: a charter that
-    said "resolved" while every running worker still announced `file://` would
-    be the decorative document its own section warns about.
+    **The default is permanent, so this assertion is too** (decided 2026-08-20).
+    It stopped being a countdown to a flip and became a pin on a decision: a
+    default that moved with the code would let a merge here make a cluster-wide
+    choice, and `local` is the only backend that works with nothing provisioned
+    — which is what this very test run needs. The violation closes on the
+    *deployment* naming `gcs` in `/etc/replicator/.env`, which no test in this
+    repo can see, and which is why the charter says so in prose and points at
+    the boot log.
+
+    Kept as a pin rather than deleted for that reason: a charter that said
+    "resolved" while every worker built from this checkout still announced
+    `file://` would be the decorative document its own section warns about.
     """
     store = LocalBlobStore(tmp_path)
 
