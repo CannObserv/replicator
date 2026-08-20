@@ -25,12 +25,13 @@ The Redis change bus is Archiver-operated cluster infrastructure (the shared VM'
 
 The **redis-py client** resolves `>=5,<8` transitively via `co-core-aio[bus]`. Don't re-pin it narrower.
 
-### The temp-blob buckets — provisioned 2026-08-20, backend still off (#7)
+### The temp-blob buckets — live since 2026-08-20 (#7)
 
-The `gcs` blob backend exists in the code and is **off**: `REPLICATOR_BLOB_BACKEND`
-defaults to `local` and this VM does not set it. The infrastructure below *is*
-now built; what has not happened is the flip, which waits on
-CannObserv/watcher#275.
+The `gcs` blob backend is **what this VM runs**: `/etc/replicator/.env` sets
+`REPLICATOR_BLOB_BACKEND=gcs` / `REPLICATOR_BLOB_BUCKET=co-gcs-blobs` (flipped
+2026-08-20, after watcher#275 deployed `gs://` support). The compiled-in default
+stays `local` — permanently, see ENVIRONMENT.md — so a fresh clone, a test run,
+and any host without this env still get the filesystem backend.
 
 | | Production temp store | Test temp store |
 |---|---|---|
@@ -64,27 +65,29 @@ Order still mattered more than any single step, and the two things this bucket
 needs from an operator — a lifecycle rule and a consumer-side grant — remain the
 two things no test in this repo can check.
 
-**Do not flip the backend first.** Watcher parses `blob_uri` into a filesystem
-path and re-issues the fetch when it cannot open one, on a path with no attempt
-cap (CannObserv/watcher#275). A worker announcing `gs://` to a Watcher that
-cannot read it produces an unbounded re-fetch loop against live origins — real
-requests, per watched item, forever. The sequence is:
+**The flip sequence, as executed** — kept because its ordering argument is the
+template for any future backend change, and because one step is still pending:
 
-1. **CannObserv/watcher#275 ships** — `gs://` support *and* the re-issue cap.
-   **Outstanding; this is the only thing still blocking the flip.**
-2. **CannObserv/archiver#175 answers** — the availability window. Outstanding,
-   and deliberately not blocking: the rule is provisioned at 8 days and is one
+1. ~~CannObserv/watcher#275 ships~~ — `gs://` support *and* the re-issue cap,
+   deployed 2026-08-20. The ordering was the whole point: a worker announcing
+   `gs://` to a Watcher that could not read it would have put every watched item
+   into re-fetch-until-capped against live origins.
+2. **CannObserv/archiver#175 answers** — the availability window. Still open,
+   and deliberately never blocking: the rule is provisioned at 8 days and is one
    `buckets update` away from whatever number comes back.
 3. ~~Provision the buckets, the lifecycle rule, and both grants~~ — done
    2026-08-20, verified per identity with `testIamPermissions`.
-4. Set `REPLICATOR_BLOB_BACKEND=gcs` and `REPLICATOR_BLOB_BUCKET=co-gcs-blobs` in
-   `/etc/replicator/.env`, then restart. Commands already in the PEL naming
-   `file://` blobs are refused `blob_expired`, not `invalid_source` — the issuer
-   is told to fetch again, which is the truth after a flip.
-5. `rm -rf /var/lib/replicator/blobs` once nothing is reading it. **The sweep
-   stops running under `gcs`**, so whatever is in that tree at the moment of the
-   flip stays there forever. It was 2.1 MB on the day of provisioning; the point
-   is that nothing will ever reclaim it, not that it is large.
+4. ~~Set the env and restart~~ — done 2026-08-20 19:45Z. The boot line confirmed
+   bucket, prefix, and the 7-day published horizon against the 8-day rule.
+   Commands in the PEL naming `file://` blobs are refused `blob_expired`, not
+   `invalid_source` — the issuer is told to fetch again, which is the truth
+   after a flip.
+5. **Pending, dated:** `rm -rf /var/lib/replicator/blobs` — **not before
+   2026-08-27**. Pre-flip `blob_available` facts promise `file://` URIs for up
+   to the 7-day window, and Watcher reads those straight off this tree; deleting
+   it early would break reads the contract still guarantees. After the horizon
+   passes nothing can legitimately reference it, and **nothing will ever
+   reclaim it otherwise** — the sweep does not run under `gcs`. ~2 MB.
 
 What has to exist, and why each part:
 

@@ -30,8 +30,9 @@ that outlast the migration:
 - **A default that moved with the code would deploy a cluster decision.** A
   worker announcing `gs://` before its consumers can read it puts every watched
   item into re-fetch-until-capped against live origins
-  (CannObserv/watcher#275). One repo's merge must not be able to cause that;
-  order is Watcher ships, then `/etc/replicator/.env` changes.
+  (CannObserv/watcher#275). One repo's merge must not be able to cause that.
+  (The ordering held in practice: Watcher shipped and the VM flipped on
+  2026-08-20, in that order, on the same day.)
 - **`local` is the only backend that works with nothing provisioned.** The object
   store needs a bucket, a lifecycle rule and two IAM grants that no checkout
   carries. Every test run, dev worker and CI job wants the backend that needs no
@@ -39,8 +40,8 @@ that outlast the migration:
   deployments.
 
 So the production posture is a deployment's configuration, not a repo's, and the
-boundaries charter's *Known violation* closes on the **deployment** announcing
-`gs://` rather than on the default changing.
+boundaries charter's *Known violation* closed on exactly that: the deployment
+announcing `gs://` (2026-08-20), with the default unchanged.
 
 **What the object store removes, and what it does not.** It removes the
 host-local data plane: a consumer no longer has to live on this VM, and the

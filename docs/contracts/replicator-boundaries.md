@@ -308,26 +308,33 @@ rather than a `Literal` precisely so a producer adding a token cannot crash an o
 puts the vocabulary on the producer. Defining a wire *model* here would be the violation; owning the
 tokens Replicator emits is the contract working.
 
-## Known violation, tracked
+## Known violation — closed in deployment 2026-08-20, tracked here through its life
 
-`blob_uri` is a host-local `file://` path and nothing on the wire says so. Any consumer must
-live on Replicator's VM — a shared-filesystem data-plane coupling in a service otherwise
+`blob_uri` **was** a host-local `file://` path with nothing on the wire saying so. Any consumer
+had to live on Replicator's VM — a shared-filesystem data-plane coupling in a service otherwise
 reached only through the broker, and a constraint on the *issuer's* deployment topology that
-the issuer never agreed to. It is not theoretical: Watcher parses the URI into a path and
-reads the bytes off this filesystem today.
+the issuer never agreed to. It was not theoretical: Watcher parsed the URI into a path and read
+the bytes off this filesystem.
 
-**#7 built the way out; taking it is a deployment act, not a merge.** An object-store backend
-satisfies the same `BlobStore` seam and announces `gs://`, and its bucket, lifecycle rule and
-grants are provisioned. What has not happened is `/etc/replicator/.env` naming it, which waits
-on a consumer that can read the new scheme (CannObserv/watcher#275). Until then every running
-worker announces `file://` and this section stands.
+**#7 built the way out, and the deployment took it on 2026-08-20.** An object-store backend
+satisfies the same `BlobStore` seam; Watcher ships `gs://` support with a capped re-issue
+(CannObserv/watcher#275); and `/etc/replicator/.env` names the backend, so the live worker
+announces `gs://co-gcs-blobs/...` — host-independent, readable by any identity holding
+`objectViewer` on the bucket. The closure is verifiable where this section always said it would
+be: the boot log's "storing blobs in an object store" line.
+
+The section stays, past tense, rather than being deleted. It is the charter's one worked
+example of a violation being *tracked honestly to closure* — recorded while it stood, pinned so
+the remedy could not rot, and closed by an auditable operational fact rather than by a merge —
+and the residual coupling below is still true and still worth a reader's attention.
 
 **And the default will not change when it does** (decided 2026-08-20). `REPLICATOR_BLOB_BACKEND`
 stays `local` in the code permanently: a default that moved with the code would let one repo's
 merge make a cluster-wide decision, and `local` is the only backend that works from a fresh
 clone with nothing provisioned, which is what every test run and CI job needs. So this section
 closes on the **deployment** announcing `gs://` — a fact about `/etc/replicator/.env`, verifiable
-in the worker's boot log — and not on anything a test in this repo can assert.
+in the worker's boot log — and not on anything a test in this repo can assert. That is how it
+closed.
 
 That is worth stating plainly rather than leaving as a gap: the charter's own enforcement
 convention is that its claims are pinned by tests, and this one cannot be. What the tests pin
