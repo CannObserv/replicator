@@ -25,13 +25,44 @@ The Redis change bus is Archiver-operated cluster infrastructure (the shared VM'
 
 The **redis-py client** resolves `>=5,<8` transitively via `co-core-aio[bus]`. Don't re-pin it narrower.
 
-### The temp-blob bucket — not provisioned yet, and what provisioning it means (#7)
+### The temp-blob buckets — provisioned 2026-08-20, backend still off (#7)
 
 The `gcs` blob backend exists in the code and is **off**: `REPLICATOR_BLOB_BACKEND`
-defaults to `local` and this VM does not set it. Nothing below has been created.
-It is written down here because the order matters more than any single step, and
-because the two things this bucket needs from an operator — a lifecycle rule and
-a consumer-side grant — are the two things no test in this repo can check.
+defaults to `local` and this VM does not set it. The infrastructure below *is*
+now built; what has not happened is the flip, which waits on
+CannObserv/watcher#275.
+
+| | Production temp store | Test temp store |
+|---|---|---|
+| Bucket | `gs://co-gcs-blobs` | `gs://co-gcs-test-blobs` |
+| Location / class | `US-WEST1` / `STANDARD` | same |
+| Lifecycle | `daysSinceCustomTime: 8`, plus an `age: 365` cost backstop | — |
+| Soft delete | disabled (`--soft-delete-duration=0`) | disabled |
+| Public access | prevented; UBLA on | same |
+| Writer | `co-gcs-replicator` via the custom role below | `co-gcs-test-replicator`, `roles/storage.objectAdmin` |
+| Reader | `co-gcs-blob-reader@co-gcs.iam.gserviceaccount.com`, `roles/storage.objectViewer` | — |
+| Key on the VM | — | `/etc/replicator/co-gcs-test-replicator.json` |
+| Consumer key | `/etc/watcher/co-gcs-blob-reader.json`, named by `GCS_BLOB_CREDENTIALS` | — |
+
+**The worker's grant is a custom role, because no predefined one fits.**
+`GcsBlobStore._touch` moves `customTime` on every re-reference, which needs
+`storage.objects.update` — and every predefined role carrying `update`
+(`objectUser`, `objectAdmin`) also carries `delete`. The worker must never hold
+`delete`: expiry is the lifecycle rule's job, and "this identity cannot delete
+anything, anywhere" is the same property that makes the permanent writer's grant
+correct. So `projects/co-gcs/roles/replicatorTempBlobWriter` grants exactly
+`storage.objects.{create,get,list,update}` and nothing else — not even
+`storage.buckets.get`, which is why the lifecycle rule is verifiable only from a
+workstation.
+
+**`--soft-delete-duration=0` is the flag**, not `--clear-soft-delete-policy`. The
+GCS default is 7 days of soft-delete retention, which on a bucket whose entire
+purpose is expiry means paying to store every expired blob for a week after it
+expired.
+
+Order still mattered more than any single step, and the two things this bucket
+needs from an operator — a lifecycle rule and a consumer-side grant — remain the
+two things no test in this repo can check.
 
 **Do not flip the backend first.** Watcher parses `blob_uri` into a filesystem
 path and re-issues the fetch when it cannot open one, on a path with no attempt
@@ -40,13 +71,20 @@ cannot read it produces an unbounded re-fetch loop against live origins — real
 requests, per watched item, forever. The sequence is:
 
 1. **CannObserv/watcher#275 ships** — `gs://` support *and* the re-issue cap.
-2. **CannObserv/archiver#175 answers** — the availability window, so the
-   lifecycle rule is a stated number rather than an inherited guess.
-3. Provision the bucket, the lifecycle rule, and both grants (below).
-4. Set `REPLICATOR_BLOB_BACKEND=gcs` and `REPLICATOR_BLOB_BUCKET=…` in
+   **Outstanding; this is the only thing still blocking the flip.**
+2. **CannObserv/archiver#175 answers** — the availability window. Outstanding,
+   and deliberately not blocking: the rule is provisioned at 8 days and is one
+   `buckets update` away from whatever number comes back.
+3. ~~Provision the buckets, the lifecycle rule, and both grants~~ — done
+   2026-08-20, verified per identity with `testIamPermissions`.
+4. Set `REPLICATOR_BLOB_BACKEND=gcs` and `REPLICATOR_BLOB_BUCKET=co-gcs-blobs` in
    `/etc/replicator/.env`, then restart. Commands already in the PEL naming
    `file://` blobs are refused `blob_expired`, not `invalid_source` — the issuer
    is told to fetch again, which is the truth after a flip.
+5. `rm -rf /var/lib/replicator/blobs` once nothing is reading it. **The sweep
+   stops running under `gcs`**, so whatever is in that tree at the moment of the
+   flip stays there forever. It was 2.1 MB on the day of provisioning; the point
+   is that nothing will ever reclaim it, not that it is large.
 
 What has to exist, and why each part:
 
@@ -54,7 +92,7 @@ What has to exist, and why each part:
 |---|---|
 | A **separate** bucket from `co-gcs-replication` | These are arbitrary bytes from arbitrary origins. The permanent-artifact bucket's whole grant design withholds `delete` so nothing can erase it; a temp store exists to expire. One bucket cannot be both |
 | Uniform bucket-level access, no public access | Fetched content is not published content. Nothing here should be reachable without a grant |
-| Same region as the VM | Consumer reads from GCE in-region are not egress-billed; cross-region reads are, per blob, per consumer |
+| Same region as the VM | In-region reads **from a GCE instance** are not egress-billed. This VM shows no GCE DMI signature, so consumer reads may well be billed as internet egress whatever the region — co-locating still minimises latency and cost, but do not plan on the traffic being free. At the volumes seen so far (~2 MB of live blobs) the distinction is rounding error either way |
 | A lifecycle rule on **`daysSinceCustomTime`** | Not `age`. The store stamps `customTime` on every re-reference, which is what makes "TTL since last referenced" expressible — an age rule would reap a blob announced moments ago, invisibly, because re-fetching unchanged bytes never rewrites the object |
 | The rule's day count ≥ `REPLICATOR_BLOB_TTL_SECONDS` | The two are configured in different places and nothing keeps them in step. A rule shorter than the published horizon announces a window the bucket will not honour |
 | `objectAdmin`-equivalent for the worker's SA | It creates objects, reads them back, and **lists** — the boot preflight is a one-object listing, because an existence check cannot detect a missing bucket (the SDK swallows the 404). `storage.objects.list` is in both `objectViewer` and `objectAdmin`, so this widens nothing. It needs no `delete`: expiry is the lifecycle rule's job, which is also why the preflight is a read rather than a write-and-clean-up |
@@ -95,18 +133,30 @@ What the bucket differs from production in, and why each one:
 
 ```bash
 gcloud storage buckets describe gs://co-gcs-test-replication \
-  --format="yaml(location, storageClass, versioning, lifecycle, softDeletePolicy, iamConfiguration)"
+  --format="yaml(location, default_storage_class, versioning_enabled, lifecycle_config,
+                 soft_delete_policy, uniform_bucket_level_access, public_access_prevention)"
 ```
+
+**Those are `gcloud storage`'s key names, not the JSON API's**, and the difference
+is silent: an unknown key in a `yaml()` projection prints *nothing* rather than
+erroring, so the earlier spelling of this command (`storageClass`, `lifecycle`,
+`softDeletePolicy`, `iamConfiguration`) returned `location:` alone and read
+exactly like a bucket with no lifecycle rule configured. It cost a round trip
+during #7's provisioning. Either drop `--format` entirely — the bare output
+cannot be wrong, and is the one to trust when a field comes back missing — or
+pass `--raw`, which switches the resource to the API's own camelCase
+representation and makes the old spelling correct again.
 
 Everything else was verified from the VM as the test SA on 2026-08-18: `create` with `ifGenerationMatch: 0` succeeds, a second create raises `PreconditionFailed`, the confirming `get` finds the object, `delete` removes it, and a soft-deleted listing is refused `400 Soft delete policy is required to list soft-deleted versions` — which is the policy-cleared confirmation. On production the same identity holds **no write permission of any kind**; the `get`/`list` it does report there belong to `allUsers`, since that bucket is public, and are not a grant to this SA — an anonymous client reports the identical pair.
 
 Usage, the marker, and the variables: **Testing the write path** in [TESTING.md](TESTING.md).
 
-**#7 adds a second test bucket, also unprovisioned.** `REPLICATOR_TEST_BLOB_BUCKET`
-names the temp-store destination for `@pytest.mark.gcs`, and it must not be the
-replicate one: those tests create objects and delete them afterwards, which needs
-exactly the `delete` the replicate grant withholds. Until it is set,
-`tests/storage/test_gcs_bucket.py` skips and says which variable is missing.
+**#7 adds a second test bucket, provisioned 2026-08-20.**
+`REPLICATOR_TEST_BLOB_BUCKET=co-gcs-test-blobs` names the temp-store destination
+for `@pytest.mark.gcs`, and it must not be the replicate one: those tests create
+objects and delete them afterwards, which needs exactly the `delete` the
+replicate grant withholds. Its first run found a test asserting behaviour a
+review had already changed — see **the marked suite** in [TESTING.md](TESTING.md).
 
 ## Server Lifecycle
 

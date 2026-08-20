@@ -109,8 +109,16 @@ whatever the code would have picked":
 | Variable | What it names |
 |---|---|
 | `REPLICATOR_TEST_GCS_BUCKET` | the provisioned replicate test bucket |
-| `REPLICATOR_TEST_BLOB_BUCKET` | the temp-blob test bucket (#7); unprovisioned today, so `tests/storage/test_gcs_bucket.py` skips |
+| `REPLICATOR_TEST_BLOB_BUCKET` | the temp-blob test bucket (#7); `co-gcs-test-blobs` since 2026-08-20 |
 | `REPLICATOR_TEST_GCS_CREDENTIALS` | the test SA key; the fixture maps it onto `GOOGLE_APPLICATION_CREDENTIALS` for marked tests only |
+
+**The marked suite is the only thing that has ever caught an SDK-fidelity bug
+here, and it caught one the hour it was first able to run.**
+`tests/storage/test_gcs_bucket.py` shipped asserting that a missing object raises
+the SDK's `NotFound`; CR #3 had since made the store translate that to
+`FileNotFoundError`, and the file stayed green for a week purely because no host
+had `REPLICATOR_TEST_BLOB_BUCKET` set to run it against. Provision the test
+destination *before* the production one, for exactly this reason.
 
 **Two buckets, because the grants are opposites.** The replicate destination's SA
 holds no `delete` — the property that puts T4 at IAM rather than only in our code
