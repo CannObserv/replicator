@@ -60,14 +60,24 @@ class Settings(BaseSettings):
     # Which backend holds the fetched bytes, and therefore what scheme
     # ``blob_available.blob_uri`` carries (#7).
     #
-    # **``local`` is the compiled-in default and stays that way until the cluster
-    # is ready.** A `file://` URI makes every consumer share this host — the
-    # data-plane coupling #7 exists to remove — but the flip is not Replicator's
-    # alone to make: Watcher parses the URI into a path and re-issues the fetch,
-    # *uncapped*, when it cannot open one (CannObserv/watcher#275). Shipping
-    # `gcs` as the default would turn a deploy into an unbounded re-fetch loop
-    # against live origins. The operator moves this in
-    # ``/etc/replicator/.env`` once the consumers can read the new scheme.
+    # **``local`` is the compiled-in default and stays that way — permanently, not
+    # until some later flip** (decided 2026-08-20). Two separate reasons, and the
+    # second outlives the first:
+    #
+    # 1. A default that moved with the code would deploy a *cluster* decision. A
+    #    `file://` URI makes every consumer share this host, and a worker that
+    #    started announcing `gs://` before its consumers could read it would put
+    #    every watched item into re-fetch-until-capped against live origins
+    #    (CannObserv/watcher#275). One repo's merge must not be able to do that.
+    # 2. The object store needs a bucket, a lifecycle rule and two IAM grants
+    #    that no checkout carries. `local` is the only backend that works from a
+    #    fresh clone with nothing provisioned, which makes it the right default
+    #    for every test run, every dev worker, and every CI job — the population
+    #    that is *always* larger than the production deployments.
+    #
+    # So the production posture lives in ``/etc/replicator/.env``, where a
+    # deployment's configuration belongs, and the repo keeps the default that is
+    # correct with nothing set up. ``tests/test_boundaries.py`` pins it.
     #
     # A Literal rather than a free string: a typo that fell back to a working
     # backend would be a silent misconfiguration, and the failure it produces —

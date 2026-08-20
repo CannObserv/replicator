@@ -407,17 +407,32 @@ have and must not grow.
 
 Expands [MUST-7](content-fetch-issuer-contract.md#7-copy-the-bytes-before-the-blob-expires).
 
-The clock runs from **last reference by a fetch**, not last read by a consumer: Replicator `utime`s
-the file when a re-fetch short-circuits on existing bytes
-([`src/storage/local.py::_touch`](../../src/storage/local.py)), but a consumer opening the path does
-not touch mtime. Holding a `blob_uri` for a week without a re-fetch loses the bytes.
+The clock runs from **last reference by a fetch**, not last read by a consumer, and **both backends
+implement that same rule by different means**. A consumer reading the blob extends nothing, on
+either.
 
-That is the event `blob_expires_at` exposes, since no consumer can see it. The value is
+| | `local` | `gcs` |
+|---|---|---|
+| What marks a reference | `utime` on the short-circuit ([`src/storage/local.py::_touch`](../../src/storage/local.py)) | `customTime` re-stamped on the same branch ([`src/storage/gcs.py::_touch`](../../src/storage/gcs.py)) |
+| What reaps | the in-worker sweep, every `REPLICATOR_BLOB_SWEEP_INTERVAL_SECONDS` | a bucket lifecycle rule on `daysSinceCustomTime` |
+| Granularity of the reap | seconds | **one day**, enforced asynchronously and often later |
+
+The object-store column is why the commitment is phrased as *at least* seven days. A lifecycle rule
+cannot express "7 days and not a second more", and its enforcement pass is not scheduled against
+anything a consumer can observe, so the rule is set a day beyond the promise and the real deletion
+drifts later from there.
+
+`blob_expires_at` exposes the event either way, since no consumer can see it. The value is
 `stored_at + REPLICATOR_BLOB_TTL_SECONDS`, read **before** the store, so it lands at or before the
-mtime the sweep measures against — and the sweep runs only every
-`REPLICATOR_BLOB_SWEEP_INTERVAL_SECONDS`, putting the real reap later still. The error is one-way:
-acting on the horizon is early, never too late. A later fetch pushes the expiry out and emits a
-fresh fact carrying the new value.
+moment the reap measures against — and every mechanism after it pushes the real reap later still.
+The error is one-way: acting on the horizon is early, never too late. A later fetch pushes the
+expiry out and emits a fresh fact carrying the new value.
+
+**Nothing keeps the two halves in step automatically under `gcs`.** The published horizon comes from
+`REPLICATOR_BLOB_TTL_SECONDS` and the reap comes from a lifecycle rule configured in Google Cloud;
+a rule shorter than the setting would announce a window the bucket will not honour, which is the one
+way this value can be wrong in the unsafe direction. The worker logs the horizon at boot beside the
+bucket so the pairing is checkable, and `docs/DEPLOYMENT.md` records the provisioned rule.
 
 Also, on the reaper [MUST-6](content-fetch-issuer-contract.md#6-handle-fetch_failed-and-keep-a-reaper-anyway)
 keeps:

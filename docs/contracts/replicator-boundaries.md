@@ -308,20 +308,38 @@ rather than a `Literal` precisely so a producer adding a token cannot crash an o
 puts the vocabulary on the producer. Defining a wire *model* here would be the violation; owning the
 tokens Replicator emits is the contract working.
 
-## Known violation, tracked
+## Known violation — closed in deployment 2026-08-20, tracked here through its life
 
-`blob_uri` is a host-local `file://` path and nothing on the wire says so. Any consumer must
-live on Replicator's VM — a shared-filesystem data-plane coupling in a service otherwise
+`blob_uri` **was** a host-local `file://` path with nothing on the wire saying so. Any consumer
+had to live on Replicator's VM — a shared-filesystem data-plane coupling in a service otherwise
 reached only through the broker, and a constraint on the *issuer's* deployment topology that
-the issuer never agreed to. It is not theoretical: Watcher parses the URI into a path and
-reads the bytes off this filesystem today.
+the issuer never agreed to. It was not theoretical: Watcher parsed the URI into a path and read
+the bytes off this filesystem.
 
-**#7 built the way out and deliberately did not take it.** An object-store backend now
-satisfies the same `BlobStore` seam and announces `gs://`, but `REPLICATOR_BLOB_BACKEND`
-still defaults to `local`, so what every running worker announces is unchanged. The violation
-closes when two things happen that this repo cannot do alone: a consumer that can read the
-new scheme without an uncapped re-fetch loop (CannObserv/watcher#275), and an operator
-flipping `/etc/replicator/.env`. Until both, this section stands.
+**#7 built the way out, and the deployment took it on 2026-08-20.** An object-store backend
+satisfies the same `BlobStore` seam; Watcher ships `gs://` support with a capped re-issue
+(CannObserv/watcher#275); and `/etc/replicator/.env` names the backend, so the live worker
+announces `gs://co-gcs-blobs/...` — host-independent, readable by any identity holding
+`objectViewer` on the bucket. The closure is verifiable where this section always said it would
+be: the boot log's "storing blobs in an object store" line.
+
+The section stays, past tense, rather than being deleted. It is the charter's one worked
+example of a violation being *tracked honestly to closure* — recorded while it stood, pinned so
+the remedy could not rot, and closed by an auditable operational fact rather than by a merge —
+and the residual coupling below is still true and still worth a reader's attention.
+
+**And the default did not change when it closed** (decided 2026-08-20, the day of the flip).
+`REPLICATOR_BLOB_BACKEND` stays `local` in the code permanently: a default that moved with the
+code would let one repo's merge make a cluster-wide decision, and `local` is the only backend
+that works from a fresh clone with nothing provisioned, which is what every test run and CI job
+needs. The section therefore closed on the **deployment** announcing `gs://` — a fact about
+`/etc/replicator/.env`, verified in the worker's boot log — and not on anything a test in this
+repo can assert.
+
+That is worth stating plainly rather than leaving as a gap: the charter's own enforcement
+convention is that its claims are pinned by tests, and this one cannot be. What the tests pin
+instead is that the remedy exists and that the default is a deliberate choice; whether it is
+*deployed* is an operational question, and the honest answer lives in the boot log.
 
 **Pinned by a characterization test in both directions** — that the default backend still
 announces `file://`, and that the object store announces a host-independent URI. The first
@@ -364,7 +382,7 @@ is failing a PR, not documenting an intention.
 | No locally-defined wire models | no class in `src/` declares an `event_type` field — every wire payload comes from co-core |
 | No issuer SDK | no dependency on a sibling repo's client in the lock |
 | Config surface | every `Settings` field is `REPLICATOR_*`-prefixed except `build_id`, exempted by name; no `env_file`; no configuration or network call at import time |
-| Known violation, pinned | `blob_uri` still starts `file://` (#7) |
+| Known violation, closed 2026-08-20 | the **default** backend still announces `file://` (deliberate — see the section) and the object store announces `gs://`; whether the object store is *deployed* is boot-log state no test here can see |
 
 Three notes on the implementation, because each encodes a decision that a "simplification"
 would undo:
