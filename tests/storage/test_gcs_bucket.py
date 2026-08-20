@@ -147,18 +147,32 @@ def test_the_retention_clock_is_a_real_settable_field(store, fingerprint, gcs_bl
     assert second >= first
 
 
-def test_a_missing_object_reads_as_not_found(store, fingerprint):
-    """The exception the replicate path now catches beside `FileNotFoundError`.
+def test_a_missing_object_reads_as_a_file_not_found(store, fingerprint):
+    """The translation CR #3 introduced, against the SDK that motivates it.
 
-    Asserted against the SDK rather than assumed from its documentation: the
-    catch in `src/worker/replicate.py` is what turns a swept blob into
-    `blob_expired` instead of a burnt delivery ceiling, and it is keyed on this
-    exact type.
+    `src/worker/replicate.py` turns a swept blob into `blob_expired` rather than
+    a burnt delivery ceiling, and it does that on one catch for both backends —
+    which only works because the store translates. The unit tests assert the
+    translation against a fake; what needs a real bucket is that the thing being
+    translated is genuinely what the SDK raises, so the **cause** is asserted
+    too. Without that this would pass just as happily if `open` raised
+    `FileNotFoundError` for some entirely different reason.
+
+    This test is also the reason the marked suite matters: it shipped asserting
+    the pre-CR-#3 behaviour and stayed green for a week, because no host had a
+    `REPLICATOR_TEST_BLOB_BUCKET` to run it against.
     """
     assert store.exists(fingerprint) is False
 
-    with pytest.raises(NotFound):
+    with pytest.raises(FileNotFoundError) as caught:
         store.open(fingerprint)
+
+    assert isinstance(caught.value.__cause__, NotFound)
+
+    with pytest.raises(FileNotFoundError) as streamed:
+        store.open_stream(fingerprint)
+
+    assert isinstance(streamed.value.__cause__, NotFound)
 
 
 def test_a_stream_of_a_stored_blob_is_seekable(store, fingerprint):
