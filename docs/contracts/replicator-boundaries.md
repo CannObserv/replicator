@@ -355,6 +355,31 @@ not the absence of one, and the charter should not be read as claiming otherwise
 Recorded here rather than omitted: a charter that asserts an isolation the code does not have
 teaches its readers that the document is decorative.
 
+## Asked and answered — the derived-sidecar question (#69, 2026-08-20)
+
+**May the blob store hold a derived artifact Replicator cannot rebuild? No**, twice over:
+spec-extracted text fails Test 1 (re-deriving it needs extraction specs, a named **Never
+Replicator's** line — the conditional-GET example was cited, and held), and an issuer-written
+sidecar fails independently on the **write path**: content-addressing is trustworthy here
+precisely because addresser and writer are the same process, so lending the namespace to
+bytes this worker cannot verify inverts the claim-check principle, whatever Test 1 says.
+
+**Granted instead: retention is a number, not a boundary.** "Holding them briefly" means
+*bounded by the announced `blob_expires_at`*, not any particular magnitude — a longer
+`REPLICATOR_BLOB_TTL_SECONDS` changes duration, not kind, and the raise-on-consumer-request
+path already exists ([ENVIRONMENT.md](../ENVIRONMENT.md)). The issuer-side shape is the
+conditional-GET precedent again: persist the previous `blob_uri` + `blob_expires_at` (a
+reference, not content), re-extract old bytes with current specs
+(CannObserv/watcher#222).
+
+**The successor question left this repo.** Sidecars in *permanent* storage under a pinned
+Replication Specification dissolve the Test 1 objection (the destination is issuer-owned;
+Replicator retains nothing) — but Test 2 never fires, and pinned toolchain versions are a
+hosting commitment this service must not accrete. Replicator stays out of processing
+entirely; the capability centralizes behind a bus contract orchestrated by the issuer —
+[CannObserv/archiver#179](https://github.com/CannObserv/archiver/issues/179). The line held
+with no carve-out needed; full reasoning in #69's closing comment.
+
 ## Cluster-side corollary
 
 The single-fetcher invariant is only true if issuers hold up their end. Watcher's create-time
