@@ -1,33 +1,61 @@
-# 2026-08-17 curation (#47). Two lines rewritten because a command refuted them.
-disproven :: Auth is ADC: on the VM the SA key at `GOOGLE_APPLICATION_CREDENTIALS` (`/etc/replicator/co-pypi-reader.json`), in CI a keyless WIF token. Pin the current minor
-disproven :: enforces eight charter invariants in CI; change a
+# Judged losses from the #72 curation (AGENTS.md 6334 -> 5985).
+# Each line below was read against its replacement before being warranted.
+#
+# The three demotions all removed prose whose content the destination doc already
+# carries in a better form -- a table row, or a section written later and in more
+# detail. Restoring the prose verbatim into those docs would have appended a
+# near-duplicate beside the canonical treatment, which Phase 5 forbids, so these
+# are warranted rather than relocated. The one line the destination did NOT carry
+# (the REPLICATOR_ prefix rationale) was moved verbatim instead and is absent here.
 
-# 2026-08-19 curation (#60 CR #1, #7). The `blob_available` bullet was rewritten to
-# carry the second drop condition; the rationale clauses it shed ("origin-controlled
-# strings on a stream nothing trims", the terminal/pre-request wedge) are already in
-# docs/contracts/content-fetch-issuer-reference.md, which AGENTS.md links.
-docs/ARCHITECTURE.md :: duplicate :: dropped over `MAX_HEADER_VALUE_LENGTH`, never truncated
+# --- Server Lifecycle -> docs/DEPLOYMENT.md ---------------------------------
+# Every fact verified present: the two merge paths and the guard (## Server
+# Lifecycle table, ### The checkout guard), journalctl and the distinct consumer
+# name (table rows), the cp/daemon-reload trap (its own paragraph), the override
+# and the dev-worker question at the writer (#52).
+duplicate :: pull when the merge happened here, because the guard refuses a `main` that is ahead
+duplicate :: of `origin/main` (#48); debug with `sudo journalctl -u replicator -f`;
+duplicate :: test a branch with `uv run python -m src.worker.main` under a distinct
+duplicate :: `REPLICATOR_CONSUMER_NAME`. **After editing `deploy/replicator.service`, `cp` it to
+duplicate :: `/etc/systemd/system/`** — the installed unit is a copy, not a symlink, so
+duplicate :: `daemon-reload` alone silently re-reads the old file and the mismatch has no
+duplicate :: symptom until a directive matters. **Refuses to start off `main`, or off
+duplicate :: unpushed commits** (#37, #48) — `scripts/check_main_checkout.sh`;
+duplicate :: `REPLICATOR_ALLOW_ANY_CHECKOUT=1` overrides; a dev worker asks the same
+duplicate :: question at the writer (#52).
+retarget :: Full lifecycle table and the dev-server invocation:
 
-# 2026-08-19 curation (#67). Bus Conventions -> docs/STREAMS.md and Environment
-# Variables -> docs/ENVIRONMENT.md. Four lines dropped because DEPLOYMENT.md
-# already carries the #52 dev-worker guard in full (its "The dev worker asks the
-# same question, at the writer" subsection); three rewritten because this same
-# change moved what they point at.
-AGENTS.md :: duplicate :: A **dev** worker runs no
-AGENTS.md :: duplicate :: so `build_writers` asks the same script directly
-AGENTS.md :: duplicate :: provider writer on a checkout it rejects (#52)
-AGENTS.md :: duplicate :: refused `provider_disabled`.
-AGENTS.md :: retarget :: - What each stream carries — [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-AGENTS.md :: retarget :: founding design, module-by-module layout, and what each stream carries
-AGENTS.md :: retarget :: the systemd unit's lifecycle, and every environment variable the service reads
+# --- Environment Variables -> docs/ENVIRONMENT.md ---------------------------
+# The boundary, the PAT list and the blast-radius reasoning are all in that doc's
+# opening paragraph, which states them as one hard rule rather than as four.
+duplicate :: Two env files, with a hard boundary between them:
+duplicate :: 1. **`/etc/replicator/.env`** — production configuration. Survives repo resets
+duplicate :: 2. **`.env`** (repo root, git-ignored) — dev/agent secrets: `GH_TOKEN` plus the per-repo PATs
+duplicate :: **The service must never load the repo `.env`.** Those PATs carry org-wide write access
+retarget :: Every variable the service reads, with the reasoning behind each default:
 
-# 2026-08-19, #67 CR #10 and #11. Each file's preamble is a pointer at its own
-# contents, and this same change moved what both pointed at: the bus-contract
-# reasoning to docs/STREAMS.md, the variable inventory to docs/ENVIRONMENT.md.
-# Left as written, both promised content the file no longer holds.
-docs/ARCHITECTURE.md :: retarget :: Module layout and the bus contracts the worker consumes and publishes.
-docs/ARCHITECTURE.md :: retarget :: keeps the rules needed on nearly every task; the reasoning that makes
-docs/ARCHITECTURE.md :: retarget :: each one non-negotiable lives here. Blob-tree and retention rules are in
-docs/DEPLOYMENT.md :: retarget :: Single-VM topology, the systemd unit's lifecycle, and every environment variable
-docs/DEPLOYMENT.md :: retarget :: the service reads. `AGENTS.md` keeps the two-env-file boundary and the restart
-docs/DEPLOYMENT.md :: retarget :: command; the per-variable reasoning is here.
+# --- The blob-backend bullet -> docs/STORAGE.md -----------------------------
+# Backends, URI schemes, the sweep, the ceiling, customTime and the timeout are
+# the rows of that doc's "Two backends, one seam" table.
+duplicate :: - **Two blob backends, one seam, and the flip is not ours alone.** `local` announces
+duplicate :: `file://` and `gcs` announces `gs://`; `local` is the compiled-in default and stays
+duplicate :: `asyncio.to_thread` — which puts it in the unit's shutdown budget, not just the
+duplicate :: handler's. Under `gcs` there is no sweep and `REPLICATOR_BLOB_MAX_TOTAL_BYTES`
+duplicate :: is **not enforced** — retention is a bucket lifecycle rule on `customTime`, and
+duplicate :: `blob_expires_at` becomes a floor. A missing blob is a `FileNotFoundError` on
+duplicate :: both backends; every other provider failure carries its status for the caller
+duplicate :: to classify (`is_terminal_provider_status`). Read
+duplicate :: [docs/STORAGE.md](docs/STORAGE.md) before touching either store.
+
+# These two said `local` "stays that way UNTIL a consumer can read the other
+# scheme (CannObserv/watcher#275)". watcher#275 closed 2026-08-20 and the VM
+# flipped the same day, yet the default did not move -- because docs/STORAGE.md
+# records it as permanent: "Not a holding position until the cluster catches up
+# -- a permanent one". The condition was met and the claim it gated is false.
+disproven :: that way until a consumer can read the other scheme without an uncapped re-fetch
+disproven :: loop (CannObserv/watcher#275). Every `BlobStore` call from a coroutine goes through
+
+# --- The style bullets -> docs/STYLE.md -------------------------------------
+# The block moved verbatim; this bold pseudo-heading became the `## General`
+# heading of its own section, which is a heading rename the move forced.
+rename :: **General:**
