@@ -151,6 +151,24 @@ changed — never `.skills/` wholesale, which holds operator config), and never 
 also re-installs `.skills/doctor.sh` each session, ahead of both gates, so the doctor self-heals on
 any branch if deleted. Logs to `.git/skills-update.log`.
 
+**It commits and does not push — so check for its commit before you deploy.** That is deliberate:
+an unattended hook that pushes to `main` is a worse trade than one that leaves a commit behind. But
+the commit it leaves interacts with a guard that has no other symptom. `scripts/check_main_checkout.sh`
+**refuses to start `replicator.service`** off a `main` carrying unpushed commits (#48), so a refresh
+nobody pushed blocks the next deploy, and the first sign of it is a service that will not start.
+#72 found the repo in exactly that state — `b29efcf` sat unpushed for a day.
+
+Cheap habit, worth having before any restart:
+
+```bash
+git status -sb | head -1        # "## main...origin/main [ahead 1]" is the tell
+git log --oneline origin/main..main
+git push origin main            # if the only thing ahead is the refresh commit
+```
+
+`git log --oneline -- skills-vendor/` names every refresh the hook has made; `.git/skills-update.log`
+records what it did each day, including the commit it created.
+
 **The hook is a symlink into the submodule, not a copy** (`managing-skills` Step 1). That is what
 makes upstream fixes to the script arrive on the normal submodule refresh; a copy freezes at whatever
 version was current the day it was installed and drifts silently thereafter — this repo's had, for
@@ -164,7 +182,9 @@ re-copied it.
 original existed; [skills#186](https://github.com/gregoryfoster/skills/issues/186) gave it one and
 told consumers to symlink it, for exactly the reason above — the prefetch query is edited upstream,
 and a copy stops receiving those edits. Ours already had: it named nine tools where the current
-query names twelve, so three graph tools went unloaded every session with nothing failing.
+query names twelve, so three graph tools went unloaded every session and nothing announced
+the gap. Calling one of them unloaded does fail — `InputValidationError` — so what was silent
+was the drift, not its consequence.
 
 Two consequences worth knowing before reading either file. `docs/SOCRATICODE.md` prints the same
 query, but it is **generated** — a re-run of `init-socraticode` overwrites it wholesale — so the
@@ -186,7 +206,7 @@ unnoticed for another nine days.
 | Hook | Event | What it does |
 |---|---|---|
 | `socraticode-reminder.sh` | SessionStart | Prints the `ToolSearch` prefetch string — the `codebase_*` MCP tools are deferred and their schemas do not load without it. Symlink into the vendored skill since #72 ([skills#186](https://github.com/gregoryfoster/skills/issues/186)), so upstream edits to the query arrive on the normal refresh. |
-| `socraticode-health.sh` | SessionStart | Once-per-UTC-day SocratiCode infra check: graph yield, `codebase_health`, a failed last operation, and — from the #72 pin bump ([skills#214](https://github.com/gregoryfoster/skills/issues/214)) — the manifest's declared artifact count against how many are actually indexed, naming the shortfall. **Reports only — never re-indexes, never edits a file, never starts Docker.** Silent when clean; logs to `.git/socraticode-health.log`. Symlink into the vendored skill for the #16 reason above, against `init-socraticode`'s own instruction to copy it ([skills#179](https://github.com/gregoryfoster/skills/issues/179)). |
+| `socraticode-health.sh` | SessionStart | Once-per-UTC-day SocratiCode infra check: graph yield, `codebase_health`, a failed last operation, and — from the #72 pin bump ([skills#214](https://github.com/gregoryfoster/skills/issues/214)) — the manifest's declared artifact count against how many are actually indexed, naming the shortfall. **Reports only — never re-indexes, never edits a file, never starts Docker.** Silent when clean; logs to `.git/socraticode-health.log`. Symlink into the vendored skill for the #16 reason above. `init-socraticode` used to instruct a *copy* here; [skills#179](https://github.com/gregoryfoster/skills/issues/179) and [skills#186](https://github.com/gregoryfoster/skills/issues/186) are both closed and it now symlinks both hooks through `managing-skills`' `install-hook.sh`. |
 | `context-budget-guard.sh` | PostToolUse | `curating-context`'s write guard: warns when an edit pushes `AGENTS.md` over the token budget. Non-blocking. |
 
 **The health hook lies in two situations, and both look like a healthy report.**
@@ -220,13 +240,28 @@ Repo-specific *prose* needs no re-applying — it lives in `AGENTS.md` under
 `## Code Exploration Notes (repo-specific)`, outside the marker pair, which is why it goes there and
 not into the generated file.
 
-## The write-guard hook dangles on a submodule-less checkout
+## Every hook dangles on a submodule-less checkout
 
-`curating-context` installs `.claude/hooks/context-budget-guard.sh` as a symlink into the
-vendored skill. On a checkout where the submodule is not initialized (fresh clone,
-`git worktree add`, shallow CI clone) the hook path dangles and the wired `PostToolUse` command
-fails with `No such file or directory` on **every** `Edit`/`Write`/`MultiEdit`, naming a path that
-`ls` shows as present. Run `bash .skills/doctor.sh`.
+All four `.claude/hooks/` entries are symlinks into `skills-vendor/`. On a checkout where the
+submodule is not initialized (fresh clone, `git worktree add`, shallow CI clone) every one of them
+dangles and its wired command fails with `No such file or directory`, naming a path that `ls` shows
+as present. Run `bash .skills/doctor.sh`.
+
+`socraticode-reminder.sh` was the last real file and became a symlink in #72, which makes this
+condition worse in one specific way. **This repo develops in worktrees by default**, and the doctor
+runs when a skill invokes it — not at SessionStart. So the *first* session in a new worktree is
+already past the failure: the prefetch line never prints, and an agent that then calls a deferred
+`codebase_*` tool gets `InputValidationError` rather than a missing-hook message. The remedy is the
+same `bash .skills/doctor.sh`; the cost of not knowing it is one confused session.
+
+Per hook, what a dangling link costs:
+
+| Hook | Cost while dangling |
+|---|---|
+| `context-budget-guard.sh` | An error on **every** `Edit`/`Write`/`MultiEdit`. Loudest, hardest to miss. |
+| `socraticode-reminder.sh` | The prefetch line never prints; deferred `codebase_*` schemas never load (#72). |
+| `socraticode-health.sh` | The once-per-day infra check does not run. Silent — it is silent when clean too. |
+| `skills-submodule-update.sh` | The daily refresh does not run, so the pin quietly stops tracking upstream. |
 
 `.claude/hooks/` is now **inside** the doctor's heal scope — it scans `skills/*` and
 `.claude/hooks/*` both ([gregoryfoster/skills#99](https://github.com/gregoryfoster/skills/issues/99),

@@ -38,11 +38,21 @@ SETTINGS = ROOT / ".claude" / "settings.json"
 # the same silent freeze the module docstring describes for #16, reached by the
 # other route.
 #
-# `socraticode-health.sh` is the one under active pressure. `init-socraticode`
-# Phase 3 step C instructs a *copy*, contradicting `managing-skills`' symlink
-# rule, so the next re-run of that skill will silently overwrite the link and
-# restore the #16 drift with nothing failing (skills#179). That is precisely
-# what this test is for.
+# The pressure this test was written for is GONE, and the test is kept anyway.
+# `init-socraticode` used to instruct a *copy* for `socraticode-health.sh`,
+# contradicting `managing-skills`' symlink rule, so a re-run would silently
+# overwrite the link and restore the #16 drift. skills#179 and skills#186 are
+# both closed: at the pin this repo installs, SKILL.md routes BOTH SessionStart
+# hooks through `managing-skills`' `scripts/install-hook.sh`, which symlinks
+# into `skills-vendor/`.
+#
+# Do not read that as "obsolete, delete it". Two live paths still produce a
+# copy. `install-hook.sh` copies deliberately where there is no
+# `skills-vendor/` tree (skills#200) — correct there, wrong here, and it is the
+# same script either way. And a hand re-copy has always been the failure mode:
+# #16 was one, and the #72 drift on `socraticode-reminder.sh` was another. What
+# changed is that upstream is no longer the likeliest source of the re-copy,
+# not that a re-copy stopped being silent.
 VENDORED_HOOKS = (
     "skills-submodule-update.sh",
     "socraticode-health.sh",
