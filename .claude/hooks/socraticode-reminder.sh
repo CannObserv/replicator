@@ -1,3 +1,1 @@
-#!/usr/bin/env bash
-# socraticode-prefetch
-echo 'socraticode-prefetch: SocratiCode codebase_* tools are deferred. Before broad code exploration, run ToolSearch "select:mcp__plugin_socraticode_socraticode__codebase_search,mcp__plugin_socraticode_socraticode__codebase_symbol,mcp__plugin_socraticode_socraticode__codebase_symbols,mcp__plugin_socraticode_socraticode__codebase_flow,mcp__plugin_socraticode_socraticode__codebase_impact,mcp__plugin_socraticode_socraticode__codebase_graph_query,mcp__plugin_socraticode_socraticode__codebase_status,mcp__plugin_socraticode_socraticode__codebase_context,mcp__plugin_socraticode_socraticode__codebase_context_search" to load their schemas. Prefer codebase_search over grep for semantic questions.'
+../../skills-vendor/gregoryfoster-skills/skills/init-socraticode/scripts/socraticode-reminder.sh

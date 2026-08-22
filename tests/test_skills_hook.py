@@ -28,16 +28,26 @@ HOOKS_DIR = ROOT / ".claude" / "hooks"
 SETTINGS = ROOT / ".claude" / "settings.json"
 
 # Every hook whose source of truth is a vendored skill, and must therefore be a
-# symlink rather than a copy. `socraticode-reminder.sh` is deliberately absent:
-# it is repo-authored — no vendored original exists — so a real file is correct
-# there and asserting a link would be wrong.
+# symlink rather than a copy.
+#
+# `socraticode-reminder.sh` joined this list in #72. It was repo-authored while
+# no vendored original existed, and a real file was correct then; skills#186
+# gave it one and told consumers to symlink it, precisely so an edit to the
+# prefetch query arrives on the normal submodule refresh. Our copy had already
+# fallen three tools behind the upstream query by the time the pin was bumped —
+# the same silent freeze the module docstring describes for #16, reached by the
+# other route.
 #
 # `socraticode-health.sh` is the one under active pressure. `init-socraticode`
 # Phase 3 step C instructs a *copy*, contradicting `managing-skills`' symlink
 # rule, so the next re-run of that skill will silently overwrite the link and
 # restore the #16 drift with nothing failing (skills#179). That is precisely
 # what this test is for.
-VENDORED_HOOKS = ("skills-submodule-update.sh", "socraticode-health.sh")
+VENDORED_HOOKS = (
+    "skills-submodule-update.sh",
+    "socraticode-health.sh",
+    "socraticode-reminder.sh",
+)
 INSTALLER = (
     ROOT
     / "skills-vendor"

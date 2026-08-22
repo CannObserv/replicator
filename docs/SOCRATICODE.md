@@ -27,9 +27,11 @@ file wholesale. Repo-specific exploration notes belong in `AGENTS.md` under
 The `codebase_*` MCP tools are **deferred**: their schemas are not in the session
 until a `ToolSearch` prefetch loads them, and calling one before that fails
 validation. The SessionStart hook (`.claude/hooks/socraticode-reminder.sh`)
-prints this each session; run it verbatim if it did not fire.
+prints this each session; run it verbatim if it did not fire. The hook is a
+symlink into the vendored skill, so the query below and the one it prints are
+the same string — when they differ, this doc is the stale copy (#72).
 
-`select:mcp__plugin_socraticode_socraticode__codebase_search,mcp__plugin_socraticode_socraticode__codebase_symbol,mcp__plugin_socraticode_socraticode__codebase_symbols,mcp__plugin_socraticode_socraticode__codebase_flow,mcp__plugin_socraticode_socraticode__codebase_impact,mcp__plugin_socraticode_socraticode__codebase_graph_query,mcp__plugin_socraticode_socraticode__codebase_status,mcp__plugin_socraticode_socraticode__codebase_context,mcp__plugin_socraticode_socraticode__codebase_context_search`
+`select:mcp__plugin_socraticode_socraticode__codebase_search,mcp__plugin_socraticode_socraticode__codebase_symbol,mcp__plugin_socraticode_socraticode__codebase_symbols,mcp__plugin_socraticode_socraticode__codebase_flow,mcp__plugin_socraticode_socraticode__codebase_impact,mcp__plugin_socraticode_socraticode__codebase_graph_query,mcp__plugin_socraticode_socraticode__codebase_graph_circular,mcp__plugin_socraticode_socraticode__codebase_graph_stats,mcp__plugin_socraticode_socraticode__codebase_graph_visualize,mcp__plugin_socraticode_socraticode__codebase_status,mcp__plugin_socraticode_socraticode__codebase_context,mcp__plugin_socraticode_socraticode__codebase_context_search`
 
 ## Per-tool notes
 
@@ -47,7 +49,12 @@ prints this each session; run it verbatim if it did not fire.
   systemd unit, the command reference, and every doc in the Detail Docs index. A
   path that does not resolve is skipped silently, so a missing answer is often a
   manifest problem. The manifest is a source, not the artifact: see
-  `AGENTS.md` → `## Code Exploration Notes (repo-specific)`.
+  `AGENTS.md` → `## Code Exploration Notes (repo-specific)`. The daily
+  `socraticode-health.sh` check now names an entry that is declared but never
+  indexed ([skills#214](https://github.com/gregoryfoster/skills/issues/214), pin
+  bumped in #72) — it does **not** catch an *edited* `description` on an entry
+  that is already indexed, which stays the case `codebase_context_index` in the
+  same change is the only guard against.
 - **The file watcher is ephemeral.** It lives only while an MCP server process is
   running. After a long gap, or after a reboot, re-run `codebase_index` rather
   than trusting the index to be current.
