@@ -14,7 +14,6 @@
 # a demotion, not less. They point at the arrangement, never at a given block.
 docs/ARCHITECTURE.md :: keeps the rules needed on nearly every task; what each
 docs/ARCHITECTURE.md :: Reference docs; the Detail Docs index in AGENTS.md is the roster
-docs/ARCHITECTURE.md :: Each rule `AGENTS.md` states in one line, with the reasoning that makes it non-negotiable.
 docs/CONVENTIONS.md :: touches, with the reasoning that makes each one non-negotiable.
 docs/DEPLOYMENT.md :: keeps the two-env-file boundary and the
 docs/STYLE.md :: Code style beyond the conventions `AGENTS.md` keeps inline. Today that is the
@@ -57,7 +56,6 @@ docs/contracts/replicator-boundaries.md :: The fallback default (was the interim
 # stub and the intro line that moved with the section both name AGENTS.md because
 # they say what AGENTS.md states in one line — true before the split, true after.
 docs/ARCHITECTURE.md :: What each stream carries, and the reasoning behind each rule
-docs/STREAMS.md :: Each rule `AGENTS.md` states in one line, with the reasoning
 # Pre-existing, unrelated to the split: provenance in a heading is legitimate here —
 # the two issue numbers are what distinguishes this bucket from the production one.
 docs/DEPLOYMENT.md :: The GCS test bucket — the opposite grant, on purpose
@@ -67,3 +65,12 @@ docs/TESTING.md :: The bucket and the SA are provisioned (#50)
 # 2026-08-19, #67 CR #14. The new ENVIRONMENT.md preamble points back at
 # DEPLOYMENT.md for the lifecycle and the unit — neither moved in this split.
 docs/ENVIRONMENT.md :: and the unit itself are in [DEPLOYMENT.md](DEPLOYMENT.md).
+
+docs/STREAMS.md :: Each rule `AGENTS.md` states in one line, with the reasoning
+# --- judged during the #72 curation -------------------------------------
+# Points at `## Code Exploration Notes (repo-specific)`, which this curation did
+# not touch: the back-reference is accurate, not fallout.
+docs/SKILLS.md :: case, which is why the rule in `AGENTS.md` → `## Code Exploration Notes (repo-specific)` is to
+# Provenance heading from #69, unrelated to this run and the same shape as the
+# ten provenance-headings already judged legitimate above.
+docs/contracts/replicator-boundaries.md :: Asked and answered — the derived-sidecar question (#69, 2026-08-20)

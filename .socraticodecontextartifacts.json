@@ -113,7 +113,7 @@
     {
       "name": "dependency-contract",
       "path": "./pyproject.toml",
-      "description": "Project and tooling contract. The co-core / co-core-aio pins (>=0.7,<0.8) with their [extract] and [bus] extras, the [tool.uv] find-links wheelhouse resolution, the ruff rule set and its skills-vendor exclusion, the ty exclusion, the replicator-worker console script, pytest configuration (asyncio auto mode, integration marker, timeout) and the 80% coverage gate."
+      "description": "Project and tooling contract. The co-core / co-core-aio pins (>=0.10,<0.11) with their [extract] and [bus] extras, the [tool.uv] find-links wheelhouse resolution, the ruff rule set and its skills-vendor exclusion, the ty exclusion, the replicator-worker console script, pytest configuration (asyncio auto mode, integration marker, timeout) and the 80% coverage gate."
     },
     {
       "name": "main-checkout-guard",

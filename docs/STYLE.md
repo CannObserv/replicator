@@ -17,3 +17,11 @@ deliberately not JSON.
 A shipper reading journald natively is unaffected (the message is a field alongside `_SYSTEMD_UNIT` / `_PID`); a pipeline that `json.loads` every `MESSAGE` must tolerate all of them — **the refusal lines especially, since they appear exactly when something is already wrong**, which is when a dropped log line costs the most. Two of the three can *only* speak on a bad start.
 
 **The colour strip is a filter on the loggers, deliberately.** uvicorn attaches an ANSI-coloured duplicate of each lifecycle message as `extra={"color_message": ...}`, and every extra reaches the JSON payload. `ColorMessageFilter` deletes it from the record at its source — not via the formatter's `reserved_attrs`, and not on the stdout handler. Both alternatives scope the fix to *this* sink: a handler that builds its payload from the record's `__dict__` rather than a `logging.Formatter` resurrects the field, and OpenTelemetry's `LoggingHandler` is exactly that (its own reserved list does not cover `color_message`). Mutating the record once means the strip survives a sink swap with no failing test to warn you it had stopped working. `tests/core/test_logging.py` pins the filter's placement, not just its effect.
+
+## General
+
+- No inline module imports; all at file top
+- Docstrings for public modules, classes, functions
+- Test structure mirrors source (`src/foo.py` → `tests/test_foo.py`); splitting rules — by concern, and the `_integration` exception — in [docs/TESTING.md](TESTING.md)
+- Explicit imports only
+- Small, focused functions

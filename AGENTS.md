@@ -89,33 +89,39 @@ guards it as an `ExecStartPre`. Ports, neighbours, and the redis-py pin:
 
 `replicator.service` runs the worker. Deploy committed code with `git pull --ff-only
 && uv sync --frozen && sudo systemctl restart replicator` — `git push` instead of the
-pull when the merge happened here, because the guard refuses a `main` that is ahead
-of `origin/main` (#48); debug with `sudo journalctl -u replicator -f`;
-test a branch with `uv run python -m src.worker.main` under a distinct
-`REPLICATOR_CONSUMER_NAME`. **After editing `deploy/replicator.service`, `cp` it to
-`/etc/systemd/system/`** — the installed unit is a copy, not a symlink, so
-`daemon-reload` alone silently re-reads the old file and the mismatch has no
-symptom until a directive matters. **Refuses to start off `main`, or off
-unpushed commits** (#37, #48) — `scripts/check_main_checkout.sh`;
-`REPLICATOR_ALLOW_ANY_CHECKOUT=1` overrides; a dev worker asks the same
-question at the writer (#52).
-Full lifecycle table and the dev-server invocation:
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+pull when the merge happened here.
+
+Three things that bite, each of which has no symptom until it matters:
+
+- **The service refuses to start off `main`, or off unpushed commits** (#37, #48).
+  `REPLICATOR_ALLOW_ANY_CHECKOUT=1` overrides; a dev worker asks the same question
+  at the writer (#52).
+- **`/etc/systemd/system/replicator.service` is a copy, not a symlink** — `cp` it
+  after every edit to `deploy/`, because `daemon-reload` alone re-reads the old file.
+- **The daily skills-refresh hook commits without pushing**, which is one of the
+  states the checkout guard refuses. Check `git status -sb` before a restart.
+
+Every deploy situation with its command, the guard's full verdict table, and the
+dev-server invocation: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Environment Variables
 
-Two env files, with a hard boundary between them:
+Two env files, and the boundary between them is a security boundary, not a
+convention:
 
-1. **`/etc/replicator/.env`** — production configuration. Survives repo resets and worktree switches. Managed manually on the VM. **The only file `replicator.service` reads.**
-2. **`.env`** (repo root, git-ignored) — dev/agent secrets: `GH_TOKEN` plus the per-repo PATs (`GH_TOKEN_ARCHIVER`, `GH_TOKEN_WATCHER`, `GH_TOKEN_CANNOBSERV`, `GH_TOKEN_SKILLS`). Never commit.
+1. **`/etc/replicator/.env`** — production config. **The only file `replicator.service` reads.**
+2. **`.env`** (repo root, git-ignored) — dev/agent secrets, chiefly org-wide GitHub PATs. Never commit.
 
-**The service must never load the repo `.env`.** Those PATs carry org-wide write access the worker has no use for; handing them to a process whose job is fetching public URLs widens the blast radius of any crash dump or subprocess for no benefit. Anything the service genuinely needs belongs in `/etc/replicator/.env`.
+**The service must never load the repo `.env`.** Those PATs carry write access the
+worker has no use for, and a process whose job is fetching public URLs must not
+widen their blast radius. Anything the service needs goes in `/etc/replicator/.env`.
+
+New settings take the `REPLICATOR_` prefix — the VM is shared, and the prefix is
+what keeps a sibling service from colliding. `BUILD_ID` is the one deliberate
+exception, stamped generically by the unit.
 
 For shell commands (dev only), load both — the snippet is under Common Commands.
-
-Replicator-owned settings carry the `REPLICATOR_` prefix so they never collide with a sibling service on the shared VM. `BUILD_ID` is deliberately unprefixed — the systemd unit stamps it generically.
-
-Every variable the service reads, with the reasoning behind each default:
+Every variable, which file carries it, and the reasoning behind each default:
 [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md).
 
 ## Bus Conventions
@@ -129,17 +135,13 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
   rides both and is **echoed, never read**, as is replicate's
   `info_item_rep_spec_id`: each `test_boundaries.py` carve-out is one field
   wide, and adding one edits the charter (#28, #29).
-- **Two blob backends, one seam, and the flip is not ours alone.** `local` announces
-  `file://` and `gcs` announces `gs://`; `local` is the compiled-in default and stays
-  that way until a consumer can read the other scheme without an uncapped re-fetch
-  loop (CannObserv/watcher#275). Every `BlobStore` call from a coroutine goes through
-  `asyncio.to_thread` — which puts it in the unit's shutdown budget, not just the
-  handler's. Under `gcs` there is no sweep and `REPLICATOR_BLOB_MAX_TOTAL_BYTES`
-  is **not enforced** — retention is a bucket lifecycle rule on `customTime`, and
-  `blob_expires_at` becomes a floor. A missing blob is a `FileNotFoundError` on
-  both backends; every other provider failure carries its status for the caller
-  to classify (`is_terminal_provider_status`). Read
-  [docs/STORAGE.md](docs/STORAGE.md) before touching either store.
+- **Two blob backends, one seam.** `local` announces `file://` and `gcs` announces
+  `gs://`; `local` is the compiled-in default **by decision, not by schedule** —
+  the deployment flipped on 2026-08-20 and the default did not. Every `BlobStore`
+  call from a coroutine goes through `asyncio.to_thread` — which puts it in the
+  unit's shutdown budget, not just the handler's. Per-backend retention, ceilings
+  and failure classification: [docs/STORAGE.md](docs/STORAGE.md), which is the
+  authority and worth reading before touching either store.
 - **Store, then publish — never the reverse.** A fact pointing at bytes that are
   not there is unrepairable by the consumer; stored bytes with no fact repair
   themselves on the reclaim.
@@ -240,12 +242,9 @@ are deliberately not JSON: [docs/STYLE.md](docs/STYLE.md).
 - All UTC
 - ISO 8601: `YYYY-MM-DDTHH:MM:SS.ffffffZ` (timestamps), `YYYY-MM-DD` (dates)
 
-**General:**
-- No inline module imports; all at file top
-- Docstrings for public modules, classes, functions
-- Test structure mirrors source (`src/foo.py` → `tests/test_foo.py`); splitting rules — by concern, and the `_integration` exception — in [docs/TESTING.md](docs/TESTING.md)
-- Explicit imports only
-- Small, focused functions
+**General:** imports at file top and explicit, docstrings on public modules,
+classes and functions, small focused functions, and tests mirroring source —
+each with its rationale and its ruff gate in [docs/STYLE.md](docs/STYLE.md).
 
 ## Detail Docs
 
