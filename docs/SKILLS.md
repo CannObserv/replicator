@@ -166,6 +166,14 @@ told consumers to symlink it, for exactly the reason above — the prefetch quer
 and a copy stops receiving those edits. Ours already had: it named nine tools where the current
 query names twelve, so three graph tools went unloaded every session with nothing failing.
 
+Two consequences worth knowing before reading either file. `docs/SOCRATICODE.md` prints the same
+query, but it is **generated** — a re-run of `init-socraticode` overwrites it wholesale — so the
+hook, not the doc, is the copy that tracks upstream; when the two disagree the doc is the stale one.
+And the artifact-count check the #72 bump brought catches a manifest entry that is declared and
+never indexed, **not** an edited `description` on one already indexed. Nothing catches that second
+case, which is why the rule in `AGENTS.md` → `## Code Exploration Notes (repo-specific)` is to
+re-run `codebase_context_index` in the same change as the edit.
+
 **Two artifacts, and the second is the one that fails.** The symlink alone never runs — Claude Code
 runs what `.claude/settings.json` names. This repo carried the link, tracked and resolving, for nine
 days while the registration was absent, so the skills froze at one commit and `ls .claude/hooks/`
