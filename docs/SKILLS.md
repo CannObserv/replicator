@@ -90,6 +90,35 @@ that hold has ended — see [The curating-context v1.2 hold (ended)](#the-curati
 `docs/plans/` is the default governed by `writing-plans`. Override with a single-line
 `.skills/plans_dir` file at the repo root if a different path is ever wanted.
 
+## The doc-check sensitive-path list
+
+`.skills/doc-sensitive-paths` replaces — **not extends** — the built-in
+`SENSITIVE_PATHS` in `shipping-work-python-fastapi/scripts/doc-check.sh`, the
+Step 1.5 gate that asks whether a branch touched anything the docs inventory.
+One path per line, blank lines and `#`-comments ignored, same grammar as
+`.skills/import-targets`. Entries match whole path **segments** at any depth,
+so `src/` also reaches `packages/<pkg>/src/` (gregoryfoster/skills#252).
+
+Three things about the tailoring here (#75):
+
+- **Five defaults were dropped as unmatchable** — `CHANGELOG.md`, `schema.sql`,
+  `alembic/versions/`, `src/models/`, `.env.example`. Replicator has no DB and
+  no changelog, and both env files are outside the repo or git-ignored. A list
+  where *no* entry matches any tracked file now exits 2 rather than printing a
+  clean green, and dead entries are named in a note on the exit-0 path — so an
+  untrimmed list is noise the gate reports at you every run.
+- **`src/` replaced the per-package entries** the defaults used. A new
+  top-level package is the change that leaves AGENTS.md's Project Layout stale,
+  and `src/api/` + `src/core/` cannot see one arriving.
+- **`skills-vendor/` is deliberately absent.** The daily auto-refresh bumps
+  those pointers with no doc consequence; listing them would trip the gate on
+  every refresh commit. `skills/` and `.claude/skills/` are listed, because a
+  symlink appearing or vanishing *is* the inventory above changing.
+
+Verify a change to the list with the gate itself — `bash
+skills/shipping-work-python-fastapi/scripts/doc-check.sh` on a clean branch
+prints the list source it consulted and names any entry that matches nothing.
+
 ## The curating-context v1.2 hold (ended)
 
 **Released 2026-08-15 (#39, #41). Both of the hold's own conditions were met.** Kept here because the

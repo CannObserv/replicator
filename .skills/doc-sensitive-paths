@@ -1,0 +1,47 @@
+# Sensitive paths for shipping-work-python-fastapi's doc-check.sh (Step 1.5).
+# One path per line; blank lines and #-comments ignored. Entries match whole
+# path SEGMENTS at any depth. This file REPLACES the script's built-in
+# defaults wholesale — it does not extend them (#75, gregoryfoster/skills#252).
+#
+# Dropped from the defaults because nothing in this tree can match them:
+# CHANGELOG.md, schema.sql, alembic/versions/, src/models/, .env.example.
+# Replicator has no DB and no changelog, and both env files live outside the
+# repo or are git-ignored (see docs/ENVIRONMENT.md).
+
+# Agent- and human-facing entry points. AGENTS.md inventories the rest.
+AGENTS.md
+CLAUDE.md
+README.md
+
+# Dependency surface: the co-core pin and the wheelhouse story are documented
+# prose, not just lockfile state (docs/DEPLOYMENT.md).
+pyproject.toml
+uv.lock
+
+# Module layout. Whole tree, not the per-package list the defaults used: a NEW
+# top-level package under src/ is exactly the change that leaves AGENTS.md's
+# Project Layout stale, and a per-package list would miss it.
+src/
+
+# Runnable surface — docs/COMMANDS.md lists every script with its flags.
+scripts/
+
+# The systemd unit and its guards (docs/DEPLOYMENT.md, Server Lifecycle).
+deploy/
+
+# CI gates, including the charter enforcement in tests/test_boundaries.py.
+.github/workflows/
+
+# Normative contracts — linked from sibling repos, so drift here is cross-repo.
+docs/contracts/
+
+# Skill inventory, mirrored in two places and inventoried by docs/SKILLS.md.
+# skills-vendor/ is deliberately absent: the daily auto-refresh bumps that
+# pointer without any doc consequence.
+skills/
+.claude/skills/
+.claude/hooks/
+
+# The SocratiCode manifest is a source, not the artifact — editing it without
+# re-indexing leaves the highest-authority answer stale (docs/SOCRATICODE.md).
+.socraticodecontextartifacts.json
