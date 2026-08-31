@@ -257,7 +257,7 @@ each with its rationale and its ruff gate in [docs/STYLE.md](docs/STYLE.md).
 - [docs/TESTING.md](docs/TESTING.md) — where fakeredis diverges from the live broker, which keys an integration run may create, and why production `co-gcs-replication` is unreachable from every test (#38)
 - [docs/STYLE.md](docs/STYLE.md) — the logging stack: formatter, installers, and the non-JSON journald lines
 - [docs/COMMANDS.md](docs/COMMANDS.md) — every runnable command, with flags
-- [docs/SKILLS.md](docs/SKILLS.md) — vendored skill inventory and refresh procedure
+- [docs/SKILLS.md](docs/SKILLS.md) — vendored skill inventory, refresh procedure, and the doc-check sensitive-path list
 - [docs/SOCRATICODE.md](docs/SOCRATICODE.md) — the full tool table, the prefetch query, per-tool gotchas, and cross-repo search
 - [docs/contracts/content-fetch-issuer-contract.md](docs/contracts/content-fetch-issuer-contract.md) — what a `content.fetch` producer must do; normative, linked from issuer repos
 - [docs/contracts/content-fetch-issuer-reference.md](docs/contracts/content-fetch-issuer-reference.md) — its lookup half: the refusal list, the failure taxonomy, the silent conditions, trust posture

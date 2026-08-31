@@ -95,25 +95,53 @@ that hold has ended — see [The curating-context v1.2 hold (ended)](#the-curati
 `.skills/doc-sensitive-paths` replaces — **not extends** — the built-in
 `SENSITIVE_PATHS` in `shipping-work-python-fastapi/scripts/doc-check.sh`, the
 Step 1.5 gate that asks whether a branch touched anything the docs inventory.
-One path per line, blank lines and `#`-comments ignored, same grammar as
-`.skills/import-targets`. Entries match whole path **segments** at any depth,
-so `src/` also reaches `packages/<pkg>/src/` (gregoryfoster/skills#252).
+One path per line, blank lines and `#`-comments ignored — the grammar the
+skills use for `.skills/import-targets` elsewhere, which this repo does not
+carry. Entries match whole path **segments** at any depth, so `src/` also
+reaches `packages/<pkg>/src/` (gregoryfoster/skills#252).
 
-Three things about the tailoring here (#75):
+[`tests/test_doc_sensitive_paths.py`](../tests/test_doc_sensitive_paths.py)
+guards it, and that is the part worth knowing: the gate downgrades an
+individually-dead entry to a *note* under an otherwise-green run, which is
+precisely the signal a passing check trains its reader to skim. A rename —
+`deploy/` to `systemd/`, a `scripts/` split — would quietly stop watching what
+that entry was added for. The test makes it red instead, and pins its port of
+the bash matcher before trusting it.
+
+What the tailoring here decided (#75, and its code review):
 
 - **Five defaults were dropped as unmatchable** — `CHANGELOG.md`, `schema.sql`,
-  `alembic/versions/`, `src/models/`, `.env.example`. Replicator has no DB and
-  no changelog, and both env files are outside the repo or git-ignored. A list
-  where *no* entry matches any tracked file now exits 2 rather than printing a
-  clean green, and dead entries are named in a note on the exit-0 path — so an
-  untrimmed list is noise the gate reports at you every run.
+  `alembic/versions/`, `src/models/`, `.env.example`. No DB, no changelog, no
+  committed env template. A list where *no* entry matches exits 2 rather than
+  printing a clean green, so an untrimmed list is noise the gate reports every
+  run.
 - **`src/` replaced the per-package entries** the defaults used. A new
   top-level package is the change that leaves AGENTS.md's Project Layout stale,
   and `src/api/` + `src/core/` cannot see one arriving.
-- **`skills-vendor/` is deliberately absent.** The daily auto-refresh bumps
-  those pointers with no doc consequence; listing them would trip the gate on
-  every refresh commit. `skills/` and `.claude/skills/` are listed, because a
-  symlink appearing or vanishing *is* the inventory above changing.
+- **`skills-vendor/` is deliberately absent; `.gitmodules` stands in for it.**
+  The daily auto-refresh bumps those pointers with no doc consequence, so
+  listing them would trip the gate on every refresh commit. `.gitmodules`
+  changes only when the vendor inventory does — which is when the table above
+  goes stale.
+- **`.claude/settings.json` is listed separately from `.claude/hooks/`,**
+  because [hook suspension](#the-other-claudehooks-entries) is an edit to the
+  settings file with the hook script left in place. `.claude/skills/` is
+  redundant for *matching* — segment matching already makes `skills/` hit
+  `*/skills/*` — and is kept for the dead-entry census rather than the match:
+  it is what reports that tree emptying.
+- **The list covers itself** via a slash-less `doc-sensitive-paths` entry.
+  Editing it is the change that obsoletes this very section.
+- **The rest of `docs/` is out, as a trade-off rather than an oversight.**
+  AGENTS.md's Detail Docs list is a by-name inventory of `docs/*.md`, so a new
+  doc does need an AGENTS.md line the gate will not ask for. A blanket `docs/`
+  entry would fire on every branch that edits prose — most of them — and a gate
+  that always fires is one nobody reads.
+
+One thing the override cannot reach: `DOC_SECTIONS`, the advice printed on exit
+1, is not project-configurable, so it still names a "route table" this
+worker-first service has no equivalent of, and cannot point at
+`tests/test_boundaries.py` when a `docs/contracts/` charter changes. Filed
+upstream as gregoryfoster/skills#261.
 
 Verify a change to the list with the gate itself — `bash
 skills/shipping-work-python-fastapi/scripts/doc-check.sh` on a clean branch

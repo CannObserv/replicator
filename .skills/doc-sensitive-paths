@@ -3,10 +3,13 @@
 # path SEGMENTS at any depth. This file REPLACES the script's built-in
 # defaults wholesale — it does not extend them (#75, gregoryfoster/skills#252).
 #
-# Dropped from the defaults because nothing in this tree can match them:
-# CHANGELOG.md, schema.sql, alembic/versions/, src/models/, .env.example.
-# Replicator has no DB and no changelog, and both env files live outside the
-# repo or are git-ignored (see docs/ENVIRONMENT.md).
+# Guarded by tests/test_doc_sensitive_paths.py: a dead entry is a red test
+# here, not a note under a green gate run.
+#
+# Five defaults are dropped because this tree cannot match them. Replicator has
+# no DB (schema.sql, alembic/versions/, src/models/), no changelog
+# (CHANGELOG.md), and ships no committed env template (.env.example) — config
+# lives in /etc/replicator/.env, see docs/ENVIRONMENT.md.
 
 # Agent- and human-facing entry points. AGENTS.md inventories the rest.
 AGENTS.md
@@ -33,14 +36,43 @@ deploy/
 .github/workflows/
 
 # Normative contracts — linked from sibling repos, so drift here is cross-repo.
+#
+# The rest of docs/ is deliberately absent, and that is a trade-off rather than
+# an oversight: AGENTS.md's Detail Docs list is a by-name inventory of
+# docs/*.md, so adding docs/FOO.md does need an AGENTS.md line and this gate
+# will not ask for it. A blanket docs/ entry would instead fire on every branch
+# that edits documentation prose — which is most of them — and a gate that
+# always fires is one nobody reads. Structural drift under docs/ is accepted as
+# uncaught to keep the gate's exit 1 meaningful.
 docs/contracts/
 
 # Skill inventory, mirrored in two places and inventoried by docs/SKILLS.md.
-# skills-vendor/ is deliberately absent: the daily auto-refresh bumps that
-# pointer without any doc consequence.
+#
+# skills-vendor/ is deliberately absent: the daily auto-refresh bumps those
+# pointers with no doc consequence, so listing them would trip the gate on
+# every refresh commit. .gitmodules is the low-churn stand-in — it changes only
+# when the vendor inventory itself changes, which is when the table in
+# docs/SKILLS.md goes stale.
+#
+# .claude/settings.json earns its own entry: docs/SKILLS.md records hook
+# suspension as an edit *there* with the hook script left in place, so a hook
+# can be enabled, disabled or repointed with nothing under .claude/hooks/
+# changing at all.
+#
+# .claude/skills/ is redundant for matching — segment matching already makes
+# skills/ hit */skills/* — and is kept deliberately, for the dead-entry census
+# rather than the match: it is what reports that tree emptying.
 skills/
 .claude/skills/
 .claude/hooks/
+.claude/settings.json
+.gitmodules
+
+# The list must cover itself. Editing it is precisely the change that obsoletes
+# its own section in docs/SKILLS.md, and a doc-drift guard blind to its own
+# configuration is the one blind spot it can least afford. Slash-less, so it
+# matches at any depth and adds no churn.
+doc-sensitive-paths
 
 # The SocratiCode manifest is a source, not the artifact — editing it without
 # re-indexing leaves the highest-authority answer stale (docs/SOCRATICODE.md).
