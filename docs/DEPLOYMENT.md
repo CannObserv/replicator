@@ -169,7 +169,7 @@ review had already changed — see **the marked suite** in [TESTING.md](TESTING.
 |---|---|
 | Code merged to main **on GitHub** (the usual path) | `git pull --ff-only && uv sync --frozen && sudo systemctl restart replicator` |
 | Code merged to main **locally** | `git push && uv sync --frozen && sudo systemctl restart replicator` |
-| Testing a worktree/branch | `uv run python -m src.worker.main` (set a distinct `REPLICATOR_CONSUMER_NAME`) |
+| Testing a worktree/branch | `uv run python -m src.worker.main` (set a distinct `REPLICATOR_CONSUMER_NAME` — **required** while the service runs, since #77 makes both derive the same name) |
 | Debugging the live service | `sudo journalctl -u replicator -f` |
 | After editing `deploy/replicator.service` | `sudo cp deploy/replicator.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart replicator` |
 | After a co-core version bump | re-run `sync_wheelhouse.py`, then `uv sync` |

@@ -102,7 +102,7 @@ rather than deleting bytes a consumer was promised.
 | `GOOGLE_APPLICATION_CREDENTIALS` | `/etc/replicator/co-pypi-reader.json` | SA key for the wheelhouse mirror |
 | `REPLICATOR_REDIS_URL` | `redis://localhost:6379/0` | Change-bus client URL |
 | `REPLICATOR_BLOB_DIR` | `/var/lib/replicator/blobs` | Temp-storage root — **not** the `blobs` default |
-| `REPLICATOR_CONSUMER_NAME` | `replicator@<hostname>` | This worker's identity in the group — never share one |
+| `REPLICATOR_CONSUMER_NAME` | *(unset)* | Override; the name is derived per group — `replicator-fetch-1` — and never shared |
 | `REPLICATOR_LOG_LEVEL` | `INFO` | Root log level |
 
 `BUILD_ID` is stamped by the unit's `ExecStartPre` rather than set in the env file. Every
