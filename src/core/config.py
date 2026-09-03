@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Literal
 
 from co_core.pure.adapters.bus import streams
-from co_core.pure.adapters.bus.streams import group_name
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -192,7 +191,7 @@ class Settings(BaseSettings):
     # test, rather than reaching `ensure_group` and creating a *new empty group*
     # beside the real one for the worker to read nothing from.
     consumer_group: str = Field(
-        default=group_name(streams.CONTENT_FETCH, SERVICE_NAME),
+        default=streams.group_name(streams.CONTENT_FETCH, SERVICE_NAME),
         validation_alias="REPLICATOR_CONSUMER_GROUP",
     )
     # The fetch group's consumer-name **override**, unset on every host — the name
@@ -259,7 +258,7 @@ class Settings(BaseSettings):
     # `_the_command_groups_stay_distinct` still refuses the collision, for the
     # narrower reason recorded there: the consumer-name override is keyed by group.
     replicate_consumer_group: str = Field(
-        default=group_name(streams.CONTENT_REPLICATE, SERVICE_NAME),
+        default=streams.group_name(streams.CONTENT_REPLICATE, SERVICE_NAME),
         validation_alias="REPLICATOR_REPLICATE_CONSUMER_GROUP",
     )
     # The replicate group's override, paired with its group exactly as the fetch

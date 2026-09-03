@@ -1,12 +1,19 @@
 """Settings contract: REPLICATOR_-prefixed env, unprefixed BUILD_ID, safe defaults."""
 
+import ast
 from pathlib import Path
 
 import pytest
-from co_core.pure.adapters.bus import streams
-from co_core.pure.adapters.bus.streams import group_name, stream_kind
+from co_core.pure.adapters.bus.streams import (
+    CONTENT_FETCH,
+    CONTENT_FETCH_POLICY,
+    CONTENT_REPLICATE,
+    group_name,
+    stream_kind,
+)
 from pydantic import ValidationError
 
+from src.core import config as config_module
 from src.core.config import Settings, get_settings
 
 
@@ -42,29 +49,78 @@ def test_build_id_is_unprefixed(monkeypatch):
     assert get_settings().build_id == "abc1234"
 
 
-def test_the_group_defaults_are_derived_not_spelled(monkeypatch):
-    """Both group names come from co-core's ``group_name``, not from literals.
+def _group_field_defaults() -> dict[str, ast.expr]:
+    """The ``default=`` expression of each group Field, straight from the source.
+
+    Structural because the property is structural. Comparing the *value* against
+    ``group_name(...)`` cannot see the difference between deriving and spelling —
+    both sides evaluate to the same string today, so the assertion holds either way
+    (CR round 4, verified by reverting the defaults to literals and watching the
+    test pass). The AST is where "derived" is actually visible, and this repo
+    already reads it that way in ``test_boundaries.py`` and ``test_destinations.py``.
+    """
+    source = Path(config_module.__file__).read_text()
+    settings_class = next(
+        node
+        for node in ast.parse(source).body
+        if isinstance(node, ast.ClassDef) and node.name == "Settings"
+    )
+    wanted = {"consumer_group", "replicate_consumer_group"}
+    defaults: dict[str, ast.expr] = {}
+    for node in settings_class.body:
+        if not (isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)):
+            continue
+        if node.target.id not in wanted or not isinstance(node.value, ast.Call):
+            continue
+        for keyword in node.value.keywords:
+            if keyword.arg == "default":
+                defaults[node.target.id] = keyword.value
+    return defaults
+
+
+def test_the_group_defaults_are_derived_not_spelled():
+    """Both group names are *computed* by co-core's ``group_name``, not written out.
 
     The convention is co-core's to define — ``<service>.<stream-suffix>``
     (cannobserv#384, v0.13.1) — so spelling the results here is a second copy of a
-    rule this repo does not own, free to drift the way the group-naming rule
-    already did once cluster-wide. Deriving them means a convention change arrives
-    with the wheel rather than needing to be noticed.
+    rule this repo does not own, free to drift the way the cluster's group naming
+    already did once. Deriving them means a convention change arrives with the
+    wheel rather than needing to be noticed by a person.
 
-    Pure no-op at runtime, and that is the point: both calls evaluate to the
-    strings already live on the broker, audited 2026-09-01 (#384). A version that
-    changed either would fail here rather than at ``ensure_group``, where the
-    symptom is a *new empty group* beside the real one and a worker that reads
-    nothing.
+    Asserted against the syntax tree, not the resolved value: see
+    ``_group_field_defaults`` for why the obvious value comparison proves nothing.
+    """
+    defaults = _group_field_defaults()
+    assert set(defaults) == {"consumer_group", "replicate_consumer_group"}
+
+    called = {}
+    for field, expr in defaults.items():
+        assert isinstance(expr, ast.Call), f"{field} spells its group name instead of deriving it"
+        # ``unparse`` rather than matching a node shape, so the assertion survives
+        # ``group_name(...)`` and ``streams.group_name(...)`` alike — the import
+        # style is not the property under test.
+        called[field] = ast.unparse(expr)
+
+    assert called == {
+        "consumer_group": "streams.group_name(streams.CONTENT_FETCH, SERVICE_NAME)",
+        "replicate_consumer_group": "streams.group_name(streams.CONTENT_REPLICATE, SERVICE_NAME)",
+    }
+
+
+def test_the_derived_groups_are_the_ones_live_on_the_broker(monkeypatch):
+    """And what they derive *to* is what the broker already has.
+
+    The companion to the structural test above, and a separate property: that one
+    says the names are computed, this one says the computation still yields
+    ``replicator.fetch`` / ``replicator.replicate`` — audited on the broker
+    2026-09-01 (#384). A co-core release that changed the convention fails here
+    rather than at ``ensure_group``, where the symptom is a *new empty group*
+    beside the real one and a worker reading a stream nothing delivers to.
     """
     for var in ("REPLICATOR_CONSUMER_GROUP", "REPLICATOR_REPLICATE_CONSUMER_GROUP"):
         monkeypatch.delenv(var, raising=False)
 
     settings = get_settings()
-    assert settings.consumer_group == group_name(streams.CONTENT_FETCH, "replicator")
-    assert settings.replicate_consumer_group == group_name(streams.CONTENT_REPLICATE, "replicator")
-    # The literals, asserted once beside the derivation: what is on the broker
-    # today, so a wheel that changed the convention cannot pass quietly.
     assert (settings.consumer_group, settings.replicate_consumer_group) == (
         "replicator.fetch",
         "replicator.replicate",
@@ -79,12 +135,12 @@ def test_the_policy_stream_takes_no_group():
     taxonomy is queryable, so the rule can be asserted against co-core's own
     classification rather than restated here.
     """
-    assert stream_kind(streams.CONTENT_FETCH_POLICY) == "config_state"
-    assert stream_kind(streams.CONTENT_FETCH) == "command"
-    assert stream_kind(streams.CONTENT_REPLICATE) == "command"
+    assert stream_kind(CONTENT_FETCH_POLICY) == "config_state"
+    assert stream_kind(CONTENT_FETCH) == "command"
+    assert stream_kind(CONTENT_REPLICATE) == "command"
 
     with pytest.raises(ValueError, match="no consumer group"):
-        group_name(streams.CONTENT_FETCH_POLICY, "replicator")
+        group_name(CONTENT_FETCH_POLICY, "replicator")
 
 
 def test_the_hostname_never_reaches_the_consumer_name(monkeypatch):
