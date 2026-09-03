@@ -26,10 +26,13 @@ set -a; . /etc/replicator/.env 2>/dev/null; . .env 2>/dev/null; set +a
 ## Worker
 
 ```bash
-# Run the bus consumer locally. Set a distinct consumer name when the live
-# service is also running — the derived default is the *same* name the service
-# registers under, and a shared name means a shared pending-entries list.
-REPLICATOR_CONSUMER_NAME="replicator-fetch-$(whoami)-dev" uv run python -m src.worker.main
+# Run the bus consumer locally. Set distinct consumer names when the live
+# service is also running — the derived defaults are the *same* names the service
+# registers under, and a shared name means a shared pending-entries list. One per
+# group: the worker runs two loops, and each keeps its own registration.
+REPLICATOR_CONSUMER_NAME="replicator-fetch-$(whoami)-dev" \
+REPLICATOR_REPLICATE_CONSUMER_NAME="replicator-replicate-$(whoami)-dev" \
+  uv run python -m src.worker.main
 
 # Ctrl-C (or SIGTERM) finishes the in-flight message, acks it, and exits 0.
 ```
