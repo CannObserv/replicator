@@ -148,6 +148,34 @@ def _unreachable_levels(blob_dir: Path) -> list[tuple[Path, int]]:
     return [(level, mode) for level, mode in levels if not mode & 0o011]
 
 
+def resolve_consumer_name(group: str) -> str:
+    """Name this worker within ``group`` — the group, dashed, plus a slot ordinal.
+
+    ``replicator.fetch`` -> ``replicator-fetch-1``. **Stable across restarts and
+    across VM moves, on purpose** (#77, archiver#156). The previous spelling was
+    ``replicator@{gethostname()}``, and a consumer registration persists in the
+    group until an explicit ``XGROUP DELCONSUMER`` that nothing calls — so every
+    hostname change minted a fresh registration and abandoned the old one along
+    with whatever sat in its PEL, reclaimable only by an ``XAUTOCLAIM`` at
+    ``min_idle_time``. A stable name makes a restart *reuse* its registration, so
+    the leak cannot recur rather than needing a periodic sweep or a shutdown hook
+    that a ``SIGKILL`` would skip anyway.
+
+    It also fixes a misattribution, and this repo had it worse than archiver did:
+    the shared VM's hostname is literally ``watcher``, so a host-derived name reads
+    as the Watcher service's consumer on a broker all three services share.
+
+    Derived from the group rather than written out per call site so the next group
+    consumer inherits the convention instead of copying a literal — which is also
+    what makes it per-group for free, and replicator runs two.
+
+    The ``-1`` is a slot, not decoration: the unit runs exactly one worker, so a
+    pid would carry no information a log line does not. A multi-consumer
+    deployment assigns ``-2`` upward via ``REPLICATOR_CONSUMER_NAME``.
+    """
+    return f"{group.replace('.', '-')}-1"
+
+
 def build_consumer(
     client: Redis,
     settings: Settings,
@@ -171,12 +199,18 @@ def build_consumer(
     replicate loop (#29). One group per *stream*, never one shared across both:
     ``claim_stale`` walks a group's PEL, so a shared name would let recovery on
     one stream reach into the other's pending entries.
+
+    The consumer name is derived from whichever group that resolves to, so each
+    loop registers under its own (#77). ``REPLICATOR_CONSUMER_NAME`` overrides
+    both — which is safe, because a consumer name is scoped to its group and
+    ``claim_stale`` is a method on the reader, so it can never cross.
     """
+    resolved_group = group or settings.consumer_group
     return AsyncBusConsumer(
         client,
         topic=topic,
-        group=group or settings.consumer_group,
-        consumer=settings.consumer_name,
+        group=resolved_group,
+        consumer=settings.consumer_name or resolve_consumer_name(resolved_group),
     )
 
 
@@ -514,6 +548,16 @@ async def run(
         replicate_consumer = build_consumer(
             client, settings, topic=replicate_topic, group=settings.replicate_consumer_group
         )
+        # Recomputed rather than read back off the readers: AsyncBusConsumer keeps
+        # its consumer name private, and these are only for the journal. Pure
+        # functions of the same inputs ``build_consumer`` used, so they cannot
+        # drift from the names actually registered (#77).
+        fetch_consumer_name = settings.consumer_name or resolve_consumer_name(
+            settings.consumer_group
+        )
+        replicate_consumer_name = settings.consumer_name or resolve_consumer_name(
+            settings.replicate_consumer_group
+        )
         # Host state, read once at boot: which destinations an operator
         # provisioned here. Unset means nothing is provisioned and every
         # replicate command is refused, which is the current state of every host
@@ -547,7 +591,12 @@ async def run(
             "worker ready",
             extra={
                 "group": settings.consumer_group,
-                "consumer": settings.consumer_name,
+                # One name per group since #77 — there is no single process-wide
+                # consumer name any more, and these are what an operator matches
+                # against XINFO output.
+                "consumer": fetch_consumer_name,
+                "replicate_group": settings.replicate_consumer_group,
+                "replicate_consumer": replicate_consumer_name,
                 "build": settings.build_id,
                 # How long this worker will absorb a broker outage before
                 # exiting. In the journal at every boot because the unit's
@@ -662,7 +711,10 @@ async def run(
             run_policy_reader(policy_reader, policies=policies, settings=settings, stop=stop),
             stop=stop,
         )
-        logger.info("worker stopped", extra={"consumer": settings.consumer_name})
+        logger.info(
+            "worker stopped",
+            extra={"consumer": fetch_consumer_name, "replicate_consumer": replicate_consumer_name},
+        )
     finally:
         if owns_signals:
             remove_signal_handlers()

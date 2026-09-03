@@ -12,7 +12,6 @@ convention). ``BUILD_ID`` is deliberately unprefixed: it is stamped generically 
 the systemd unit's ``ExecStartPre``.
 """
 
-import socket
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -31,18 +30,6 @@ DEFAULT_WRITE_TIMEOUT_SECONDS = 120
 # by two literals staying equal (CR #8) — the same arrangement
 # ``DEFAULT_WRITE_TIMEOUT_SECONDS`` has with the replicate handler.
 DEFAULT_BLOB_TIMEOUT_SECONDS = 30.0
-
-
-def _default_consumer_name() -> str:
-    """Identify this worker within the consumer group.
-
-    Redis Streams tracks pending entries per consumer name, so two workers
-    sharing a name would also share a PEL and could not be recovered
-    independently by ``claim_stale``. Host-derived keeps them distinct without
-    configuration; override via ``REPLICATOR_CONSUMER_NAME`` when running more
-    than one worker per host.
-    """
-    return f"replicator@{socket.gethostname()}"
 
 
 class Settings(BaseSettings):
@@ -190,9 +177,25 @@ class Settings(BaseSettings):
     consumer_group: str = Field(
         default="replicator.fetch", validation_alias="REPLICATOR_CONSUMER_GROUP"
     )
-    consumer_name: str = Field(
-        default_factory=_default_consumer_name, validation_alias="REPLICATOR_CONSUMER_NAME"
-    )
+    # An **override**, unset on every host — the name itself is derived from the
+    # group by ``src.worker.main.resolve_consumer_name`` (#77).
+    #
+    # It was host-derived (``replicator@{gethostname()}``), which is a leak with no
+    # symptom until it fires: a consumer registration persists until an explicit
+    # ``XGROUP DELCONSUMER`` that nothing calls, so every hostname change minted a
+    # fresh registration and abandoned the old one along with its PEL — reclaimable
+    # only by an ``XAUTOCLAIM`` at ``min_idle_time``. Archiver reached seven
+    # registrations on the production broker, six of them dead (archiver#156).
+    #
+    # Derivation cannot live here as a field default: it needs the *group*, and
+    # there are two of them. A single process-wide name would collapse both
+    # registrations onto one string.
+    #
+    # Set it to give a *second* member of a group its own PEL (slot ``-2`` upward),
+    # or to keep a dev worker's registration off the service's — the documented way
+    # to test a branch on this VM. Two workers sharing a name share a PEL, which
+    # makes independent ``claim_stale`` recovery impossible.
+    consumer_name: str | None = Field(default=None, validation_alias="REPLICATOR_CONSUMER_NAME")
 
     # How long a poll blocks waiting for a new message. Bounds worst-case
     # shutdown latency: SIGTERM is checked between polls, and a blocking
