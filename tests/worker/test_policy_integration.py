@@ -194,6 +194,14 @@ async def test_run_replays_the_named_policy_stream_into_the_byte_path(
     monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
     monkeypatch.setenv("REPLICATOR_CONSUMER_GROUP", "replicator.itest")
     monkeypatch.setenv("REPLICATOR_CONSUMER_NAME", "replicator@itest")
+    # Both names, because the override is per group since CR round 1: setting only
+    # the fetch one leaves the replicate loop on its derived `replicator-replicate-1`
+    # — the name the live unit registers under. Harmless today (`real_redis` refuses
+    # db 0, so production is unreachable whatever the consumer is called, and no
+    # integration test delivers a replicate command) but the `itest` marker is the
+    # convention `docs/TESTING.md` builds its scratch promise on, and a consumer
+    # registration is not a key, so nothing would ever sweep one that lacked it.
+    monkeypatch.setenv("REPLICATOR_REPLICATE_CONSUMER_NAME", "replicator@itest-replicate")
     monkeypatch.setenv("REPLICATOR_READ_BLOCK_MS", "50")
     get_settings.cache_clear()
     monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: real_redis)

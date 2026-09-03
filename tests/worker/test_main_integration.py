@@ -53,3 +53,42 @@ async def test_first_delivery_registers_the_consumer(real_redis, scratch_topic):
 
     consumers = await real_redis.xinfo_consumers(scratch_topic, GROUP)
     assert [c["name"] for c in consumers] == [CONSUMER.encode()]
+
+
+async def test_a_group_name_is_scoped_to_its_stream(real_redis, scratch_topic):
+    """Two streams, one group *name*, two entirely separate PELs.
+
+    Pinned because the tree asserted the opposite in four places (CR round 2):
+    that one group spanning both command streams would let ``claim_stale`` on one
+    "reach into the other's pending entries". It cannot. A consumer group is
+    identified by **(stream key, group name)**, so a shared name creates two
+    unrelated groups that merely spell the same — and the rule those comments were
+    defending (one group per stream) is about legibility and about keeping the
+    name-override key unambiguous, not about PEL safety.
+
+    A false reason in a comment outlives the comment: it gets cited, and #77's
+    round-1 validator hardened this one into a runtime guard before anyone checked
+    it against a broker. Hence a live-broker assertion rather than a rewritten
+    paragraph — fakeredis is not the authority on what Redis scopes.
+    """
+    other_topic = f"{scratch_topic}.second"
+    try:
+        await real_redis.xadd(scratch_topic, make_command())
+        await real_redis.xadd(other_topic, make_command())
+        first = _consumer(real_redis, scratch_topic)
+        second = _consumer(real_redis, other_topic)
+        await first.ensure_group(start_id="0")
+        await second.ensure_group(start_id="0")
+
+        # Deliver on the first stream only.
+        assert await first.read(count=1, block_ms=100)
+
+        assert (await real_redis.xpending(scratch_topic, GROUP))["pending"] == 1
+        assert (await real_redis.xpending(other_topic, GROUP))["pending"] == 0
+
+        # Reclaiming on the first stream cannot see the second's entries either.
+        claimed = await real_redis.xautoclaim(scratch_topic, GROUP, "other-member", 0, "0-0")
+        assert claimed[1], "the first stream's own entry is reclaimable"
+        assert (await real_redis.xpending(other_topic, GROUP))["pending"] == 0
+    finally:
+        await real_redis.delete(other_topic)

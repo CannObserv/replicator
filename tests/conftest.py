@@ -35,9 +35,24 @@ LEFTOVER_TTL_SECONDS = 900
 # Production configuration an agent's shell is *told* to carry: AGENTS.md's
 # Common Commands snippet sources `/etc/replicator/.env` before any repo command,
 # so `uv run pytest` inherits the worker's ADC and — once #50 provisions it — the
-# production alias table. Neither has any business reaching a test, and the
-# autouse fixture below removes both rather than trusting no test reads them.
-PRODUCTION_ENV = ("REPLICATOR_REPLICATION_ALIASES_FILE", "GOOGLE_APPLICATION_CREDENTIALS")
+# production alias table. None of it has any business reaching a test, and the
+# autouse fixture below removes it rather than trusting no test reads it.
+#
+# The blob pair joined the list in CR round 2, and the reason is that the two
+# documented procedures contradicted each other. That same snippet also carries
+# `REPLICATOR_BLOB_BACKEND=gcs` and the production `REPLICATOR_BLOB_BUCKET`, so
+# sourcing it and then running AGENTS.md's own `-m integration` command failed the
+# policy-replay test on `constructed a real GcsBlobStore('co-gcs-blobs')`. The
+# construction guard below did its job — but a guard firing is the last line, not
+# the plan, and that failure reads like a security incident rather than the config
+# collision it is. Scrubbed here so a run under the production shell resolves the
+# same backend a fresh clone does.
+PRODUCTION_ENV = (
+    "REPLICATOR_REPLICATION_ALIASES_FILE",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "REPLICATOR_BLOB_BACKEND",
+    "REPLICATOR_BLOB_BUCKET",
+)
 
 # The test destination, and the identity to reach it with. **Neither has a
 # default** (#38, #51): absent means the `@pytest.mark.gcs` tests skip, and never

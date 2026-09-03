@@ -86,12 +86,16 @@ def test_each_group_has_its_own_name_override(monkeypatch):
 
 
 def test_the_two_command_groups_may_not_collide(monkeypatch):
-    """One group per stream. Sharing one would cross two command queues' PELs.
+    """One group name per stream, because the override key is the group.
 
-    ``claim_stale`` walks a group's pending entries, so a single group spanning
-    both streams lets recovery on one reach into the other's. Refused at startup
-    rather than diagnosed later from a stuck stream, and it is also what makes
-    the group the sound discriminator for picking a name override (CR round 1).
+    **Not because the PELs would cross** — they would not, and this docstring said
+    they would until CR round 2 checked it against a broker. A group is identified
+    by *(stream key, group name)*, so the same name on both command streams is two
+    unrelated groups; ``test_a_group_name_is_scoped_to_its_stream`` pins it.
+
+    What the collision actually breaks is ``consumer_name_for``, which decides
+    which name override applies by comparing against the group. Equal groups leave
+    that question unanswerable, so the config is refused where it is written.
     """
     monkeypatch.setenv("REPLICATOR_CONSUMER_GROUP", "replicator.shared")
     monkeypatch.setenv("REPLICATOR_REPLICATE_CONSUMER_GROUP", "replicator.shared")

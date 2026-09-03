@@ -46,6 +46,7 @@ from pathlib import Path
 import pytest
 from co_core_aio.gcs import AsyncGcsDriver
 
+from src.core.config import get_settings
 from src.storage.gcs import GcsBlobStore
 from tests.conftest import (
     PRODUCTION_ENV,
@@ -195,6 +196,25 @@ def test_the_production_environment_is_not_visible_to_a_test():
     test that reads either is reading production configuration.
     """
     assert [name for name in PRODUCTION_ENV if name in os.environ] == []
+
+
+def test_the_scrub_covers_the_whole_snippet_agents_are_told_to_source():
+    """Every production variable that reaches a test, not only the two ADC ones.
+
+    ``/etc/replicator/.env`` also carries ``REPLICATOR_BLOB_BACKEND=gcs`` and the
+    production ``REPLICATOR_BLOB_BUCKET``, and AGENTS.md tells an agent to source
+    it before any repo command. Sourcing it and then running the documented
+    integration command failed the policy replay test on ``constructed a real
+    GcsBlobStore('co-gcs-blobs')`` — the construction guard doing its job, but
+    only after two documented procedures had contradicted each other, and reading
+    like a security incident rather than a config collision (CR round 2).
+
+    Membership in ``PRODUCTION_ENV`` is the assertion because that tuple is what
+    the autouse fixture scrubs; the absence check above then covers these two for
+    free, from inside a test that inherited whatever shell launched it.
+    """
+    assert {"REPLICATOR_BLOB_BACKEND", "REPLICATOR_BLOB_BUCKET"} <= set(PRODUCTION_ENV)
+    assert get_settings().blob_backend == "local"
 
 
 def test_the_test_bucket_variable_has_no_fallback():
