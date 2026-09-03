@@ -69,6 +69,37 @@ def test_consumer_name_override_still_wins(monkeypatch):
     assert get_settings().consumer_name == "replicator-fetch-2"
 
 
+def test_each_group_has_its_own_name_override(monkeypatch):
+    """One override per group, mirroring the two group settings themselves.
+
+    A single process-wide override applied to *both* loops, so the documented
+    dev-worker invocation registered a ``replicator-fetch-…`` name inside the
+    ``replicator.replicate`` group — a consumer whose name misstates its group,
+    which is the defect class #77 exists to remove (CR round 1).
+    """
+    monkeypatch.setenv("REPLICATOR_CONSUMER_NAME", "replicator-fetch-2")
+    monkeypatch.delenv("REPLICATOR_REPLICATE_CONSUMER_NAME", raising=False)
+
+    settings = get_settings()
+    assert settings.consumer_name == "replicator-fetch-2"
+    assert settings.replicate_consumer_name is None
+
+
+def test_the_two_command_groups_may_not_collide(monkeypatch):
+    """One group per stream. Sharing one would cross two command queues' PELs.
+
+    ``claim_stale`` walks a group's pending entries, so a single group spanning
+    both streams lets recovery on one reach into the other's. Refused at startup
+    rather than diagnosed later from a stuck stream, and it is also what makes
+    the group the sound discriminator for picking a name override (CR round 1).
+    """
+    monkeypatch.setenv("REPLICATOR_CONSUMER_GROUP", "replicator.shared")
+    monkeypatch.setenv("REPLICATOR_REPLICATE_CONSUMER_GROUP", "replicator.shared")
+
+    with pytest.raises(ValidationError, match="must name different groups"):
+        get_settings()
+
+
 def test_worst_case_outage_bounds_the_absorb_window(monkeypatch):
     """The figure the unit's StartLimitIntervalSec is sized against (CR #22)."""
     monkeypatch.setenv("REPLICATOR_MAX_CONSECUTIVE_CYCLE_FAILURES", "20")

@@ -13,6 +13,7 @@ import os
 import signal
 import stat
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,7 @@ from src.storage.local import LocalBlobStore
 from src.storage.sweeper import SweepResult
 from src.worker.main import (
     build_consumer,
+    consumer_name_for,
     install_signal_handlers,
     remove_signal_handlers,
     resolve_consumer_name,
@@ -51,6 +53,12 @@ def _short_poll_window(monkeypatch):
     """
     monkeypatch.setenv("REPLICATOR_READ_BLOCK_MS", "50")
     get_settings.cache_clear()
+
+
+# How long the end-to-end byte-path test waits for its fact to land. A liveness
+# bound, not a latency assertion: generous enough that a loaded machine does not
+# trip it, finite so a genuine hang still ends the run (CR round 1).
+BYTE_PATH_DEADLINE_SECONDS = 30.0
 
 
 def _stopped() -> asyncio.Event:
@@ -122,6 +130,71 @@ def test_consumer_name_is_derived_from_the_group():
     """
     assert resolve_consumer_name("replicator.fetch") == "replicator-fetch-1"
     assert resolve_consumer_name("replicator.replicate") == "replicator-replicate-1"
+
+
+def test_one_precedence_rule_serves_every_caller(monkeypatch):
+    """``consumer_name_for`` is the single site where an override beats the default.
+
+    It was written out three times — in ``build_consumer`` and once per journal
+    name — and the copies agreed only because their ``group`` arguments were kept
+    in step by hand. A journal line naming a consumer the broker never registered
+    sends an operator to ``XINFO`` after something that does not exist (CR round 1).
+    """
+    monkeypatch.delenv("REPLICATOR_CONSUMER_NAME", raising=False)
+    monkeypatch.delenv("REPLICATOR_REPLICATE_CONSUMER_NAME", raising=False)
+    settings = get_settings()
+
+    assert consumer_name_for(settings, settings.consumer_group) == "replicator-fetch-1"
+    assert (
+        consumer_name_for(settings, settings.replicate_consumer_group) == "replicator-replicate-1"
+    )
+
+
+def test_an_override_moves_only_its_own_group(monkeypatch):
+    """Overriding the fetch name must not rename the replicate consumer.
+
+    The dev-worker invocation the docs *require* while the service runs sets the
+    fetch override; when that also renamed the replicate consumer, the registration
+    in ``replicator.replicate`` read ``replicator-fetch-…`` (CR round 1).
+    """
+    monkeypatch.setenv("REPLICATOR_CONSUMER_NAME", "replicator-fetch-greg-dev")
+    monkeypatch.delenv("REPLICATOR_REPLICATE_CONSUMER_NAME", raising=False)
+    settings = get_settings()
+
+    assert consumer_name_for(settings, settings.consumer_group) == "replicator-fetch-greg-dev"
+    assert (
+        consumer_name_for(settings, settings.replicate_consumer_group) == "replicator-replicate-1"
+    )
+
+
+async def test_the_override_reaches_the_registration_it_names(fake_redis, monkeypatch):
+    """End to end at the broker: each override lands in its own group, and only it."""
+    monkeypatch.setenv("REPLICATOR_CONSUMER_NAME", "replicator-fetch-9")
+    monkeypatch.setenv("REPLICATOR_REPLICATE_CONSUMER_NAME", "replicator-replicate-9")
+    settings = get_settings()
+
+    fetch = build_consumer(fake_redis, settings)
+    replicate = build_consumer(
+        fake_redis,
+        settings,
+        topic=streams.CONTENT_REPLICATE,
+        group=settings.replicate_consumer_group,
+    )
+    for reader in (fetch, replicate):
+        await reader.ensure_group(start_id="$")
+        await reader.read(count=1, block_ms=1)
+
+    registered = {
+        topic: [c["name"] for c in await fake_redis.xinfo_consumers(topic, group)]
+        for topic, group in (
+            (streams.CONTENT_FETCH, settings.consumer_group),
+            (streams.CONTENT_REPLICATE, settings.replicate_consumer_group),
+        )
+    }
+    assert registered == {
+        streams.CONTENT_FETCH: [b"replicator-fetch-9"],
+        streams.CONTENT_REPLICATE: [b"replicator-replicate-9"],
+    }
 
 
 async def test_each_group_registers_under_its_own_derived_name(fake_redis, monkeypatch):
@@ -393,15 +466,36 @@ async def test_run_dispatches_to_the_byte_path(monkeypatch, fake_redis, tmp_path
     await fake_redis.xadd(streams.CONTENT_FETCH, make_command("cmd-wired"))
 
     stop = asyncio.Event()
+    published = asyncio.Event()
 
     async def stop_once_published():
-        for _ in range(500):
-            if await fake_redis.exists(streams.CONTENT_BLOBS):
-                break
-            await asyncio.sleep(0.01)
-        stop.set()
+        """Stop as soon as the fact lands, and record *whether* it ever did.
+
+        The bound is wall clock, so a loaded machine used to trip it silently: the
+        old spelling set ``stop`` on timeout exactly as it did on success, and the
+        test then died in ``LocalBlobStore.open`` with a bare ``FileNotFoundError``
+        that reads as a byte-path regression rather than the timeout it was. Set
+        generously — this is a liveness bound, not a latency assertion (CR round 1).
+        """
+        try:
+            deadline = time.monotonic() + BYTE_PATH_DEADLINE_SECONDS
+            while time.monotonic() < deadline:
+                if await fake_redis.exists(streams.CONTENT_BLOBS):
+                    published.set()
+                    return
+                await asyncio.sleep(0.01)
+        finally:
+            # In a ``finally`` so a timeout still releases ``run()``; leaving it
+            # blocked would hang the gather rather than fail the assertion below.
+            stop.set()
 
     await asyncio.gather(run(stop), stop_once_published())
+
+    assert published.is_set(), (
+        f"content.blobs never appeared within {BYTE_PATH_DEADLINE_SECONDS}s — the byte "
+        "path did not complete. On a loaded machine that is this bound expiring, not a "
+        "regression; check the machine before hunting in run()."
+    )
 
     fingerprint = sha256(b"page bytes")
     assert LocalBlobStore(blob_dir).open(fingerprint) == b"page bytes"
