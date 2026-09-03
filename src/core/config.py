@@ -177,8 +177,8 @@ class Settings(BaseSettings):
     consumer_group: str = Field(
         default="replicator.fetch", validation_alias="REPLICATOR_CONSUMER_GROUP"
     )
-    # An **override**, unset on every host — the name itself is derived from the
-    # group by ``src.worker.main.resolve_consumer_name`` (#77).
+    # The fetch group's consumer-name **override**, unset on every host — the name
+    # itself is derived from the group at the wiring seam (#77).
     #
     # It was host-derived (``replicator@{gethostname()}``), which is a leak with no
     # symptom until it fires: a consumer registration persists until an explicit
@@ -187,14 +187,13 @@ class Settings(BaseSettings):
     # only by an ``XAUTOCLAIM`` at ``min_idle_time``. Archiver reached seven
     # registrations on the production broker, six of them dead (archiver#156).
     #
-    # Derivation cannot live here as a field default: it needs the *group*, and
-    # there are two of them. A single process-wide name would collapse both
-    # registrations onto one string.
+    # Derivation cannot live here as a field default: it needs the *group*, and the
+    # group is not known until the reader is wired.
     #
-    # Set it to give a *second* member of a group its own PEL (slot ``-2`` upward),
-    # or to keep a dev worker's registration off the service's — the documented way
-    # to test a branch on this VM. Two workers sharing a name share a PEL, which
-    # makes independent ``claim_stale`` recovery impossible.
+    # Set it to give a *second* member of the fetch group its own PEL (slot ``-2``
+    # upward), or to keep a dev worker's registration off the service's — the
+    # documented way to test a branch on this VM. Two workers sharing a name share
+    # a PEL, which makes independent ``claim_stale`` recovery impossible.
     consumer_name: str | None = Field(default=None, validation_alias="REPLICATOR_CONSUMER_NAME")
 
     # How long a poll blocks waiting for a new message. Bounds worst-case
@@ -237,6 +236,16 @@ class Settings(BaseSettings):
     # `claim_stale` on one reach into the other's PEL.
     replicate_consumer_group: str = Field(
         default="replicator.replicate", validation_alias="REPLICATOR_REPLICATE_CONSUMER_GROUP"
+    )
+    # The replicate group's override, paired with its group exactly as the fetch
+    # pair above (CR round 1). One override per group and not one per *process*:
+    # a single name applied to both loops registered a ``replicator-fetch-…``
+    # consumer inside ``replicator.replicate``, so the name misstated its own
+    # group — the defect class #77 exists to remove, reintroduced through the one
+    # path the docs tell a developer to take. The names stayed distinct, so
+    # nothing shared a PEL; it was ``XINFO`` that lied.
+    replicate_consumer_name: str | None = Field(
+        default=None, validation_alias="REPLICATOR_REPLICATE_CONSUMER_NAME"
     )
 
     # Where the alias table lives, or None on a host that does not replicate.
@@ -374,6 +383,29 @@ class Settings(BaseSettings):
                 "REPLICATOR_BLOB_BACKEND=gcs needs REPLICATOR_BLOB_BUCKET — "
                 "there is no default bucket, and guessing one is how bytes land "
                 "somewhere nobody reads"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _the_command_groups_stay_distinct(self) -> "Settings":
+        """One group per command stream — refused at startup, not diagnosed later.
+
+        ``claim_stale`` walks a *group's* pending entries, so a single group
+        spanning both command streams lets recovery on one reach into the other's
+        PEL: a fetch consumer would claim replicate commands it has no handler for
+        and vice versa, and the resulting stall has no local symptom beyond two
+        streams that stop advancing.
+
+        It is also what makes the group a sound discriminator for picking a name
+        override (CR round 1) — with the two equal, "which override applies" has
+        no answer, and the wiring seam would have to invent one.
+        """
+        if self.consumer_group == self.replicate_consumer_group:
+            raise ValueError(
+                "REPLICATOR_CONSUMER_GROUP and REPLICATOR_REPLICATE_CONSUMER_GROUP "
+                f"must name different groups (both are {self.consumer_group!r}) — "
+                "one group across two command streams crosses their pending-entry "
+                "lists, and claim_stale on either would reach into the other's"
             )
         return self
 

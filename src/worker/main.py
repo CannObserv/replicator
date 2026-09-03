@@ -176,6 +176,34 @@ def resolve_consumer_name(group: str) -> str:
     return f"{group.replace('.', '-')}-1"
 
 
+def consumer_name_for(settings: Settings, group: str) -> str:
+    """This worker's name in ``group``: its own override, else the derivation.
+
+    **The single site for the precedence rule** (CR round 1). It was written out
+    at each of three call sites — the reader and the two journal lines — which
+    agreed only because their ``group`` arguments were kept in step by hand. A
+    journal line naming a consumer the broker never registered is worse than no
+    line at all: it sends an operator to ``XINFO`` after something that is not
+    there.
+
+    The override is **per group**, keyed off which group was asked for, because a
+    single process-wide name applied to both loops put a ``replicator-fetch-…``
+    consumer inside ``replicator.replicate``. Distinct names, so no shared PEL —
+    but a name that misstates its group is the defect #77 exists to remove, and
+    it arrived through the invocation the docs tell a developer to use.
+    ``_the_command_groups_stay_distinct`` is what makes the group a sound key.
+
+    An empty override (``REPLICATOR_CONSUMER_NAME=``) is falsy and so reads as
+    unset rather than registering a nameless consumer.
+    """
+    override = (
+        settings.replicate_consumer_name
+        if group == settings.replicate_consumer_group
+        else settings.consumer_name
+    )
+    return override or resolve_consumer_name(group)
+
+
 def build_consumer(
     client: Redis,
     settings: Settings,
@@ -200,17 +228,16 @@ def build_consumer(
     ``claim_stale`` walks a group's PEL, so a shared name would let recovery on
     one stream reach into the other's pending entries.
 
-    The consumer name is derived from whichever group that resolves to, so each
-    loop registers under its own (#77). ``REPLICATOR_CONSUMER_NAME`` overrides
-    both — which is safe, because a consumer name is scoped to its group and
-    ``claim_stale`` is a method on the reader, so it can never cross.
+    The consumer name comes from whichever group that resolves to, so each loop
+    registers under its own — its group's override if one is set, else the
+    derivation (#77, CR round 1).
     """
     resolved_group = group or settings.consumer_group
     return AsyncBusConsumer(
         client,
         topic=topic,
         group=resolved_group,
-        consumer=settings.consumer_name or resolve_consumer_name(resolved_group),
+        consumer=consumer_name_for(settings, resolved_group),
     )
 
 
@@ -549,15 +576,12 @@ async def run(
             client, settings, topic=replicate_topic, group=settings.replicate_consumer_group
         )
         # Recomputed rather than read back off the readers: AsyncBusConsumer keeps
-        # its consumer name private, and these are only for the journal. Pure
-        # functions of the same inputs ``build_consumer`` used, so they cannot
-        # drift from the names actually registered (#77).
-        fetch_consumer_name = settings.consumer_name or resolve_consumer_name(
-            settings.consumer_group
-        )
-        replicate_consumer_name = settings.consumer_name or resolve_consumer_name(
-            settings.replicate_consumer_group
-        )
+        # its consumer name private, and these are only for the journal. Through
+        # the same function ``build_consumer`` used, so the names logged are the
+        # names registered by construction rather than by two call sites agreeing
+        # (#77, CR round 1).
+        fetch_consumer_name = consumer_name_for(settings, settings.consumer_group)
+        replicate_consumer_name = consumer_name_for(settings, settings.replicate_consumer_group)
         # Host state, read once at boot: which destinations an operator
         # provisioned here. Unset means nothing is provisioned and every
         # replicate command is refused, which is the current state of every host
