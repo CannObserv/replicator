@@ -232,8 +232,14 @@ class Settings(BaseSettings):
     # config edit rather than a code change.
     # The second command stream's group (#29). Separate from consumer_group
     # because the two streams are separate command queues: one group per stream,
-    # competing consumers within each. Sharing a name across streams would make
-    # `claim_stale` on one reach into the other's PEL.
+    # competing consumers within each.
+    #
+    # **Not because a shared name would cross their PELs — it would not** (CR
+    # round 2). A group is identified by (stream key, group name), so one name on
+    # both streams is two unrelated groups with separate pending-entry lists;
+    # `test_a_group_name_is_scoped_to_its_stream` pins that against a live broker.
+    # `_the_command_groups_stay_distinct` still refuses the collision, for the
+    # narrower reason recorded there: the consumer-name override is keyed by group.
     replicate_consumer_group: str = Field(
         default="replicator.replicate", validation_alias="REPLICATOR_REPLICATE_CONSUMER_GROUP"
     )
@@ -388,24 +394,33 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _the_command_groups_stay_distinct(self) -> "Settings":
-        """One group per command stream — refused at startup, not diagnosed later.
+        """One group name per command stream — because the *override key* needs it.
 
-        ``claim_stale`` walks a *group's* pending entries, so a single group
-        spanning both command streams lets recovery on one reach into the other's
-        PEL: a fetch consumer would claim replicate commands it has no handler for
-        and vice versa, and the resulting stall has no local symptom beyond two
-        streams that stop advancing.
+        **Not for PEL safety, which was the reason this repo gave for years and it
+        is wrong** (CR round 2). A consumer group is identified by *(stream key,
+        group name)*, so the same name on ``content.fetch`` and
+        ``content.replicate`` creates two unrelated groups that merely spell alike:
+        their pending-entry lists are separate, and ``XAUTOCLAIM`` on one cannot
+        see the other's. ``tests/worker/test_main_integration.py`` pins that
+        against a live broker, since fakeredis is not the authority on what Redis
+        scopes.
 
-        It is also what makes the group a sound discriminator for picking a name
-        override (CR round 1) — with the two equal, "which override applies" has
-        no answer, and the wiring seam would have to invent one.
+        The real constraint is local and narrow: ``consumer_name_for`` picks which
+        name override applies by comparing against this group. With the two equal
+        the question has no answer, and the wiring seam would have to invent one —
+        so a config that makes it ambiguous is refused where it is written rather
+        than resolved arbitrarily at boot.
+
+        Legibility is the secondary reason and the older one: two same-named groups
+        in ``XINFO`` on a broker three services share is a reading someone gets
+        wrong under time pressure.
         """
         if self.consumer_group == self.replicate_consumer_group:
             raise ValueError(
                 "REPLICATOR_CONSUMER_GROUP and REPLICATOR_REPLICATE_CONSUMER_GROUP "
                 f"must name different groups (both are {self.consumer_group!r}) — "
-                "one group across two command streams crosses their pending-entry "
-                "lists, and claim_stale on either would reach into the other's"
+                "the consumer-name override is chosen by group, so two groups "
+                "spelled alike leave no way to tell which override applies"
             )
         return self
 

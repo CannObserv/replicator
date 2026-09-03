@@ -42,8 +42,9 @@ ExecStartPre=+/bin/bash -c 'mkdir -p /run/replicator && chown exedev:exedev /run
 # guard exists to close.
 #
 # REPLICATOR_ALLOW_ANY_CHECKOUT=1 in /etc/replicator/.env bypasses it. That is not
-# the documented way to test a branch on this VM (run the worker directly under a
-# distinct REPLICATOR_CONSUMER_NAME) — it is for testing this unit itself. The
+# the documented way to test a branch on this VM (run the worker directly under
+# distinct REPLICATOR_CONSUMER_NAME and REPLICATOR_REPLICATE_CONSUMER_NAME, one
+# per group) — it is for testing this unit itself. The
 # override still reaches this step even though the EnvironmentFile= lines appear
 # below it: EnvironmentFile= is a unit-level setting applied to every Exec*
 # process, not a sequential instruction, so its position in the file is not an

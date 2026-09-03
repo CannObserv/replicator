@@ -3,8 +3,9 @@
 ``replicator.service`` already asks, as an ``ExecStartPre`` running
 ``scripts/check_main_checkout.sh`` (#37, #48). The dev worker never does: the
 documented way to test a branch on this VM is ``uv run python -m
-src.worker.main`` under a distinct ``REPLICATOR_CONSUMER_NAME``, which involves
-no systemd and so runs no ``ExecStartPre``.
+src.worker.main`` under distinct consumer names — ``REPLICATOR_CONSUMER_NAME``
+*and* ``REPLICATOR_REPLICATE_CONSUMER_NAME``, one per group since CR round 2 —
+which involves no systemd and so runs no ``ExecStartPre``.
 
 That was harmless while replication was unprovisioned and every command refused.
 It stops being harmless the moment an alias table exists: ``AGENTS.md`` instructs

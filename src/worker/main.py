@@ -224,9 +224,14 @@ def build_consumer(
     operator's typo away, and there is no deployment that wants a different one.
 
     ``group`` defaults to the fetch group and is passed explicitly by the
-    replicate loop (#29). One group per *stream*, never one shared across both:
-    ``claim_stale`` walks a group's PEL, so a shared name would let recovery on
-    one stream reach into the other's pending entries.
+    replicate loop (#29). One group per *stream*, never one shared across both —
+    though **not** for the reason this docstring gave until CR round 2. A group is
+    identified by *(stream key, group name)*, so a shared name is two unrelated
+    groups with separate PELs, and ``claim_stale`` on one provably cannot reach the
+    other's (``test_a_group_name_is_scoped_to_its_stream``). The collision is
+    refused by ``_the_command_groups_stay_distinct`` because the consumer-name
+    override is keyed by group, and because two same-named groups in ``XINFO`` are
+    a misreading waiting to happen on a broker three services share.
 
     The consumer name comes from whichever group that resolves to, so each loop
     registers under its own — its group's override if one is set, else the
