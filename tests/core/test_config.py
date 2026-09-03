@@ -40,11 +40,33 @@ def test_build_id_is_unprefixed(monkeypatch):
     assert get_settings().build_id == "abc1234"
 
 
-def test_consumer_names_are_host_distinct(monkeypatch):
-    """Two workers sharing a consumer name would share a PEL and break recovery."""
+def test_the_hostname_never_reaches_the_consumer_name(monkeypatch):
+    """Unset by default — the name is derived from the *group*, at the wiring seam.
+
+    Host-derived was a leak with no symptom until it fired (#77, archiver#156): a
+    consumer registration persists until an explicit ``XGROUP DELCONSUMER``, which
+    nothing calls, so every hostname change minted a fresh one and abandoned the
+    old along with its PEL. It also misattributed — this VM's hostname is literally
+    ``watcher``, so Replicator's consumers read as Watcher's on a broker all three
+    services share.
+
+    The patched hostname is the assertion: it must not appear anywhere in the
+    settings, so no future default can quietly reintroduce the derivation.
+    """
     monkeypatch.delenv("REPLICATOR_CONSUMER_NAME", raising=False)
     monkeypatch.setattr("socket.gethostname", lambda: "vm-1")
-    assert get_settings().consumer_name == "replicator@vm-1"
+    assert get_settings().consumer_name is None
+
+
+def test_consumer_name_override_still_wins(monkeypatch):
+    """The override is how a *second* worker on one host gets its own PEL.
+
+    Two workers sharing a name would share a pending-entries list, which makes
+    independent ``claim_stale`` recovery impossible. The derived default names
+    slot 1; a second member is configured to ``-2``.
+    """
+    monkeypatch.setenv("REPLICATOR_CONSUMER_NAME", "replicator-fetch-2")
+    assert get_settings().consumer_name == "replicator-fetch-2"
 
 
 def test_worst_case_outage_bounds_the_absorb_window(monkeypatch):

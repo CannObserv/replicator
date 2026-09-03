@@ -31,6 +31,7 @@ from src.worker.main import (
     build_consumer,
     install_signal_handlers,
     remove_signal_handlers,
+    resolve_consumer_name,
     run,
     warn_if_unreachable,
 )
@@ -108,6 +109,59 @@ async def test_consumer_registers_under_the_configured_group(fake_redis, monkeyp
 
     consumers = await fake_redis.xinfo_consumers(streams.CONTENT_FETCH, "replicator.fetch")
     assert [c["name"] for c in consumers] == [b"replicator@test"]
+
+
+def test_consumer_name_is_derived_from_the_group():
+    """``replicator.fetch`` -> ``replicator-fetch-1`` (#77, archiver#156).
+
+    Derived from the group rather than written per caller, so the next group
+    consumer inherits the convention instead of copying a literal — and stable
+    across restarts *and* VM moves, which is the whole point: a restart reuses
+    its registration, so the orphan leak cannot recur and needs no periodic
+    sweep and no shutdown hook that a ``SIGKILL`` would skip anyway.
+    """
+    assert resolve_consumer_name("replicator.fetch") == "replicator-fetch-1"
+    assert resolve_consumer_name("replicator.replicate") == "replicator-replicate-1"
+
+
+async def test_each_group_registers_under_its_own_derived_name(fake_redis, monkeypatch):
+    """Two command streams, two groups, two names — with nothing configured.
+
+    The bug this closes is that both loops took a single process-wide
+    ``REPLICATOR_CONSUMER_NAME``, so the derivation has to be per-group or the
+    two registrations collapse back onto one string.
+
+    fakeredis registers a consumer on an empty poll where the live broker needs a
+    delivery (GH #3) — relied on here deliberately, so the assertion is about the
+    name ``build_consumer`` passed and not about decoding a payload for each of
+    two different command schemas.
+    """
+    monkeypatch.delenv("REPLICATOR_CONSUMER_NAME", raising=False)
+    get_settings.cache_clear()
+    settings = get_settings()
+
+    fetch = build_consumer(fake_redis, settings)
+    replicate = build_consumer(
+        fake_redis,
+        settings,
+        topic=streams.CONTENT_REPLICATE,
+        group=settings.replicate_consumer_group,
+    )
+    for reader in (fetch, replicate):
+        await reader.ensure_group(start_id="$")
+        await reader.read(count=1, block_ms=1)
+
+    registered = {
+        topic: [c["name"] for c in await fake_redis.xinfo_consumers(topic, group)]
+        for topic, group in (
+            (streams.CONTENT_FETCH, settings.consumer_group),
+            (streams.CONTENT_REPLICATE, settings.replicate_consumer_group),
+        )
+    }
+    assert registered == {
+        streams.CONTENT_FETCH: [b"replicator-fetch-1"],
+        streams.CONTENT_REPLICATE: [b"replicator-replicate-1"],
+    }
 
 
 async def test_ensure_group_is_idempotent(fake_redis):
@@ -257,6 +311,32 @@ async def test_worker_ready_reports_the_outage_window(monkeypatch, fake_redis, t
         root.handlers, root.level = saved_handlers, saved_level
 
     assert record["worst_case_outage_seconds"] == get_settings().worst_case_outage_seconds
+
+
+async def test_worker_ready_names_both_consumers(monkeypatch, fake_redis, tmp_path, capsys):
+    """One name per group in the journal, because there is no longer just one.
+
+    The line used to carry ``settings.consumer_name``, which is now the *override*
+    and unset on every host — logging it would print ``null`` and leave an operator
+    reading ``XINFO`` with nothing to match against (#77).
+    """
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.delenv("REPLICATOR_CONSUMER_NAME", raising=False)
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    get_settings.cache_clear()
+
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    try:
+        await run(_stopped())
+        record = json.loads(
+            next(ln for ln in capsys.readouterr().out.splitlines() if "worker ready" in ln)
+        )
+    finally:
+        root.handlers, root.level = saved_handlers, saved_level
+
+    assert record["consumer"] == "replicator-fetch-1"
+    assert record["replicate_consumer"] == "replicator-replicate-1"
 
 
 async def test_run_closes_the_fetch_driver(monkeypatch, fake_redis, tmp_path):
