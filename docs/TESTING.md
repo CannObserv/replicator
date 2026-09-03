@@ -39,10 +39,17 @@ makes production untestable (#38).
   wheelhouse reader `co-pypi-reader.json` stays legal, because
   `test_replicate_guards.py` names it on purpose to prove the path guard refuses
   a real secret.
-- **The fixtures** (`tests/conftest.py`, autouse). `REPLICATOR_REPLICATION_ALIASES_FILE`
-  and `GOOGLE_APPLICATION_CREDENTIALS` are removed from the environment of every
-  test — the Common Commands snippet sources `/etc/replicator/.env`, so `uv run
-  pytest` inherits both — and `AsyncGcsDriver.__init__` **and
+- **The fixtures** (`tests/conftest.py`, autouse). Four variables are removed from
+  the environment of every test — `REPLICATOR_REPLICATION_ALIASES_FILE`,
+  `GOOGLE_APPLICATION_CREDENTIALS`, `REPLICATOR_BLOB_BACKEND` and
+  `REPLICATOR_BLOB_BUCKET`. The Common Commands snippet sources
+  `/etc/replicator/.env`, so `uv run pytest` inherits all four. The blob pair was
+  added in #77 CR round 2, when sourcing that file and then running this document's
+  own `-m integration` command failed the policy-replay test on `constructed a real
+  GcsBlobStore('co-gcs-blobs')` — the construction guard working, but only after
+  two documented procedures had contradicted each other. `PRODUCTION_ENV` in
+  `tests/conftest.py` is the list; `test_the_scrub_covers_the_whole_snippet_agents_are_told_to_source`
+  pins the blob pair's membership. Alongside the scrub, `AsyncGcsDriver.__init__` **and
   `GcsBlobStore.__init__`** are patched to refuse any bucket. The refusal
   precedes the call through, because both constructors resolve ADC in their own
   body; checking afterwards would authenticate first and object second.
@@ -78,8 +85,21 @@ means the live VM Redis, which is local, free and routinely run, and a marker
 that also writes to a bucket changes what `-m integration` costs.
 
 ```bash
-uv run pytest --no-cov -m gcs
+REPLICATOR_TEST_GCS_CREDENTIALS=/etc/replicator/co-gcs-test-replicator.json \
+REPLICATOR_TEST_GCS_BUCKET=co-gcs-test-replication \
+REPLICATOR_TEST_BLOB_BUCKET=co-gcs-test-blobs \
+  uv run pytest --no-cov -m gcs
 ```
+
+**Run it explicitly after touching `_no_production_destination` or
+`PRODUCTION_ENV`.** With those three variables unset all twelve marked tests skip,
+and a plain `uv run pytest` then reports a clean pass with nothing saying a whole
+population was never exercised. That fixture is exactly the code whose blast radius
+*is* the skipped population: #77 CR round 2 widened `PRODUCTION_ENV` to scrub
+`REPLICATOR_BLOB_BACKEND`/`REPLICATOR_BLOB_BUCKET` and was called verified against
+suites in which every GCS test had skipped (it was in fact fine — the marked tests
+read `REPLICATOR_TEST_BLOB_BUCKET`, a different variable — but that was established
+a round later, by running them). `-rs` shows the skips if you want the reason.
 
 **What runs there.** `tests/worker/test_replicate_writer_gcs.py` — the three T4
 rows against the real bucket: absent writes and completes, a redelivery onto

@@ -46,7 +46,6 @@ from pathlib import Path
 import pytest
 from co_core_aio.gcs import AsyncGcsDriver
 
-from src.core.config import get_settings
 from src.storage.gcs import GcsBlobStore
 from tests.conftest import (
     PRODUCTION_ENV,
@@ -209,12 +208,16 @@ def test_the_scrub_covers_the_whole_snippet_agents_are_told_to_source():
     only after two documented procedures had contradicted each other, and reading
     like a security incident rather than a config collision (CR round 2).
 
-    Membership in ``PRODUCTION_ENV`` is the assertion because that tuple is what
-    the autouse fixture scrubs; the absence check above then covers these two for
-    free, from inside a test that inherited whatever shell launched it.
+    Membership in ``PRODUCTION_ENV`` is the whole assertion, because that tuple is
+    what the autouse fixture scrubs and membership is true or false regardless of
+    which shell launched the run. ``test_the_production_environment_is_not_visible_to_a_test``
+    then covers absence for every name in it.
+
+    An earlier version also asserted ``get_settings().blob_backend == "local"``,
+    which looks stronger and is weaker: on a fresh clone or in CI nothing exported
+    the variable, so it passed without the scrub having done anything (CR round 3).
     """
     assert {"REPLICATOR_BLOB_BACKEND", "REPLICATOR_BLOB_BUCKET"} <= set(PRODUCTION_ENV)
-    assert get_settings().blob_backend == "local"
 
 
 def test_the_test_bucket_variable_has_no_fallback():
