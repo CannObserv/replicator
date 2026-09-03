@@ -31,7 +31,7 @@ Python ≥3.12, uv, pytest, ruff. `ty` is available as a **non-gating** type che
 uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
 ```
 
-Auth is ADC. Pin the current minor — `>=0.10,<0.11` — and raise the **patch** floor with every co-core feature the code starts depending on: the reasoning, and the three ways a skew has already failed, in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+Auth is ADC. Pin the current minor — `>=0.13.1,<0.14` — and raise the **patch** floor with every co-core feature the code starts depending on: the reasoning, and the three ways a skew has already failed, in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 <!-- BEGIN socraticode-policy -->
 ## Code Exploration Policy
