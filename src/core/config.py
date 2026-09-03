@@ -16,8 +16,16 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from co_core.pure.adapters.bus import streams
+from co_core.pure.adapters.bus.streams import group_name
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# This service's segment in every consumer-group name it owns. One constant rather
+# than the literal at each ``group_name`` call: the two groups are the same
+# service, and a typo in one of two spellings creates a second real group at
+# ``ensure_group`` rather than failing.
+SERVICE_NAME = "replicator"
 
 # Also the default of ``build_replicate_handler``'s ``write_timeout_seconds``,
 # which imports it from here rather than repeating it (CR #43, #46): one number
@@ -174,8 +182,18 @@ class Settings(BaseSettings):
 
     # content.fetch carries command semantics => exactly one consumer group
     # cluster-wide, with competing consumers inside it.
+    #
+    # **Derived, not spelled** (cannobserv#384, co-core v0.13.1). The convention is
+    # `<service>.<stream-suffix>`, and it is co-core's to define — a literal here
+    # would be a second copy of a rule this repo does not own, free to drift the
+    # way the cluster's group naming already drifted once. Evaluates to
+    # "replicator.fetch", the name live on the broker, so this is a no-op today and
+    # a tripwire tomorrow: a convention change arrives with the wheel and fails a
+    # test, rather than reaching `ensure_group` and creating a *new empty group*
+    # beside the real one for the worker to read nothing from.
     consumer_group: str = Field(
-        default="replicator.fetch", validation_alias="REPLICATOR_CONSUMER_GROUP"
+        default=group_name(streams.CONTENT_FETCH, SERVICE_NAME),
+        validation_alias="REPLICATOR_CONSUMER_GROUP",
     )
     # The fetch group's consumer-name **override**, unset on every host — the name
     # itself is derived from the group at the wiring seam (#77).
@@ -241,7 +259,8 @@ class Settings(BaseSettings):
     # `_the_command_groups_stay_distinct` still refuses the collision, for the
     # narrower reason recorded there: the consumer-name override is keyed by group.
     replicate_consumer_group: str = Field(
-        default="replicator.replicate", validation_alias="REPLICATOR_REPLICATE_CONSUMER_GROUP"
+        default=group_name(streams.CONTENT_REPLICATE, SERVICE_NAME),
+        validation_alias="REPLICATOR_REPLICATE_CONSUMER_GROUP",
     )
     # The replicate group's override, paired with its group exactly as the fetch
     # pair above (CR round 1). One override per group and not one per *process*:

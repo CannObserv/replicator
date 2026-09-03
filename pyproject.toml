@@ -7,7 +7,37 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
-    # Floor is 0.9.4, and every floor since 0.8.0 has been chosen to fail *loudly*
+    # Floor is 0.13.1, for `group_name` — the group-naming convention became
+    # co-core's to define (cannobserv#384), so `src/core/config.py` derives both
+    # command-group defaults rather than spelling them. A *pure no-op at runtime*:
+    # both calls evaluate to `replicator.fetch` and `replicator.replicate`, the
+    # names already live on the broker (audited 2026-09-01). It buys the same thing
+    # the other floors buy — a convention change now arrives with the wheel and
+    # trips `test_the_group_defaults_are_derived_not_spelled`, instead of being
+    # something someone has to notice. The symptom it forecloses is the quiet one:
+    # a renamed convention spelled here as a literal reaches `ensure_group`, which
+    # creates a *new empty group* beside the real one, and the worker then reads a
+    # stream nothing is delivering to.
+    #
+    # **This is a three-minor jump (0.10 -> 0.13) and so a departure from "pin the
+    # current minor", taken deliberately and on evidence.** The silent-skew hazard
+    # the rule guards is payload fields moving under `extra="ignore"`; every module
+    # this service imports is byte-identical between 0.10.0 and 0.13.2 —
+    # `pure/models/changes.py`, `pure/adapters/bus/{envelope,exceptions}.py`,
+    # `effects/{bus,fetch,gcs}.py`, `pure/util/{hashing,gcs}.py`, and the whole of
+    # `co_core_aio` bar its `__version__` string. `streams.py` is the only surface
+    # that gained anything. Replicator imports no `co_v1` adapter, which is where
+    # 0.13.2's other changes landed. Verified by diffing the wheels, not inferred
+    # from the version numbers.
+    #
+    # Ceiling stays at the minor. Floor is 0.13.1 and not 0.13.2 because 0.13.1 is
+    # where `group_name` landed and `streams.py` is identical across the two — the
+    # floor names the feature depended on, per the rule in docs/DEPLOYMENT.md.
+    #
+    # Everything below is the history that rule was built from, kept because each
+    # entry records a failure mode rather than a version number.
+    #
+    # Floor was 0.9.4, and every floor since 0.8.0 has been chosen to fail *loudly*
     # rather than silently. The earlier ones (0.7.5's enriched fields, 0.7.7's
     # AsyncBusTailReader) guarded against extra="ignore" quietly discarding kwargs
     # an older wheel had no field for; 0.8.0 makes info_source_id **required** on
@@ -29,8 +59,8 @@ dependencies = [
     # at module load, so a skew cannot reach a running worker at all. Additive over
     # 0.8.0 for everything the fetch path uses — no field on ContentFetchCommand,
     # BlobAvailableEvent or FetchFailedEvent moved between the two.
-    "co-core[extract]>=0.10,<0.11",
-    "co-core-aio[bus,gcs]>=0.10,<0.11",
+    "co-core[extract]>=0.13.1,<0.14",
+    "co-core-aio[bus,gcs]>=0.13.1,<0.14",
     "fastapi>=0.126.0,<1",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.5.0,<3",
