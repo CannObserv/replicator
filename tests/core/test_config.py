@@ -3,6 +3,8 @@
 from pathlib import Path
 
 import pytest
+from co_core.pure.adapters.bus import streams
+from co_core.pure.adapters.bus.streams import group_name, stream_kind
 from pydantic import ValidationError
 
 from src.core.config import Settings, get_settings
@@ -38,6 +40,51 @@ def test_build_id_is_unprefixed(monkeypatch):
     """systemd's ExecStartPre stamps a generic BUILD_ID, not REPLICATOR_BUILD_ID."""
     monkeypatch.setenv("BUILD_ID", "abc1234")
     assert get_settings().build_id == "abc1234"
+
+
+def test_the_group_defaults_are_derived_not_spelled(monkeypatch):
+    """Both group names come from co-core's ``group_name``, not from literals.
+
+    The convention is co-core's to define — ``<service>.<stream-suffix>``
+    (cannobserv#384, v0.13.1) — so spelling the results here is a second copy of a
+    rule this repo does not own, free to drift the way the group-naming rule
+    already did once cluster-wide. Deriving them means a convention change arrives
+    with the wheel rather than needing to be noticed.
+
+    Pure no-op at runtime, and that is the point: both calls evaluate to the
+    strings already live on the broker, audited 2026-09-01 (#384). A version that
+    changed either would fail here rather than at ``ensure_group``, where the
+    symptom is a *new empty group* beside the real one and a worker that reads
+    nothing.
+    """
+    for var in ("REPLICATOR_CONSUMER_GROUP", "REPLICATOR_REPLICATE_CONSUMER_GROUP"):
+        monkeypatch.delenv(var, raising=False)
+
+    settings = get_settings()
+    assert settings.consumer_group == group_name(streams.CONTENT_FETCH, "replicator")
+    assert settings.replicate_consumer_group == group_name(streams.CONTENT_REPLICATE, "replicator")
+    # The literals, asserted once beside the derivation: what is on the broker
+    # today, so a wheel that changed the convention cannot pass quietly.
+    assert (settings.consumer_group, settings.replicate_consumer_group) == (
+        "replicator.fetch",
+        "replicator.replicate",
+    )
+
+
+def test_the_policy_stream_takes_no_group():
+    """`content.fetch-policy` is config/state — groupless, and now machine-checkable.
+
+    Replicator reads it with no group, no ack and no DLQ. That was a rule stated in
+    prose and enforced only by `policy.py` doing the right thing; since v0.13.1 the
+    taxonomy is queryable, so the rule can be asserted against co-core's own
+    classification rather than restated here.
+    """
+    assert stream_kind(streams.CONTENT_FETCH_POLICY) == "config_state"
+    assert stream_kind(streams.CONTENT_FETCH) == "command"
+    assert stream_kind(streams.CONTENT_REPLICATE) == "command"
+
+    with pytest.raises(ValueError, match="no consumer group"):
+        group_name(streams.CONTENT_FETCH_POLICY, "replicator")
 
 
 def test_the_hostname_never_reaches_the_consumer_name(monkeypatch):
