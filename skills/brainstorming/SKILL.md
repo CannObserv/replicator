@@ -7,6 +7,7 @@ metadata:
   version: "1.0"
   triggers: brainstorm, design this, let's design
   overrides: obra-superpowers/brainstorming
+  synced-from: "obra-superpowers v6.2.0 (05d90ac)"
   override-reason: "Project-specific conventions: docs/plans/ path, #<n> [type]: desc commit convention, writing-plans is optional not mandatory; invokes using-git-worktrees after design approval for any multi-step implementation; FastAPI stack context"
 ---
 
