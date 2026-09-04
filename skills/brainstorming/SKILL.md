@@ -4,7 +4,6 @@ description: Explores user intent, requirements, and design before any implement
 compatibility: Designed for Claude. Requires git and gh CLI. Python project using FastAPI, Pydantic, uv, ruff, pytest.
 metadata:
   author: gregoryfoster
-  version: "1.1"
   triggers: brainstorm, design this, let's design
   overrides: obra-superpowers/brainstorming
   synced-from: "obra-superpowers v6.3.0 (b36e082)"
@@ -185,6 +184,7 @@ Report the issue number to the user (e.g. "Opened #42").
 
 **Set up a worktree (multi-step implementation):**
 - Invoke `using-git-worktrees` to create an isolated workspace on a feature branch
+- Use `.worktrees/` as the local directory (verify it is gitignored first)
 - The service deploys whatever HEAD the main checkout is on — never leave it on a branch
 - Skip for single-commit or directed fixes where isolation adds no value
 
