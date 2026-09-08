@@ -26,6 +26,7 @@ from co_core_aio.fetch import AsyncFetchDriver
 from co_core_aio.gcs import AsyncGcsDriver
 from redis.asyncio import Redis
 
+from src.core.bus_client import build_bus_client
 from src.core.config import Settings, get_settings
 from src.core.logging import configure_logging, get_logger
 from src.storage.base import BlobStore
@@ -552,7 +553,11 @@ async def run(
     store, blob_dir = _prepare_storage(settings)
 
     owns_signals = stop is None
-    client = Redis.from_url(settings.redis_url)
+    # Explicit connection policy (CannObserv/broker#1 R7). The bare from_url
+    # this replaces was safe only while the broker was on loopback; see
+    # src/core/bus_client.py for why the socket timeout is a floor derived from
+    # the live read_block_ms rather than a value chosen for tightness.
+    client = build_bus_client(settings)
     # Constructed inside the try, like the signal handlers: anything opened
     # between here and the try would leak the Redis client if it raised.
     fetcher: AsyncFetchDriver | None = None
