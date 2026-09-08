@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/skills-submodule-update.sh\""
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/socraticode-health.sh\" # socraticode-health"
           }
         ]
       },
@@ -24,7 +24,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/socraticode-health.sh\" # socraticode-health"
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/skills-submodule-update.sh\"",
+            "timeout": 120
           }
         ]
       }
