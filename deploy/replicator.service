@@ -1,10 +1,19 @@
 [Unit]
 Description=replicator — retrieval, fingerprinting, and temporary storage layer for the Cannabis Observer cluster
-# The Redis change bus is Archiver-operated cluster infrastructure. Wants=/After=
-# (not Requires=) orders the worker behind the broker without hard-failing when
-# it is absent — the floor check below is the guard that actually blocks.
-After=network.target redis-server.service
-Wants=redis-server.service
+# The redis-server ordering is GONE, not loosened (CannObserv/broker#1 Phase 3).
+# The change bus moved to a neutral node reached over the tailnet, so there is
+# no local unit to order behind.
+#
+# Removing `Wants=` is the load-bearing half. It is a *dependency*, not just an
+# ordering: while it stood, starting this worker pulled the retired local
+# redis-server back up — observed during the cutover, after the broker's data
+# had already been copied away. A resurrected empty broker that nothing points
+# at is harmless; one that something later points at is not.
+#
+# The reasoning it replaces still holds: the broker is cluster infrastructure
+# this worker only consumes, its absence must never hard-fail the start, and the
+# floor check below remains the guard that actually blocks.
+After=network.target
 # Bound restart loops at BOTH timescales, then stay failed (visible in
 # systemctl status + OnFailure=) instead of restarting forever.
 #
