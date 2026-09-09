@@ -104,9 +104,9 @@ convention:
 1. **`/etc/replicator/.env`** — production config. **The only file `replicator.service` reads.**
 2. **`.env`** (repo root, git-ignored) — dev/agent secrets, chiefly org-wide GitHub PATs. Never commit.
 
-**The service must never load the repo `.env`.** Those PATs carry write access a
-process whose job is fetching public URLs must not widen the blast radius of;
-anything the service needs goes in `/etc/replicator/.env`.
+**The service must never load the repo `.env`.** Those PATs carry write access the
+worker has no use for, and a fetcher of public URLs must not widen their blast
+radius. Anything the service needs goes in `/etc/replicator/.env`.
 
 New settings take the `REPLICATOR_` prefix — the VM is shared, and the prefix is
 what keeps a sibling service from colliding. `BUILD_ID` is the one deliberate
