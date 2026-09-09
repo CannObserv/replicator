@@ -40,7 +40,7 @@ from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
 from co_core.pure.models.changes import ContentFetchCommand, ContentReplicateCommand
 from co_core_aio.bus import AsyncBusConsumer
 from redis.asyncio import Redis
-from redis.exceptions import BusyLoadingError, OutOfMemoryError
+from redis.exceptions import BusyLoadingError, NoPermissionError, OutOfMemoryError
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
@@ -101,6 +101,23 @@ _TRANSIENT_ERRORS: tuple[type[Exception], ...] = (
     # ``fetch_failed(handler_error)`` for bytes that stored fine and are sitting on
     # disk — store-then-publish means the OOM lands after the write.
     OutOfMemoryError,
+    # A broker refusing a command the *credential* is not granted (#82,
+    # archiver#193 Phase 1). A second ``ResponseError`` subclass that is somebody
+    # else's incident, listed for ``OutOfMemoryError``'s reasons and one sharper
+    # one: an ACL is edited by hand. broker#1 scopes each service to its own
+    # topics, so a missing ``+xadd``, a pattern that omits ``content.blobs``, or a
+    # typo produces this against commands that are perfectly valid — and the
+    # unclassified arm would burn the ceiling and then close them with a terminal
+    # ``fetch_failed(handler_error)``, telling issuers their bytes are never
+    # coming about a fault one ``ACL SETUSER`` fixes. Bytes already stored would
+    # become orphans no fact references.
+    #
+    # The trade is stated rather than assumed: a grant that is *never* fixed
+    # retries forever instead of dead-lettering, so a permanent mistake stays out
+    # of ``<topic>.dlq`` and lives in the journal at every reclaim. That is the
+    # side to be wrong on — a wrong terminal fact is unrepairable by the consumer
+    # and a stuck PEL entry is not — and it is what archiver chose.
+    NoPermissionError,
 )
 
 # Bound on consecutive poison frames stepped over before a reader pauses.

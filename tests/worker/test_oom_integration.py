@@ -27,6 +27,11 @@ not defensive decoration: writing this issue up found port 6399 already occupied
 by a sibling service's identical experiment, and the first probe run silently
 reconfigured *its* cap).
 
+**A second refusal shape, since #82.** A broker this module owns can also be made
+to refuse a write for the *other* reason broker#1 introduces — an ACL that does
+not grant it. The apparatus is the same one, so the denial is exercised here
+rather than in a module of its own: ``test_an_acl_denial_is_retried_like_a_cap``.
+
 ``REPLICATOR_TEST_REDIS_URL`` is deliberately never read here. That variable names
 the Archiver-operated broker, which is exactly the server this module must not
 touch.
@@ -50,7 +55,7 @@ from co_core.pure.models.changes import (
 )
 from co_core_aio.bus import AsyncBusConsumer
 from redis.asyncio import Redis
-from redis.exceptions import OutOfMemoryError, ResponseError
+from redis.exceptions import NoPermissionError, OutOfMemoryError, ResponseError
 
 from src.core.config import get_settings
 from src.core.errors import (
@@ -351,6 +356,35 @@ async def broker(capped_server) -> AsyncGenerator[CappedBroker]:
 
 
 @pytest.fixture
+async def denied_client(broker, topic, blobs_topic) -> AsyncGenerator[Redis]:
+    """A client whose credential reaches the command stream and not the fact stream.
+
+    The denial is a **key-pattern** one, which is the shape broker#1's draft is
+    most likely to get wrong: omitting a topic from a service's ``~`` patterns is
+    a quieter mistake than forgetting a command, and it is the one that produced
+    archiver's ``content.blobs`` boundary becoming enforcement rather than
+    documentation. ``+@all`` on purpose — restricting commands too would leave
+    ambiguous which half of the ACL refused the write.
+
+    The user is dropped in teardown: ``ACL SETUSER`` survives ``FLUSHALL``, so the
+    ``broker`` fixture's reset does not reach it and a leaked user would still be
+    on the instance for every later test in the session.
+    """
+    user = f"denied-{uuid.uuid4().hex[:8]}"
+    password = uuid.uuid4().hex
+    await broker.client.execute_command(
+        "ACL", "SETUSER", user, "on", f">{password}", f"~{topic}", f"~{dlq_name(topic)}", "+@all"
+    )
+    url = broker.client.connection_pool.connection_kwargs
+    client = Redis(host=url["host"], port=url["port"], username=user, password=password)
+    try:
+        yield client
+    finally:
+        await client.aclose()
+        await broker.client.execute_command("ACL", "DELUSER", user)
+
+
+@pytest.fixture
 def oom_settings():
     """Production settings with this module's identity and its short timers."""
     return get_settings().model_copy(
@@ -490,6 +524,61 @@ async def test_a_full_cap_refuses_a_publish_as_out_of_memory(broker, blobs_topic
     assert isinstance(raised.value, ResponseError)
     assert "used memory > 'maxmemory'" in str(raised.value)
     assert isinstance(raised.value, _TRANSIENT_ERRORS)
+
+
+async def test_an_acl_denial_is_retried_like_a_cap(
+    broker, topic, consumer, blobs_topic, denied_client, oom_settings, tmp_path
+):
+    """#82: a grant the operator got wrong must not close a valid command.
+
+    The second refusal broker#1 introduces, and the one this service was alone in
+    handling badly. ``NoPermissionError`` is a ``ResponseError`` subclass, so
+    before #82 it reached ``_handle_unclassified``, burnt the delivery ceiling
+    over five reclaims and then dead-lettered — closing a perfectly valid command
+    with a terminal ``fetch_failed(handler_error)`` about a fault one
+    ``ACL SETUSER`` fixes, and orphaning bytes already on disk.
+
+    Driven through the **real** publish path against a **real** denial: the
+    handler holds a credential that may write the command stream and its DLQ and
+    not the fact stream, which is precisely the mistake of omitting a topic from a
+    service's key patterns. The loop's own plumbing stays on the owning client, so
+    what is under test is the classification of the publish rather than an
+    ACL-scoped consume path the cutover has not settled yet.
+
+    The outcome is the cap's outcome, and deliberately so: retry, nothing acked,
+    nothing announced, nothing dead-lettered. An ACL that is never fixed retries
+    forever rather than dead-lettering — the trade ``_TRANSIENT_ERRORS`` states.
+    """
+    # The refusal itself, so a test that later stopped denying anything is visible
+    # rather than silently green.
+    with pytest.raises(NoPermissionError):
+        await denied_client.xadd(blobs_topic, {"event_type": "blob_available"})
+
+    message = await deliver(broker, consumer, topic, command_id="cmd-denied")
+    handler = build_handler(
+        fetcher=FakeFetcher(),
+        store=LocalBlobStore(tmp_path),
+        client=denied_client,
+        settings=oom_settings,
+        blobs_topic=blobs_topic,
+    )
+
+    outcome = await process_message(
+        message,
+        client=broker.client,
+        consumer=consumer,
+        group=GROUP,
+        handler=handler,
+        settings=oom_settings,
+        reporter=collected_reports(),
+        spec=FETCH_SPEC,
+    )
+
+    assert outcome is Outcome.RETRY
+    assert await pending_count(broker.client, topic) == 1
+    assert await broker.client.exists(dlq_name(topic)) == 0
+    assert await broker.client.exists(blobs_topic) == 0
+    assert await broker.client.exists(FETCH_SPEC.dedupe_key("cmd-denied")) == 0
 
 
 async def test_the_consume_path_still_runs_while_the_cap_bites(broker, topic, consumer):

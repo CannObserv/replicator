@@ -12,7 +12,7 @@ import pytest
 from co_core.pure.adapters.bus.streams import dlq_name
 from co_core.pure.models.changes import ContentFetchCommand
 from redis.exceptions import ConnectionError as RedisConnectionError
-from redis.exceptions import OutOfMemoryError
+from redis.exceptions import NoPermissionError, OutOfMemoryError
 
 from src.core.errors import FailureReason, PermanentFetchError, TransientFetchError
 from src.storage.local import LocalBlobStore
@@ -115,6 +115,52 @@ async def test_an_oom_at_the_ceiling_does_not_close_a_command_whose_bytes_stored
     assert outcome is Outcome.RETRY
     assert await fake_redis.xlen(dlq_name(TOPIC)) == 0
     assert reports.reports == []
+
+
+async def test_an_acl_denial_retries_rather_than_dead_lettering(
+    fake_redis, consumer, settings, monkeypatch
+):
+    """#82: a broker-side grant is somebody else's incident, not this command's fault.
+
+    ``NoPermissionError`` is a ``ResponseError`` subclass, so it reaches
+    ``_handle_unclassified`` exactly as ``OutOfMemoryError`` did before #20 — and
+    the consequence is worse than a burnt counter. A mistyped rule at
+    CannObserv/broker#2's ACL cutover would retry to the ceiling and then close a
+    *valid* command with a terminal ``fetch_failed(handler_error)``, telling the
+    issuer its bytes are never coming about a fault an operator fixes with one
+    ``ACL SETUSER``. Bytes already stored become orphans no fact references.
+
+    The landmine is ``test_a_flapping_memory_cap_never_burns_the_delivery_counter``'s,
+    for its reason: the counter belongs to the broker, so "was not consulted" is
+    the only observable form of "was not spent".
+
+    Archiver classified ``NOPERM`` transient in CannObserv/archiver#193 Phase 1;
+    watcher's loops classify by nothing and back off already. Replicator's loop
+    classifies by type, which is why it is the participant that needed this.
+    """
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-noperm"))
+
+    async def landmine(*args, **kwargs):
+        raise AssertionError("an ACL denial must not read the delivery counter")
+
+    monkeypatch.setattr("src.worker.loop._delivery_count", landmine)
+    reports = collected_reports()
+
+    async def handler(command: ContentFetchCommand) -> None:
+        raise NoPermissionError(
+            "this user has no permissions to access one of the keys used as arguments"
+        )
+
+    message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
+    outcome = await process_one(fake_redis, consumer, settings, message, handler, reporter=reports)
+
+    assert outcome is Outcome.RETRY
+    assert (await fake_redis.xpending(TOPIC, GROUP))["pending"] == 1
+    assert await fake_redis.xlen(dlq_name(TOPIC)) == 0
+    # No fact either: a non-terminal failure closes nothing, so the issuer's
+    # reaper (MUST-6) is what bounds the wait rather than a wrong terminal fact.
+    assert reports.reports == []
+    assert not await fake_redis.exists(FETCH_SPEC.dedupe_key("cmd-noperm"))
 
 
 async def test_a_permanent_failure_is_dead_lettered(fake_redis, consumer, settings):
