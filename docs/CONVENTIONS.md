@@ -177,6 +177,18 @@ together. So on any future restore or `db0` incident, the dedupe keys are the
 cheapest thing in the blast radius, and the exposure they represent is one TTL
 window of re-fetches, not one TTL window of anything unguarded.
 
+**One thing does lose them on their own, and it is a broker-side setting.** These
+are the only keys Replicator writes with a TTL, and on a broker whose other
+tenants write streams they may be the only volatile keys on `db0` at all — so a
+`maxmemory-policy` of `volatile-lru` or `volatile-ttl` under pressure would evict
+*precisely* this namespace and nothing else, leaving every PEL intact and every
+issuer none the wiser. That is the one route to the state the epic's fresh-start
+plan feared without a restore, it is reachable by a config change Replicator does
+not own, and it is silent. `noeviction` forecloses it by refusing the write
+instead (#79), which is why the cap behaves as a publishing incident here rather
+than a data one. Observed 2026-09-09: `maxmemory 536870912`, `maxmemory-policy
+noeviction`. Anyone changing that policy should read this paragraph first.
+
 **Why they belong on the change bus.** Endorsed deliberately, not tolerated. This
 is not application state: Replicator holds no domain vocabulary and no database
 by charter ([contracts/replicator-boundaries.md](contracts/replicator-boundaries.md)),
