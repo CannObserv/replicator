@@ -42,7 +42,6 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 
 import pytest
-from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.streams import dlq_name
 from co_core.pure.models.changes import ContentFetchCommand, FetchFailedEvent
 from co_core_aio.bus import AsyncBusConsumer
@@ -92,8 +91,12 @@ BALLAST_BYTES = 512
 # cap from a fresh instance at this size.
 MAX_BALLAST_ENTRIES = 20_000
 
-# Where ``cap()`` checks that the refusal is *sticky*. One tiny entry, on its own
-# key so a test reading the ballast is not reading this as well.
+# The stream the fill writes to, and the one ``cap()`` checks the refusal is
+# *sticky* on. Constants rather than literals at the two call sites because
+# ``relieve()`` has to drop exactly what ``cap()`` wrote: two spellings that
+# drifted would leave the ballast behind, and only the fixture's ``flushall``
+# would catch it.
+BALLAST_TOPIC = "replicator.oomtest.ballast"
 CANARY_TOPIC = "replicator.oomtest.canary"
 
 # Timers for the loop-level tests. Production is 60s/5s; the properties here are
@@ -108,8 +111,10 @@ BACKOFF_MAX_SECONDS = 0.1
 # second.
 RECOVERY_TIMEOUT_SECONDS = 15
 
-# How long the spawned broker gets to answer its first PING.
+# How long the spawned broker gets to answer its first PING, and how long it
+# gets to exit on a SIGTERM before it is killed outright.
 STARTUP_TIMEOUT_SECONDS = 10
+SHUTDOWN_TIMEOUT_SECONDS = 5
 
 # The gap between two looks at a state only the broker can change.
 POLL_INTERVAL_SECONDS = 0.05
@@ -157,17 +162,26 @@ class CappedBroker:
         payload = "x" * BALLAST_BYTES
         for written in range(MAX_BALLAST_ENTRIES):
             try:
-                await self.client.xadd("replicator.oomtest.ballast", {"payload": payload})
+                await self.client.xadd(BALLAST_TOPIC, {"payload": payload})
             except OutOfMemoryError:
-                if await self._refuses_a_small_write():
+                if await self.refuses_writes():
                     return written
         raise AssertionError(
             f"{MAX_BALLAST_ENTRIES} writes at {BALLAST_BYTES}B did not reach a "
             f"{CAP_BYTES}B cap — this broker is not enforcing maxmemory"
         )
 
-    async def _refuses_a_small_write(self) -> bool:
-        """Whether a write too small to matter is refused as well."""
+    async def refuses_writes(self) -> bool:
+        """Whether the broker refuses a write too small to matter.
+
+        **The state is asked of the broker, not computed from `INFO memory`.**
+        Comparing ``used_memory`` against ``maxmemory`` looks equivalent and is
+        not: the two sit within a few hundred bytes of each other once the cap
+        is reached, and the argument buffer of whichever command is running
+        counts toward the first number (see ``BALLAST_BYTES``). A test asserting
+        the cap still bites would read a momentary dip as "uncapped" and fail a
+        run that was behaving correctly. An actual refusal cannot be misread.
+        """
         try:
             await self.client.xadd(CANARY_TOPIC, {"payload": "."})
         except OutOfMemoryError:
@@ -183,12 +197,7 @@ class CappedBroker:
         remedy this models.
         """
         await self.client.config_set("maxmemory", 0)
-        await self.client.delete("replicator.oomtest.ballast", CANARY_TOPIC)
-
-    async def is_capped(self) -> bool:
-        """Whether the next ``XADD`` would be refused, per the broker's own numbers."""
-        memory = await self.client.info("memory")
-        return bool(memory["maxmemory"]) and memory["used_memory"] > memory["maxmemory"]
+        await self.client.delete(BALLAST_TOPIC, CANARY_TOPIC)
 
 
 def _free_port() -> int:
@@ -265,12 +274,16 @@ async def capped_server(tmp_path_factory) -> AsyncGenerator[Redis]:
         yield client
     finally:
         await client.aclose()
-        with contextlib.suppress(ProcessLookupError):
+        if process.returncode is None:
             process.terminate()
-        with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(process.wait(), timeout=5)
-        with contextlib.suppress(ProcessLookupError):
-            process.kill()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=SHUTDOWN_TIMEOUT_SECONDS)
+            except TimeoutError:
+                # Killed *and* awaited: an unreaped child is a zombie for the
+                # rest of the session, which is a cheap thing to get wrong in a
+                # fixture other fixtures get copied from.
+                process.kill()
+                await process.wait()
 
 
 @pytest.fixture
@@ -295,8 +308,10 @@ def oom_settings():
     """Production settings with this module's identity and its short timers."""
     return get_settings().model_copy(
         update={
+            # No ``consumer_name``: the ``consumer`` fixture passes ``CONSUMER``
+            # to ``AsyncBusConsumer`` directly, so a setting here would look
+            # wired and change nothing.
             "consumer_group": GROUP,
-            "consumer_name": CONSUMER,
             "claim_min_idle_ms": CLAIM_MIN_IDLE_MS,
             "read_block_ms": READ_BLOCK_MS,
             "error_backoff_base_seconds": BACKOFF_BASE_SECONDS,
@@ -387,7 +402,7 @@ async def times_delivered(client, topic: str, message_id: str) -> int:
     return int(entries[0]["times_delivered"])
 
 
-async def test_a_full_cap_refuses_a_publish_as_out_of_memory(broker):
+async def test_a_full_cap_refuses_a_publish_as_out_of_memory(broker, blobs_topic):
     """The exception the rest of this module is about, produced by a real broker.
 
     ``OutOfMemoryError`` subclasses ``ResponseError`` — the family that otherwise
@@ -400,7 +415,7 @@ async def test_a_full_cap_refuses_a_publish_as_out_of_memory(broker):
 
     assert written, "the cap must be reached by writing, not arrive pre-reached"
     with pytest.raises(OutOfMemoryError) as raised:
-        await broker.client.xadd(streams.CONTENT_BLOBS, {"event_type": "blob_available"})
+        await broker.client.xadd(blobs_topic, {"event_type": "blob_available"})
 
     assert isinstance(raised.value, ResponseError)
     assert "used memory > 'maxmemory'" in str(raised.value)
@@ -411,18 +426,29 @@ async def test_the_consume_path_still_runs_while_the_cap_bites(broker, topic, co
     """Only ``denyoom`` commands are refused, and the consume path holds none.
 
     This is why an OOM is a *publishing* incident for Replicator rather than a
-    total one: the frame can still be read, its PEL entry inspected, reclaimed and
-    acked while the broker refuses every write that grows the dataset. It is also
-    the inventory the OOM record rests on, taken from the server rather than from
-    ``COMMAND INFO`` — the flags say which commands *are* ``denyoom``; this says
-    what that means for the four calls the loop actually makes.
+    total one: the frame can still be read, its PEL entry inspected, re-read,
+    reclaimed and acked while the broker refuses every write that grows the
+    dataset. It is also the evidence behind the command list in
+    ``docs/CONVENTIONS.md``, so it asserts every command that list names — taken
+    from the server rather than from ``COMMAND INFO``, whose flags say which
+    commands *are* ``denyoom`` without saying what that leaves the loop able to do.
+
+    **The reclaim is asserted by what it returned, not by its not raising.** An
+    ``XAUTOCLAIM`` that takes nothing is not evidence it would have taken
+    something, which is the vacuous assertion ``test_main_integration.py`` already
+    had to be rewritten to avoid (CR round 3). Not raising is the *other* half —
+    a refused command raises — and both are worth having.
     """
     await broker.client.xadd(topic, make_command(command_id="cmd-before-the-cap"))
     await broker.cap()
 
     (message,) = await consumer.read(count=1, block_ms=READ_BLOCK_MS)
     assert await broker.client.xpending(topic, GROUP)
-    assert await broker.client.xautoclaim(topic, GROUP, CONSUMER, 0, "0-0") is not None
+    assert [entry[0].decode() for entry in await broker.client.xrange(topic)] == [
+        message.message_id
+    ]
+    _cursor, claimed, _deleted = await broker.client.xautoclaim(topic, GROUP, CONSUMER, 0, "0-0")
+    assert [entry[0].decode() for entry in claimed] == [message.message_id]
     assert await broker.client.exists(FETCH_SPEC.dedupe_key("cmd-before-the-cap")) == 0
     assert await broker.client.execute_command("PING")
     await consumer.ack(message.message_id)
@@ -544,7 +570,7 @@ async def test_the_loop_completes_the_command_once_the_cap_clears(
             pending(broker.client, topic, 1),
             what="the loop took delivery of the command",
         )
-        assert await broker.is_capped()
+        assert await broker.refuses_writes()
         assert await broker.client.exists(blobs_topic) == 0
 
         await broker.relieve()
@@ -668,7 +694,17 @@ async def test_a_sustained_cap_on_the_closing_path_retries_rather_than_exiting(
     )
     try:
         await wait_for(
-            delivered_at_least(broker.client, topic, message_id, settings.max_delivery_attempts),
+            delivered_at_least(
+                broker.client,
+                topic,
+                message_id,
+                # The setting this test overrides, not the delivery ceiling: one
+                # reclaim is one refused dead-letter, so more of them than the
+                # cycle-failure ceiling admits *consecutively* is the whole
+                # claim. Keyed to `max_delivery_attempts` it would have been an
+                # accident that the numbers happened to be ordered right.
+                settings.max_consecutive_cycle_failures + 1,
+            ),
             what="the loop retried the refused dead-letter past the cycle-failure ceiling",
         )
         assert not loop.done(), "the loop exited instead of riding the cap out"
