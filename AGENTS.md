@@ -173,6 +173,15 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
   got wrong backs off instead of closing valid commands with a terminal
   `fetch_failed(handler_error)`. The cost is deliberate: a grant nobody fixes
   retries forever rather than reaching `<topic>.dlq`.
+- **The `replicator:cmd:*` keys are the only non-stream keys Replicator puts on
+  the broker (#80).** Per-stream dedupe: `SET NX EX` after a close that *completes*
+  a command, `EXISTS` before the handler, and nothing else — no `GET`, no `DEL`, so
+  the value is an operator's join key and not a mechanism. Set-after-success means
+  losing them costs re-fetches for one TTL window and never correctness, and a
+  `db0` that loses them has lost the PELs too. They are bus state on the bus, not a
+  role blur — endorsed, with the reasoning and the four answers broker#1 asked for,
+  in [docs/CONVENTIONS.md#the-replicatorcmd-keys](docs/CONVENTIONS.md#the-replicatorcmd-keys). `tests/test_broker_keyspace.py` keeps that
+  section true.
 - **Consumers must be idempotent; producers own the outbox.** Replicator has no DB
   — its durable record of intent is the consumer group's PEL. Do not add a
   Postgres outbox to the consume path.
@@ -196,7 +205,7 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
 Where the reasoning lives:
 
 - What each stream carries — [docs/STREAMS.md](docs/STREAMS.md)
-- The rules common to all of them — [docs/CONVENTIONS.md](docs/CONVENTIONS.md)
+- The rules common to all of them, and the `replicator:cmd:*` keyspace — [docs/CONVENTIONS.md](docs/CONVENTIONS.md)
 - Blob paths, modes, and the retention sweep — [docs/STORAGE.md](docs/STORAGE.md)
 - Fakeredis's divergences, the keys an integration run may touch, and why production `co-gcs-replication` is refused from every test — [docs/TESTING.md](docs/TESTING.md)
 
@@ -268,7 +277,7 @@ each with its rationale and its ruff gate in [docs/STYLE.md](docs/STYLE.md).
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — founding design and the module-by-module layout; read before changing one
 - [docs/STREAMS.md](docs/STREAMS.md) — what each stream carries, one bullet per rule `AGENTS.md` states in a line
-- [docs/CONVENTIONS.md](docs/CONVENTIONS.md) — the co-core/Redis Streams rules common to every stream: idempotency, validation, DLQ, `claim_stale`
+- [docs/CONVENTIONS.md](docs/CONVENTIONS.md) — the co-core/Redis Streams rules common to every stream: idempotency, validation, DLQ, `claim_stale`; and the `replicator:cmd:*` dedupe keys, the only non-stream footprint this service has on the broker (#80)
 - [docs/STORAGE.md](docs/STORAGE.md) — blob paths and modes, the three populations under `REPLICATOR_BLOB_DIR`, TTL and ceiling semantics
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — VM topology, ports, the systemd unit's lifecycle, and the co-core pin
 - [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) — every variable either env file carries, and the boundary between them

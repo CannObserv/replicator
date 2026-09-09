@@ -102,3 +102,90 @@ states them in one line each; what a *particular* stream carries, and why, is in
     so `MAX_TRACKED_HOSTS` still governs it. `_prune` keeps an entry whose window
     is open even once its interval has elapsed: reclaiming it would honour a
     memory bound by becoming less polite.
+
+## The `replicator:cmd:*` keys
+
+The only keys Replicator writes to the broker that are not streams, and the
+question broker#1 carried open from the day it was filed (#80). A keyspace scan
+found `replicator:cmd:fetch:<ULID>` strings alongside the ten streams on `db0` —
+26 to 40 of them across the epic's life, TTL remaining observed between ~2,300 s
+and ~83,000 s — and asked, reasonably, what a change bus was doing holding
+another service's state. Four answers. Each is a claim about code, so
+`tests/test_broker_keyspace.py` holds them to it: the section another repo's
+inventory links to is the one that can rot into a plausible lie without anybody
+here touching it.
+
+**What they guard: an already-handled command, per command stream.**
+`replicator:cmd:<stream>:<command_id>` — `replicator:cmd:fetch:<command_id>` and
+`replicator:cmd:replicate:<command_id>`, namespaced by the spec's
+`dedupe_segment` since #29, the un-segmented `replicator:cmd:<id>` form being
+pre-#29 keys that are never read again and expire on their own. The value is the
+`message_id` of the delivery that completed the command, which exists so an
+operator can join a key back to a stream entry; no code reads it. Lifetime is
+`REPLICATOR_DEDUPE_TTL_SECONDS`, default `86400` — the ~24 h window the audit
+measured. No TTL is *provably* sufficient, because redelivery is bounded by the
+PEL and the PEL is unbounded in principle; a day covers any realistic outage and
+expiry degrades to a re-run.
+
+Only the two closes that **complete** a command write one — the success path and
+the completed-without-bytes path (#17) — and both write it *after* the handler.
+A retry writes none, a dead-letter writes none, and the blank-`command_id`
+refusal happens before the key is ever computed (which is the whole point of it:
+an empty id would take `replicator:cmd:fetch:` and make every later blank-id
+command a silent no-op, CR #6). One consequence is worth stating outright: a
+command that failed permanently is **not** deduped, so an issuer re-publishing
+the same `command_id` after a `fetch_failed` gets it handled again rather than
+silently acked.
+
+**What reads them: `EXISTS`, once, and nothing else.** `process_message` checks
+existence before calling the handler and acks on a hit; existence is the entire
+read. `NX` is therefore not the mechanism — it is there so a redelivery cannot
+extend a window the first delivery opened. That makes the service's whole
+non-stream command surface two commands, `SET key <message_id> NX EX <ttl>` and
+`EXISTS key`, and an ACL written for this worker (broker#2) needs `+set` and
+`+exists` on `replicator:cmd:*` and nothing more. No `GET`, no `DEL`, no `TTL`,
+no `SCAN` — those appear in [COMMANDS.md](COMMANDS.md) as things an *operator*
+runs, and granting them to the service would widen the pattern for a caller that
+does not exist.
+
+**What a cold start does without them: re-work, never loss.** The
+set-after-success ordering is what makes that true — the key can only ever
+short-circuit work already known to have finished, so its absence costs the
+short-circuit and nothing else. An empty namespace is reachable only by a
+command that is *delivered again*: a PEL entry reclaimed across the restart, or
+an issuer re-publishing an id. Each of those re-runs the handler, and the bill is
+a re-fetch of the origin (`HostPacer` is in-memory, so its escalations are cold
+too), a content-addressed re-store that is a no-op, and a second fact — which is
+distinguishable, both envelope keys being per occurrence, and exactly what
+contract MUST-4 already requires issuers to tolerate. On `content.replicate` the
+re-run is a create-if-absent, so matching bytes re-emit the same `public_url`.
+The one saving genuinely lost is the conditional GET: without a key, a reclaimed
+304 re-asks an origin that has just said nothing changed.
+
+The epic's fresh-start plan was worrying about the wrong horizon, and the shape
+of the mistake outlives it. A `db0` that has lost these keys has lost the streams
+and the consumer groups' **PELs** with them — and the PEL is this service's only
+durable record of intent, there being no database and no outbox on the consume
+path. Restoring an older snapshot brings back unacked entries and their keys
+together. So on any future restore or `db0` incident, the dedupe keys are the
+cheapest thing in the blast radius, and the exposure they represent is one TTL
+window of re-fetches, not one TTL window of anything unguarded.
+
+**Why they belong on the change bus.** Endorsed deliberately, not tolerated. This
+is not application state: Replicator holds no domain vocabulary and no database
+by charter ([contracts/replicator-boundaries.md](contracts/replicator-boundaries.md)),
+and what these keys carry is per-command *bus* state whose lifetime is the bus's
+— sitting beside the PEL entry it short-circuits and the stream that named the
+command. Two properties settle where it goes: it must survive the restart that
+redelivery follows, so an in-memory set is wrong; and it is safely lossy, so a
+durable store is more than it earns — and standing one up is precisely the
+"Replicator gets a database" step the charter refuses, reached one defensible
+commit at a time. A second store would also be a second thing that can be down
+while the broker is up, on the path of every command. The footprint is bounded by
+construction — one key per *completed* command, TTL-capped, so the standing count
+is the completion rate times the TTL, which is the 26–40 the audit saw and not a
+number that grows with uptime (27 on 2026-09-09, longest remaining 84,757 s, every
+one of them under the `fetch` segment — `replicate` completes nothing while no
+alias table is provisioned, so the second namespace is empty rather than absent). Under a capped broker they behave like every other
+write here: `SET` is `denyoom`, so it is refused, retried, and the clearing edge
+is a duplicate fact rather than a loss (#79, above).

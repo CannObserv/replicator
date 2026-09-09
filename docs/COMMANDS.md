@@ -115,6 +115,9 @@ redis-cli XLEN content.fetch.dlq
 redis-cli XRANGE content.fetch.dlq - + COUNT 5
 
 # Dedupe keys (one per handled command, TTL REPLICATOR_DEDUPE_TTL_SECONDS).
+# What they guard and what a cold start does without them: CONVENTIONS.md,
+# "The `replicator:cmd:*` keys". SCAN is an operator command — the worker only
+# ever SETs and EXISTSs them.
 redis-cli --scan --pattern 'replicator:cmd:*' | head
 
 # Facts published — content.blobs carries both outcomes. On blob_available,
