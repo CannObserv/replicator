@@ -154,8 +154,16 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
   `schema_version` first.
 - **Deterministic ⇒ DLQ; transient ⇒ retry; completed without bytes ⇒ fact + ack,
   no DLQ (#17).** `dead_letter` acks inside itself, so a fact is published
-  *before* it. Retry cadence is `REPLICATOR_CLAIM_MIN_IDLE_MS`; a failing *cycle*
-  is `run_loop`'s problem, not the message's.
+  *before* it — as `XADD <topic>.dlq` then `XACK`, which is the form broker#2's
+  ACL grants and is now observed rather than inferred (#79). Retry cadence is
+  `REPLICATOR_CLAIM_MIN_IDLE_MS`; a failing *cycle* is `run_loop`'s problem, not
+  the message's.
+- **A capped broker refuses `XADD` and `SET` only, and Replicator retries both
+  forever (#79).** Verified against a scratch broker this repo spawns, never the
+  shared one: `OutOfMemoryError` is transient and exempt from the delivery
+  ceiling, the consume path keeps reading, acking and reclaiming throughout, and
+  nothing is dropped or dead-lettered. Never answer an OOM with a client-level
+  retry — a re-sent `XADD` the broker already applied publishes twice.
 - **Consumers must be idempotent; producers own the outbox.** Replicator has no DB
   — its durable record of intent is the consumer group's PEL. Do not add a
   Postgres outbox to the consume path.
