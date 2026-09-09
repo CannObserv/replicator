@@ -184,7 +184,12 @@ Skips when `redis-server` is not on PATH. Three details are load-bearing:
   already held by a sibling service's identical experiment, and the first probe
   run reconfigured *its* cap before anyone noticed. `capped_server` compares
   `INFO server`'s `process_id` against the pid it spawned and fails the run on a
-  mismatch.
+  mismatch. The corollary is that a `pytest` killed with `SIGKILL` orphans its
+  broker — teardown cannot run — so a stray `redis-server` on an ephemeral port
+  is litter from an abnormal exit rather than a fault. It cannot affect a later
+  run, which binds its own port and checks the pid;
+  `pkill -f "redis-server 127.0.0.1:"` clears one — the fixture binds loopback
+  only, so that pattern cannot match the VM's own broker.
 - **The cap is *reached*, not merely configured.** `CappedBroker.cap()` sets
   `maxmemory` and then fills the instance until a write is refused, because "the
   cap is set" and "the cap bites" are different states and only the second is what
