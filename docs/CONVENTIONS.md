@@ -118,8 +118,10 @@ here touching it.
 **What they guard: an already-handled command, per command stream.**
 `replicator:cmd:<stream>:<command_id>` — `replicator:cmd:fetch:<command_id>` and
 `replicator:cmd:replicate:<command_id>`, namespaced by the spec's
-`dedupe_segment` since #29, the un-segmented `replicator:cmd:<id>` form being
-pre-#29 keys that are never read again and expire on their own. The value is the
+`dedupe_segment` since #29. The un-segmented `replicator:cmd:<id>` form was never
+read again after that release and, carrying the same day-long TTL, was gone within
+a day of it — today's scan finds none, and a keyspace audit that turns one up is
+looking at a restored snapshot. The value is the
 `message_id` of the delivery that completed the command, which exists so an
 operator can join a key back to a stream entry; no code reads it. Lifetime is
 `REPLICATOR_DEDUPE_TTL_SECONDS`, default `86400` — the ~24 h window the audit
