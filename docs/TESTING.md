@@ -155,3 +155,47 @@ never in `/etc/replicator/.env`, which is the file the service reads. Contrast
 `REPLICATOR_TEST_REDIS_URL`, which *does* default: db 15 on localhost cannot be
 the live database, and `real_redis` refuses db 0 outright. No bucket name has
 that property.
+
+## Testing against a broker at its cap (#79)
+
+`tests/worker/test_oom_integration.py` needs a Redis that will refuse writes, and
+the one thing it must never do is produce that state on the shared broker:
+`maxmemory` is instance-wide, so lowering `co-broker`'s cap to force an
+`OOM command not allowed` would refuse `XADD` for archiver, watcher and notifier
+at the same time. The module therefore **spawns its own `redis-server`** — a free
+loopback port, `maxmemory-policy noeviction`, `--appendonly no --save ''`, started
+uncapped, killed in teardown — and never reads `REPLICATOR_TEST_REDIS_URL`, which
+names the server it is avoiding.
+
+It runs under the existing `integration` marker rather than a third one: it does
+hit a real broker, it is local and free, and a marker whose meaning is "starts a
+process" would split the suite along a line nobody selects on.
+
+```bash
+uv run pytest --no-cov -m integration tests/worker/test_oom_integration.py
+```
+
+Skips when `redis-server` is not on PATH. Three details are load-bearing:
+
+- **The fixture refuses a broker it did not start.** Binding a free port and then
+  starting a server on it is a race, and losing that race does not look like a
+  connection error — it looks like a working client, which the tests then
+  `CONFIG SET maxmemory` on. That is not hypothetical: writing #79 found port 6399
+  already held by a sibling service's identical experiment, and the first probe
+  run reconfigured *its* cap before anyone noticed. `capped_server` compares
+  `INFO server`'s `process_id` against the pid it spawned and fails the run on a
+  mismatch.
+- **The cap is *reached*, not merely configured.** `CappedBroker.cap()` sets
+  `maxmemory` and then fills the instance until a write is refused, because "the
+  cap is set" and "the cap bites" are different states and only the second is what
+  production reaches.
+- **The first refusal is not the finish line.** Redis compares `used_memory`
+  against `maxmemory` when a `denyoom` command runs, and the client's argument
+  buffer counts toward that number — so a large ballast entry can be refused and
+  free enough on the error reply to put usage back under the cap. The fill uses
+  512-byte entries and confirms with a small-write canary; the first version of
+  the module used 16 KiB entries and observed a refusal followed immediately by a
+  successful `XADD`.
+
+What the run establishes, and where it is written down for readers who will not
+run it: **Under a capped broker** in [CONVENTIONS.md](CONVENTIONS.md).
