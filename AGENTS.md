@@ -151,9 +151,9 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
   indefinitely — `OutOfMemoryError` is transient and exempt from the delivery
   ceiling — while the consume path reads, acks and reclaims throughout. The
   third, `XGROUP CREATE … MKSTREAM`, is boot-only and does **not** retry: a first
-  boot against a capped broker exits and systemd restarts. Never answer an OOM
-  with a client-level retry, which republishes an `XADD` the broker already
-  applied.
+  boot against a capped broker exits and systemd restarts. Verified against a
+  broker the tests spawn, **never the shared one**. Never answer an OOM with a
+  client-level retry, which republishes an `XADD` the broker already applied.
 - **An ACL denial is transient too (#82).** `NoPermissionError` is the second
   `ResponseError` subclass in `_TRANSIENT_ERRORS`, so a grant broker#1's cutover
   got wrong backs off instead of closing valid commands with a terminal
