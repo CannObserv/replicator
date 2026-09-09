@@ -168,6 +168,11 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
   restarts. Verified against a scratch broker this repo spawns, never the shared
   one. Never answer an OOM with a client-level retry — a re-sent `XADD` the
   broker already applied publishes twice.
+- **An ACL denial is transient too (#82).** `NoPermissionError` is the second
+  `ResponseError` subclass in `_TRANSIENT_ERRORS`, so a grant broker#1's cutover
+  got wrong backs off instead of closing valid commands with a terminal
+  `fetch_failed(handler_error)`. The cost is deliberate: a grant nobody fixes
+  retries forever rather than reaching `<topic>.dlq`.
 - **Consumers must be idempotent; producers own the outbox.** Replicator has no DB
   — its durable record of intent is the consumer group's PEL. Do not add a
   Postgres outbox to the consume path.
