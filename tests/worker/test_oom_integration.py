@@ -43,13 +43,22 @@ from dataclasses import dataclass
 
 import pytest
 from co_core.pure.adapters.bus.streams import dlq_name
-from co_core.pure.models.changes import ContentFetchCommand, FetchFailedEvent
+from co_core.pure.models.changes import (
+    ContentFetchCommand,
+    ContentReplicateCommand,
+    FetchFailedEvent,
+)
 from co_core_aio.bus import AsyncBusConsumer
 from redis.asyncio import Redis
 from redis.exceptions import OutOfMemoryError, ResponseError
 
 from src.core.config import get_settings
-from src.core.errors import FailureReason, PermanentFetchError
+from src.core.errors import (
+    FailureReason,
+    PermanentFetchError,
+    PermanentReplicateError,
+    ReplicateReason,
+)
 from src.storage.local import LocalBlobStore
 from src.worker.handler import build_handler
 from src.worker.loop import (
@@ -64,6 +73,7 @@ from src.worker.loop import (
 )
 from src.worker.reporter import build_failure_reporter
 from tests.worker.conftest import FakeFetcher, collected_reports, decoded_facts, make_command
+from tests.worker.test_loop_spec import make_replicate_command
 
 pytestmark = pytest.mark.integration
 
@@ -365,7 +375,14 @@ def topic() -> str:
 
 @pytest.fixture
 def blobs_topic(topic) -> str:
-    """Where this test's facts land — never the real ``content.blobs``."""
+    """A scratch stand-in for ``content.blobs``, derived from this test's topic.
+
+    Never the real stream: a `fetch_failed` written there during a test would
+    tell an issuer that a command it is waiting on has failed, and a
+    `blob_available` would announce bytes under a `tmp_path` that is gone before
+    anything could open them. Some callers publish facts to it and some only
+    need a name the cap can refuse — both want it off the live stream.
+    """
     return f"{topic}.blobs"
 
 
@@ -394,8 +411,14 @@ def publishing_handler(broker, blobs_topic, tmp_path, oom_settings):
     )
 
 
-async def deliver(broker, consumer, topic, command_id="cmd-oom"):
-    """Put one well-formed command on the stream and read it into the PEL."""
+async def deliver(broker, consumer, topic, *, command_id: str):
+    """Put one well-formed command on the stream and read it into the PEL.
+
+    ``command_id`` is required rather than defaulted: a test that asserts on a
+    dedupe key spells the id a second time, and an id defaulted here is one the
+    two spellings can drift apart on — where the assertion is ``== 0``, which
+    passes for a key nothing ever wrote (CR #13).
+    """
     await broker.client.xadd(topic, make_command(command_id=command_id))
     (message,) = await consumer.read(count=1, block_ms=READ_BLOCK_MS)
     return message
@@ -566,7 +589,7 @@ async def test_a_capped_broker_never_burns_the_delivery_ceiling(
     below irrelevant, and this drives it well past it to say so.
     """
     settings = oom_settings.model_copy(update={"max_delivery_attempts": 3})
-    message = await deliver(broker, consumer, topic)
+    message = await deliver(broker, consumer, topic, command_id="cmd-ceiling")
     await broker.cap()
     handler = publishing_handler(broker, blobs_topic, tmp_path, settings)
 
@@ -822,6 +845,62 @@ async def test_the_dead_letter_write_is_an_xadd_to_the_topic_dlq(
     # dead-letters on both and triages both since broker#1 Phase 5.
     assert dlq_name(FETCH_SPEC.label) == "content.fetch.dlq"
     assert dlq_name(REPLICATE_SPEC.label) == "content.replicate.dlq"
+
+
+async def test_the_replicate_stream_dead_letters_by_the_same_two_commands(
+    broker, topic, consumer, oom_settings
+):
+    """The second command stream's form, observed rather than reasoned from the first.
+
+    One loop serves both streams (#29), so the pair below *should* be the pair
+    above with a different topic — and that is a claim about code an ACL is being
+    written from, which makes it worth a capture rather than an inference.
+    broker#2 grants ``~content.replicate.dlq`` on this basis, and until this test
+    existed the only observation of it lived in a comment on that issue, produced
+    by a script nothing re-runs.
+
+    The refusal is ``alias_unknown``, which the replicate contract refuses **before
+    any credential is touched** (T2) — so this reaches the dead-letter path with no
+    GCS identity, no alias table, and no writer.
+
+    The dedupe key is asserted too, and it is the one thing here that is *not* the
+    fetch path with a different topic: the namespaces are per stream, so a
+    ``content.replicate`` command can never dedupe against a ``content.fetch`` one.
+    """
+
+    async def refusing_replicate_handler(command: ContentReplicateCommand) -> None:
+        raise PermanentReplicateError(
+            "the alias named by this command is not provisioned on this host",
+            reason=ReplicateReason.ALIAS_UNKNOWN,
+        )
+
+    command_id = "rep-observed"
+    await broker.client.xadd(topic, make_replicate_command(command_id=command_id))
+    (message,) = await consumer.read(count=1, block_ms=READ_BLOCK_MS)
+
+    async with observing(broker.client) as observed:
+        outcome = await process_message(
+            message,
+            client=broker.client,
+            consumer=consumer,
+            group=GROUP,
+            handler=refusing_replicate_handler,
+            settings=oom_settings,
+            reporter=collected_reports(),
+            spec=REPLICATE_SPEC,
+        )
+
+    assert outcome is Outcome.DEAD_LETTERED
+    writes = [line for line in observed if line.startswith(("XADD", "XACK"))]
+    assert len(writes) == 2, observed
+    assert writes[0].startswith(f"XADD {topic}.dlq * ")
+    assert "dlq_reason handler reported a permanent failure" in writes[0]
+    assert writes[1] == f"XACK {topic} {GROUP} {message.message_id}"
+
+    # Per stream, and a collision here would be the worst failure shape available:
+    # the second command acking having done nothing, silently.
+    assert REPLICATE_SPEC.dedupe_key(command_id) != FETCH_SPEC.dedupe_key(command_id)
+    assert await broker.client.exists(REPLICATE_SPEC.dedupe_key(command_id)) == 0
 
 
 async def test_a_frame_that_will_not_decode_is_dead_lettered_by_the_same_two_commands(
