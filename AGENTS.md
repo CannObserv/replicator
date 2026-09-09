@@ -234,17 +234,15 @@ from src.core.logging import get_logger
 
 logger = get_logger(__name__)
 ```
-Entry points only: `configure_logging()` is called once inside the FastAPI `lifespan` or the worker's `run()`. Never in library modules.
+Entry points only: `configure_logging()` is called once inside the FastAPI `lifespan` or the worker's `run()`. Never in library modules. The stack itself — formatter, installers, the journald lines deliberately not JSON — is in [docs/STYLE.md](docs/STYLE.md).
 
 **Date & Time:**
 - All UTC
 - ISO 8601: `YYYY-MM-DDTHH:MM:SS.ffffffZ` (timestamps), `YYYY-MM-DD` (dates)
 
 **General:** imports at file top and explicit, docstrings on public modules,
-classes and functions, small focused functions, and tests mirroring source.
-Those with their rationale and ruff gate, plus the logging stack — its formatter,
-its installers, and the journald lines deliberately not JSON:
-[docs/STYLE.md](docs/STYLE.md).
+classes and functions, small focused functions, and tests mirroring source — each
+with its rationale and ruff gate in [docs/STYLE.md](docs/STYLE.md).
 
 ## Detail Docs
 
