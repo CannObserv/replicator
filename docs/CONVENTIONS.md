@@ -142,11 +142,10 @@ existence before calling the handler and acks on a hit; existence is the entire
 read. `NX` is therefore not the mechanism — it is there so a redelivery cannot
 extend a window the first delivery opened. That makes the service's whole
 non-stream command surface two commands, `SET key <message_id> NX EX <ttl>` and
-`EXISTS key`, and an ACL written for this worker (broker#2) needs `+set` and
-`+exists` on `replicator:cmd:*` and nothing more. No `GET`, no `DEL`, no `TTL`,
-no `SCAN` — those appear in [COMMANDS.md](COMMANDS.md) as things an *operator*
-runs, and granting them to the service would widen the pattern for a caller that
-does not exist.
+`EXISTS key`. No `GET`, no `DEL`, no `TTL`: nothing in `src/` reads the value
+back or reaps a key early, and the `SCAN` in [COMMANDS.md](COMMANDS.md) is an
+*operator* command that the service never issues — granting any of them here
+would widen a grant for a caller that does not exist.
 
 **What a cold start does without them: re-work, never loss.** The
 set-after-success ordering is what makes that true — the key can only ever
