@@ -169,8 +169,21 @@ jobs:
       # this binary. A step in this job rather than a job of its own: the
       # wheelhouse is already mirrored and the venv already synced here, and a
       # second job would pay both again to run 13 tests.
+      #
+      # `apt-get update` is deliberately not fatal. Runner images carry
+      # third-party sources this job has no interest in — the first run of this
+      # step failed with `E: Failed to fetch .../chrome-stable/... Hash Sum
+      # mismatch`, which exits 100 even though every Ubuntu index updated
+      # cleanly. Letting that fail the job would make an unrelated vendor's
+      # mirror a gate on Replicator's CI. Nothing is lost by continuing: a broken
+      # *Ubuntu* index makes the install below fail on its own, and a binary that
+      # never arrived is caught by the guard after it. The warning keeps the
+      # cause in the log rather than swallowing it.
       - name: Install redis-server (the OOM suite spawns its own broker)
-        run: sudo apt-get update && sudo apt-get install -y redis-server
+        run: |
+          sudo apt-get update \
+            || echo "::warning::apt-get update reported errors (usually a third-party index); continuing — the install and the guard below decide"
+          sudo apt-get install -y --no-install-recommends redis-server
 
       # Skipping is not passing, and this suite's skip is silent by construction:
       # the fixture skips when `redis-server` is absent, so an apt failure that
