@@ -190,8 +190,10 @@ commit at a time. A second store would also be a second thing that can be down
 while the broker is up, on the path of every command. The footprint is bounded by
 construction — one key per *completed* command, TTL-capped, so the standing count
 is the completion rate times the TTL, which is the 26–40 the audit saw and not a
-number that grows with uptime (27 on 2026-09-09, longest remaining 84,757 s, every
-one of them under the `fetch` segment — `replicate` completes nothing while no
-alias table is provisioned, so the second namespace is empty rather than absent). Under a capped broker they behave like every other
+number that grows with uptime. Measured on 2026-09-09: 27 keys, TTL remaining
+across all of them spanning 534 s to 84,713 s — the ~24 h window, seen whole
+rather than sampled — and every one under the `fetch` segment, `replicate`
+completing nothing while no alias table is provisioned, so the second namespace
+is empty rather than absent. Under a capped broker they behave like every other
 write here: `SET` is `denyoom`, so it is refused, retried, and the clearing edge
 is a duplicate fact rather than a loss (#79, above).
