@@ -6,16 +6,10 @@ Be terse. Prefer fragments over full sentences. Skip filler and preamble. Sacrif
 
 Retrieval, fingerprinting, and temporary storage layer for the Cannabis Observer cluster.
 
-Owns content fetching, temp storage, and fingerprinting — the network-bound, byte-handling work re-homed out of Watcher. Driven by **commands** on the Redis change bus; reports outcomes as **facts**.
-
-```
-content.fetch (command) → fetch → fingerprint → temp-store → blob_available (fact)
-                        ↘ closed without bytes ───────────────→ fetch_failed  (fact)
-content.replicate (cmd) → guards → create-if-absent ────────→ replication_complete (fact)
-                                 ↘ refused / conflict ──────→ replication_failed  (fact)
-```
-
 **Worker-first.** Primary process = bus consumer (`src/worker/main.py`), not an HTTP API. The FastAPI app is a `/health` surface only, dev-only until a status endpoint is wanted.
+
+The command → fact flow, and what each module owns:
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Development Methodology
 
@@ -23,7 +17,7 @@ TDD required. Red → Green → Refactor. No production code without a failing t
 
 ## Environment & Tooling
 
-Python ≥3.12, uv, pytest, ruff. `ty` is available as a **non-gating** type checker (`uv run ty check`) — advisory only; no pre-commit or CI gate.
+Python ≥3.12, uv, pytest, ruff. `ty` is a **non-gating** type checker (`uv run ty check`) — advisory, no pre-commit or CI gate.
 
 **co-core comes from the wheelhouse, not PyPI.** `co-core` / `co-core-aio` resolve from `./.wheelhouse`, mirrored from the private GCS index `gs://co-gcs-pypi` by `scripts/sync_wheelhouse.py` via `[tool.uv] find-links`. Run the sync **before** `uv sync` on a fresh clone or after a version bump:
 
@@ -31,7 +25,7 @@ Python ≥3.12, uv, pytest, ruff. `ty` is available as a **non-gating** type che
 uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
 ```
 
-Auth is ADC. Pin the current minor — `>=0.13.1,<0.14` — and raise the **patch** floor with every co-core feature the code starts depending on: the reasoning, and the three ways a skew has already failed, in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+Auth is ADC. Pin the current minor — `>=0.13.1,<0.14` — and raise the **patch** floor with every co-core feature the code starts depending on; the ways a skew has already failed are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 <!-- BEGIN socraticode-policy -->
 ## Code Exploration Policy
@@ -58,7 +52,7 @@ Full tool table, prefetch query, per-tool guidance, cross-repo search:
 
 ## Code Exploration Notes (repo-specific)
 
-**The manifest is a source, not the artifact.** Nothing re-embeds it — no hook, no CI step — so editing a `description` there changes what the repo says and not what `codebase_context_search` returns. Re-run `codebase_context_index` in the same change, or the highest-authority answer an agent gets stays the stale one (#19 CR #17).
+**The manifest is a source, not the artifact.** Nothing re-embeds it, so re-run `codebase_context_index` in the same change as a `description` edit — otherwise the highest-authority answer an agent gets stays the stale one (#19 CR #17).
 
 **`mcp-driver.mjs` lies twice — silently through the `skills/` symlink (skills#177), falsely from a worktree (skills#180).** Use `"$SOCRATICODE_DRIVER"`; disbelieve health findings outside the main checkout. Both in [docs/SKILLS.md](docs/SKILLS.md).
 
@@ -67,23 +61,21 @@ Full tool table, prefetch query, per-tool guidance, cross-repo search:
 `src/worker/` is the primary process — the bus consumer, with the byte path, the
 failure fact, the retention sweep, the pacer, and the `content.fetch-policy` reader
 each behind their own seam. `src/storage/` is the content-addressed temp store behind
-the `BlobStore` protocol — **two backends now** (`local`, `gcs`), selected by
-`REPLICATOR_BLOB_BACKEND` and defaulting to `local` (#7); `src/api/` is the dev-only
-`/health` app; `src/core/` holds config, logging, and the consume path's failure
-vocabulary. `tests/` mirrors
-`src/`. Every module with the job it owns:
+the `BlobStore` protocol — **two backends** (`local`, `gcs`), selected by
+`REPLICATOR_BLOB_BACKEND`, default `local` (#7). `src/api/` is the dev-only `/health`
+app; `src/core/` holds config, logging, and the consume path's failure vocabulary;
+`tests/` mirrors `src/`. Every module with the job it owns:
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Infrastructure
 
-**Single-VM setup.** Code committed to main is the deployed code. Replicator shares the VM with archiver, watcher, and notifier.
+**Single-VM setup.** Code committed to main is the deployed code; the VM is shared with archiver, watcher, and notifier.
 
-The worker binds no port; 8041 is the dev API port and 8040 is reserved. **Redis
-is Archiver-operated** — Replicator is a client, never ships a broker, never
-claims ownership — and server **≥ 7.0** is Replicator-critical because
-`claim_stale` reads `XAUTOCLAIM`'s three-element reply. `scripts/check_redis_floor.sh`
-guards it as an `ExecStartPre`. Ports, neighbours, and the redis-py pin:
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+The worker binds no port; 8041 is the dev API port and 8040 is reserved. **Redis is
+Archiver-operated** — Replicator is a client, never ships a broker — and server
+**≥ 7.0** is Replicator-critical because `claim_stale` reads `XAUTOCLAIM`'s
+three-element reply, guarded by `scripts/check_redis_floor.sh` as an `ExecStartPre`.
+Ports, neighbours, and the redis-py pin: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Server Lifecycle
 
@@ -91,7 +83,7 @@ guards it as an `ExecStartPre`. Ports, neighbours, and the redis-py pin:
 && uv sync --frozen && sudo systemctl restart replicator` — `git push` instead of the
 pull when the merge happened here.
 
-Three things that bite, each of which has no symptom until it matters:
+Three that bite, each symptomless until it matters:
 
 - **The service refuses to start off `main`, or off unpushed commits** (#37, #48).
   `REPLICATOR_ALLOW_ANY_CHECKOUT=1` overrides; a dev worker asks the same question
@@ -101,8 +93,8 @@ Three things that bite, each of which has no symptom until it matters:
 - **The daily skills-refresh hook commits without pushing**, which is one of the
   states the checkout guard refuses. Check `git status -sb` before a restart.
 
-Every deploy situation with its command, the guard's full verdict table, and the
-dev-server invocation: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+Every deploy situation, the guard's verdict table, and the dev-server invocation:
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Environment Variables
 
@@ -112,39 +104,36 @@ convention:
 1. **`/etc/replicator/.env`** — production config. **The only file `replicator.service` reads.**
 2. **`.env`** (repo root, git-ignored) — dev/agent secrets, chiefly org-wide GitHub PATs. Never commit.
 
-**The service must never load the repo `.env`.** Those PATs carry write access the
-worker has no use for, and a process whose job is fetching public URLs must not
-widen their blast radius. Anything the service needs goes in `/etc/replicator/.env`.
+**The service must never load the repo `.env`.** Those PATs carry write access a
+process whose job is fetching public URLs must not widen the blast radius of;
+anything the service needs goes in `/etc/replicator/.env`.
 
 New settings take the `REPLICATOR_` prefix — the VM is shared, and the prefix is
 what keeps a sibling service from colliding. `BUILD_ID` is the one deliberate
 exception, stamped generically by the unit.
 
 For shell commands (dev only), load both — the snippet is under Common Commands.
-Every variable, which file carries it, and the reasoning behind each default:
+Every variable, which file carries it, and each default's reasoning:
 [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md).
 
 ## Bus Conventions
 
-Replicator is a **consumer** first. Follow the conventions co-core and the archiver producer established:
+Replicator is a **consumer** first — follow what co-core and the archiver producer established:
 
 - **At-least-once ⇒ idempotent.** The command dedupes on `command_id`; both facts
   are keyed per *occurrence* (`content_fingerprint:command_id`,
-  `command_id:occurred_at`), so nothing an issuer waits on can collapse — storage
-  identity and correlation identity are not interchangeable. `info_source_id`
-  rides both and is **echoed, never read**, as is replicate's
-  `info_item_rep_spec_id`: each `test_boundaries.py` carve-out is one field
-  wide, and adding one edits the charter (#28, #29).
+  `command_id:occurred_at`). `info_source_id` and replicate's
+  `info_item_rep_spec_id` are **echoed, never read** — each `test_boundaries.py`
+  carve-out is one field wide, and adding one edits the charter (#28, #29).
 - **Two blob backends, one seam.** `local` announces `file://` and `gcs` announces
-  `gs://`; `local` is the compiled-in default **by decision, not by schedule** —
-  the deployment flipped on 2026-08-20 and the default did not. Every `BlobStore`
-  call from a coroutine goes through `asyncio.to_thread` — which puts it in the
-  unit's shutdown budget, not just the handler's. Per-backend retention, ceilings
-  and failure classification: [docs/STORAGE.md](docs/STORAGE.md), which is the
-  authority and worth reading before touching either store.
-- **Store, then publish — never the reverse.** A fact pointing at bytes that are
-  not there is unrepairable by the consumer; stored bytes with no fact repair
-  themselves on the reclaim.
+  `gs://`; `local` is the compiled-in default **by decision, not by schedule**.
+  Every `BlobStore` call from a coroutine goes through `asyncio.to_thread`, which
+  puts it in the unit's shutdown budget, not just the handler's.
+  [docs/STORAGE.md](docs/STORAGE.md) is the authority — read it before touching
+  either store.
+- **Store, then publish — never the reverse.** A fact pointing at absent bytes is
+  unrepairable by the consumer; stored bytes with no fact repair themselves on the
+  reclaim.
 - **Read `count=1`.** `AsyncBusConsumer.read(count>1)` raises on a malformed frame
   *before* returning the well-formed ones, and `claim_stale` at `count>1` lets a
   poison entry jam recovery permanently.
@@ -154,30 +143,25 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
   `schema_version` first.
 - **Deterministic ⇒ DLQ; transient ⇒ retry; completed without bytes ⇒ fact + ack,
   no DLQ (#17).** `dead_letter` acks inside itself, so a fact is published
-  *before* it — as `XADD <topic>.dlq` then `XACK`, which is the form broker#2's
-  ACL grants and is now observed rather than inferred (#79). Retry cadence is
-  `REPLICATOR_CLAIM_MIN_IDLE_MS`; a failing *cycle* is `run_loop`'s problem, not
-  the message's.
+  *before* it — as `XADD <topic>.dlq` then `XACK`, the form broker#2's ACL grants
+  (#79). Retry cadence is `REPLICATOR_CLAIM_MIN_IDLE_MS`; a failing *cycle* is
+  `run_loop`'s problem, not the message's.
 - **A capped broker refuses only its `denyoom` commands, and the worker retries
   the two it meets at runtime (#79).** `XADD` and `SET` are refused and retried
   indefinitely — `OutOfMemoryError` is transient and exempt from the delivery
-  ceiling, the consume path keeps reading, acking and reclaiming throughout, and
-  nothing is dropped or dead-lettered. The third, `XGROUP CREATE … MKSTREAM`, is
-  boot-only and does **not** retry: `ensure_group` re-raises anything but
-  `BUSYGROUP`, so a first boot against a capped broker exits and systemd
-  restarts. Verified against a scratch broker this repo spawns, never the shared
-  one. Never answer an OOM with a client-level retry — a re-sent `XADD` the
-  broker already applied publishes twice.
+  ceiling — while the consume path reads, acks and reclaims throughout. The
+  third, `XGROUP CREATE … MKSTREAM`, is boot-only and does **not** retry: a first
+  boot against a capped broker exits and systemd restarts. Never answer an OOM
+  with a client-level retry, which republishes an `XADD` the broker already
+  applied.
 - **An ACL denial is transient too (#82).** `NoPermissionError` is the second
   `ResponseError` subclass in `_TRANSIENT_ERRORS`, so a grant broker#1's cutover
   got wrong backs off instead of closing valid commands with a terminal
-  `fetch_failed(handler_error)`. The cost is deliberate: a grant nobody fixes
-  retries forever rather than reaching `<topic>.dlq`.
+  `fetch_failed(handler_error)` — at the deliberate cost that a grant nobody
+  fixes retries forever.
 - **The `replicator:cmd:*` keys are the only non-stream keys on the broker (#80).**
   Per-stream dedupe — `SET NX EX` after a *completing* close, `EXISTS` before the
-  handler — so losing them costs one TTL window of re-fetches and never
-  correctness. Endorsed as bus state rather than a role blur, with broker#1's four
-  answers and the ACL grant they imply, in
+  handler — so losing them costs one TTL window of re-fetches, never correctness:
   [docs/CONVENTIONS.md](docs/CONVENTIONS.md#the-replicatorcmd-keys).
 - **Consumers must be idempotent; producers own the outbox.** Replicator has no DB
   — its durable record of intent is the consumer group's PEL. Do not add a
@@ -187,24 +171,17 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
   `content.blobs` and `content.artifacts` each carry both outcomes of their
   command; `content.fetch-policy` is read **groupless** — no group, no ack, no
   DLQ.
-- **The replicate loop writes for `gcs` (#29)** — create-if-absent, `blob_uri`
-  never resolved as a path, writers keyed by alias, refusals before credentials,
-  provider failures classified by HTTP status. Read
-  [docs/CONVENTIONS.md](docs/CONVENTIONS.md) before touching that path.
+- **The replicate loop writes for `gcs` (#29)** — create-if-absent, `blob_uri` never
+  resolved as a path, writers keyed by alias, refusals before credentials, provider
+  failures classified by HTTP status. Read
+  [docs/CONVENTIONS.md](docs/CONVENTIONS.md) first.
 - **Nothing but the seed script writes to `content.fetch`.** `scripts/seed_fetch.py`
-  requires `--production` for the one combination the live worker consumes — a
-  frame there is fetched for real.
-- **Three normative contracts bound the wire and the roadmap** — four documents,
-  all under `docs/contracts/`, linked from sibling repos and indexed below.
-  `tests/test_boundaries.py` enforces the charter in CI; change a
-  charter and its tests together.
-
-Where the reasoning lives:
-
-- What each stream carries — [docs/STREAMS.md](docs/STREAMS.md)
-- The rules common to all of them, and the `replicator:cmd:*` keyspace — [docs/CONVENTIONS.md](docs/CONVENTIONS.md)
-- Blob paths, modes, and the retention sweep — [docs/STORAGE.md](docs/STORAGE.md)
-- Fakeredis's divergences, the keys an integration run may touch, and why production `co-gcs-replication` is refused from every test — [docs/TESTING.md](docs/TESTING.md)
+  requires `--production` for the one combination the live worker consumes: a frame
+  there is fetched for real.
+- **Three normative contracts bound the wire and the roadmap** — four documents
+  under `docs/contracts/`, linked from sibling repos and indexed below.
+  `tests/test_boundaries.py` enforces the charter in CI; change a charter and its
+  tests together.
 
 ## Common Commands
 
@@ -259,31 +236,30 @@ logger = get_logger(__name__)
 ```
 Entry points only: `configure_logging()` is called once inside the FastAPI `lifespan` or the worker's `run()`. Never in library modules.
 
-The logging stack — one formatter, two installers, and the journald lines that
-are deliberately not JSON: [docs/STYLE.md](docs/STYLE.md).
-
 **Date & Time:**
 - All UTC
 - ISO 8601: `YYYY-MM-DDTHH:MM:SS.ffffffZ` (timestamps), `YYYY-MM-DD` (dates)
 
 **General:** imports at file top and explicit, docstrings on public modules,
-classes and functions, small focused functions, and tests mirroring source —
-each with its rationale and its ruff gate in [docs/STYLE.md](docs/STYLE.md).
+classes and functions, small focused functions, and tests mirroring source.
+Those with their rationale and ruff gate, plus the logging stack — its formatter,
+its installers, and the journald lines deliberately not JSON:
+[docs/STYLE.md](docs/STYLE.md).
 
 ## Detail Docs
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — founding design and the module-by-module layout; read before changing one
-- [docs/STREAMS.md](docs/STREAMS.md) — what each stream carries, one bullet per rule `AGENTS.md` states in a line
-- [docs/CONVENTIONS.md](docs/CONVENTIONS.md) — the co-core/Redis Streams rules common to every stream: idempotency, validation, DLQ, `claim_stale`; and the `replicator:cmd:*` keys, this service's only non-stream footprint (#80)
-- [docs/STORAGE.md](docs/STORAGE.md) — blob paths and modes, the three populations under `REPLICATOR_BLOB_DIR`, TTL and ceiling semantics
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — VM topology, ports, the systemd unit's lifecycle, and the co-core pin
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — founding design, module by module; read before changing one
+- [docs/STREAMS.md](docs/STREAMS.md) — what each stream carries, one bullet per rule stated here in a line
+- [docs/CONVENTIONS.md](docs/CONVENTIONS.md) — the rules common to every stream: idempotency, validation, DLQ, `claim_stale`; and the `replicator:cmd:*` keys (#80)
+- [docs/STORAGE.md](docs/STORAGE.md) — blob paths and modes, the three populations under `REPLICATOR_BLOB_DIR`, TTL and ceilings
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — VM topology, ports, the unit's lifecycle, the co-core pin
 - [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) — every variable either env file carries, and the boundary between them
-- [docs/TESTING.md](docs/TESTING.md) — where fakeredis diverges from the live broker, which keys an integration run may create, and why production `co-gcs-replication` is unreachable from every test (#38)
+- [docs/TESTING.md](docs/TESTING.md) — fakeredis's divergences, the keys an integration run may create, and why production `co-gcs-replication` is unreachable from every test (#38)
 - [docs/STYLE.md](docs/STYLE.md) — the logging stack: formatter, installers, and the non-JSON journald lines
 - [docs/COMMANDS.md](docs/COMMANDS.md) — every runnable command, with flags
-- [docs/SKILLS.md](docs/SKILLS.md) — vendored skill inventory, refresh procedure, and the doc-check sensitive-path list
-- [docs/SOCRATICODE.md](docs/SOCRATICODE.md) — the full tool table, the prefetch query, per-tool gotchas, and cross-repo search
+- [docs/SKILLS.md](docs/SKILLS.md) — vendored skill inventory, refresh procedure, doc-check sensitive paths
+- [docs/SOCRATICODE.md](docs/SOCRATICODE.md) — full tool table, prefetch query, per-tool gotchas, cross-repo search
 - [docs/contracts/content-fetch-issuer-contract.md](docs/contracts/content-fetch-issuer-contract.md) — what a `content.fetch` producer must do; normative, linked from issuer repos
-- [docs/contracts/content-fetch-issuer-reference.md](docs/contracts/content-fetch-issuer-reference.md) — its lookup half: the refusal list, the failure taxonomy, the silent conditions, trust posture
+- [docs/contracts/content-fetch-issuer-reference.md](docs/contracts/content-fetch-issuer-reference.md) — its lookup half: refusal list, failure taxonomy, silent conditions, trust posture
 - [docs/contracts/replicator-boundaries.md](docs/contracts/replicator-boundaries.md) — what Replicator may become; run its three tests against any proposed capability
-- [docs/contracts/content-replicate-issuer-contract.md](docs/contracts/content-replicate-issuer-contract.md) — the replicate trust model and issuer obligations, settled ahead of the code (#34)
+- [docs/contracts/content-replicate-issuer-contract.md](docs/contracts/content-replicate-issuer-contract.md) — the replicate trust model and issuer obligations (#34)

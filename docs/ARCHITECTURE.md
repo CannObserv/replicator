@@ -8,6 +8,17 @@ bus stream carries is in [STREAMS.md](STREAMS.md), the rules common to all of
 them in [CONVENTIONS.md](CONVENTIONS.md), and blob-tree and retention rules in
 [STORAGE.md](STORAGE.md).
 
+## What it owns, and what it emits
+
+Owns content fetching, temp storage, and fingerprinting — the network-bound, byte-handling work re-homed out of Watcher. Driven by **commands** on the Redis change bus; reports outcomes as **facts**.
+
+```
+content.fetch (command) → fetch → fingerprint → temp-store → blob_available (fact)
+                        ↘ closed without bytes ───────────────→ fetch_failed  (fact)
+content.replicate (cmd) → guards → create-if-absent ────────→ replication_complete (fact)
+                                 ↘ refused / conflict ──────→ replication_failed  (fact)
+```
+
 ## Project Layout
 
 ```

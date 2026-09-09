@@ -61,7 +61,6 @@ docs/ARCHITECTURE.md :: What each stream carries, and the reasoning behind each 
 docs/DEPLOYMENT.md :: The GCS test bucket — the opposite grant, on purpose
 # The GCS test bucket stayed in DEPLOYMENT.md's Infrastructure section through the
 # #67 split — this pointer still resolves to what it names.
-docs/TESTING.md :: The bucket and the SA are provisioned (#50)
 # 2026-08-19, #67 CR #14. The new ENVIRONMENT.md preamble points back at
 # DEPLOYMENT.md for the lifecycle and the unit — neither moved in this split.
 docs/ENVIRONMENT.md :: and the unit itself are in [DEPLOYMENT.md](DEPLOYMENT.md).
@@ -74,3 +73,17 @@ docs/SKILLS.md :: case, which is why the rule in `AGENTS.md` → `## Code Explor
 # Provenance heading from #69, unrelated to this run and the same shape as the
 # ten provenance-headings already judged legitimate above.
 docs/contracts/replicator-boundaries.md :: Asked and answered — the derived-sidecar question (#69, 2026-08-20)
+
+# --- judged during the 2026-09-09 curation ------------------------------
+# All three SKILLS.md hits point at the *arrangement* rather than at a block:
+# `## Project Layout` and `## Detail Docs` both still exist and still hold the
+# content each sentence describes — this run tightened their prose and moved the
+# command→fact diagram to docs/ARCHITECTURE.md, neither of which is what these
+# lines name. Verified by reading all three against the sections they point at.
+docs/SKILLS.md :: top-level package is the change that leaves AGENTS.md's Project Layout stale,
+docs/SKILLS.md :: AGENTS.md's Detail Docs list is a by-name inventory of `docs/*.md`, so a new
+docs/SKILLS.md :: doc does need an AGENTS.md line the gate will not ask for. A blanket `docs/`
+# Provenance heading from #79 in a doc this curation did not move anything into
+# or out of; same shape as the eleven already judged legitimate above, and
+# renaming it would break inbound anchors for no gain this run can claim.
+docs/TESTING.md :: Testing against a broker at its cap (#79)

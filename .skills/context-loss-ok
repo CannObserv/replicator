@@ -21,7 +21,6 @@ duplicate :: `/etc/systemd/system/`** — the installed unit is a copy, not a sy
 duplicate :: `daemon-reload` alone silently re-reads the old file and the mismatch has no
 duplicate :: symptom until a directive matters. **Refuses to start off `main`, or off
 duplicate :: unpushed commits** (#37, #48) — `scripts/check_main_checkout.sh`;
-duplicate :: `REPLICATOR_ALLOW_ANY_CHECKOUT=1` overrides; a dev worker asks the same
 duplicate :: question at the writer (#52).
 retarget :: Full lifecycle table and the dev-server invocation:
 
@@ -58,4 +57,98 @@ disproven :: loop (CannObserv/watcher#275). Every `BlobStore` call from a corout
 # --- The style bullets -> docs/STYLE.md -------------------------------------
 # The block moved verbatim; this bold pseudo-heading became the `## General`
 # heading of its own section, which is a heading rename the move forced.
-rename :: **General:**
+
+# --- The 2026-09-09 curation (AGENTS.md 6,747 -> 5,969 exact tokens). ---
+# Two shapes only. Every `tighten` line is a class-C rewrite whose claims all survive:
+# prove-no-loss.sh --claims reports claims_dropped: 0, so no backticked identifier,
+# issue reference or link target of the base file was dropped -- only words. The
+# reasoning each rewrite stopped repeating was read in its destination first:
+# docs/CONVENTIONS.md (OOM, ACL, the three fates, the dedupe keys), docs/STORAGE.md
+# (the backend seam, to_thread inside the shutdown budget), docs/STREAMS.md (the
+# compiled-in `local` default), docs/DEPLOYMENT.md (guard verdicts, the co-core pin).
+# Some entries are re-wrapped fragments rather than whole claims -- a rewrite moves
+# line boundaries, and whole-line matching cannot see the text survived.
+#
+# The `duplicate` five are the 'Where the reasoning lives' mini-index, which listed
+# four docs the ## Detail Docs index below it already lists with fuller one-liners.
+tighten :: Python ≥3.12, uv, pytest, ruff. `ty` is available as a **non-gating** type checker (`uv run ty check`) — advisory only; no pre-commit or CI gate.
+tighten :: Auth is ADC. Pin the current minor — `>=0.13.1,<0.14` — and raise the **patch** floor with every co-core feature the code starts depending on: the reasoning, and the three ways a skew has already failed, in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+tighten :: **The manifest is a source, not the artifact.** Nothing re-embeds it — no hook, no CI step — so editing a `description` there changes what the repo says and not what `codebase_context_search` returns. Re-run `codebase_context_index` in the same change, or the highest-authority answer an agent gets stays the stale one (#19 CR #17).
+tighten :: the `BlobStore` protocol — **two backends now** (`local`, `gcs`), selected by
+tighten :: `REPLICATOR_BLOB_BACKEND` and defaulting to `local` (#7); `src/api/` is the dev-only
+tighten :: `/health` app; `src/core/` holds config, logging, and the consume path's failure
+tighten :: vocabulary. `tests/` mirrors
+tighten :: `src/`. Every module with the job it owns:
+tighten :: **Single-VM setup.** Code committed to main is the deployed code. Replicator shares the VM with archiver, watcher, and notifier.
+tighten :: The worker binds no port; 8041 is the dev API port and 8040 is reserved. **Redis
+tighten :: is Archiver-operated** — Replicator is a client, never ships a broker, never
+tighten :: claims ownership — and server **≥ 7.0** is Replicator-critical because
+tighten :: `claim_stale` reads `XAUTOCLAIM`'s three-element reply. `scripts/check_redis_floor.sh`
+tighten :: guards it as an `ExecStartPre`. Ports, neighbours, and the redis-py pin:
+tighten :: Three things that bite, each of which has no symptom until it matters:
+tighten :: Every deploy situation with its command, the guard's full verdict table, and the
+tighten :: dev-server invocation: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+tighten :: **The service must never load the repo `.env`.** Those PATs carry write access the
+tighten :: worker has no use for, and a process whose job is fetching public URLs must not
+tighten :: widen their blast radius. Anything the service needs goes in `/etc/replicator/.env`.
+tighten :: Every variable, which file carries it, and the reasoning behind each default:
+tighten :: Replicator is a **consumer** first. Follow the conventions co-core and the archiver producer established:
+tighten :: `command_id:occurred_at`), so nothing an issuer waits on can collapse — storage
+tighten :: identity and correlation identity are not interchangeable. `info_source_id`
+tighten :: rides both and is **echoed, never read**, as is replicate's
+tighten :: `info_item_rep_spec_id`: each `test_boundaries.py` carve-out is one field
+tighten :: wide, and adding one edits the charter (#28, #29).
+tighten :: `gs://`; `local` is the compiled-in default **by decision, not by schedule** —
+tighten :: the deployment flipped on 2026-08-20 and the default did not. Every `BlobStore`
+tighten :: call from a coroutine goes through `asyncio.to_thread` — which puts it in the
+tighten :: unit's shutdown budget, not just the handler's. Per-backend retention, ceilings
+tighten :: and failure classification: [docs/STORAGE.md](docs/STORAGE.md), which is the
+tighten :: authority and worth reading before touching either store.
+tighten :: - **Store, then publish — never the reverse.** A fact pointing at bytes that are
+tighten :: not there is unrepairable by the consumer; stored bytes with no fact repair
+tighten :: themselves on the reclaim.
+tighten :: *before* it — as `XADD <topic>.dlq` then `XACK`, which is the form broker#2's
+tighten :: ACL grants and is now observed rather than inferred (#79). Retry cadence is
+tighten :: `REPLICATOR_CLAIM_MIN_IDLE_MS`; a failing *cycle* is `run_loop`'s problem, not
+tighten :: the message's.
+tighten :: ceiling, the consume path keeps reading, acking and reclaiming throughout, and
+tighten :: nothing is dropped or dead-lettered. The third, `XGROUP CREATE … MKSTREAM`, is
+tighten :: boot-only and does **not** retry: `ensure_group` re-raises anything but
+tighten :: `BUSYGROUP`, so a first boot against a capped broker exits and systemd
+tighten :: restarts. Verified against a scratch broker this repo spawns, never the shared
+tighten :: one. Never answer an OOM with a client-level retry — a re-sent `XADD` the
+tighten :: broker already applied publishes twice.
+tighten :: `fetch_failed(handler_error)`. The cost is deliberate: a grant nobody fixes
+tighten :: retries forever rather than reaching `<topic>.dlq`.
+tighten :: handler — so losing them costs one TTL window of re-fetches and never
+tighten :: correctness. Endorsed as bus state rather than a role blur, with broker#1's four
+tighten :: answers and the ACL grant they imply, in
+tighten :: - **The replicate loop writes for `gcs` (#29)** — create-if-absent, `blob_uri`
+tighten :: never resolved as a path, writers keyed by alias, refusals before credentials,
+tighten :: provider failures classified by HTTP status. Read
+tighten :: [docs/CONVENTIONS.md](docs/CONVENTIONS.md) before touching that path.
+tighten :: requires `--production` for the one combination the live worker consumes — a
+tighten :: frame there is fetched for real.
+tighten :: - **Three normative contracts bound the wire and the roadmap** — four documents,
+tighten :: all under `docs/contracts/`, linked from sibling repos and indexed below.
+tighten :: `tests/test_boundaries.py` enforces the charter in CI; change a
+tighten :: charter and its tests together.
+duplicate :: Where the reasoning lives:
+duplicate :: - What each stream carries — [docs/STREAMS.md](docs/STREAMS.md)
+duplicate :: - The rules common to all of them, and the `replicator:cmd:*` keyspace — [docs/CONVENTIONS.md](docs/CONVENTIONS.md)
+duplicate :: - Blob paths, modes, and the retention sweep — [docs/STORAGE.md](docs/STORAGE.md)
+duplicate :: - Fakeredis's divergences, the keys an integration run may touch, and why production `co-gcs-replication` is refused from every test — [docs/TESTING.md](docs/TESTING.md)
+tighten :: The logging stack — one formatter, two installers, and the journald lines that
+tighten :: are deliberately not JSON: [docs/STYLE.md](docs/STYLE.md).
+tighten :: classes and functions, small focused functions, and tests mirroring source —
+tighten :: each with its rationale and its ruff gate in [docs/STYLE.md](docs/STYLE.md).
+tighten :: - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — founding design and the module-by-module layout; read before changing one
+tighten :: - [docs/STREAMS.md](docs/STREAMS.md) — what each stream carries, one bullet per rule `AGENTS.md` states in a line
+tighten :: - [docs/CONVENTIONS.md](docs/CONVENTIONS.md) — the co-core/Redis Streams rules common to every stream: idempotency, validation, DLQ, `claim_stale`; and the `replicator:cmd:*` keys, this service's only non-stream footprint (#80)
+tighten :: - [docs/STORAGE.md](docs/STORAGE.md) — blob paths and modes, the three populations under `REPLICATOR_BLOB_DIR`, TTL and ceiling semantics
+tighten :: - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — VM topology, ports, the systemd unit's lifecycle, and the co-core pin
+tighten :: - [docs/TESTING.md](docs/TESTING.md) — where fakeredis diverges from the live broker, which keys an integration run may create, and why production `co-gcs-replication` is unreachable from every test (#38)
+tighten :: - [docs/SKILLS.md](docs/SKILLS.md) — vendored skill inventory, refresh procedure, and the doc-check sensitive-path list
+tighten :: - [docs/SOCRATICODE.md](docs/SOCRATICODE.md) — the full tool table, the prefetch query, per-tool gotchas, and cross-repo search
+tighten :: - [docs/contracts/content-fetch-issuer-reference.md](docs/contracts/content-fetch-issuer-reference.md) — its lookup half: the refusal list, the failure taxonomy, the silent conditions, trust posture
+tighten :: - [docs/contracts/content-replicate-issuer-contract.md](docs/contracts/content-replicate-issuer-contract.md) — the replicate trust model and issuer obligations, settled ahead of the code (#34)
