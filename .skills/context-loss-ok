@@ -88,9 +88,6 @@ tighten :: guards it as an `ExecStartPre`. Ports, neighbours, and the redis-py p
 tighten :: Three things that bite, each of which has no symptom until it matters:
 tighten :: Every deploy situation with its command, the guard's full verdict table, and the
 tighten :: dev-server invocation: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
-tighten :: **The service must never load the repo `.env`.** Those PATs carry write access the
-tighten :: worker has no use for, and a process whose job is fetching public URLs must not
-tighten :: widen their blast radius. Anything the service needs goes in `/etc/replicator/.env`.
 tighten :: Every variable, which file carries it, and the reasoning behind each default:
 tighten :: Replicator is a **consumer** first. Follow the conventions co-core and the archiver producer established:
 tighten :: `command_id:occurred_at`), so nothing an issuer waits on can collapse — storage
@@ -143,7 +140,6 @@ tighten :: are deliberately not JSON: [docs/STYLE.md](docs/STYLE.md).
 tighten :: classes and functions, small focused functions, and tests mirroring source —
 tighten :: each with its rationale and its ruff gate in [docs/STYLE.md](docs/STYLE.md).
 tighten :: - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — founding design and the module-by-module layout; read before changing one
-tighten :: - [docs/STREAMS.md](docs/STREAMS.md) — what each stream carries, one bullet per rule `AGENTS.md` states in a line
 tighten :: - [docs/CONVENTIONS.md](docs/CONVENTIONS.md) — the co-core/Redis Streams rules common to every stream: idempotency, validation, DLQ, `claim_stale`; and the `replicator:cmd:*` keys, this service's only non-stream footprint (#80)
 tighten :: - [docs/STORAGE.md](docs/STORAGE.md) — blob paths and modes, the three populations under `REPLICATOR_BLOB_DIR`, TTL and ceiling semantics
 tighten :: - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — VM topology, ports, the systemd unit's lifecycle, and the co-core pin

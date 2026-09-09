@@ -51,7 +51,7 @@ Full tool table, prefetch query, per-tool guidance, cross-repo search:
 
 ## Code Exploration Notes (repo-specific)
 
-**The manifest is a source, not the artifact.** Nothing re-embeds it, so re-run `codebase_context_index` in the same change as a `description` edit — otherwise the highest-authority answer an agent gets stays the stale one (#19 CR #17).
+**The manifest is a source, not the artifact.** Nothing re-embeds it, so re-run `codebase_context_index` in the same change as a `description` edit — otherwise the stalest answer is the one with the most authority (#19 CR #17).
 
 **`mcp-driver.mjs` lies twice — silently through the `skills/` symlink (skills#177), falsely from a worktree (skills#180).** Use `"$SOCRATICODE_DRIVER"`; disbelieve health findings outside the main checkout. Both in [docs/SKILLS.md](docs/SKILLS.md).
 
@@ -104,8 +104,8 @@ convention:
 2. **`.env`** (repo root, git-ignored) — dev/agent secrets, chiefly org-wide GitHub PATs. Never commit.
 
 **The service must never load the repo `.env`.** Those PATs carry write access the
-worker has no use for, and a fetcher of public URLs must not widen their blast
-radius. Anything the service needs goes in `/etc/replicator/.env`.
+worker has no use for, and a process whose job is fetching public URLs must not
+widen their blast radius. Anything the service needs goes in `/etc/replicator/.env`.
 
 New settings take the `REPLICATOR_` prefix — the VM is shared, and the prefix is
 what keeps a sibling service from colliding. `BUILD_ID` is the one deliberate
@@ -233,7 +233,8 @@ from src.core.logging import get_logger
 
 logger = get_logger(__name__)
 ```
-Entry points only: `configure_logging()` is called once inside the FastAPI `lifespan` or the worker's `run()`. Never in library modules. The stack itself — formatter, installers, the journald lines deliberately not JSON — is in [docs/STYLE.md](docs/STYLE.md).
+Entry points only: `configure_logging()` is called once inside the FastAPI `lifespan` or the worker's `run()`. Never in library modules.
+The stack itself: [docs/STYLE.md](docs/STYLE.md).
 
 **Date & Time:**
 - All UTC
@@ -248,10 +249,10 @@ with its rationale and ruff gate in [docs/STYLE.md](docs/STYLE.md).
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — founding design, the command → fact flow, module by module; read before changing one
 - [docs/STREAMS.md](docs/STREAMS.md) — what each stream carries, one bullet per rule `AGENTS.md` states in a line
 - [docs/CONVENTIONS.md](docs/CONVENTIONS.md) — the rules common to every stream: idempotency, validation, DLQ, `claim_stale`; and the `replicator:cmd:*` keys (#80)
-- [docs/STORAGE.md](docs/STORAGE.md) — blob paths and modes, the three populations under `REPLICATOR_BLOB_DIR`, TTL and ceilings
+- [docs/STORAGE.md](docs/STORAGE.md) — blob paths and modes, the populations under `REPLICATOR_BLOB_DIR`, TTL and ceilings
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — VM topology, ports, the unit's lifecycle, the co-core pin
 - [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) — every variable either env file carries, and the boundary between them
-- [docs/TESTING.md](docs/TESTING.md) — fakeredis's divergences, the keys an integration run may create, and why production `co-gcs-replication` is unreachable from every test (#38)
+- [docs/TESTING.md](docs/TESTING.md) — fakeredis's divergences, the keys an integration run may create, why production `co-gcs-replication` is unreachable (#38)
 - [docs/STYLE.md](docs/STYLE.md) — the logging stack: formatter, installers, and the non-JSON journald lines
 - [docs/COMMANDS.md](docs/COMMANDS.md) — every runnable command, with flags
 - [docs/SKILLS.md](docs/SKILLS.md) — vendored skill inventory, refresh procedure, doc-check sensitive paths
