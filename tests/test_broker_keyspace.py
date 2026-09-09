@@ -41,9 +41,9 @@ CONVENTIONS = REPO / "docs" / "CONVENTIONS.md"
 # silently, so it is pinned here rather than left to prose.
 HEADING = "## The `replicator:cmd:*` keys"
 
-# Commands that address a *stream*, plus the connection-lifecycle call. What is
-# left after these is by definition the non-stream keyspace this file is about,
-# so a newly used command lands in the assertion instead of a skip list.
+# Commands that address a *stream*. What is left after these — and after the
+# non-commands below — is by definition the non-stream keyspace this file is
+# about, so a newly used command lands in the assertion, not in a skip list.
 STREAM_COMMANDS = frozenset(
     {
         "xadd",
@@ -61,7 +61,11 @@ STREAM_COMMANDS = frozenset(
         "xtrim",
     }
 )
-LIFECYCLE_COMMANDS = frozenset({"aclose", "close", "ping"})
+# Not commands at all — connection lifecycle on the client object. `ping` is
+# deliberately absent: it *is* a Redis command, one an ACL has to grant, so a
+# health probe that starts sending it should break the "two commands" claim in
+# CONVENTIONS.md and broker#2's grant list rather than pass through an exemption.
+NOT_COMMANDS = frozenset({"aclose", "close"})
 
 
 def _relative(path: Path) -> str:
@@ -133,7 +137,7 @@ def test_the_non_stream_keyspace_is_the_dedupe_key_and_nothing_else() -> None:
     non_stream = [
         site
         for site in redis_call_sites(SRC)
-        if site[2] not in STREAM_COMMANDS and site[2] not in LIFECYCLE_COMMANDS
+        if site[2] not in STREAM_COMMANDS and site[2] not in NOT_COMMANDS
     ]
     assert non_stream, "the scan found no non-stream commands at all — it has stopped working"
     assert {site[3] for site in non_stream} == {"dedupe_key"}, (
