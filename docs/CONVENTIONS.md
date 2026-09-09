@@ -147,6 +147,13 @@ back or reaps a key early, and the `SCAN` in [COMMANDS.md](COMMANDS.md) is an
 *operator* command that the service never issues — granting any of them here
 would widen a grant for a caller that does not exist.
 
+For broker#2, that is two clauses rather than one, because Redis ACLs grant
+commands and key patterns separately: `+set` and `+exists` among the commands,
+`~replicator:cmd:*` among the key patterns. Neither is scoped by the other —
+`+set` is a grant to run `SET` on *any* key the user's patterns already reach —
+so a pattern list written to this service's real footprint is what keeps the
+command grants narrow in effect.
+
 **What a cold start does without them: re-work, never loss.** The
 set-after-success ordering is what makes that true — the key can only ever
 short-circuit work already known to have finished, so its absence costs the
