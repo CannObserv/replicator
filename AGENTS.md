@@ -158,13 +158,16 @@ Replicator is a **consumer** first. Follow the conventions co-core and the archi
   ACL grants and is now observed rather than inferred (#79). Retry cadence is
   `REPLICATOR_CLAIM_MIN_IDLE_MS`; a failing *cycle* is `run_loop`'s problem, not
   the message's.
-- **A capped broker refuses only its `denyoom` commands — `XADD`, `SET`, and
-  `XGROUP CREATE … MKSTREAM` — and Replicator retries through all of them
-  (#79).** Verified against a scratch broker this repo spawns, never the shared
-  one: `OutOfMemoryError` is transient and exempt from the delivery ceiling, the
-  consume path keeps reading, acking and reclaiming throughout, and nothing is
-  dropped or dead-lettered. Never answer an OOM with a client-level retry — a
-  re-sent `XADD` the broker already applied publishes twice.
+- **A capped broker refuses only its `denyoom` commands, and the worker retries
+  the two it meets at runtime (#79).** `XADD` and `SET` are refused and retried
+  indefinitely — `OutOfMemoryError` is transient and exempt from the delivery
+  ceiling, the consume path keeps reading, acking and reclaiming throughout, and
+  nothing is dropped or dead-lettered. The third, `XGROUP CREATE … MKSTREAM`, is
+  boot-only and does **not** retry: `ensure_group` re-raises anything but
+  `BUSYGROUP`, so a first boot against a capped broker exits and systemd
+  restarts. Verified against a scratch broker this repo spawns, never the shared
+  one. Never answer an OOM with a client-level retry — a re-sent `XADD` the
+  broker already applied publishes twice.
 - **Consumers must be idempotent; producers own the outbox.** Replicator has no DB
   — its durable record of intent is the consumer group's PEL. Do not add a
   Postgres outbox to the consume path.
