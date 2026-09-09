@@ -119,13 +119,18 @@ SHUTDOWN_TIMEOUT_SECONDS = 5
 # The gap between two looks at a state only the broker can change.
 POLL_INTERVAL_SECONDS = 0.05
 
+# How long ``observing`` waits for MONITOR to attach, and for the last reply to
+# arrive before it stops listening. Both ends need it: a capture that starts late
+# misses the commands under test, and one that stops early truncates them.
+MONITOR_SETTLE_SECONDS = 0.2
+
 
 async def wait_for(predicate, *, what: str) -> None:
     """Poll ``predicate`` until it holds, or fail saying what never happened.
 
     ``asyncio.timeout`` around the same loop would report a bare
-    ``TimeoutError`` from inside a ``while`` — true, and silent about which of
-    the two waits below expired.
+    ``TimeoutError`` from inside a ``while`` — true, and silent about which wait
+    expired.
     """
     deadline = time.monotonic() + RECOVERY_TIMEOUT_SECONDS
     while True:
@@ -134,6 +139,38 @@ async def wait_for(predicate, *, what: str) -> None:
         if time.monotonic() > deadline:
             raise AssertionError(f"waited {RECOVERY_TIMEOUT_SECONDS}s and {what} never happened")
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
+
+
+@contextlib.asynccontextmanager
+async def observing(client: Redis) -> AsyncGenerator[list[str]]:
+    """Collect every command the broker sees, as ``MONITOR`` reports it.
+
+    The list fills as the body runs and is complete once the block exits. Both
+    sleeps are settling time — one for ``MONITOR`` to attach before anything is
+    issued, one for the last reply to arrive before the collector is cancelled —
+    and they live here rather than in each test so the two capture sites cannot
+    be tuned apart.
+
+    Safe against this module's own broker only, which is the whole point of
+    ``capped_server``: ``MONITOR`` reports *every* client's traffic, so on a
+    shared instance these assertions would read somebody else's commands.
+    """
+    observed: list[str] = []
+    async with client.monitor() as monitor:
+
+        async def collect() -> None:
+            async for entry in monitor.listen():
+                observed.append(entry["command"])
+
+        collector = asyncio.create_task(collect())
+        await asyncio.sleep(MONITOR_SETTLE_SECONDS)
+        try:
+            yield observed
+        finally:
+            await asyncio.sleep(MONITOR_SETTLE_SECONDS)
+            collector.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await collector
 
 
 @dataclass(frozen=True, slots=True)
@@ -364,6 +401,16 @@ async def deliver(broker, consumer, topic, command_id="cmd-oom"):
     return message
 
 
+async def refusing_handler(command: ContentFetchCommand) -> None:
+    """A handler whose failure is deterministic, so the loop closes the command.
+
+    Module-level for the reason ``conftest.py`` keeps ``noop_handler`` there:
+    five copies of a two-line handler is five things to keep in agreement, and
+    the reason token is what selects the closing path under test.
+    """
+    raise PermanentFetchError("404 from the origin", reason=FailureReason.HTTP_STATUS)
+
+
 async def pending_count(client, topic: str) -> int:
     return int((await client.xpending(topic, GROUP))["pending"])
 
@@ -439,27 +486,37 @@ async def test_the_consume_path_still_runs_while_the_cap_bites(broker, topic, co
     had to be rewritten to avoid (CR round 3). Not raising is the *other* half —
     a refused command raises — and both are worth having.
     """
-    await broker.client.xadd(topic, make_command(command_id="cmd-before-the-cap"))
+    command_id = "cmd-before-the-cap"
+    await broker.client.xadd(topic, make_command(command_id=command_id))
     await broker.cap()
 
-    (message,) = await consumer.read(count=1, block_ms=READ_BLOCK_MS)
-    assert await broker.client.xpending(topic, GROUP)
-    assert [entry[0].decode() for entry in await broker.client.xrange(topic)] == [
-        message.message_id
-    ]
-    _cursor, claimed, _deleted = await broker.client.xautoclaim(topic, GROUP, CONSUMER, 0, "0-0")
-    assert [entry[0].decode() for entry in claimed] == [message.message_id]
-    assert await broker.client.exists(FETCH_SPEC.dedupe_key("cmd-before-the-cap")) == 0
-    assert await broker.client.execute_command("PING")
-    await consumer.ack(message.message_id)
-    assert await pending_count(broker.client, topic) == 0
-
-    # The two writes the loop makes that a capped broker will not take: the fact
-    # (and, on the closing paths, the DLQ copy), and the dedupe key.
+    # The refused half first, next to the fill that provoked it. Ordering, not
+    # taste: ``used_memory`` sits within a few hundred bytes of the cap and moves
+    # with whatever command is running (see ``BALLAST_BYTES``), so a refusal
+    # asserted six commands later is asserted against a boundary that may have
+    # drifted underneath it. These are the two writes the loop makes that a
+    # capped broker will not take — the fact (and, on the closing paths, the DLQ
+    # copy), and the dedupe key.
     with pytest.raises(OutOfMemoryError):
         await broker.client.xadd(dlq_name(topic), {"payload": "x"})
     with pytest.raises(OutOfMemoryError):
-        await broker.client.set(FETCH_SPEC.dedupe_key("cmd-before-the-cap"), "1", nx=True, ex=60)
+        await broker.client.set(FETCH_SPEC.dedupe_key(command_id), "1", nx=True, ex=60)
+
+    # The admitted half. Each of these would raise if the cap covered it, so the
+    # assertions are about what each returned as well as about reaching a reply.
+    (message,) = await consumer.read(count=1, block_ms=READ_BLOCK_MS)
+    assert await broker.client.xpending(topic, GROUP)
+    # By id, which is the form ``dead_letter_anomaly`` issues — the unbounded
+    # ``XRANGE key - +`` is admitted identically and is not the command an ACL
+    # will be asked about.
+    reread = await broker.client.xrange(topic, min=message.message_id, max=message.message_id)
+    assert [entry[0].decode() for entry in reread] == [message.message_id]
+    _cursor, claimed, _deleted = await broker.client.xautoclaim(topic, GROUP, CONSUMER, 0, "0-0")
+    assert [entry[0].decode() for entry in claimed] == [message.message_id]
+    assert await broker.client.exists(FETCH_SPEC.dedupe_key(command_id)) == 0
+    assert await broker.client.execute_command("PING")
+    await consumer.ack(message.message_id)
+    assert await pending_count(broker.client, topic) == 0
 
 
 async def test_a_refused_fact_leaves_the_command_pending_and_undead_lettered(
@@ -474,7 +531,8 @@ async def test_a_refused_fact_leaves_the_command_pending_and_undead_lettered(
     PEL still names the command, which is the durable record of intent this
     service has instead of an outbox.
     """
-    message = await deliver(broker, consumer, topic)
+    command_id = "cmd-refused-fact"
+    message = await deliver(broker, consumer, topic, command_id=command_id)
     await broker.cap()
 
     outcome = await process_message(
@@ -492,7 +550,7 @@ async def test_a_refused_fact_leaves_the_command_pending_and_undead_lettered(
     assert await pending_count(broker.client, topic) == 1
     assert await broker.client.exists(dlq_name(topic)) == 0
     assert await broker.client.exists(blobs_topic) == 0
-    assert await broker.client.exists(FETCH_SPEC.dedupe_key("cmd-oom")) == 0
+    assert await broker.client.exists(FETCH_SPEC.dedupe_key(command_id)) == 0
 
 
 async def test_a_capped_broker_never_burns_the_delivery_ceiling(
@@ -527,7 +585,12 @@ async def test_a_capped_broker_never_burns_the_delivery_ceiling(
             )
         )
         await asyncio.sleep(CLAIM_MIN_IDLE_MS / 1000)
-        (message,) = await claim_once(broker.client, consumer, settings, group=GROUP)
+        reclaimed = await claim_once(broker.client, consumer, settings, group=GROUP)
+        # Named rather than unpacked blind: an empty list here is a missed idle
+        # window, and `not enough values to unpack` would send the next reader
+        # into claim_once looking for a bug that is not there.
+        assert reclaimed, f"nothing was reclaimable after {CLAIM_MIN_IDLE_MS}ms idle"
+        (message,) = reclaimed
 
     assert outcomes == [Outcome.RETRY] * (settings.max_delivery_attempts + 2)
     assert await times_delivered(broker.client, topic, message.message_id) > (
@@ -602,9 +665,6 @@ async def test_a_dead_letter_refused_at_the_cap_strands_nothing(
     is redelivered and closed properly when the cap lifts.
     """
 
-    async def refusing_handler(command: ContentFetchCommand) -> None:
-        raise PermanentFetchError("404 from the origin", reason=FailureReason.HTTP_STATUS)
-
     message = await deliver(broker, consumer, topic, command_id="cmd-permanent")
     await broker.cap()
 
@@ -671,9 +731,6 @@ async def test_a_sustained_cap_on_the_closing_path_retries_rather_than_exiting(
     ``loop.done()`` is the assertion that the worker is still the one making them.
     """
 
-    async def refusing_handler(command: ContentFetchCommand) -> None:
-        raise PermanentFetchError("404 from the origin", reason=FailureReason.HTTP_STATUS)
-
     settings = oom_settings.model_copy(update={"max_consecutive_cycle_failures": 3})
     message_id = (
         await broker.client.xadd(topic, make_command(command_id="cmd-permanent"))
@@ -739,20 +796,9 @@ async def test_the_dead_letter_write_is_an_xadd_to_the_topic_dlq(
     ``dlq_name`` the production topics go through.
     """
 
-    async def refusing_handler(command: ContentFetchCommand) -> None:
-        raise PermanentFetchError("404 from the origin", reason=FailureReason.HTTP_STATUS)
-
     message = await deliver(broker, consumer, topic, command_id="cmd-observed")
-    observed: list[str] = []
 
-    async with broker.client.monitor() as monitor:
-
-        async def collect() -> None:
-            async for entry in monitor.listen():
-                observed.append(entry["command"])
-
-        collector = asyncio.create_task(collect())
-        await asyncio.sleep(0.2)  # let MONITOR attach before anything is issued
+    async with observing(broker.client) as observed:
         outcome = await process_message(
             message,
             client=broker.client,
@@ -763,10 +809,6 @@ async def test_the_dead_letter_write_is_an_xadd_to_the_topic_dlq(
             reporter=collected_reports(),
             spec=FETCH_SPEC,
         )
-        await asyncio.sleep(0.2)
-        collector.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await collector
 
     assert outcome is Outcome.DEAD_LETTERED
     writes = [line for line in observed if line.startswith(("XADD", "XACK"))]
@@ -795,21 +837,9 @@ async def test_a_frame_that_will_not_decode_is_dead_lettered_by_the_same_two_com
     CannObserv/archiver#162.
     """
     await broker.client.xadd(topic, {"event_type": "content_fetch", "payload": "not json"})
-    observed: list[str] = []
 
-    async with broker.client.monitor() as monitor:
-
-        async def collect() -> None:
-            async for entry in monitor.listen():
-                observed.append(entry["command"])
-
-        collector = asyncio.create_task(collect())
-        await asyncio.sleep(0.2)
+    async with observing(broker.client) as observed:
         assert await poll_once(broker.client, consumer, oom_settings, group=GROUP) == []
-        await asyncio.sleep(0.2)
-        collector.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await collector
 
     assert any(line.startswith(f"XRANGE {topic} ") for line in observed), observed
     assert any(line.startswith(f"XADD {topic}.dlq * ") for line in observed), observed
@@ -829,9 +859,6 @@ async def test_a_closing_fact_that_the_cap_refuses_is_swallowed_not_raised(
     isolate the one under test, which is the only way to observe a failed announce
     followed by a successful dead-letter.
     """
-
-    async def refusing_handler(command: ContentFetchCommand) -> None:
-        raise PermanentFetchError("404 from the origin", reason=FailureReason.HTTP_STATUS)
 
     message = await deliver(broker, consumer, topic, command_id="cmd-silent")
     reporter = build_failure_reporter(client=broker.client, blobs_topic=blobs_topic)
@@ -869,9 +896,6 @@ async def test_the_fact_stream_carries_the_close_when_the_broker_can_take_it(
     Without it, "no fact on the stream" is not evidence the cap refused one — it
     is equally consistent with a reporter that never publishes at all.
     """
-
-    async def refusing_handler(command: ContentFetchCommand) -> None:
-        raise PermanentFetchError("404 from the origin", reason=FailureReason.HTTP_STATUS)
 
     message = await deliver(broker, consumer, topic, command_id="cmd-announced")
 
