@@ -12,13 +12,17 @@ segment, or a changed TTL default all leave the prose reading plausibly and
 naming something that is no longer true — in another repo's inventory and, via
 broker#2, in an ACL. This file is the executable half.
 
-**The scan is AST-based and its receiver is the convention, not a guess.** Bus
-clients are injection-only (see CONVENTIONS.md), so every direct Redis command
-in `src/` is spelled `client.<cmd>(...)` on a parameter named `client`;
-everything else reaches the broker through a co-core driver, which speaks
-streams only. `test_the_scan_*` runs the scanner against synthetic source, for
-the reason `test_boundaries.py` gives: a structural scan that quietly matches
-nothing passes forever while enforcing nothing.
+**The scan is AST-based, and the convention it rests on is enforced rather than
+assumed.** Bus clients are injection-only (see CONVENTIONS.md), so every direct
+Redis command in `src/` is spelled `client.<cmd>(...)`; everything else reaches
+the broker through a co-core driver, which speaks streams only. That receiver
+name is the scan's whole reach, which makes it the bypass: a module taking
+`redis: Redis` writes whatever keys it likes and every assertion here still
+passes. So `test_every_redis_handle_is_named_client` scans the *annotations*
+too and requires the name — a new handle must join the scanned population
+before it can be used. `test_the_scan_*` drives both scanners against synthetic
+violating source, for the reason `test_boundaries.py` gives: a structural scan
+that quietly matches nothing passes forever while enforcing nothing.
 """
 
 import ast
@@ -89,6 +93,25 @@ def redis_call_sites(root: Path) -> list[tuple[str, int, str, str]]:
     return sites
 
 
+def redis_handle_names(root: Path) -> list[tuple[str, int, str]]:
+    """Every `Redis`-annotated binding under `root`, as (file, line, name).
+
+    Parameters and annotated assignments both, so `self._client: Redis` is as
+    visible as `client: Redis`. Return annotations are not bindings and are
+    skipped — nothing can be called on them without first being named.
+    """
+    handles: list[tuple[str, int, str]] = []
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.arg) and node.annotation is not None:
+                if "Redis" in ast.unparse(node.annotation):
+                    handles.append((_relative(path), node.lineno, node.arg))
+            elif isinstance(node, ast.AnnAssign) and "Redis" in ast.unparse(node.annotation):
+                handles.append((_relative(path), node.lineno, ast.unparse(node.target)))
+    return handles
+
+
 def documented_section() -> str:
     """The `## The `replicator:cmd:*` keys` section of CONVENTIONS.md."""
     text = CONVENTIONS.read_text(encoding="utf-8")
@@ -147,6 +170,23 @@ def test_the_documented_ttl_is_the_shipped_default() -> None:
     assert str(default) in section, f"the section does not name the {default}s default TTL"
 
 
+def test_every_redis_handle_is_named_client() -> None:
+    """The convention `redis_call_sites` reaches through, asserted rather than trusted.
+
+    A handle spelled anything else is invisible to every other test in this
+    file, so the section could go on claiming one key pattern while a second
+    was already on the broker — the failure mode a guard has instead of a bug.
+    """
+    handles = redis_handle_names(SRC)
+    assert handles, "no Redis-annotated binding found at all — the scan has stopped working"
+    misnamed = [handle for handle in handles if handle[2] != "client"]
+    assert not misnamed, (
+        f"a Redis handle not named `client`: {misnamed}. Every direct command in src/ has "
+        "to be reachable by this file's scan before docs/CONVENTIONS.md can claim what the "
+        "non-stream footprint is (#80)."
+    )
+
+
 @pytest.mark.parametrize(
     ("source", "expected"),
     [
@@ -170,3 +210,15 @@ def test_the_scan_ignores_a_call_on_something_that_is_not_the_client(tmp_path: P
     module = tmp_path / "fake.py"
     module.write_text("def f(store, fingerprint):\n    return store.exists(fingerprint)\n")
     assert redis_call_sites(tmp_path) == []
+
+
+def test_the_handle_scan_sees_a_redis_parameter_under_another_name(tmp_path: Path) -> None:
+    """The bypass finding 1 closed: a handle the call scan would never look at."""
+    module = tmp_path / "fake.py"
+    module.write_text(
+        "class C:\n    _pool: Redis\n\nasync def f(redis: Redis, n: int) -> None:\n    ...\n"
+    )
+    assert [(name, line > 0) for _, line, name in redis_handle_names(tmp_path)] == [
+        ("_pool", True),
+        ("redis", True),
+    ]
