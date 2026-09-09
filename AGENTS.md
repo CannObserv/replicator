@@ -8,8 +8,7 @@ Retrieval, fingerprinting, and temporary storage layer for the Cannabis Observer
 
 **Worker-first.** Primary process = bus consumer (`src/worker/main.py`), not an HTTP API. The FastAPI app is a `/health` surface only, dev-only until a status endpoint is wanted.
 
-The command → fact flow, and what each module owns:
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The command → fact flow: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Development Methodology
 
@@ -126,7 +125,7 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
   `info_item_rep_spec_id` are **echoed, never read** — each `test_boundaries.py`
   carve-out is one field wide, and adding one edits the charter (#28, #29).
 - **Two blob backends, one seam.** `local` announces `file://` and `gcs` announces
-  `gs://`; `local` is the compiled-in default **by decision, not by schedule**.
+  `gs://`; `local` stays the compiled-in default deliberately (#7).
   Every `BlobStore` call from a coroutine goes through `asyncio.to_thread`, which
   puts it in the unit's shutdown budget, not just the handler's.
   [docs/STORAGE.md](docs/STORAGE.md) is the authority — read it before touching
