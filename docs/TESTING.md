@@ -171,6 +171,15 @@ It runs under the existing `integration` marker rather than a third one: it does
 hit a real broker, it is local and free, and a marker whose meaning is "starts a
 process" would split the suite along a line nobody selects on.
 
+**CI runs this file and no other marked one (#83).** The `test` job installs
+`redis-server`, asserts the binary resolved — a skip here is silent by
+construction, so an apt failure would otherwise leave a green job with the suite
+unrun, the same hazard the `gcs` job asserts its way out of — and then runs the
+file explicitly. Every other `@pytest.mark.integration` test still needs the VM
+broker and still runs only on the VM, so the marker's meaning is unchanged: what
+CI selects is a path, not a marker. `tests/test_ci.py` pins both the step and its
+guard, because deleting either leaves a workflow that still passes.
+
 ```bash
 uv run pytest --no-cov -m integration tests/worker/test_oom_integration.py
 ```

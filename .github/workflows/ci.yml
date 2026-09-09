@@ -162,6 +162,39 @@ jobs:
       - name: pytest (default, excludes integration)
         run: uv run pytest
 
+      # One integration file runs here, and only one (#83). Every other
+      # `@pytest.mark.integration` test needs the Archiver-operated broker on the
+      # VM, which no runner has; `test_oom_integration.py` spawns its own
+      # `redis-server` on a loopback port it picks, so its only requirement is
+      # this binary. A step in this job rather than a job of its own: the
+      # wheelhouse is already mirrored and the venv already synced here, and a
+      # second job would pay both again to run 13 tests.
+      - name: Install redis-server (the OOM suite spawns its own broker)
+        run: sudo apt-get update && sudo apt-get install -y redis-server
+
+      # Skipping is not passing, and this suite's skip is silent by construction:
+      # the fixture skips when `redis-server` is absent, so an apt failure that
+      # left the binary missing would produce a green job with the whole suite
+      # unrun. That is the failure docs/TESTING.md already names for the `gcs`
+      # job, and this is the same answer — assert the precondition rather than
+      # discover it. `-rs` in the run below prints the reason for any skip that
+      # survives.
+      - name: Assert the scratch broker's binary resolved
+        run: |
+          if ! command -v redis-server > /dev/null; then
+            echo "::error::redis-server is not on PATH after apt-get install. The OOM suite would skip, not fail — and it is the evidence behind the capped-broker record in docs/CONVENTIONS.md and behind CannObserv/broker#6 and CannObserv/broker#2."
+            exit 1
+          fi
+          redis-server --version
+
+      # --no-cov: this file does not exercise all of src/, and the gate measures
+      # it. The Redis >= 7.0 floor `scripts/check_redis_floor.sh` guards in
+      # production applies to the runner's build too — `claim_stale` reads
+      # XAUTOCLAIM's three-element reply — so a runner image that regressed below
+      # it fails here rather than on the VM.
+      - name: pytest (broker OOM, ACL denial, and dead-letter command forms)
+        run: uv run pytest --no-cov -m integration tests/worker/test_oom_integration.py -rs
+
   # The only job in this workflow that holds a delete-capable identity, and it is
   # a separate job for exactly that reason (#53). The `test` job authenticates as
   # `co-pypi-reader` — read on the package index and nothing else — and giving it
