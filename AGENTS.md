@@ -249,7 +249,7 @@ its installers, and the journald lines deliberately not JSON:
 ## Detail Docs
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — founding design, module by module; read before changing one
-- [docs/STREAMS.md](docs/STREAMS.md) — what each stream carries, one bullet per rule stated here in a line
+- [docs/STREAMS.md](docs/STREAMS.md) — what each stream carries, one bullet per rule `AGENTS.md` states in a line
 - [docs/CONVENTIONS.md](docs/CONVENTIONS.md) — the rules common to every stream: idempotency, validation, DLQ, `claim_stale`; and the `replicator:cmd:*` keys (#80)
 - [docs/STORAGE.md](docs/STORAGE.md) — blob paths and modes, the three populations under `REPLICATOR_BLOB_DIR`, TTL and ceilings
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — VM topology, ports, the unit's lifecycle, the co-core pin
