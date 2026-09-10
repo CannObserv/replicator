@@ -108,7 +108,7 @@ rather than deleting bytes a consumer was promised.
 | `REPLICATOR_BLOB_BACKEND` | `gcs` | Temp blobs live in an object store — **not** the `local` default |
 | `REPLICATOR_BLOB_BUCKET` | `co-gcs-blobs` | The temp-blob bucket that backend writes into |
 | `REPLICATOR_BLOB_DIR` | `/var/lib/replicator/blobs` | Temp-storage root; **unused under `gcs`**, kept against a flip back to `local` |
-| `REPLICATOR_REPLICATION_ALIASES_FILE` | *(unset)* | No alias table ⇒ nothing provisioned; every `content.replicate` command is refused `alias_unknown` until an operator writes one (#86) |
+| `REPLICATOR_REPLICATION_ALIASES_FILE` | `/etc/replicator/replication-aliases.json` | The alias table: one binding, `primary` → `gs://co-gcs-replication`, empty prefix — provisioned 2026-09-10 (#86). `root:exedev 640`, like the key files beside it. Unset ⇒ nothing provisioned, every `content.replicate` command refused `alias_unknown` |
 | `REPLICATOR_CONSUMER_NAME` | *(unset)* | Per-group override; the name is derived from the group — `replicator-fetch-1` — and never shared |
 | `REPLICATOR_REPLICATE_CONSUMER_NAME` | *(unset)* | The same, for `replicator.replicate` — derives `replicator-replicate-1` |
 | `REPLICATOR_LOG_LEVEL` | `INFO` | Root log level |

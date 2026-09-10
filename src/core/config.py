@@ -279,8 +279,9 @@ class Settings(BaseSettings):
     # REPLICATOR_* variable per alias per field is a shape env does not hold. The
     # contract's phrase is "env-referenced host config" (T2), and this is that.
     #
-    # Unset is the safe default and the current state of every host: nothing
-    # provisioned means every replicate command is refused, so enabling
+    # Unset is the safe default, and every host's state until an operator
+    # writes the table (this VM's until #86): nothing provisioned means every
+    # replicate command is refused, so enabling
     # replication is an explicit operator act rather than a consequence of a
     # message arriving (T5).
     replication_aliases_file: Path | None = Field(

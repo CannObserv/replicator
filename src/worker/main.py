@@ -284,8 +284,9 @@ def build_writers(aliases: AliasTable) -> dict[str, AsyncGcsDriver]:
         if binding.provider != "gcs":
             continue
         # Asked here rather than at the top: a worker with nothing provisioned —
-        # every worker on this VM today — should not pay a subprocess for a
-        # question about a write it will never attempt. Asked once and cached for
+        # every host's posture until an operator writes an alias table, this
+        # VM's until #86 — should not pay a subprocess for a question about a
+        # write it will never attempt. Asked once and cached for
         # the table, because the answer cannot differ between two bindings read
         # in the same process.
         if not asked:
@@ -594,8 +595,9 @@ async def run(
         replicate_consumer_name = consumer_name_for(settings, settings.replicate_consumer_group)
         # Host state, read once at boot: which destinations an operator
         # provisioned here. Unset means nothing is provisioned and every
-        # replicate command is refused, which is the current state of every host
-        # and the safe default (contract T5).
+        # replicate command is refused — the safe default (contract T5), and
+        # every host's state until an operator writes the table (this VM's
+        # until #86 provisioned `primary`).
         aliases = load_alias_table(settings.replication_aliases_file)
         # One driver per provisioned binding, built **here** and not per command:
         # ``storage.Client()`` resolves ADC synchronously — key files, and on a
