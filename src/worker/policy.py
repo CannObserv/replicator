@@ -536,9 +536,13 @@ def _skip_poison(reader: PolicyReader, exc: BusMessageAnomaly) -> bool:
     """Advance past a frame that will never decode. ``False`` if it could not.
 
     With no group there is no ``ack`` to move past one, so the cursor has to be
-    forced or the next read redelivers the same frame and raises forever. Safe to
-    seek straight to it only because reads are ``count=1``: there is no
-    well-formed prefix behind it to skip.
+    forced or the next read redelivers the same frame and raises forever. Safe
+    to seek straight to it only because **every caller reaches this at
+    ``count=1``**: there is no well-formed prefix behind it to skip. The tail
+    reads that way throughout; the replay batches (#85), and the ``count > 1``
+    branch in ``replay_policies`` is what keeps a raised batch away from here
+    until it has degraded and drained. A new caller has to satisfy that too —
+    seeking from a raised batch discards its prefix permanently (CR 6).
 
     **The id is checked rather than trusted (CR #15).**
     ``BusMessageAnomaly.__init__`` *defaults* ``message_id`` to ``"?"`` instead
