@@ -50,19 +50,38 @@ from src.worker.loop import (
 
 logger = get_logger(__name__)
 
-# Entries are read one at a time, deliberately, and the acceptance criteria in
-# #19 allow it as the documented choice.
+# The **tail** reads one entry at a time, deliberately, and the acceptance
+# criteria in #19 allow it as the documented choice.
 #
 # ``AsyncBusTailReader`` advances its cursor only on a fully-decoded batch, so a
 # poison frame at position k discards the k-1 good messages ahead of it and
 # redelivers them. Recovering from that at ``count > 1`` means re-reading at
 # ``count=1`` to drain the prefix and land on the poison *before* seeking past
 # it, because ``seek`` only moves forward and would otherwise skip the prefix
-# for good. Reading at ``count=1`` throughout deletes that sequence rather than
-# implementing it: this stream carries one message per host per republish, so
-# the extra round-trips are noise against a correctness argument that is easy to
-# get right today and easy to break on the next edit.
+# for good. Reading at ``count=1`` here deletes that sequence rather than
+# implementing it, and it costs nothing: the tail blocks on a stream that gains
+# three entries every five minutes.
 READ_COUNT = 1
+
+# The **replay** reads in batches, because it is the one place where the number
+# of round trips is the length of the stream rather than the rate of the
+# producer (#85).
+#
+# The live stream held 29,770 entries — three hosts republished every five
+# minutes since the producer started, never trimmed — and one round trip each
+# made the boot replay take 950 seconds. `ensure_group` has already run by
+# then, but neither consume loop has reached its first read, so for sixteen
+# minutes the broker sees a worker with a single non-blocking `xread`
+# connection and no blocked `xreadgroup` at all. That is what #85 was filed
+# on, and it is startup ordering, not the event-loop starvation it resembled.
+#
+# So the replay pays for the recovery sequence the tail avoids: it degrades to
+# ``count=1`` on an anomaly, drains the prefix, seeks past the poison, and
+# restores the batch on the next successful read. 500 is chosen against the
+# failure it has to survive rather than against throughput — a batch that
+# raises is re-read one entry at a time, so the size is also the worst-case
+# number of extra round trips one poison frame can cost.
+REPLAY_COUNT = 500
 
 # What ``BusMessageAnomaly.__init__`` puts in ``message_id`` when the raiser did
 # not supply one. A sentinel, not an id — seeking to it wedges the cursor. See
@@ -199,8 +218,14 @@ class FetchPolicyMap:
         value it replaces is not knowable at this moment — which is why the
         contract fixes it from the consumer side and ``_store`` reports every
         policy that turns out to be stricter than it.
+
+        Logged only when a policy was actually dropped, for the reason
+        ``_store`` logs only on a change (#85): a tombstone is republished on
+        the producer's cron like any other entry, and a host the worker never
+        held is revoked once per republish for the whole history of the stream.
         """
-        self._intervals.pop(host, None)
+        if self._intervals.pop(host, None) is None:
+            return
         logger.info(
             "revoked a host fetch policy — falling back to the default",
             extra={"host": host, "default_interval_seconds": self._default},
@@ -212,7 +237,17 @@ class FetchPolicyMap:
             # policy with no interval, so this is unreachable through from_wire.
             logger.warning("ignoring a live fetch policy with no interval", extra={"host": host})
             return
+        previous = self._intervals.get(host)
         self._intervals[host] = min_interval_seconds
+        # Only a *change* is news (#85). The producer republishes its whole set
+        # on a cron and the boot replay walks every republish it ever made, so
+        # logging each apply made the journal a function of the stream's length
+        # rather than of what happened: ~31 lines/second for the 16 minutes a
+        # 29,770-entry replay took, then three unchanging lines every five
+        # minutes forever. The gauge that says the map is populated is
+        # ``tracked_hosts`` on the replay's summary line, not this one.
+        if previous == min_interval_seconds:
+            return
         logger.info(
             "applied a host fetch policy",
             extra={
@@ -286,22 +321,42 @@ async def replay_policies(
     ``MAX_POISON_SKIPS`` in a row, past which this gives up and leaves the rest
     to the tail.
 
-    ``stop`` is **required**, not defaulted (CR #13). How long this runs is the
-    producer's business — the charter asks it to ``MAXLEN`` the stream and
-    Replicator cannot enforce that, so an untrimmed one is a round trip per
-    historical entry. Signal handlers are already installed by the time this is
-    called, so a SIGTERM here sets the event and would otherwise be ignored
-    until the replay finished, leaving systemd to ``SIGKILL`` at
-    ``TimeoutStopSec``. A default would make "uninterruptible" the outcome of
-    forgetting to wire one.
+    **Reads are batched at ``REPLAY_COUNT``**, unlike the tail's, and pay for
+    the recovery sequence that buys (#85). How long this runs is the producer's
+    business — the charter asks it to ``MAXLEN`` the stream and Replicator
+    cannot enforce that — so the cost of one round trip per historical entry is
+    unbounded from here: the live stream reached 29,770 entries and a
+    ``count=1`` replay took 950 seconds of a boot in which neither consume loop
+    had yet read anything.
+
+    ``stop`` is **required**, not defaulted (CR #13). Signal handlers are
+    already installed by the time this is called, so a SIGTERM here sets the
+    event and would otherwise be ignored until the replay finished, leaving
+    systemd to ``SIGKILL`` at ``TimeoutStopSec``. A default would make
+    "uninterruptible" the outcome of forgetting to wire one. Batching shortens
+    the window it guards but does not remove it — the bound is still the
+    producer's.
     """
+    logger.info("replaying the fetch policy stream", extra={"count": REPLAY_COUNT})
     started = time.monotonic()
     messages = 0
     skips = 0
+    # Batched until a frame fails to decode, then one at a time until one
+    # succeeds. Degraded is a *mode*, exited by a good read rather than by the
+    # seek that ends a poison: restoring the batch on the skip itself would
+    # send the next read straight back into a run of malformed frames and
+    # spend a full batch discovering it, once per frame.
+    count = REPLAY_COUNT
     while not stop.is_set():
         try:
-            batch = await reader.read(count=READ_COUNT)
+            batch = await reader.read(count=count)
         except BusMessageAnomaly as exc:
+            if count > 1:
+                # The cursor did not move, so the well-formed prefix this batch
+                # threw away is still ahead of the poison. Seeking to
+                # ``exc.message_id`` now would skip it for good.
+                count = 1
+                continue
             if not _skip_poison(reader, exc):
                 break
             skips += 1
@@ -325,6 +380,7 @@ async def replay_policies(
             )
             break
         skips = 0
+        count = REPLAY_COUNT
         if not batch:
             break
         for message in batch:
@@ -337,8 +393,10 @@ async def replay_policies(
             # Both, because they diverge for reasons worth seeing: entries the
             # producer never trimmed (the charter asks it to MAXLEN, which
             # Replicator cannot enforce) show up as messages far exceeding
-            # hosts, and at count=1 each one is a round trip — so a slow boot
-            # has a cause in the journal rather than only a symptom.
+            # hosts. With per-message logging gated on a change (#85) this pair
+            # and `duration_ms` are the whole account of the replay, so a slow
+            # or empty boot has a cause in the journal rather than only a
+            # symptom.
             "messages": messages,
             "duration_ms": round((time.monotonic() - started) * 1000, 1),
         },

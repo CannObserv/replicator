@@ -283,3 +283,107 @@ def test_the_host_key_is_whatever_the_model_canonicalized(host):
     policies.apply(policy(host=host))
 
     assert policies.interval_for("slow.test") == 30.0
+
+
+# --------------------------------------------------------------------------- #
+# Logging on change only (#85).
+# --------------------------------------------------------------------------- #
+
+
+def test_a_republish_that_changes_nothing_is_not_logged_again(caplog):
+    """The producer re-emits its whole set on a cron, so most applies are no-ops.
+
+    Logging every one of them cost ~31 lines/second on the replicator host
+    during a boot replay, and 3 lines every 5 minutes forever after — a journal
+    in which the line that means "a host's politeness changed" is buried under
+    thousands that mean "nothing changed" (#85).
+    """
+    policies = FetchPolicyMap(DEFAULT)
+    first = now()
+    policies.apply(policy(min_interval_seconds=30.0, occurred_at=first))
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        policies.apply(policy(min_interval_seconds=30.0, occurred_at=first + timedelta(seconds=1)))
+
+    assert "applied a host fetch policy" not in caplog.text
+    assert policies.interval_for("slow.test") == 30.0
+
+
+def test_a_republish_that_changes_the_interval_is_logged(caplog):
+    """The line survives for the case it was added for: a policy that moved."""
+    policies = FetchPolicyMap(DEFAULT)
+    first = now()
+    policies.apply(policy(min_interval_seconds=30.0, occurred_at=first))
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        policies.apply(policy(min_interval_seconds=12.0, occurred_at=first + timedelta(seconds=1)))
+
+    record = next(r for r in caplog.records if r.message == "applied a host fetch policy")
+    assert record.min_interval_seconds == 12.0
+
+
+def test_a_republished_strict_policy_is_warned_about_once(caplog):
+    """The "stricter than the fallback" warning rides the same gate.
+
+    It is a standing condition, not an event: repeating it on every republish
+    would restore the volume the change removes and say nothing new.
+    """
+    policies = FetchPolicyMap(DEFAULT)
+    first = now()
+    policies.apply(policy(min_interval_seconds=30.0, occurred_at=first))
+    caplog.clear()
+
+    with caplog.at_level(logging.WARNING):
+        policies.apply(policy(min_interval_seconds=30.0, occurred_at=first + timedelta(seconds=1)))
+
+    assert "stricter than the fallback default" not in caplog.text
+
+
+def test_a_republished_tombstone_is_not_logged_again(caplog):
+    """Revocation is an edge too: the producer keeps republishing the tombstone."""
+    policies = FetchPolicyMap(DEFAULT)
+    first = now()
+    policies.apply(policy(min_interval_seconds=30.0, occurred_at=first))
+    policies.apply(
+        policy(min_interval_seconds=None, revoked=True, occurred_at=first + timedelta(seconds=1))
+    )
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        policies.apply(
+            policy(
+                min_interval_seconds=None, revoked=True, occurred_at=first + timedelta(seconds=2)
+            )
+        )
+
+    assert "revoked a host fetch policy" not in caplog.text
+
+
+def test_revoking_a_host_that_was_never_known_logs_nothing(caplog):
+    """A booting worker sees tombstones for hosts it never held — one per
+    republish, per host, for the whole history of the stream."""
+    policies = FetchPolicyMap(DEFAULT)
+
+    with caplog.at_level(logging.INFO):
+        policies.apply(policy(host="never.test", min_interval_seconds=None, revoked=True))
+
+    assert "revoked a host fetch policy" not in caplog.text
+
+
+def test_a_host_revoked_and_then_republished_is_logged_again(caplog):
+    """Change-gating must not hide a host coming *back* at the value it had."""
+    policies = FetchPolicyMap(DEFAULT)
+    first = now()
+    policies.apply(policy(min_interval_seconds=30.0, occurred_at=first))
+    policies.apply(
+        policy(min_interval_seconds=None, revoked=True, occurred_at=first + timedelta(seconds=1))
+    )
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        policies.apply(policy(min_interval_seconds=30.0, occurred_at=first + timedelta(seconds=2)))
+
+    record = next(r for r in caplog.records if r.message == "applied a host fetch policy")
+    assert record.min_interval_seconds == 30.0

@@ -204,6 +204,7 @@ redis-cli XINFO GROUPS content.fetch-policy
 The worker's own view, from the journal — what it rebuilt at boot and what it has applied since:
 
 ```bash
+sudo journalctl -u replicator | grep 'replaying the fetch policy stream'  # the boot replay started
 sudo journalctl -u replicator | grep 'fetch policy replay complete'   # tracked_hosts, messages, duration_ms
 sudo journalctl -u replicator -f | grep 'applied a host fetch policy' # host, min_interval, and the default beside it
 sudo journalctl -u replicator | grep 'stricter than the fallback'     # raise REPLICATOR_MIN_HOST_INTERVAL_SECONDS
@@ -213,6 +214,14 @@ sudo journalctl -u replicator | grep 'stricter than the fallback'     # raise RE
 `ignoring a ...` warnings on the same boot. The last grep is the one that needs acting on: it
 names a host whose real policy is stricter than the fallback that would replace it if the
 policy were revoked or missed on a replay.
+
+**The second grep is silent while nothing changes, by design (#85).** `applied a host fetch
+policy` fires on a *change*, not on an apply: the producer republishes its whole set on a cron,
+so an ungated line meant three unchanging entries every five minutes forever and one per
+historical entry during the boot replay — 29,770 of them, at ~31 lines/second, the day #85 was
+filed. To confirm the map is populated rather than to watch it move, read `tracked_hosts` on the
+replay's summary line and `XLEN` beside it; `worker ready` follows the replay, so seeing it means
+the consume loops are about to make their first read.
 
 ## Submodules
 

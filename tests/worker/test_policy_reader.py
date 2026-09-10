@@ -20,6 +20,8 @@ from co_core.pure.models.changes import FetchPolicyState
 from src.core.config import get_settings
 from src.worker.loop import MAX_POISON_SKIPS
 from src.worker.policy import (
+    READ_COUNT,
+    REPLAY_COUNT,
     FetchPolicyMap,
     build_policy_reader,
     replay_policies,
@@ -359,7 +361,9 @@ async def test_replay_gives_up_on_a_run_of_malformed_frames(policies, caplog):
     with caplog.at_level("WARNING"):
         await replay_policies(reader, policies, stop=stop)
 
-    assert reader.reads == MAX_POISON_SKIPS
+    # One more than the bound: the first read is the batch that discovers the
+    # stream is poisoned and degrades to ``count=1``, and it skips nothing.
+    assert reader.reads == MAX_POISON_SKIPS + 1
     assert "gave up replaying" in caplog.text
 
 
@@ -445,3 +449,91 @@ async def test_the_tail_escalates_when_the_cursor_cannot_advance(
     assert attempts[:3] == [1, 2, 3]
     assert reader.seeks == []
     assert "malformed frames in a row" not in caplog.text
+
+
+# --------------------------------------------------------------------------- #
+# The boot replay reads in batches (#85).
+# --------------------------------------------------------------------------- #
+
+
+class CountingReader:
+    """A real reader with the ``count`` of every read recorded."""
+
+    def __init__(self, inner) -> None:
+        self._inner = inner
+        self.counts: list[int] = []
+
+    async def read(self, *, count: int, block_ms: int | None = None):
+        self.counts.append(count)
+        return await self._inner.read(count=count, block_ms=block_ms)
+
+    def seek(self, message_id: str) -> None:
+        self._inner.seek(message_id)
+
+
+async def test_replay_reads_the_history_in_batches(fake_redis, policies):
+    """One round trip per historical entry is a boot measured in minutes (#85).
+
+    The live stream held 29,770 entries — a producer republishing three hosts
+    every five minutes and never trimming — and at ``count=1`` the replay took
+    950 seconds, during which ``ensure_group`` had run but neither consume loop
+    had reached its first read. That is the "no blocked ``xreadgroup``
+    connection" the broker saw, and it is startup ordering rather than the
+    starvation it looked like.
+    """
+    for index in range(25):
+        await publish(fake_redis, TOPIC, f"host{index}.test", 30.0)
+    reader = CountingReader(build_policy_reader(fake_redis, topic=TOPIC))
+
+    await replay_policies(reader, policies, stop=asyncio.Event())
+
+    assert policies.tracked_hosts == 25
+    # One batch, then the empty read that ends it.
+    assert reader.counts == [REPLAY_COUNT, REPLAY_COUNT]
+
+
+async def test_replay_degrades_to_one_at_a_time_around_a_poison_frame(fake_redis, policies):
+    """``seek`` only moves forward, so the well-formed prefix a raised batch
+    discarded has to be drained at ``count=1`` before the poison is stepped over.
+
+    Reading at ``count=1`` throughout used to delete that sequence; batching
+    reinstates it, so it is asserted rather than described. The reader stays
+    degraded until a read succeeds — restoring the batch size on the skip
+    itself would re-raise on the very next frame of a run of them.
+    """
+    await publish(fake_redis, TOPIC, "ahead.test", 30.0)
+    await fake_redis.xadd(TOPIC, {"not": "a frame"})
+    await publish(fake_redis, TOPIC, "behind.test", 12.0)
+    reader = CountingReader(build_policy_reader(fake_redis, topic=TOPIC))
+
+    await replay_policies(reader, policies, stop=asyncio.Event())
+
+    assert policies.interval_for("ahead.test") == 30.0
+    assert policies.interval_for("behind.test") == 12.0
+    assert reader.counts == [
+        REPLAY_COUNT,  # raises on the poison, discarding "ahead"
+        1,  # drains the prefix — "ahead" applied
+        REPLAY_COUNT,  # back to batching, and straight back onto the poison
+        1,  # lands on it, and seeks past
+        1,  # "behind" applied
+        REPLAY_COUNT,  # empty, so the replay ends
+    ]
+
+
+async def test_the_tail_still_reads_one_at_a_time(fake_redis, policies, fast_settings):
+    """Only the replay batches. The tail blocks on a stream that advances three
+    entries every five minutes, so ``count=1`` costs nothing and keeps the
+    poison recovery it has been tested against."""
+    reader = CountingReader(build_policy_reader(fake_redis, topic=TOPIC))
+    stop = asyncio.Event()
+    task = asyncio.create_task(
+        run_policy_reader(reader, policies=policies, settings=fast_settings, stop=stop)
+    )
+    try:
+        await publish(fake_redis, TOPIC, "tailed.test", 30.0)
+        await until(lambda: policies.interval_for("tailed.test") == 30.0)
+    finally:
+        stop.set()
+        await task
+
+    assert set(reader.counts) == {READ_COUNT}

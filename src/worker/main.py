@@ -621,6 +621,31 @@ async def run(
         # issuer exists — see the setting for the XGROUP SETID caveat.
         await consumer.ensure_group(start_id=settings.consumer_start_id)
         await replicate_consumer.ensure_group(start_id=settings.consumer_start_id)
+        # One instance, deliberately shared: the sweep measures the tree and the
+        # byte path adds to it between sweeps. Wired to two objects both halves
+        # would be individually correct and the ceiling would never fire, with
+        # nothing observing the difference until the disk was full.
+        usage = BlobUsage()
+        # One store for both command loops, for the reason `usage` is one object:
+        # wired twice, each half would be individually correct and any state a
+        # backend holds — the object store's client pool (#7) — would silently be
+        # two (CR #18). Built above, before the broker client, because a storage
+        # misconfiguration should fail the boot before anything is opened.
+        # Rebuilt from the stream *before* the consume loop starts, not as the
+        # first pass of the tail task (#19). Started as a peer, the loop would
+        # fetch its opening commands against an empty map and pace every host at
+        # the fallback — safe only because the fallback is supposed to be the
+        # stricter number, which is the one assumption not worth spending on
+        # startup ordering. `ensure_group` above already makes a blocking broker
+        # call at boot, so this adds a round trip, not a new failure mode.
+        policies = FetchPolicyMap(settings.min_host_interval_seconds)
+        policy_reader = build_policy_reader(client, topic=policy_topic)
+        await replay_policies(policy_reader, policies, stop=stop)
+        # **After** the replay, not before (#85). "Ready" naming both groups
+        # and both consumer names while the loops had not yet reached a first
+        # read is what made a 950-second boot look like event-loop starvation
+        # from the broker side. The replay logs its own start, so the window
+        # is still bracketed at both ends.
         logger.info(
             "worker ready",
             extra={
@@ -643,26 +668,6 @@ async def run(
                 "replication_aliases": list(aliases.provisioned),
             },
         )
-        # One instance, deliberately shared: the sweep measures the tree and the
-        # byte path adds to it between sweeps. Wired to two objects both halves
-        # would be individually correct and the ceiling would never fire, with
-        # nothing observing the difference until the disk was full.
-        usage = BlobUsage()
-        # One store for both command loops, for the reason `usage` is one object:
-        # wired twice, each half would be individually correct and any state a
-        # backend holds — the object store's client pool (#7) — would silently be
-        # two (CR #18). Built above, before the broker client, because a storage
-        # misconfiguration should fail the boot before anything is opened.
-        # Rebuilt from the stream *before* the consume loop starts, not as the
-        # first pass of the tail task (#19). Started as a peer, the loop would
-        # fetch its opening commands against an empty map and pace every host at
-        # the fallback — safe only because the fallback is supposed to be the
-        # stricter number, which is the one assumption not worth spending on
-        # startup ordering. `ensure_group` above already makes a blocking broker
-        # call at boot, so this adds a round trip, not a new failure mode.
-        policies = FetchPolicyMap(settings.min_host_interval_seconds)
-        policy_reader = build_policy_reader(client, topic=policy_topic)
-        await replay_policies(policy_reader, policies, stop=stop)
         await _run_until_first_exit(
             run_loop(
                 client=client,

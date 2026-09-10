@@ -412,6 +412,31 @@ async def test_worker_ready_names_both_consumers(monkeypatch, fake_redis, tmp_pa
     assert record["replicate_consumer"] == "replicator-replicate-1"
 
 
+async def test_worker_ready_follows_the_policy_replay(monkeypatch, fake_redis, tmp_path, capsys):
+    """ "Ready" has to mean the consume loops are about to read (#85).
+
+    Logged before the boot replay, it said so 950 seconds early on the live
+    host: an operator saw both groups and both consumer names in the journal
+    while the broker showed a single non-blocking `xread` and no blocked
+    `xreadgroup` at all, which reads as starvation rather than as a worker
+    still warming up. The replay's own start line covers the window.
+    """
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    try:
+        await run(_stopped())
+        lines = capsys.readouterr().out.splitlines()
+    finally:
+        root.handlers, root.level = saved_handlers, saved_level
+
+    replayed = next(i for i, ln in enumerate(lines) if "fetch policy replay complete" in ln)
+    ready = next(i for i, ln in enumerate(lines) if "worker ready" in ln)
+    assert replayed < ready
+
+
 async def test_run_closes_the_fetch_driver(monkeypatch, fake_redis, tmp_path):
     """The driver owns an httpx client; leaking it leaks sockets across restarts.
 
