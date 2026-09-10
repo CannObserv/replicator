@@ -10,11 +10,14 @@ Redis change bus and reports outcomes as **facts**:
 content.fetch (command)  →  fetch  →  fingerprint  →  temp-store  →  blob_available (fact)
                          ↘  closed without bytes  ──────────────→  fetch_failed  (fact)
 
+content.replicate (cmd)  →  guards  →  create-if-absent  ────────→  replication_complete (fact)
+                         ↘  refused / conflict  ────────────────→  replication_failed  (fact)
+
 content.fetch-policy (config)  →  per-host request spacing applied to that fetch
 ```
 
-Both facts land on `content.blobs`, so an issuer's one consumer group sees either outcome of
-its command.
+Each command's two outcomes share one stream — `content.blobs` for a fetch, `content.artifacts`
+for a replicate — so an issuer's one consumer group sees either outcome of its command.
 
 `content.fetch-policy` is the third stream kind and the only one Replicator reads without a
 consumer group: it carries how often each host may be asked, last-write-wins per host, replayed
