@@ -104,34 +104,53 @@ Watch the other side with `sudo journalctl -u replicator -f`.
 
 ### Inspecting the consume path
 
+**Every `redis-cli` in this file needs the credential** since broker#2's ACL cutover — a bare
+`redis-cli` answers `NOAUTH Authentication required`. Load the env first (Common Commands in
+AGENTS.md), then set this once per shell; the examples below assume it:
+
+```bash
+alias rcli='redis-cli --no-auth-warning -u "$REPLICATOR_REDIS_URL"'
+```
+
+**And the credential cannot run everything `redis-cli` can (#85).** The `replicator` user is
+scoped to its own topics, permanently and by design, so the operator surface splits in two:
+
+| Runnable here | Denied — ask the broker operator |
+|---|---|
+| `XLEN`, `XRANGE`, `XINFO STREAM`, `INFO` | `XPENDING`, `SCAN`, `XINFO GROUPS`, `XINFO CONSUMERS`, `CLIENT LIST`, `ACL LOG`, `SELECT` |
+
+The denied column is marked `# NOPERM` at each use below rather than removed, because the
+command is still the right one to ask for — and two of them answer questions nothing else can.
+See [Redis](#redis) for what to know before asking.
+
 ```bash
 # Pending entries: id, holder, idle ms, and delivery count — the last field is
 # the times_delivered the DLQ ceiling reads. Add `IDLE <ms>` before the range to
 # filter to entries idle at least that long (what claim_stale would reclaim).
-redis-cli XPENDING content.fetch replicator.fetch - + 10
+rcli XPENDING content.fetch replicator.fetch - + 10      # NOPERM as replicator
 
 # Dead-lettered frames.
-redis-cli XLEN content.fetch.dlq
-redis-cli XRANGE content.fetch.dlq - + COUNT 5
+rcli XLEN content.fetch.dlq
+rcli XRANGE content.fetch.dlq - + COUNT 5
 
 # Dedupe keys (one per handled command, TTL REPLICATOR_DEDUPE_TTL_SECONDS).
 # What they guard and what a cold start does without them: CONVENTIONS.md,
 # "The `replicator:cmd:*` keys". SCAN is an operator command — the worker only
 # ever SETs and EXISTSs them.
-redis-cli --scan --pattern 'replicator:cmd:*' | head
+rcli --scan --pattern 'replicator:cmd:*' | head          # NOPERM as replicator
 
 # Facts published — content.blobs carries both outcomes. On blob_available,
 # blob_uri points at REPLICATOR_BLOB_DIR and the fingerprint is the filename, so
 # `sha256sum` on the blob must reproduce it.
-redis-cli XLEN content.blobs
-redis-cli XRANGE content.blobs - + COUNT 5
+rcli XLEN content.blobs
+rcli XRANGE content.blobs - + COUNT 5
 
 # Just the failures. Matches the payload JSON, which is one line per entry and
 # carries the whole fact — do NOT grep the bare token, which also hits the
 # hoisted event_type field and interleaves half-records. A dead-lettered command
 # should appear here *and* in content.fetch.dlq — the fact is the issuer's
 # surface, the DLQ is the operator's.
-redis-cli XRANGE content.blobs - + COUNT 200 | grep '"event_type":"fetch_failed"'
+rcli XRANGE content.blobs - + COUNT 200 | grep '"event_type":"fetch_failed"'
 ```
 
 ## API (dev only)
@@ -168,16 +187,31 @@ uv run ty check          # non-gating, advisory only
 
 Redis is Archiver-operated shared infrastructure — inspect, don't administer.
 
+`rcli` is the alias defined under [Inspecting the consume path](#inspecting-the-consume-path).
+
 ```bash
 bash scripts/check_redis_floor.sh                       # assert the >=7.0 server floor
-redis-cli -u "${REPLICATOR_REDIS_URL:-redis://localhost:6379/0}" INFO server | grep redis_version
+rcli INFO server | grep redis_version
 
 # Bus inspection
-redis-cli XINFO STREAM content.fetch
-redis-cli XINFO GROUPS content.fetch
-redis-cli XINFO CONSUMERS content.fetch replicator.fetch
-redis-cli XLEN content.fetch.dlq                        # dead-lettered frames
+rcli XINFO STREAM content.fetch
+rcli XINFO GROUPS content.fetch                         # NOPERM as replicator
+rcli XINFO CONSUMERS content.fetch replicator.fetch     # NOPERM as replicator
+rcli XLEN content.fetch.dlq                             # dead-lettered frames
 ```
+
+Group and connection state are **not observable from this host at all** — the four commands that
+carry it are in the denied column above — so they have to be asked of the broker operator. Two
+things to know before asking (#85):
+
+- **`consumers: 0` on `XINFO GROUPS` is not evidence of a dead worker** on a stream that has
+  never carried a message. Redis registers a consumer only when a read *returns* an entry, so a
+  worker blocked on an empty stream registers nothing — the state of `content.replicate` and
+  `content.artifacts` today (broker#7).
+- **The liveness signal for a low-traffic group is `flags=b` on the connection**, from
+  `CLIENT LIST`: `b` means genuinely blocked in Redis, as against `N` for a connection that
+  merely ran a read once. That field is what distinguished a healthy worker from #85's spinning
+  one, and `XINFO GROUPS` could not have.
 
 ### Politeness — `content.fetch-policy` (#19)
 
@@ -189,16 +223,18 @@ beginning at every worker boot.
 # Has the producer published anything at all? An empty stream is not an error —
 # it means every host resolves to REPLICATOR_MIN_HOST_INTERVAL_SECONDS — but it
 # is the first thing to rule out, and it looks identical to a working consumer.
-redis-cli XLEN content.fetch-policy
-redis-cli XRANGE content.fetch-policy - + COUNT 10
+rcli XLEN content.fetch-policy
+rcli XRANGE content.fetch-policy - + COUNT 10
 
 # What one host is actually paced at. `revoked: true` is a tombstone meaning
 # "no explicit policy", not "no limit" — it falls back to the env default.
-redis-cli XRANGE content.fetch-policy - + COUNT 500 | grep '"host":"example.test"'
+rcli XRANGE content.fetch-policy - + COUNT 500 | grep '"host":"example.test"'
 
 # Expected EMPTY. A group here is a bug: every worker needs every message, so a
-# group would compete for them and grow a PEL nothing acks or drains.
-redis-cli XINFO GROUPS content.fetch-policy
+# group would compete for them and grow a PEL nothing acks or drains. Denied to
+# the `replicator` user (#85) — ask the broker operator, or infer it the way
+# tests/worker/test_policy_integration.py does, from the absence of a PEL.
+rcli XINFO GROUPS content.fetch-policy   # NOPERM as replicator
 ```
 
 The worker's own view, from the journal — what it rebuilt at boot and what it has applied since:
