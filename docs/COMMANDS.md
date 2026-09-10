@@ -205,7 +205,7 @@ The worker's own view, from the journal — what it rebuilt at boot and what it 
 
 ```bash
 sudo journalctl -u replicator | grep 'replaying the fetch policy stream'  # the boot replay started
-sudo journalctl -u replicator | grep 'fetch policy replay complete'   # tracked_hosts, messages, duration_ms
+sudo journalctl -u replicator | grep 'fetch policy replay complete'   # tracked_hosts, messages, hosts_stricter_than_default, duration_ms
 sudo journalctl -u replicator -f | grep 'applied a host fetch policy' # host, min_interval, and the default beside it
 sudo journalctl -u replicator | grep 'stricter than the fallback'     # raise REPLICATOR_MIN_HOST_INTERVAL_SECONDS
 ```
@@ -215,13 +215,23 @@ sudo journalctl -u replicator | grep 'stricter than the fallback'     # raise RE
 names a host whose real policy is stricter than the fallback that would replace it if the
 policy were revoked or missed on a replay.
 
-**The second grep is silent while nothing changes, by design (#85).** `applied a host fetch
-policy` fires on a *change*, not on an apply: the producer republishes its whole set on a cron,
-so an ungated line meant three unchanging entries every five minutes forever and one per
-historical entry during the boot replay — 29,770 of them, at ~31 lines/second, the day #85 was
-filed. To confirm the map is populated rather than to watch it move, read `tracked_hosts` on the
-replay's summary line and `XLEN` beside it; `worker ready` follows the replay, so seeing it means
-the consume loops are about to make their first read.
+**The last two greps are silent while nothing changes, by design (#85).** `applied a host fetch
+policy` and the `stricter than the fallback` warning beneath it both fire on a *change*, not on
+an apply: the producer republishes its whole set on a cron, so ungated they meant unchanging
+entries every five minutes forever and one per historical entry during the boot replay — 29,770
+of them, at ~31 lines/second, the day #85 was filed.
+
+That gating is right for an event and wrong for a **standing condition**, which is what "this
+host's policy is stricter than your fallback" is — it holds until an operator raises
+`REPLICATOR_MIN_HOST_INTERVAL_SECONDS` or the producer lowers the policy. So do not read an
+empty `stricter than the fallback` grep as "resolved": on a stream nobody has touched for a day
+the last warning has rotated out while the condition still holds. Read
+**`hosts_stricter_than_default`** on the replay summary instead — every boot re-asserts it, and
+non-zero is what says to run the warning grep unwindowed (no `--since`) to find out which hosts.
+
+To confirm the map is populated rather than to watch it move, read `tracked_hosts` on the same
+line with `XLEN` beside it; `worker ready` follows the replay, so seeing it means the consume
+loops are about to make their first read.
 
 ## Submodules
 

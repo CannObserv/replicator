@@ -141,6 +141,26 @@ class FetchPolicyMap:
         """
         return len(self._intervals)
 
+    @property
+    def hosts_stricter_than_default(self) -> int:
+        """How many published policies outstrip the fallback that would replace them.
+
+        The gauge half of the ``_store`` warning, and it exists because that
+        warning is change-gated (#85, CR 2). "This host's real policy is
+        stricter than `REPLICATOR_MIN_HOST_INTERVAL_SECONDS`" is a **standing
+        condition**, not an event: it holds until an operator raises the
+        default or the producer lowers the policy. Gating the line on a change
+        is right for a line — repeating it every five minutes said nothing new
+        — but it means that on a stream nobody has touched for a day the last
+        warning has rotated out of the journal while the condition still
+        holds, and the grep for it comes back empty. Reported on the replay
+        summary, every boot re-asserts it.
+
+        Strictly greater, the same comparison the warning fires on: a policy
+        equal to the fallback loses nothing when the fallback replaces it.
+        """
+        return sum(1 for interval in self._intervals.values() if interval > self._default)
+
     def interval_for(self, host: str) -> float | None:
         """This host's published spacing, or ``None`` when it has no policy.
 
@@ -398,6 +418,12 @@ async def replay_policies(
             # or empty boot has a cause in the journal rather than only a
             # symptom.
             "messages": messages,
+            # The standing condition, restated at every boot (CR 2). Non-zero
+            # means REPLICATOR_MIN_HOST_INTERVAL_SECONDS is looser than a
+            # policy someone published, so revoking that host — or a replay
+            # that misses it — paces it more loosely than its owner asked. The
+            # per-host warnings name which ones; this says whether to look.
+            "hosts_stricter_than_default": policies.hosts_stricter_than_default,
             "duration_ms": round((time.monotonic() - started) * 1000, 1),
         },
     )

@@ -118,6 +118,9 @@ async def test_replay_reports_what_it_rebuilt(fake_redis, policies, caplog):
     # cause in the journal rather than only a symptom.
     assert record.messages == 1
     assert record.duration_ms >= 0
+    # The standing condition, restated at every boot (CR 2): the published 30.0
+    # outstrips the 1.0 fallback that would replace it on revocation.
+    assert record.hosts_stricter_than_default == 1
 
 
 async def test_replay_leaves_the_cursor_where_the_tail_picks_up(fake_redis, policies):

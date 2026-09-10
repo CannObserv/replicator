@@ -387,3 +387,40 @@ def test_a_host_revoked_and_then_republished_is_logged_again(caplog):
 
     record = next(r for r in caplog.records if r.message == "applied a host fetch policy")
     assert record.min_interval_seconds == 30.0
+
+
+def test_the_map_reports_how_many_policies_outstrip_the_default():
+    """A *standing* condition needs a gauge, not only an event (CR 2).
+
+    The per-apply warning is change-gated (#85), so on a stream that has been
+    quiet for a day the last one has rotated out of the journal while the
+    condition it named still holds. The replay summary carries this number so
+    every boot re-asserts it.
+    """
+    policies = FetchPolicyMap(DEFAULT)
+    policies.apply(policy(host="strict.test", min_interval_seconds=30.0))
+    policies.apply(policy(host="loose.test", min_interval_seconds=0.5))
+    policies.apply(policy(host="equal.test", min_interval_seconds=DEFAULT))
+
+    assert policies.tracked_hosts == 3
+    # Strictly greater, the same comparison the warning fires on: a policy
+    # equal to the fallback loses nothing when the fallback replaces it.
+    assert policies.hosts_stricter_than_default == 1
+
+
+def test_a_revoked_host_stops_counting_against_the_default():
+    """It resolves to the fallback from here on, so it is no longer outstripping it."""
+    policies = FetchPolicyMap(DEFAULT)
+    first = now()
+    policies.apply(policy(host="strict.test", min_interval_seconds=30.0, occurred_at=first))
+
+    policies.apply(
+        policy(
+            host="strict.test",
+            min_interval_seconds=None,
+            revoked=True,
+            occurred_at=first + timedelta(seconds=1),
+        )
+    )
+
+    assert policies.hosts_stricter_than_default == 0
