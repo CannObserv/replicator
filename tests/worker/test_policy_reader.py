@@ -507,8 +507,8 @@ async def test_replay_degrades_to_one_at_a_time_around_a_poison_frame(fake_redis
 
     Reading at ``count=1`` throughout used to delete that sequence; batching
     reinstates it, so it is asserted rather than described. The reader stays
-    degraded until a read succeeds — restoring the batch size on the skip
-    itself would re-raise on the very next frame of a run of them.
+    degraded **until a read succeeds after the poison has been stepped over**
+    (CR 7) — see the test below for the shape that rule exists for.
     """
     await publish(fake_redis, TOPIC, "ahead.test", 30.0)
     await fake_redis.xadd(TOPIC, {"not": "a frame"})
@@ -522,11 +522,34 @@ async def test_replay_degrades_to_one_at_a_time_around_a_poison_frame(fake_redis
     assert reader.counts == [
         REPLAY_COUNT,  # raises on the poison, discarding "ahead"
         1,  # drains the prefix — "ahead" applied
-        REPLAY_COUNT,  # back to batching, and straight back onto the poison
-        1,  # lands on it, and seeks past
-        1,  # "behind" applied
-        REPLAY_COUNT,  # empty, so the replay ends
+        1,  # lands on the poison, and seeks past
+        1,  # "behind" applied — the first success after a skip
+        REPLAY_COUNT,  # restored, empty, so the replay ends
     ]
+
+
+async def test_the_poison_frame_is_reached_once_however_long_its_prefix(fake_redis, policies):
+    """Restoring the batch on *any* success re-raises on the same frame (CR 7).
+
+    The prefix a raised batch discarded is drained one entry at a time, so
+    restoring `REPLAY_COUNT` after each of those reads sends the next one
+    straight back onto the poison that is still ahead of them: `2P + 2` reads
+    for a prefix of `P` instead of `P + 4`. Staying degraded until a success
+    *follows a skip* costs the same on a run of malformed frames — the run
+    never reaches a success — and strictly less here.
+    """
+    for index in range(3):
+        await publish(fake_redis, TOPIC, f"ahead{index}.test", 30.0)
+    await fake_redis.xadd(TOPIC, {"not": "a frame"})
+    await publish(fake_redis, TOPIC, "behind.test", 12.0)
+    reader = CountingReader(build_policy_reader(fake_redis, topic=TOPIC))
+
+    await replay_policies(reader, policies, stop=asyncio.Event())
+
+    assert policies.tracked_hosts == 4
+    assert reader.counts == [REPLAY_COUNT, 1, 1, 1, 1, 1, REPLAY_COUNT]
+    # The batch size is paid once, not once per entry ahead of the poison.
+    assert reader.counts.count(REPLAY_COUNT) == 2
 
 
 async def test_the_tail_still_reads_one_at_a_time(fake_redis, policies, fast_settings):

@@ -77,10 +77,10 @@ READ_COUNT = 1
 #
 # So the replay pays for the recovery sequence the tail avoids: it degrades to
 # ``count=1`` on an anomaly, drains the prefix, seeks past the poison, and
-# restores the batch on the next successful read. 500 is chosen against the
-# failure it has to survive rather than against throughput — a batch that
-# raises is re-read one entry at a time, so the size is also the worst-case
-# number of extra round trips one poison frame can cost.
+# restores the batch on the first read that succeeds *after* the seek (CR 7).
+# 500 is chosen against the failure it has to survive rather than against
+# throughput — a batch that raises is re-read one entry at a time, so the size
+# is also the worst-case number of extra round trips one poison frame can cost.
 REPLAY_COUNT = 500
 
 # What ``BusMessageAnomaly.__init__`` puts in ``message_id`` when the raiser did
@@ -364,12 +364,22 @@ async def replay_policies(
     started = time.monotonic()
     messages = 0
     skips = 0
-    # Batched until a frame fails to decode, then one at a time until one
-    # succeeds. Degraded is a *mode*, exited by a good read rather than by the
-    # seek that ends a poison: restoring the batch on the skip itself would
-    # send the next read straight back into a run of malformed frames and
-    # spend a full batch discovering it, once per frame.
+    # Batched until a frame fails to decode, then one at a time until the frame
+    # that broke the batch is **behind** the cursor and a read has succeeded
+    # past it (CR 7).
+    #
+    # Both halves of that condition are load-bearing, and each rules out one of
+    # the two simpler rules. Restoring on the *skip* sends the next read into
+    # the next frame of a run of malformed ones and spends a whole batch
+    # discovering it, once per frame. Restoring on any *success* is worse in
+    # the other direction: the prefix a raised batch discarded is drained one
+    # entry at a time, and each of those reads is still behind the poison, so
+    # restoring after them re-raises on the same frame — 2P + 2 reads for a
+    # prefix of P rather than P + 4. Requiring both costs the same as the
+    # first rule on a run (a run never reaches a success) and strictly less on
+    # a prefix.
     count = REPLAY_COUNT
+    stepped_over = False
     while not stop.is_set():
         try:
             batch = await reader.read(count=count)
@@ -379,9 +389,11 @@ async def replay_policies(
                 # threw away is still ahead of the poison. Seeking to
                 # ``exc.message_id`` now would skip it for good.
                 count = 1
+                stepped_over = False
                 continue
             if not _skip_poison(reader, exc):
                 break
+            stepped_over = True
             skips += 1
             if skips >= MAX_POISON_SKIPS:
                 # Bounded for the same reason loop.py bounds its recovery pass:
@@ -403,7 +415,9 @@ async def replay_policies(
             )
             break
         skips = 0
-        count = REPLAY_COUNT
+        if stepped_over:
+            count = REPLAY_COUNT
+            stepped_over = False
         if not batch:
             break
         for message in batch:
