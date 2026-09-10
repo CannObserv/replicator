@@ -198,8 +198,7 @@ uv run pytest
 # Run a subset of tests (skip the coverage gate, which measures all of src/)
 uv run pytest --no-cov tests/path/to/test.py
 
-# Integration tests (a scratch redis-server — the shared broker's ACL denies
-# SELECT — or a broker the test spawns; --no-cov —
+# Integration tests (a scratch redis-server, or one the test spawns; --no-cov —
 # these do not exercise all of src/)
 uv run pytest --no-cov -m integration
 
