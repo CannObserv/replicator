@@ -357,7 +357,10 @@ async def replay_policies(
     the window it guards but does not remove it — the bound is still the
     producer's.
     """
-    logger.info("replaying the fetch policy stream", extra={"count": REPLAY_COUNT})
+    # `batch_count`, not `count` (CR 5): beside `messages` and `tracked_hosts`
+    # on the summary line, a bare `count` in the JSON reads as a count of
+    # something rather than as the size of a read.
+    logger.info("replaying the fetch policy stream", extra={"batch_count": REPLAY_COUNT})
     started = time.monotonic()
     messages = 0
     skips = 0

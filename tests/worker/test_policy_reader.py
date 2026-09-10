@@ -111,6 +111,12 @@ async def test_replay_reports_what_it_rebuilt(fake_redis, policies, caplog):
             build_policy_reader(fake_redis, topic=TOPIC), policies, stop=asyncio.Event()
         )
 
+    # Both ends of the window, because they are now the only ones (CR 3).
+    # Moving `worker ready` after the replay (#85) removed the other bracket,
+    # so the start line is what says a long boot is replaying rather than hung
+    # — and nothing else asserts it exists.
+    start = next(r for r in caplog.records if r.message == "replaying the fetch policy stream")
+    assert start.batch_count == REPLAY_COUNT
     record = next(r for r in caplog.records if r.message == "fetch policy replay complete")
     assert record.tracked_hosts == 1
     # Entries read, not hosts held: they diverge when the producer has not
