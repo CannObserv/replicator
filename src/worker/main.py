@@ -646,28 +646,38 @@ async def run(
         # read is what made a 950-second boot look like event-loop starvation
         # from the broker side. The replay logs its own start, so the window
         # is still bracketed at both ends.
-        logger.info(
-            "worker ready",
-            extra={
-                "group": settings.consumer_group,
-                # One name per group since #77 — there is no single process-wide
-                # consumer name any more, and these are what an operator matches
-                # against XINFO output.
-                "consumer": fetch_consumer_name,
-                "replicate_group": settings.replicate_consumer_group,
-                "replicate_consumer": replicate_consumer_name,
-                "build": settings.build_id,
-                # How long this worker will absorb a broker outage before
-                # exiting. In the journal at every boot because the unit's
-                # StartLimitIntervalSec is sized against it, and a config change
-                # that widens it would otherwise be invisible.
-                "worst_case_outage_seconds": settings.worst_case_outage_seconds,
-                # What this host will accept a replicate command for. Empty is
-                # the expected value today and says so plainly, rather than
-                # leaving an operator to infer it from a stream of refusals.
-                "replication_aliases": list(aliases.provisioned),
-            },
-        )
+        #
+        # And **not at all** once a shutdown has been requested (CR 4). Moving
+        # the line after the replay put the interruptible window before the
+        # claim rather than after it: `replay_policies` honours the stop event
+        # and returns early, so a SIGTERM arriving during an untrimmed
+        # stream's replay used to leave `replaying… -> worker ready -> worker
+        # stopped` in the journal. Nothing below reads a message either — the
+        # tasks see the same event and return — so this asserts nothing that
+        # the run then does.
+        if not stop.is_set():
+            logger.info(
+                "worker ready",
+                extra={
+                    "group": settings.consumer_group,
+                    # One name per group since #77 — there is no single process-wide
+                    # consumer name any more, and these are what an operator matches
+                    # against XINFO output.
+                    "consumer": fetch_consumer_name,
+                    "replicate_group": settings.replicate_consumer_group,
+                    "replicate_consumer": replicate_consumer_name,
+                    "build": settings.build_id,
+                    # How long this worker will absorb a broker outage before
+                    # exiting. In the journal at every boot because the unit's
+                    # StartLimitIntervalSec is sized against it, and a config change
+                    # that widens it would otherwise be invisible.
+                    "worst_case_outage_seconds": settings.worst_case_outage_seconds,
+                    # What this host will accept a replicate command for. Empty is
+                    # the expected value today and says so plainly, rather than
+                    # leaving an operator to infer it from a stream of refusals.
+                    "replication_aliases": list(aliases.provisioned),
+                },
+            )
         await _run_until_first_exit(
             run_loop(
                 client=client,

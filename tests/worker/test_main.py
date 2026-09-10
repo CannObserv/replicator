@@ -61,6 +61,23 @@ def _short_poll_window(monkeypatch):
 BYTE_PATH_DEADLINE_SECONDS = 30.0
 
 
+def _ended_by_the_loop(monkeypatch) -> asyncio.Event:
+    """A stop event that is *not* pre-set; the stubbed consume loop ends the run.
+
+    The three ``worker ready`` assertions need this rather than ``_stopped()``
+    since CR 4: the line is now suppressed when a shutdown has already been
+    requested, so a pre-set event correctly produces no line to assert on. The
+    precedent is ``test_the_policy_map_is_rebuilt_before_the_consume_loop_starts``,
+    which reached for it when the replay started honouring the stop event.
+    """
+
+    async def stub_run_loop(**kwargs):
+        return None
+
+    monkeypatch.setattr("src.worker.main.run_loop", stub_run_loop)
+    return asyncio.Event()
+
+
 def _stopped() -> asyncio.Event:
     """A pre-set stop event: run() does its startup work, then returns.
 
@@ -372,11 +389,12 @@ async def test_worker_ready_reports_the_outage_window(monkeypatch, fake_redis, t
     """CR #22: the number the unit is sized against belongs in the journal."""
     monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
     monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    stop = _ended_by_the_loop(monkeypatch)
 
     root = logging.getLogger()
     saved_handlers, saved_level = root.handlers[:], root.level
     try:
-        await run(_stopped())
+        await run(stop)
         record = json.loads(
             next(ln for ln in capsys.readouterr().out.splitlines() if "worker ready" in ln)
         )
@@ -397,11 +415,12 @@ async def test_worker_ready_names_both_consumers(monkeypatch, fake_redis, tmp_pa
     monkeypatch.delenv("REPLICATOR_CONSUMER_NAME", raising=False)
     monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
     get_settings.cache_clear()
+    stop = _ended_by_the_loop(monkeypatch)
 
     root = logging.getLogger()
     saved_handlers, saved_level = root.handlers[:], root.level
     try:
-        await run(_stopped())
+        await run(stop)
         record = json.loads(
             next(ln for ln in capsys.readouterr().out.splitlines() if "worker ready" in ln)
         )
@@ -423,11 +442,12 @@ async def test_worker_ready_follows_the_policy_replay(monkeypatch, fake_redis, t
     """
     monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
     monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    stop = _ended_by_the_loop(monkeypatch)
 
     root = logging.getLogger()
     saved_handlers, saved_level = root.handlers[:], root.level
     try:
-        await run(_stopped())
+        await run(stop)
         lines = capsys.readouterr().out.splitlines()
     finally:
         root.handlers, root.level = saved_handlers, saved_level
@@ -435,6 +455,32 @@ async def test_worker_ready_follows_the_policy_replay(monkeypatch, fake_redis, t
     replayed = next(i for i, ln in enumerate(lines) if "fetch policy replay complete" in ln)
     ready = next(i for i, ln in enumerate(lines) if "worker ready" in ln)
     assert replayed < ready
+
+
+async def test_worker_ready_is_not_claimed_after_a_shutdown_request(
+    monkeypatch, fake_redis, tmp_path, capsys
+):
+    """A SIGTERM landing during the replay must not be followed by "ready" (CR 4).
+
+    `replay_policies` honours the stop event and returns early, so moving the
+    line after it (#85) put the interruptible window *before* the claim rather
+    than after it: the journal read `replaying… -> worker ready -> worker
+    stopped`. That is a smaller instance of the falsity the move removed.
+    """
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    try:
+        await run(_stopped())
+        out = capsys.readouterr().out
+    finally:
+        root.handlers, root.level = saved_handlers, saved_level
+
+    assert "worker ready" not in out
+    # And the run still closes cleanly rather than skipping its shutdown line.
+    assert "worker stopped" in out
 
 
 async def test_run_closes_the_fetch_driver(monkeypatch, fake_redis, tmp_path):
