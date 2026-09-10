@@ -102,9 +102,13 @@ rather than deleting bytes a consumer was promised.
 
 | Variable | Set on this VM | Purpose |
 |---|---|---|
-| `GOOGLE_APPLICATION_CREDENTIALS` | `/etc/replicator/co-pypi-reader.json` | SA key for the wheelhouse mirror |
+| `GOOGLE_APPLICATION_CREDENTIALS` | `/etc/replicator/co-gcs-replicator.json` | The worker's ADC — the replication writer SA (`co-gcs-replicator@co-gcs`), never the wheelhouse reader |
+| `REPLICATOR_WHEELHOUSE_CREDENTIALS` | `/etc/replicator/co-pypi-reader.json` | Read-only key for the wheelhouse mirror, so the boot step never holds the writer |
 | `REPLICATOR_REDIS_URL` | `redis://localhost:6379/0` | Change-bus client URL |
-| `REPLICATOR_BLOB_DIR` | `/var/lib/replicator/blobs` | Temp-storage root — **not** the `blobs` default |
+| `REPLICATOR_BLOB_BACKEND` | `gcs` | Temp blobs live in an object store — **not** the `local` default |
+| `REPLICATOR_BLOB_BUCKET` | `co-gcs-blobs` | The temp-blob bucket that backend writes into |
+| `REPLICATOR_BLOB_DIR` | `/var/lib/replicator/blobs` | Temp-storage root; **unused under `gcs`**, kept against a flip back to `local` |
+| `REPLICATOR_REPLICATION_ALIASES_FILE` | *(unset)* | No alias table ⇒ nothing provisioned; every `content.replicate` command is refused `alias_unknown` until an operator writes one (#86) |
 | `REPLICATOR_CONSUMER_NAME` | *(unset)* | Per-group override; the name is derived from the group — `replicator-fetch-1` — and never shared |
 | `REPLICATOR_REPLICATE_CONSUMER_NAME` | *(unset)* | The same, for `replicator.replicate` — derives `replicator-replicate-1` |
 | `REPLICATOR_LOG_LEVEL` | `INFO` | Root log level |

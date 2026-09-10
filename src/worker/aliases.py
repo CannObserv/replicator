@@ -31,6 +31,11 @@ from src.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+# One message for both unprovisioned states — unset, and a path with no file
+# behind it — so the grep an operator runs is the same either way; ``detail``
+# (and ``path`` in the second case) is what tells them apart (#86).
+_UNPROVISIONED = "no alias table on this host — replication is not provisioned"
+
 # Providers this host knows how to bind. A provider absent here cannot be
 # provisioned, which is the other half of the ``provider_disabled`` refusal: the
 # command decodes (co-core types ``provider`` as a plain ``str`` precisely so an
@@ -124,7 +129,10 @@ def load_alias_table(path: Path | None) -> AliasTable:
 
     - **no path, or no file** — nothing is provisioned. Not an error: this is the
       default posture of a host that does not replicate, and the overwhelmingly
-      common case while #29 is in progress.
+      common case while #29 is in progress. Logged at INFO either way, under one
+      message, so a single grep answers "is this host provisioned?" (#86 had to
+      infer it from ``worker ready``, because unset used to return silently);
+      ``detail`` says which of the two it was.
     - **unreadable file** — nothing is provisioned, logged at ERROR. Refusing
       everything is recoverable; provisioning whatever happened to parse before
       the syntax error would make the set of live aliases depend on where the
@@ -138,11 +146,25 @@ def load_alias_table(path: Path | None) -> AliasTable:
     the same channel every other replicate problem reaches the operator by.
     """
     if path is None:
+        logger.info(
+            _UNPROVISIONED,
+            extra={
+                "detail": "REPLICATOR_REPLICATION_ALIASES_FILE is unset; "
+                "every content.replicate command is refused alias_unknown"
+            },
+        )
         return _empty()
     try:
         raw = json.loads(Path(path).read_text())
     except FileNotFoundError:
-        logger.info("no alias table on this host — replication is not provisioned")
+        logger.info(
+            _UNPROVISIONED,
+            extra={
+                "path": str(path),
+                "detail": "no file at that path; "
+                "every content.replicate command is refused alias_unknown",
+            },
+        )
         return _empty()
     except Exception as exc:
         logger.error(

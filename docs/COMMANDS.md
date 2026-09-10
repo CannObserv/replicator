@@ -12,10 +12,12 @@ uv sync
 uv run pre-commit install
 ```
 
-The sync authenticates with Application Default Credentials. On the VM that is the
-service-account key at `GOOGLE_APPLICATION_CREDENTIALS`
-(`/etc/replicator/co-pypi-reader.json`); in CI it is the keyless WIF token written by
-`google-github-actions/auth`. Either identity needs only `roles/storage.objectViewer`.
+The sync authenticates as the read-only key named by `REPLICATOR_WHEELHOUSE_CREDENTIALS`
+when that is set (`/etc/replicator/co-pypi-reader.json` on the VM), else Application
+Default Credentials — in CI the keyless WIF token written by `google-github-actions/auth`.
+Either identity needs only `roles/storage.objectViewer`. The VM's
+`GOOGLE_APPLICATION_CREDENTIALS` is the replication *writer*, which is why the sync has
+a variable of its own.
 
 ## Environment
 

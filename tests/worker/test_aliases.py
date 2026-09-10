@@ -45,17 +45,46 @@ def test_an_unset_path_provisions_nothing(monkeypatch):
     assert table.provisioned == ()
 
 
-def test_a_missing_file_provisions_nothing_rather_than_raising(tmp_path):
+UNPROVISIONED = "no alias table on this host — replication is not provisioned"
+
+
+def test_an_unset_path_says_so_in_the_journal(caplog):
+    """Unset leaves the same line a missing file does, and says *why* (#86).
+
+    Before this, ``None`` returned silently and only the missing-file branch
+    logged — so the one state every host has actually been in was the one state
+    the journal could not show. An operator asked "is this host provisioned?"
+    had to infer it from the absence of a line, and the ``worker ready`` line's
+    ``replication_aliases: []`` was the only positive evidence. One message for
+    both unprovisioned states keeps a single grep honest; ``detail`` is what
+    tells them apart.
+    """
+    with caplog.at_level("INFO", logger="src.worker.aliases"):
+        load_alias_table(None)
+
+    [record] = [r for r in caplog.records if r.message == UNPROVISIONED]
+    assert "REPLICATOR_REPLICATION_ALIASES_FILE" in record.detail
+    assert "alias_unknown" in record.detail
+    assert not hasattr(record, "path")
+
+
+def test_a_missing_file_provisions_nothing_rather_than_raising(tmp_path, caplog):
     """A path that does not exist is "nothing provisioned", not a boot failure.
 
     Deliberate: the worker's job is ``content.fetch``, and a replicate config
     typo must not take the fetch loop down with it. The refusals say so per
     command, which reaches the operator through the same channel every other
-    replicate problem does.
+    replicate problem does — and the journal names the path it looked for, so
+    a typo in the variable is one grep from its cause (#86).
     """
-    table = load_alias_table(tmp_path / "absent.json")
+    path = tmp_path / "absent.json"
+    with caplog.at_level("INFO", logger="src.worker.aliases"):
+        table = load_alias_table(path)
 
     assert table.provisioned == ()
+    [record] = [r for r in caplog.records if r.message == UNPROVISIONED]
+    assert record.path == str(path)
+    assert "alias_unknown" in record.detail
 
 
 def test_a_binding_is_resolved_by_name(tmp_path):
