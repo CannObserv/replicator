@@ -29,6 +29,11 @@ from src.core.config import Settings
 REPO_ROOT = Path(__file__).resolve().parents[1]
 UNIT = REPO_ROOT / "deploy" / "replicator.service"
 GUARD = REPO_ROOT / "scripts" / "check_main_checkout.sh"
+FLOOR = REPO_ROOT / "scripts" / "check_redis_floor.sh"
+
+# systemd's DefaultTimeoutStartSec, which governs the unit because it sets no
+# TimeoutStartSec of its own: every ExecStartPre shares this one budget.
+DEFAULT_TIMEOUT_START_SEC = 90
 
 
 def _directive(name: str) -> str:
@@ -151,6 +156,33 @@ def test_the_stop_timeout_absorbs_a_pacing_wait_as_well():
 def test_the_unit_starts_after_tailscaled():
     """Without it the floor check races the tailnet at every boot, and loses quietly."""
     assert "tailscaled.service" in _unit_list("After")
+
+
+def _floor_default(variable: str) -> int:
+    """The default ``check_redis_floor.sh`` gives ``variable`` (``${VAR:-N}``)."""
+    match = re.search(rf"\${{{variable}:-(\d+)}}", FLOOR.read_text())
+    assert match, f"{FLOOR.name} has no numeric default for {variable}"
+    return int(match.group(1))
+
+
+def test_the_floor_checks_boot_wait_leaves_most_of_the_start_budget():
+    """``After=`` alone was measured insufficient (#88), so the floor check now
+    waits out an unreachable broker itself — inside the start.
+
+    Every ExecStartPre shares one TimeoutStartSec, and the wheelhouse sync that
+    follows goes to the network. A wait that could eat the budget would turn a
+    slow tailnet into a start timeout: a failure, counted against the three
+    starts an hour. The last probe can begin just before the wait expires, so
+    the bound is the wait plus one probe's timeout.
+    """
+    worst = _floor_default("REPLICATOR_REDIS_FLOOR_WAIT") + _floor_default(
+        "REPLICATOR_REDIS_FLOOR_TIMEOUT"
+    )
+
+    assert worst <= DEFAULT_TIMEOUT_START_SEC / 2
+    assert "TimeoutStartSec" not in UNIT.read_text(), (
+        "the unit now sets TimeoutStartSec; compare against it instead of the default"
+    )
 
 
 def test_the_unit_does_not_depend_on_tailscaled():

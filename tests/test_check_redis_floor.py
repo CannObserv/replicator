@@ -17,6 +17,7 @@ this service for days while describing the wrong system.
 
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -74,13 +75,42 @@ def _stub_redis_cli(
 
 
 def _run(bindir: Path | None, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """Run the script with no boot wait unless a test opts in.
+
+    ``REPLICATOR_REDIS_FLOOR_WAIT=0`` by default keeps every single-probe case
+    at a single probe; the retry cases below set their own window.
+    """
     path = f"{bindir}:/usr/bin:/bin" if bindir else "/usr/bin:/bin"
     return subprocess.run(
         ["bash", str(SCRIPT)],
-        env={"PATH": path, **env},
+        env={"PATH": path, "REPLICATOR_REDIS_FLOOR_WAIT": "0", **env},
         text=True,
         capture_output=True,
     )
+
+
+def _flaky_redis_cli(
+    tmp_path: Path, *, fail_first: int, stderr: str, version: str = "7.0.15"
+) -> tuple[Path, Path]:
+    """A `redis-cli` whose first `fail_first` calls fail with `stderr`, then answer.
+
+    Returns the bin dir for PATH and the file counting the calls, so a test can
+    assert how many probes the script made - the retry's whole contract.
+    """
+    binder = tmp_path / "bin"
+    binder.mkdir()
+    calls = tmp_path / "calls"
+    (binder / "redis-cli").write_text(
+        "#!/usr/bin/env bash\n"
+        'if [[ "$1" == "--help" ]]; then\n'
+        '  printf "usage: redis-cli\\n  --tls    Use TLS.\\n"; exit 0\n'
+        "fi\n"
+        f'n=$(( $(cat "{calls}" 2>/dev/null || echo 0) + 1 )); echo "$n" > "{calls}"\n'
+        f'if [ "$n" -le {fail_first} ]; then printf "%b\\n" {stderr!r} >&2; exit 1; fi\n'
+        f'case "$*" in *"INFO server"*) echo "redis_version:{version}" ;; esac\n'
+    )
+    (binder / "redis-cli").chmod(0o755)
+    return binder, calls
 
 
 def test_version_at_floor_passes(tmp_path: Path) -> None:
@@ -152,6 +182,80 @@ def test_unreachable_broker_is_still_reported_as_unreachable(tmp_path: Path) -> 
     assert result.returncode == 0
     assert "unreachable" in result.stderr.lower()
     assert "authenticate" not in result.stderr.lower()
+
+
+# --- The boot wait (#88) ------------------------------------------------------
+#
+# Measured on co-replicator's cold boots: this check ran 0.2 s after tailscaled
+# reached Running, and MagicDNS answered `broker` with no address (EAI_NODATA)
+# for a moment longer. A wait for the tailnet *address* was tried and disproved
+# - the address was local while the name still did not resolve - so the check
+# retries the dependency it actually has: resolve and connect.
+
+_NODATA = "Could not connect to Redis at broker:6379: No address associated with hostname"
+_URL = {"REPLICATOR_REDIS_URL": "redis://default:pw@broker:6379/0"}
+
+
+def _calls(counter: Path) -> int:
+    return int(counter.read_text())
+
+
+def test_a_broker_that_resolves_during_the_wait_is_verified(tmp_path: Path) -> None:
+    bindir, calls = _flaky_redis_cli(tmp_path, fail_first=2, stderr=_NODATA)
+    result = _run(bindir, {**_URL, "REPLICATOR_REDIS_FLOOR_WAIT": "10"})
+
+    assert result.returncode == 0
+    assert "meets the >=7.0 floor" in result.stdout
+    assert "reachable after" in result.stdout
+    assert _calls(calls) == 3
+
+
+def test_an_unreachable_broker_is_retried_until_the_wait_runs_out(tmp_path: Path) -> None:
+    """Bounded, and still soft: the floor is reported UNVERIFIED, the start goes ahead."""
+    bindir, calls = _flaky_redis_cli(tmp_path, fail_first=99, stderr=_NODATA)
+    started = time.monotonic()
+    result = _run(bindir, {**_URL, "REPLICATOR_REDIS_FLOOR_WAIT": "2"})
+
+    assert result.returncode == 0
+    assert "UNVERIFIED" in result.stderr
+    assert _calls(calls) >= 2
+    assert time.monotonic() - started < 10
+
+
+def test_an_authentication_refusal_is_not_retried(tmp_path: Path) -> None:
+    """The broker answered; waiting cannot change a wrong credential."""
+    bindir, calls = _flaky_redis_cli(tmp_path, fail_first=99, stderr=_WRONGPASS)
+    result = _run(bindir, {**_URL, "REPLICATOR_REDIS_FLOOR_WAIT": "10"})
+
+    assert result.returncode == 0
+    assert _calls(calls) == 1
+
+
+def test_a_silent_failure_is_not_retried(tmp_path: Path) -> None:
+    """No stderr is what a timeout kill leaves - the probe already spent its timeout."""
+    bindir, calls = _flaky_redis_cli(tmp_path, fail_first=99, stderr="")
+    result = _run(bindir, {**_URL, "REPLICATOR_REDIS_FLOOR_WAIT": "10"})
+
+    assert result.returncode == 0
+    assert _calls(calls) == 1
+
+
+def test_a_zero_wait_probes_once(tmp_path: Path) -> None:
+    bindir, calls = _flaky_redis_cli(tmp_path, fail_first=99, stderr=_NODATA)
+    result = _run(bindir, {**_URL, "REPLICATOR_REDIS_FLOOR_WAIT": "0"})
+
+    assert result.returncode == 0
+    assert _calls(calls) == 1
+
+
+def test_a_malformed_wait_is_named_and_the_default_used(tmp_path: Path) -> None:
+    """An override that quietly did nothing would be worse than none."""
+    bindir, calls = _flaky_redis_cli(tmp_path, fail_first=1, stderr=_NODATA)
+    result = _run(bindir, {**_URL, "REPLICATOR_REDIS_FLOOR_WAIT": "soon"})
+
+    assert "REPLICATOR_REDIS_FLOOR_WAIT" in result.stderr
+    assert "meets the >=7.0 floor" in result.stdout
+    assert _calls(calls) == 2
 
 
 def test_silent_failure_claims_neither_cause(tmp_path: Path) -> None:

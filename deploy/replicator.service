@@ -15,11 +15,13 @@ Description=replicator — retrieval, fingerprinting, and temporary storage laye
 # floor check below remains the guard that actually blocks.
 #
 # tailscaled is the ordering that replaced it (#88): the broker is `broker` on
-# the tailnet, so a boot that starts this unit first has the floor check race
-# MagicDNS and report UNVERIFIED rather than the version. Ordering ONLY — no
-# Wants=/Requires=/BindsTo=. Those propagate: tailscaled restarting under an apt
-# upgrade would restart the worker and spend one of the three starts an hour
-# below. A tailnet that is merely slow is the worker's backoff's job, not ours.
+# the tailnet. Ordering ONLY — no Wants=/Requires=/BindsTo=. Those propagate:
+# tailscaled restarting under an apt upgrade would restart the worker and spend
+# one of the three starts an hour below. After= orders against tailscaled
+# STARTING, and on a cold boot MagicDNS answers `broker` with no address for a
+# moment after that - measured twice - so the floor check below retries an
+# unreachable broker for a bounded window rather than trusting this ordering.
+# A tailnet that stays down is still the worker's backoff's job.
 After=network.target tailscaled.service
 # Bound restart loops at BOTH timescales, then stay failed (visible in
 # systemctl status + OnFailure=) instead of restarting forever.
@@ -87,8 +89,9 @@ EnvironmentFile=/etc/replicator/.env
 
 # Hard guard: Replicator is the cluster's first user of claim_stale, which needs
 # XAUTOCLAIM's three-element reply (Redis server >= 7.0). Soft on an unreachable
-# broker, fatal on a genuine downgrade. Not '-' prefixed — that exit 1 must stop
-# the start.
+# broker — after retrying it for REPLICATOR_REDIS_FLOOR_WAIT (default 30 s), which
+# is what lets it see the broker on a cold boot (#88) — and fatal on a genuine
+# downgrade. Not '-' prefixed — that exit 1 must stop the start.
 ExecStartPre=/bin/bash /home/exedev/replicator/scripts/check_redis_floor.sh
 
 # Refresh the cannobserv wheelhouse. Non-fatal ('-' prefix): a transient GCS

@@ -12,9 +12,11 @@
 # ended the arrangement where Archiver operated it); Replicator is a client and
 # never ships or manages a broker.
 #
-# Soft on absence, hard on age — matching replicator.service's Wants=/After=
-# (not Requires=):
+# Soft on absence, hard on age — the unit orders After=tailscaled.service only,
+# never Requires=, so the broker's absence must not block the start:
 #   - unreachable / auth  -> the floor is UNVERIFIED, but don't block -> exit 0
+#                            (unreachable only after REPLICATOR_REDIS_FLOOR_WAIT
+#                            seconds of retrying - the boot wait below, #88)
 #                            (the two are reported distinctly - archiver#195)
 #   - version read, < 7.0 -> a real downgrade, block the worker  -> exit 1
 #   - version read, >=7.0 -> ok                                  -> exit 0
@@ -53,6 +55,24 @@ esac
 # REPLICATOR_REDIS_FLOOR_TIMEOUT (seconds, default 5) bounds the call.
 TIMEOUT_SECS="${REPLICATOR_REDIS_FLOOR_TIMEOUT:-5}"
 TIMEOUT_BIN="$(command -v timeout || true)"
+
+# The boot wait (#88). At a cold boot the unit's After=tailscaled.service is not
+# enough: tailscaled has started, but MagicDNS answers `broker` with no address
+# (EAI_NODATA) for a moment longer, and this check landed inside that window on
+# both of co-replicator's measured boots. A wait for the tailnet *address* was
+# tried and disproved - the address was already local while the name still did
+# not resolve - so this retries the dependency itself: an 'unreachable' probe is
+# repeated once a second until REPLICATOR_REDIS_FLOOR_WAIT seconds have passed.
+# Only 'unreachable': an auth refusal is an answer no wait can change, and a
+# silent failure is a timeout kill that has already spent TIMEOUT_SECS.
+# tests/test_deploy.py bounds WAIT + TIMEOUT against the unit's start budget.
+WAIT_SECS="${REPLICATOR_REDIS_FLOOR_WAIT:-30}"
+case "${WAIT_SECS}" in
+  ''|*[!0-9]*)
+    echo "check_redis_floor: REPLICATOR_REDIS_FLOOR_WAIT='${WAIT_SECS}' is not a whole number of seconds — using the default, 30" >&2
+    WAIT_SECS=30
+    ;;
+esac
 
 # Stderr is CAPTURED rather than discarded (CannObserv/archiver#195): an
 # authentication rejection and an unreachable host both produce an empty reply,
@@ -98,8 +118,19 @@ probe_failure_kind() {
   esac
 }
 
-redis_probe INFO server
-version="$(printf '%s\n' "${PROBE_OUT}" | sed -n 's/^redis_version:\(.*\)$/\1/p')"
+started=${SECONDS}
+while :; do
+  redis_probe INFO server
+  version="$(printf '%s\n' "${PROBE_OUT}" | sed -n 's/^redis_version:\(.*\)$/\1/p')"
+  [ -n "${version}" ] && break
+  [ "$(probe_failure_kind)" = unreachable ] || break
+  [ $(( SECONDS - started )) -lt "${WAIT_SECS}" ] || break
+  sleep 1
+done
+waited=$(( SECONDS - started ))
+if [ -n "${version}" ] && [ "${waited}" -gt 0 ]; then
+  echo "check_redis_floor: broker reachable after ${waited}s"
+fi
 
 if [ -z "${version}" ]; then
   # Whatever the cause, the >=7.0 floor was NOT checked. Say "unverified",
@@ -117,7 +148,7 @@ if [ -z "${version}" ]; then
       echo "check_redis_floor: exactly this URL form, so a refusal here is not evidence about it" >&2
       ;;
     unreachable)
-      echo "check_redis_floor: broker unreachable — >=7.0 floor UNVERIFIED, not blocking start" >&2
+      echo "check_redis_floor: broker unreachable after ${waited}s of retrying — >=7.0 floor UNVERIFIED, not blocking start" >&2
       echo "check_redis_floor: broker said: ${PROBE_ERR}" >&2
       ;;
     *)
