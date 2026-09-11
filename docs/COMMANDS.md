@@ -137,8 +137,9 @@ So `XDEL` works on those two queues and is refused on every other key this crede
 reach — the command streams and the fact streams included. The root permission set never
 gains `+xdel`. Verified on the broker's node against 7.0.15, not from here: this host can
 confirm a drained queue by its depth (`content.replicate.dlq` is 0) but cannot prove the
-selector's shape without deleting something. `XTRIM` remains denied, which is the point of a
-selector — precise disposal, never a queue wipe.
+selector's shape without deleting something. The grant adds `+xdel` and nothing else, and
+`XTRIM` has never been exercised from this credential — so treat per-id deletion as the only
+disposal available, which is the point of a selector anyway: precise, never a queue wipe.
 
 **Triage before deleting, and not only for correctness.** The broker's probe copies every DLQ
 entry to its `dlq-evidence/` tree on the first tick that sees depth above zero, so a deleted
