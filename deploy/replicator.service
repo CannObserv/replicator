@@ -15,12 +15,11 @@ Description=replicator — retrieval, fingerprinting, and temporary storage laye
 # floor check below remains the guard that actually blocks.
 #
 # tailscaled is the ordering that replaced it (#88): the broker is `broker` on
-# the tailnet. Ordering ONLY — no Wants=/Requires=/BindsTo=. Those propagate:
-# tailscaled restarting under an apt upgrade would restart the worker and spend
-# one of the three starts an hour below. After= alone proved too early for the
-# floor check, which is why that check waits for the tailnet address first (see
-# ExecStartPre below); a tailnet that is merely slow is still the worker's
-# backoff's job.
+# the tailnet, so a boot that starts this unit first has the floor check race
+# MagicDNS and report UNVERIFIED rather than the version. Ordering ONLY — no
+# Wants=/Requires=/BindsTo=. Those propagate: tailscaled restarting under an apt
+# upgrade would restart the worker and spend one of the three starts an hour
+# below. A tailnet that is merely slow is the worker's backoff's job, not ours.
 After=network.target tailscaled.service
 # Bound restart loops at BOTH timescales, then stay failed (visible in
 # systemctl status + OnFailure=) instead of restarting forever.
@@ -90,18 +89,6 @@ EnvironmentFile=/etc/replicator/.env
 # XAUTOCLAIM's three-element reply (Redis server >= 7.0). Soft on an unreachable
 # broker, fatal on a genuine downgrade. Not '-' prefixed — that exit 1 must stop
 # the start.
-#
-# Preceded by a wait for this host's tailnet address (#88), because After= is
-# not enough: it orders against tailscaled STARTING, and the with-service reboot
-# test caught the floor check ~1 s ahead of MagicDNS - `broker` did not resolve
-# and the floor read UNVERIFIED on a cold boot. The address appears at
-# tailscaled's Running transition. '-' prefixed: a tailnet that never comes up
-# must not refuse the start (the worker's backoff owns that), so on a timeout
-# the wait logs and the floor check reports UNVERIFIED, exactly as before.
-# 30 s is 20x the measured gap and leaves most of the start budget to the
-# wheelhouse sync below. The address is this node's (docs/reference/tailscale.md);
-# it survives reboots, and a re-registered node shows up here as a timeout.
-ExecStartPre=-/bin/bash /home/exedev/replicator/scripts/wait_for_tailnet_addr.sh 100.114.136.20 30
 ExecStartPre=/bin/bash /home/exedev/replicator/scripts/check_redis_floor.sh
 
 # Refresh the cannobserv wheelhouse. Non-fatal ('-' prefix): a transient GCS

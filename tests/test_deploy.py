@@ -21,7 +21,6 @@ in `tests/test_check_main_checkout.py`, per `docs/TESTING.md`'s split-by-concern
 rule.
 """
 
-import ipaddress
 import re
 from pathlib import Path
 
@@ -30,14 +29,6 @@ from src.core.config import Settings
 REPO_ROOT = Path(__file__).resolve().parents[1]
 UNIT = REPO_ROOT / "deploy" / "replicator.service"
 GUARD = REPO_ROOT / "scripts" / "check_main_checkout.sh"
-TAILNET_WAIT = REPO_ROOT / "scripts" / "wait_for_tailnet_addr.sh"
-FLOOR = REPO_ROOT / "scripts" / "check_redis_floor.sh"
-
-# systemd's DefaultTimeoutStartSec, which governs the unit because it sets no
-# TimeoutStartSec of its own: every ExecStartPre shares this one budget.
-DEFAULT_TIMEOUT_START_SEC = 90
-# check_redis_floor.sh's REPLICATOR_REDIS_FLOOR_TIMEOUT default.
-FLOOR_PROBE_TIMEOUT_SEC = 5
 
 
 def _directive(name: str) -> str:
@@ -160,70 +151,6 @@ def test_the_stop_timeout_absorbs_a_pacing_wait_as_well():
 def test_the_unit_starts_after_tailscaled():
     """Without it the floor check races the tailnet at every boot, and loses quietly."""
     assert "tailscaled.service" in _unit_list("After")
-
-
-def _one_step(script: Path) -> str:
-    """The single ``ExecStartPre`` that runs ``script``."""
-    matches = [value for value in _exec_start_pre() if script.name in value]
-    assert len(matches) == 1, f"expected exactly one {script.name} ExecStartPre, got {matches}"
-    return matches[0]
-
-
-def _tailnet_wait_args() -> tuple[str, int]:
-    """The address and timeout the wait step is invoked with."""
-    step = _one_step(TAILNET_WAIT)
-    args = step.split(TAILNET_WAIT.name, 1)[1].split()
-    assert len(args) >= 2, f"expected '<addr> <timeout_s>' after {TAILNET_WAIT.name}: {step!r}"
-    return args[0], int(args[1])
-
-
-def test_the_floor_check_waits_for_the_tailnet_address_first():
-    """``After=`` alone was measured insufficient (#88's with-service reboot).
-
-    It orders against tailscaled *starting*: the floor check ran ~1 s before
-    MagicDNS could resolve ``broker`` and reported the floor UNVERIFIED.
-    """
-    assert TAILNET_WAIT.exists(), f"{TAILNET_WAIT.name} is missing"
-    steps = _exec_start_pre()
-    wait_at = steps.index(_one_step(TAILNET_WAIT))
-    floor_at = steps.index(_one_step(FLOOR))
-
-    assert wait_at < floor_at, (
-        f"{TAILNET_WAIT.name} runs at ExecStartPre #{wait_at}, after the floor check at #{floor_at}"
-    )
-
-
-def test_the_tailnet_wait_never_blocks_the_start():
-    """The broker's absence must never hard-fail the start — the unit's standing rule.
-
-    Unlike broker's copy, which is fatal because a broker that cannot bind must
-    fail loudly, a slow tailnet here is the worker's backoff's job. The wait
-    exists so the floor check can *see*; the floor check decides.
-    """
-    assert _one_step(TAILNET_WAIT).startswith("-"), (
-        f"{TAILNET_WAIT.name} must be '-' prefixed: a timeout would otherwise refuse the start"
-    )
-
-
-def test_the_tailnet_wait_names_a_tailnet_address():
-    address, _ = _tailnet_wait_args()
-
-    assert ipaddress.ip_address(address) in ipaddress.ip_network("100.64.0.0/10"), (
-        f"{address} is not a tailnet (CGNAT) address"
-    )
-
-
-def test_the_tailnet_wait_leaves_most_of_the_start_budget():
-    """Every ExecStartPre shares one TimeoutStartSec, and the wheelhouse sync after
-    the floor check goes to the network. A wait that could eat the budget would
-    turn a slow tailnet into a start-timeout — a failure, counted against the
-    three starts an hour."""
-    _, timeout = _tailnet_wait_args()
-
-    assert timeout + FLOOR_PROBE_TIMEOUT_SEC <= DEFAULT_TIMEOUT_START_SEC / 2
-    assert "TimeoutStartSec" not in UNIT.read_text(), (
-        "the unit now sets TimeoutStartSec; compare against it instead of the default"
-    )
 
 
 def test_the_unit_does_not_depend_on_tailscaled():
