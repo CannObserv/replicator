@@ -12,6 +12,9 @@ about which code it starts: `scripts/check_main_checkout.sh` (#37) is invoked, i
 unprefixed, and runs ahead of the `BUILD_ID` stamp. All three are properties of
 this ini file, reached by parsing it.
 
+The unit is also ordered behind `tailscaled` — ordering, never dependency —
+because the broker it consumes is reached by tailnet name (#88).
+
 Whether the guard then *decides* correctly is a different concern reached by a
 different mechanism — a real process against throwaway repositories — and lives
 in `tests/test_check_main_checkout.py`, per `docs/TESTING.md`'s split-by-concern
@@ -55,6 +58,19 @@ def _guard_step() -> str:
     matches = [value for value in _exec_start_pre() if GUARD.name in value]
     assert len(matches) == 1, f"expected exactly one {GUARD.name} ExecStartPre, got {matches}"
     return matches[0]
+
+
+def _unit_list(name: str) -> list[str]:
+    """Every unit named by a list directive like ``After=``, in systemd's semantics.
+
+    Each assignment appends its whitespace-separated names, and an empty
+    assignment resets the list — so a later ``After=`` line can silently drop
+    what an earlier one declared.
+    """
+    units: list[str] = []
+    for value in re.findall(rf"^{name}=(.*)$", UNIT.read_text(), flags=re.MULTILINE):
+        units = units + value.split() if value.strip() else []
+    return units
 
 
 def test_the_start_limit_window_fits_a_burst_of_slow_exits():
@@ -122,6 +138,34 @@ def test_the_stop_timeout_absorbs_a_pacing_wait_as_well():
     )
 
     assert timeout_stop > worst_case
+
+
+# --- Ordering behind the tailnet (#88) ---------------------------------------
+#
+# The broker is reached as `broker` over the tailnet, so at boot the worker and
+# its floor check both need tailscaled. Ordering, never dependency: the
+# worker's backoff already absorbs a slow tailnet, and what this buys is the
+# floor check seeing the broker instead of reporting it UNVERIFIED.
+
+
+def test_the_unit_starts_after_tailscaled():
+    """Without it the floor check races the tailnet at every boot, and loses quietly."""
+    assert "tailscaled.service" in _unit_list("After")
+
+
+def test_the_unit_does_not_depend_on_tailscaled():
+    """``After=`` orders; these directives also *propagate*, and that is the hazard.
+
+    ``Requires=``/``BindsTo=``/``PartOf=`` carry tailscaled's stops and restarts
+    through to the worker — an apt upgrade of tailscale would restart it and
+    spend one of the unit's three starts an hour. ``Wants=``/``Requisite=``
+    are the dependency trap the unit's own comment block records for the
+    retired redis-server ordering.
+    """
+    for name in ("Wants", "Requires", "Requisite", "BindsTo", "PartOf"):
+        assert "tailscaled.service" not in _unit_list(name), (
+            f"{name}=tailscaled.service makes the worker's lifecycle follow tailscaled's"
+        )
 
 
 # --- The main-checkout guard (#37) -------------------------------------------

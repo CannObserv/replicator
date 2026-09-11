@@ -13,7 +13,14 @@ Description=replicator — retrieval, fingerprinting, and temporary storage laye
 # The reasoning it replaces still holds: the broker is cluster infrastructure
 # this worker only consumes, its absence must never hard-fail the start, and the
 # floor check below remains the guard that actually blocks.
-After=network.target
+#
+# tailscaled is the ordering that replaced it (#88): the broker is `broker` on
+# the tailnet, so a boot that starts this unit first has the floor check race
+# MagicDNS and report UNVERIFIED rather than the version. Ordering ONLY — no
+# Wants=/Requires=/BindsTo=. Those propagate: tailscaled restarting under an apt
+# upgrade would restart the worker and spend one of the three starts an hour
+# below. A tailnet that is merely slow is the worker's backoff's job, not ours.
+After=network.target tailscaled.service
 # Bound restart loops at BOTH timescales, then stay failed (visible in
 # systemctl status + OnFailure=) instead of restarting forever.
 #
