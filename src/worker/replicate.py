@@ -81,6 +81,14 @@ _ALLOWED_IN_SEGMENT = frozenset(string.ascii_letters + string.digits + "._-+=@,(
 # How much of a message-derived value reaches the journal. One constant rather
 # than a literal at each site, so the two cannot drift into disagreeing about how
 # much of an untrusted string is safe to record (CR #20).
+#
+# **Both remaining uses are refusals, and that is the whole scope of it (#87).**
+# It bounds a string that *failed* validation and is being quoted back — one of
+# which also becomes a fact's ``detail`` and a DLQ entry's ``dlq_reason``, so the
+# bound protects the wire and not just the journal. It deliberately does not
+# reach the success path: a key that has passed ``validate_destination`` and been
+# accepted by the provider is no longer untrusted input, it is the name of a
+# permanent artifact, and a prefix of it names nothing.
 _LOGGED_VALUE_CHARS = 120
 
 
@@ -438,7 +446,15 @@ def build_replicate_handler(
                 "command_id": command.command_id,
                 "provider": command.provider,
                 "outcome": result.outcome.value,
-                "key": key[:_LOGGED_VALUE_CHARS],
+                # In full, deliberately (#87). This is the only place the journal
+                # records what was written as a *key*, and a truncated one is
+                # worse than useless: it cannot be pasted into `gcloud storage`,
+                # and two artifacts written into one folder in the same second
+                # log identically. Unbounded is safe here in a way it is not at
+                # the refusal sites — the segment allow-list has already rejected
+                # every control character, and the provider accepted the key,
+                # which for GCS caps it at 1024 bytes.
+                "key": key,
             },
         )
 
