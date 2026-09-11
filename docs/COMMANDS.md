@@ -119,16 +119,31 @@ scoped to its own topics, permanently and by design, so the operator surface spl
 
 | Runnable here | Denied — ask the broker operator |
 |---|---|
-| `XLEN`, `XRANGE`, `XINFO STREAM`, `INFO` | `XPENDING`, `SCAN`, `XINFO GROUPS`, `XINFO CONSUMERS`, `CLIENT LIST`, `ACL LOG`, `SELECT`, **`XDEL`** |
+| `XLEN`, `XRANGE`, `XINFO STREAM`, `INFO`, `XDEL` on the two `.dlq` streams | `XPENDING`, `SCAN`, `XINFO GROUPS`, `XINFO CONSUMERS`, `CLIENT LIST`, `ACL LOG`, `SELECT`, `XDEL` anywhere else |
 
-**`XDEL` is the one that is not a diagnostic, and it makes the DLQ write-only from here (#86).**
-The grant covers `XADD <topic>.dlq` — the first half of a dead-letter, which is why the fate
-works at all — but not removing an entry afterwards, so the service that fills its own
-dead-letter queue cannot empty it. Found draining the `alias_unknown` frame the #86
-rehearsal parked on 2026-09-10 at 21:02:02Z: `XDEL content.replicate.dlq <id>` answered
-`NOPERM this user has no permissions to run the 'xdel' command`. `XTRIM` is untested and
-presumed denied with it; neither is worth retrying, because triaging a frame is reading it,
-which is granted — only the disposal has to be asked for.
+**Draining a dead-letter queue is this service's job, and since 2026-09-11 it has the grant
+for it (#86, broker#12).** It briefly did not: `XADD <topic>.dlq` was granted and the deletion
+never was, so the service that fills its own queue could not empty it — found when the
+`alias_unknown` frame the #86 rehearsal parked at 2026-09-10T21:02:02Z refused to delete. The
+broker's Phase 5 had already assigned both queues here, so the gap was an unfinished decision
+rather than a policy, and it was closed with a **Redis 7.0 ACL selector** rather than a blanket
+command grant:
+
+```
+(+xdel ~content.fetch.dlq ~content.replicate.dlq)
+```
+
+So `XDEL` works on those two queues and is refused on every other key this credential can
+reach — the command streams and the fact streams included. The root permission set never
+gains `+xdel`. Verified on the broker's node against 7.0.15, not from here: this host can
+confirm a drained queue by its depth (`content.replicate.dlq` is 0) but cannot prove the
+selector's shape without deleting something. `XTRIM` remains denied, which is the point of a
+selector — precise disposal, never a queue wipe.
+
+**Triage before deleting, and not only for correctness.** The broker's probe copies every DLQ
+entry to its `dlq-evidence/` tree on the first tick that sees depth above zero, so a deleted
+frame is still recoverable — *unless* it was written and deleted inside one 10-minute tick,
+which leaves no evidence file at all. Read the frame, close its command, then delete.
 
 The denied column is marked `# NOPERM` at each use below rather than removed, because the
 command is still the right one to ask for — and two of them answer questions nothing else can.
@@ -140,16 +155,16 @@ See [Redis](#redis) for what to know before asking.
 # filter to entries idle at least that long (what claim_stale would reclaim).
 rcli XPENDING content.fetch replicator.fetch - + 10      # NOPERM as replicator
 
-# Dead-lettered frames. Reading and triaging them is granted; *removing* one is
-# not — XDEL is NOPERM, so a drained queue is a broker-operator ask (#86).
+# Dead-lettered frames. Reading, triaging and deleting are all granted here.
 rcli XLEN content.fetch.dlq
 rcli XRANGE content.fetch.dlq - + COUNT 5
 rcli XLEN content.replicate.dlq
 rcli XRANGE content.replicate.dlq - + COUNT 5
 
-# Disposal, once a frame is triaged and its command closed. Denied today; the
-# ask, and the open question of whether it should stay denied, is broker#12.
-rcli XDEL content.replicate.dlq 1789074122299-0          # NOPERM as replicator
+# Disposal, once a frame is triaged and its command closed. One entry at a
+# time by id — there is no XTRIM here, deliberately, so a drain cannot become
+# a wipe. Resting state for both queues is 0 (broker#12).
+rcli XDEL content.replicate.dlq <entry-id>
 
 # Dedupe keys (one per handled command, TTL REPLICATOR_DEDUPE_TTL_SECONDS).
 # What they guard and what a cold start does without them: CONVENTIONS.md,
