@@ -607,3 +607,40 @@ async def test_a_success_with_no_url_is_not_published_at_all(store, blob_uri):
         await handler_for(store, writer, complete=done)(command(blob_uri))
 
     assert done.facts == []
+
+
+# The key that exposed this, shortened only in the org segment: 176 characters,
+# and the first real permanent artifact this service wrote (#87, #81).
+LONG_DESTINATION = (
+    "organizations/washington_state_liquor_and_cannabis_board/infoitems/"
+    "public_hearings_and_outreach/2026/"
+    "2026_09_09-18_54_02-public_hearings_and_outreach-01M23RDZKZS6FSPP1YZFBEQB2R.html"
+)
+
+
+async def test_the_success_line_logs_the_whole_key_it_wrote(store, blob_uri, caplog):
+    """The journal must name the object that exists, not a prefix of it (#87).
+
+    ``_LOGGED_VALUE_CHARS`` bounds *message-derived* values, and it is right at
+    the two refusal sites it was written for: those quote input that failed
+    validation, and one of them reaches the wire as a fact's ``detail``. By this
+    line the key has been through ``validate_destination`` and the provider has
+    accepted it, so it is no longer an untrusted string — it is the verified name
+    of a permanent artifact, and this is the only place the journal records it as
+    a key.
+
+    Truncating it cost two things. The logged key was not copy-pasteable, so the
+    first move of anyone reconciling a write found nothing; and two artifacts
+    written into one folder within a second logged identically, which is exactly
+    when telling them apart matters. Asserted against the name the *driver* was
+    handed rather than against a literal, so the log cannot drift from the write.
+    """
+    writer = FakeGcs(result(GcsCreateOutcome.WROTE, public_url=PUBLIC_URL, generation=1))
+    with caplog.at_level("INFO", logger="src.worker.replicate"):
+        await handler_for(store, writer)(command(blob_uri, destination=LONG_DESTINATION))
+
+    (effect,) = writer.effects
+    [record] = [r for r in caplog.records if r.message == "replicated a blob"]
+    assert record.key == effect.blob_name
+    assert record.key == LONG_DESTINATION
+    assert record.outcome == "wrote"
