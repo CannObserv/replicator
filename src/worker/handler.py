@@ -219,7 +219,7 @@ def build_handler(
 
     ``usage`` is the blob tree's measured size, shared with the retention task —
     the sweep re-measures it, this handler adds to it, and it is the one thing
-    standing between a burst and a full disk on a shared VM. Left unset it is
+    standing between a burst and a full disk. Left unset it is
     private to this handler, which only makes the ceiling later to notice; the
     worker passes the shared instance.
 

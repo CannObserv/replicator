@@ -306,7 +306,7 @@ async def client() -> AsyncGenerator[AsyncClient]:
 
 @pytest.fixture
 async def fake_redis() -> AsyncGenerator:
-    """In-memory Redis standing in for the Archiver-operated broker.
+    """In-memory Redis standing in for the change-bus broker.
 
     Streams-capable, so consumer-group calls exercise real command semantics
     without a live server. Integration tests that need the genuine article are
@@ -327,7 +327,8 @@ async def real_redis() -> AsyncGenerator:
 
     Some properties are about *when* Redis acts, not what state results, and
     fakeredis diverges on exactly those (GH #3). Those assertions need the real
-    server, which on this VM is the Archiver-operated broker.
+    server — a scratch ``redis-server``, since the production broker's ACL refuses
+    these tests (CannObserv/broker#2).
 
     **Never db 0.** That database carries the live ``content.fetch`` stream the
     running ``replicator.service`` is consuming, so a test frame written there

@@ -97,7 +97,7 @@ fi
 # line sends an operator hunting the wrong hypothesis during a failed start —
 # the same misleading-verdict failure this whole guard exists to close, one
 # level down. It is reachable without anyone doing anything strange: a single
-# root-run git command, a restore, or a UID change on this shared VM is enough.
+# root-run git command, a restore, or a UID change on this VM is enough.
 unverifiable=""
 remedy=""
 head_sha=""

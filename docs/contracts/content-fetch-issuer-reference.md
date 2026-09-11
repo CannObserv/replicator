@@ -317,18 +317,21 @@ Replicator's side remains an operator responsibility, not a bus-level one.
 
 ## Provenance and trust
 
-`content.fetch` is an **unauthenticated capability**: any writer to the bus can make Replicator
-issue an arbitrary outbound HTTP request from the cluster VM and store the response. There is no
+`content.fetch` is an **unauthenticated capability**: any writer to the stream can make Replicator
+issue an arbitrary outbound HTTP request from Replicator's host and store the response. There is no
 signing, no allowlist, and no issuer identity on the frame.
 
-Integrity rests entirely on **bus access control** — the broker is Archiver-operated and bound to
-localhost on a single trusted VM. That is proportionate today. It stops being proportionate the
-moment the bus spans hosts or tenants, at which point message signing or a URL allowlist becomes
-the conversation. Not before.
+Integrity rests entirely on **bus access control**, and that control is no longer a loopback bind.
+The broker runs on its own node (`co-broker`, CannObserv/broker#1) and Replicator on another
+(`co-replicator`, #88), so what holds the line is **per-service Redis ACL users** — who may `XADD`
+to `content.fetch` is a broker grant (CannObserv/broker#2) — and the **Tailscale ACL**, which admits
+only the bus participants to the broker at all. This section named "the moment the bus spans hosts"
+as the point where message signing or a URL allowlist becomes the conversation. That moment has
+passed, and the conversation is #89; until it concludes, nothing in this contract changes.
 
 **`headers` widens that capability, and the widening is bounded here rather than by the broker.**
 A bus writer can now attach an arbitrary header — an `Authorization` among them — to a host of its
-own choosing. The trust model is unchanged (same localhost broker, same single VM), so the guards
+own choosing. The trust model is the one above — broker grants, not a signed frame — so the guards
 in the refusal table above are not a substitute for it; they are the cheap part, taken because it
 is cheap. Concretely they stop three things the broker's boundary says nothing about: a `Host`
 override that contacts one origin while addressing another, a CRLF in a value that splits the

@@ -1,4 +1,4 @@
-"""The policy reader against the live Archiver-operated broker (#19).
+"""The policy reader against a live broker (#19).
 
 Split off by *environment* rather than concern, which is the one axis that earns
 its own file: what these assert is what fakeredis cannot attest to — that the

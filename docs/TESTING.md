@@ -11,7 +11,7 @@ allowed to touch.
 
 ## Testing the bus
 
-**Testing the bus.** `tests/conftest.py` ships a `fake_redis` fixture (fakeredis, Streams-capable) — consumer-group behaviour is testable without a broker, and assertions should read the broker's own view (`xinfo_groups` / `xinfo_consumers`) rather than co-core's private attributes, which are not a stable contract. Anything that genuinely needs the live Archiver-operated Redis goes behind `@pytest.mark.integration` and is excluded by default.
+**Testing the bus.** `tests/conftest.py` ships a `fake_redis` fixture (fakeredis, Streams-capable) — consumer-group behaviour is testable without a broker, and assertions should read the broker's own view (`xinfo_groups` / `xinfo_consumers`) rather than co-core's private attributes, which are not a stable contract. Anything that genuinely needs a live Redis goes behind `@pytest.mark.integration` and is excluded by default.
 
 **Where fakeredis diverges.** It is sound for consumer-group *mechanics* — what state a command leaves behind — but diverges on *lifecycle* and *blocking* semantics: it registers a consumer on an empty `XREADGROUP` (real Redis waits for a delivery, GH #3) and it ignores `block` (worked around by `IDLE_SLEEP_SECONDS` in `src/worker/loop.py`). Rule of thumb: an assertion about **what state results** is safe against the fake; an assertion about **when Redis does something** needs a live broker. Both divergences were found by running against the real server, not by the suite.
 
@@ -177,8 +177,8 @@ process" would split the suite along a line nobody selects on.
 `redis-server`, asserts the binary resolved — a skip here is silent by
 construction, so an apt failure would otherwise leave a green job with the suite
 unrun, the same hazard the `gcs` job asserts its way out of — and then runs the
-file explicitly. Every other `@pytest.mark.integration` test still needs the VM
-broker and still runs only on the VM, so the marker's meaning is unchanged: what
+file explicitly. Every other `@pytest.mark.integration` test still needs a scratch
+`redis-server` (the production broker refuses them, above) and never runs in CI, so the marker's meaning is unchanged: what
 CI selects is a path, not a marker. `tests/test_ci.py` pins both the step and its
 guard, because deleting either leaves a workflow that still passes.
 
@@ -200,7 +200,7 @@ Skips when `redis-server` is not on PATH. Three details are load-bearing:
   is litter from an abnormal exit rather than a fault. It cannot affect a later
   run, which binds its own port and checks the pid;
   `pkill -f "redis-server 127.0.0.1:"` clears one — the fixture binds loopback
-  only, so that pattern cannot match the VM's own broker.
+  only, so that pattern cannot match a broker bound to any other address.
 - **The cap is *reached*, not merely configured.** `CappedBroker.cap()` sets
   `maxmemory` and then fills the instance until a write is refused, because "the
   cap is set" and "the cap bites" are different states and only the second is what

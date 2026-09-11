@@ -94,9 +94,9 @@ def _test_job_runs() -> list[str]:
 
 
 def test_the_broker_oom_suite_runs_in_ci():
-    """#83: the one `integration` file that needs no VM broker must actually run.
+    """#83: the one `integration` file that needs no external broker must actually run.
 
-    Every other marked test needs the Archiver-operated broker, which no runner
+    Every other marked test needs a scratch broker started beside it, which no runner
     has — but ``test_oom_integration.py`` spawns its own ``redis-server``, so
     nothing but the binary stands between CI and the suite that is the evidence
     behind the capped-broker record in ``docs/CONVENTIONS.md`` and behind

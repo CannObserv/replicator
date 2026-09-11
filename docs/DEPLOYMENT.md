@@ -1,6 +1,6 @@
 # Replicator Deployment
 
-Single-VM topology, the systemd unit's lifecycle and the guards it starts
+Dedicated-VM topology, the systemd unit's lifecycle and the guards it starts
 behind, and the co-core pin. `AGENTS.md` keeps the two-env-file boundary and the
 restart command; the reasoning behind each of them is here. The variables
 themselves — every one either env file carries — are in
@@ -8,20 +8,22 @@ themselves — every one either env file carries — are in
 
 ## Infrastructure
 
-Replicator shares the VM with archiver, watcher, and notifier:
+Own exe.dev VM, **`co-replicator`** (`pdx`), tailnet **`replicator`** — off the shared
+`watcher` VM since 2026-09-11 (#88), and also the dev workspace. The node:
+[reference/tailscale.md](reference/tailscale.md).
 
 | Service | Framework | Port | Managed by |
 |---|---|---|---|
 | Worker (live) | asyncio bus consumer | — | `systemctl` (`replicator.service`) |
-| API (dev) | FastAPI | 8041 | manual uvicorn |
+| API (dev) | FastAPI | 8001 | manual uvicorn |
 
-The worker binds no port. Port 8040 is reserved for Replicator's API should it ever be deployed; 8041 is the dev port. Neighbours: watcher 8000/8001, archiver 8020/8021, notifier 9000/9001. The exe.dev proxy transparently forwards ports 3000–9999; the dev server is reachable at `https://replicator.exe.xyz:8041/`.
+The worker binds no port; 8000 is reserved for the API, 8001 is dev. No tailnet rule reaches either; the dev server is `https://co-replicator.exe.xyz:8001/` behind the exe.dev proxy's login gate.
 
-### Redis is Archiver-operated — Replicator connects, it does not run its own
+### The broker is `co-broker` — Replicator connects, it does not run one
 
-The Redis change bus is Archiver-operated cluster infrastructure (the shared VM's `redis-server.service`). Replicator is a **client**: never ship a broker, never claim ownership.
+The change bus runs on `co-broker` (tailnet `broker`), operated from CannObserv/broker (broker#1). Replicator is a **client** — the `replicator` ACL user (broker#2) — and never ships a broker. The `redis-server` here is a binary for tests that spawn their own; its service is masked.
 
-**Redis ≥ 7.0 is Replicator-critical.** Replicator is the cluster's first user of `AsyncBusConsumer.claim_stale`, which reads `XAUTOCLAIM`'s three-element reply — the deleted-ids element added in Redis **server** 7.0. Below that, the crash-recovery path raises. `scripts/check_redis_floor.sh` guards this as an `ExecStartPre`. (The VM runs 7.0.15.)
+**Redis ≥ 7.0 is Replicator-critical.** Replicator is the cluster's first user of `AsyncBusConsumer.claim_stale`, which reads `XAUTOCLAIM`'s three-element reply — the deleted-ids element added in Redis **server** 7.0. Below that, the crash-recovery path raises. `scripts/check_redis_floor.sh` guards this as an `ExecStartPre`, ordered `After=tailscaled.service` so it sees the broker at boot (#88). (The broker runs 7.0.15.)
 
 The **redis-py client** resolves `>=5,<8` transitively via `co-core-aio[bus]`. Don't re-pin it narrower.
 
@@ -66,7 +68,7 @@ needs from an operator — a lifecycle rule and a consumer-side grant — remain
 two things no test in this repo can check.
 
 **The flip sequence, as executed** — kept because its ordering argument is the
-template for any future backend change, and because one step is still pending:
+template for any future backend change:
 
 1. ~~CannObserv/watcher#275 ships~~ — `gs://` support *and* the re-issue cap,
    deployed 2026-08-20. The ordering was the whole point: a worker announcing
@@ -82,12 +84,10 @@ template for any future backend change, and because one step is still pending:
    Commands in the PEL naming `file://` blobs are refused `blob_expired`, not
    `invalid_source` — the issuer is told to fetch again, which is the truth
    after a flip.
-5. **Pending, dated:** `rm -rf /var/lib/replicator/blobs` — **not before
-   2026-08-27**. Pre-flip `blob_available` facts promise `file://` URIs for up
-   to the 7-day window, and Watcher reads those straight off this tree; deleting
-   it early would break reads the contract still guarantees. After the horizon
-   passes nothing can legitimately reference it, and **nothing will ever
-   reclaim it otherwise** — the sweep does not run under `gcs`. ~2 MB.
+5. `rm -rf /var/lib/replicator/blobs` — held until the pre-flip `file://`
+   horizon passed (2026-08-27), since nothing reclaims it under `gcs`. The tree
+   is on the **watcher VM** and goes with #88's decommission; `co-replicator`
+   never had one. ~2 MB.
 
 What has to exist, and why each part:
 
@@ -255,11 +255,11 @@ storage is content-addressed, so re-storing identical bytes is a no-op that repu
 and the key is a cheap short-circuit rather than the correctness mechanism. Flush `replicator:cmd:*`
 only if you would rather not pay the handful of re-fetches.
 
-**Dev server workflow** (the `/health` app, port 8041 so a future live service stays up):
+**Dev server workflow** (the `/health` app, port 8001 so a future live service on 8000 stays up):
 
 ```bash
 set -a; . /etc/replicator/.env 2>/dev/null; . .env 2>/dev/null; set +a
-uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8041 --reload --log-config src/core/log_config.json
+uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8001 --reload --log-config src/core/log_config.json
 ```
 
 ## Environment Variables

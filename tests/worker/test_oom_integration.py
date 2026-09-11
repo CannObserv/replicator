@@ -33,8 +33,8 @@ not grant it. The apparatus is the same one, so the denial is exercised here
 rather than in a module of its own: ``test_an_acl_denial_is_retried_like_a_cap``.
 
 ``REPLICATOR_TEST_REDIS_URL`` is deliberately never read here. That variable names
-the Archiver-operated broker, which is exactly the server this module must not
-touch.
+a broker someone else started — once the production one — which is exactly the
+kind of server this module must not touch.
 """
 
 import asyncio

@@ -51,8 +51,8 @@ a command with no fact is a command still being retried, not one that failed.
 `content.fetch` stream), not an HTTP API. A thin FastAPI app exposes `/health` for local checks;
 it is not part of the MVP loop and is dev-only until a status surface is wanted.
 
-Redis is **Archiver-operated cluster infrastructure** — Replicator is a client and does not ship
-or manage a broker. The `>=7.0` server floor is Replicator-critical: `AsyncBusConsumer.claim_stale`
+The Redis broker is **cluster infrastructure on its own node** (`co-broker`, operated from
+CannObserv/broker) — Replicator is a client over the tailnet and does not ship or manage a broker. The `>=7.0` server floor is Replicator-critical: `AsyncBusConsumer.claim_stale`
 reads `XAUTOCLAIM`'s three-element reply, added in Redis server 7.0.
 
 ## Setup
@@ -104,7 +104,7 @@ rather than deleting bytes a consumer was promised.
 |---|---|---|
 | `GOOGLE_APPLICATION_CREDENTIALS` | `/etc/replicator/co-gcs-replicator.json` | The worker's ADC — the replication writer SA (`co-gcs-replicator@co-gcs`), never the wheelhouse reader |
 | `REPLICATOR_WHEELHOUSE_CREDENTIALS` | `/etc/replicator/co-pypi-reader.json` | Read-only key for the wheelhouse mirror, so the boot step never holds the writer |
-| `REPLICATOR_REDIS_URL` | `redis://localhost:6379/0` | Change-bus client URL |
+| `REPLICATOR_REDIS_URL` | `redis://replicator:<password>@broker:6379/0` | Change-bus client URL — the `replicator` ACL user on `co-broker`, over the tailnet |
 | `REPLICATOR_BLOB_BACKEND` | `gcs` | Temp blobs live in an object store — **not** the `local` default |
 | `REPLICATOR_BLOB_BUCKET` | `co-gcs-blobs` | The temp-blob bucket that backend writes into |
 | `REPLICATOR_BLOB_DIR` | `/var/lib/replicator/blobs` | Temp-storage root; **unused under `gcs`**, kept against a flip back to `local` |
@@ -131,7 +131,7 @@ consumes, and therefore actually fetches over the network) additionally needs `-
 # nobody else a request. Start it first (see Dev server below).
 uv run python -m scripts.seed_fetch \
   --redis-url redis://localhost:6379/0 --topic content.fetch \
-  --production --info-source-id isrc-01J9ZK7Q --watch http://localhost:8041/health
+  --production --info-source-id isrc-01J9ZK7Q --watch http://localhost:8001/health
 ```
 
 `--watch` tails the fact stream until each command has an outcome — a `blob_available`, or a
@@ -153,11 +153,11 @@ Full command reference: [`docs/COMMANDS.md`](docs/COMMANDS.md).
 
 ## Dev server
 
-The FastAPI `/health` app runs on port 8041 (port 8040 belongs to systemd if/when the API is
+The FastAPI `/health` app runs on port 8001 (port 8000 belongs to systemd if/when the API is
 promoted to a deployed surface):
 
 ```bash
-uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8041 --reload --log-config src/core/log_config.json
+uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8001 --reload --log-config src/core/log_config.json
 ```
 
 `--log-config` routes uvicorn's own `uvicorn` / `uvicorn.access` / `uvicorn.error` loggers — which

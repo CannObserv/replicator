@@ -160,8 +160,8 @@ async def keyspace(client) -> set[str]:
     """Every key on the scratch database, as an operator would see it.
 
     ``scan_iter``, not ``KEYS``: Redis is single-threaded *across databases*, and
-    this is the Archiver-operated server whose db 0 carries the live cluster bus.
-    A blocking scan of the scratch db would block that one too. Matches
+    the server may be one whose db 0 carries a live bus. A blocking scan of the
+    scratch db would block that one too. Matches
     ``_expire_leftovers`` in ``tests/conftest.py`` (CR #4).
     """
     return {key.decode() async for key in client.scan_iter(match="*")}
@@ -368,7 +368,7 @@ async def test_a_seeded_command_stores_a_blob_and_publishes_the_fact(
     """The MVP's core claim, demonstrated rather than asserted.
 
     ``content.fetch`` -> fetch -> fingerprint -> temp-store -> ``blob_available``,
-    driven end to end against the Archiver-operated broker. Only the fetch is
+    driven end to end against a live broker. Only the fetch is
     faked — this exists to prove the bus and storage behaviour, and a live origin
     would add flakiness rather than signal.
     """

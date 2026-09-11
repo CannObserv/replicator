@@ -163,8 +163,8 @@ jobs:
         run: uv run pytest
 
       # One integration file runs here, and only one (#83). Every other
-      # `@pytest.mark.integration` test needs the Archiver-operated broker on the
-      # VM, which no runner has; `test_oom_integration.py` spawns its own
+      # `@pytest.mark.integration` test needs a scratch broker started beside it,
+      # which no runner has; `test_oom_integration.py` spawns its own
       # `redis-server` on a loopback port it picks, so its only requirement is
       # this binary. A step in this job rather than a job of its own: the
       # wheelhouse is already mirrored and the venv already synced here, and a

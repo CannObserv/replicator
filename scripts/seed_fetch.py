@@ -32,8 +32,8 @@ Name one with ``--info-source-id``.
 hand-writing ``XRANGE``. It accepts **either** outcome — ``blob_available`` or,
 since #9, ``fetch_failed`` — because a watch that recognized only success would
 report a named, terminal failure as an indistinguishable timeout. It reads with a
-plain ``XREAD`` and never joins a consumer group: ``content.blobs`` is
-Archiver-operated, and a group left behind by an operator tool accumulates a
+plain ``XREAD`` and never joins a consumer group: ``content.blobs`` lives on
+the shared broker, and a group left behind by an operator tool accumulates a
 pending entries list nothing will ever drain. The stream it watches follows
 ``--topic`` unless overridden, so seeding a scratch stream watches that stream's
 facts rather than production's.

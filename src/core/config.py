@@ -7,9 +7,9 @@ Env files (``/etc/replicator/.env``, repo ``.env``) are loaded by systemd or the
 developer before launch — never by this module.
 
 Replicator-owned settings carry the ``REPLICATOR_`` prefix so they never collide
-with a sibling service's variables on the shared VM (the archiver/watcher/notifier
-convention). ``BUILD_ID`` is deliberately unprefixed: it is stamped generically by
-the systemd unit's ``ExecStartPre``.
+with a sibling service's variables — the archiver/watcher/notifier convention, kept
+from when all four shared one VM (#88). ``BUILD_ID`` is deliberately unprefixed: it
+is stamped generically by the systemd unit's ``ExecStartPre``.
 """
 
 from functools import lru_cache
@@ -44,7 +44,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(extra="ignore")
 
-    # Redis is Archiver-operated cluster infrastructure; this is a client URL.
+    # The broker is cluster infrastructure on its own node (co-broker); this is a client URL.
     # The default matches scripts/check_redis_floor.sh so the startup floor
     # guard checks the same broker the worker will actually connect to.
     redis_url: str = Field(
@@ -164,16 +164,15 @@ class Settings(BaseSettings):
     )
 
     # Ceiling on everything the blob tree holds. A TTL alone does not bound disk
-    # — a burst fills it well inside any retention window — and the VM is shared
-    # with archiver, watcher, and notifier, so filling it is a cluster-wide
-    # outage rather than a Replicator one.
+    # — a burst fills it well inside any retention window — and the host's disk
+    # is shared with its dev workspace, so filling it stops more than the worker.
     #
     # Crossing it does NOT shorten the TTL. Reaping a blob a consumer has been
     # promised would convert a local disk problem into a blob_uri that cannot be
     # opened in another repo, with no local symptom. The byte path stops fetching
     # instead, transiently, so commands wait on the bus until space frees.
     #
-    # 2 GiB against the VM's few gigabytes of headroom: room for far more than
+    # 2 GiB against the host's headroom: room for far more than
     # the seed harness produces, well short of an outage.
     blob_max_total_bytes: int = Field(
         default=2 * 1024 * 1024 * 1024, validation_alias="REPLICATOR_BLOB_MAX_TOTAL_BYTES"
@@ -355,9 +354,8 @@ class Settings(BaseSettings):
     # it (httpx `response.content`), so by the time this is checked the bytes are
     # already resident. Enforcing it would need a streaming fetch co-core does
     # not expose today. What it does buy is a bound on what reaches the blob
-    # directory on a shared VM, where filling the disk is a cluster-wide outage
-    # rather than a Replicator one. 64 MiB is far above any observed page and
-    # far below the VM's headroom.
+    # directory, on a disk the host shares with its dev workspace. 64 MiB is far
+    # above any observed page and far below the host's headroom.
     max_blob_bytes: int = Field(
         default=64 * 1024 * 1024, validation_alias="REPLICATOR_MAX_BLOB_BYTES"
     )

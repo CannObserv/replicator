@@ -101,8 +101,8 @@ written line rather than into a vacuum.
 | **command** | this occasion | `headers`, `timeout_seconds`, later a fetch `strategy` |
 | **config stream** | cluster policy needing cross-command state | per-host politeness |
 
-Env settings carry the `REPLICATOR_` prefix so they never collide with a sibling service on
-the shared VM. **`BUILD_ID` is the one exemption** and is deliberate: the systemd unit's
+Env settings carry the `REPLICATOR_` prefix so they never collide with a sibling service's — the
+cohort convention, kept from when four services shared one VM (#88). **`BUILD_ID` is the one exemption** and is deliberate: the systemd unit's
 `ExecStartPre` stamps it generically across the cluster's services, so prefixing it here would
 mean a per-service variable name for one git SHA. It is exempted by name in the test, not
 waved through — an exemption list that grows is this convention ending quietly.

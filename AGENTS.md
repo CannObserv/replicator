@@ -68,13 +68,13 @@ app; `src/core/` holds config, logging, and the consume path's failure vocabular
 
 ## Infrastructure
 
-**Single-VM setup.** Code committed to main is the deployed code; the VM is shared with archiver, watcher, and notifier.
+**Own VM, `co-replicator`** (tailnet `replicator`, #88), also the dev workspace.
+Main is the deployed code.
 
-The worker binds no port; 8041 is the dev API port and 8040 is reserved. **Redis is
-Archiver-operated** — Replicator is a client, never ships a broker — and server
-**≥ 7.0** is Replicator-critical because `claim_stale` reads `XAUTOCLAIM`'s
-three-element reply, guarded by `scripts/check_redis_floor.sh` as an `ExecStartPre`.
-Ports, neighbours, and the redis-py pin: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+Worker binds no port; 8001 is dev, 8000 reserved. **The broker is `co-broker`**
+(CannObserv/broker); Replicator is a client, never ships one. Server **≥ 7.0** is
+critical — `claim_stale` reads `XAUTOCLAIM`'s three-element reply — guarded by
+`scripts/check_redis_floor.sh`. Ports, redis-py pin: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Server Lifecycle
 
@@ -107,9 +107,8 @@ convention:
 worker has no use for, and a process whose job is fetching public URLs must not
 widen their blast radius. Anything the service needs goes in `/etc/replicator/.env`.
 
-New settings take the `REPLICATOR_` prefix — the VM is shared, and the prefix is
-what keeps a sibling service from colliding. `BUILD_ID` is the one deliberate
-exception, stamped generically by the unit.
+New settings take the `REPLICATOR_` prefix (cohort convention). `BUILD_ID` is the
+one deliberate exception, stamped generically by the unit.
 
 For shell commands (dev only), load both — the snippet is under Common Commands.
 Every variable, which file carries it, and each default's reasoning:
@@ -211,7 +210,7 @@ uv run ruff check .
 uv run python -m src.worker.main
 
 # FastAPI dev server (/health only)
-uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8041 --reload --log-config src/core/log_config.json
+uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8001 --reload --log-config src/core/log_config.json
 ```
 
 Full reference: `docs/COMMANDS.md`
@@ -253,6 +252,7 @@ with its rationale and ruff gate in [docs/STYLE.md](docs/STYLE.md).
 - [docs/CONVENTIONS.md](docs/CONVENTIONS.md) — the rules common to every stream: idempotency, validation, DLQ, `claim_stale`; and the `replicator:cmd:*` keys (#80)
 - [docs/STORAGE.md](docs/STORAGE.md) — blob paths and modes, the populations under `REPLICATOR_BLOB_DIR`, TTL and ceilings
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — VM topology, ports, the unit's lifecycle, the co-core pin
+- [docs/reference/tailscale.md](docs/reference/tailscale.md) — this node: tailnet, ACL, DNS, broker latency
 - [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) — every variable either env file carries, and the boundary between them
 - [docs/TESTING.md](docs/TESTING.md) — fakeredis's divergences, the keys an integration run may create, why production `co-gcs-replication` is unreachable (#38)
 - [docs/STYLE.md](docs/STYLE.md) — the logging stack: formatter, installers, and the non-JSON journald lines

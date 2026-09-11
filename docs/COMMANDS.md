@@ -65,7 +65,7 @@ uv run python -m scripts.seed_fetch \
 # The target below is the local /health app — start it first (see API, below).
 uv run python -m scripts.seed_fetch \
   --redis-url redis://localhost:6379/0 --topic content.fetch \
-  --production --info-source-id isrc-01J9ZK7Q --watch http://localhost:8041/health
+  --production --info-source-id isrc-01J9ZK7Q --watch http://localhost:8001/health
 ```
 
 `--watch` reads `content.blobs` for `content.fetch` and `<topic>.blobs` otherwise, so the
@@ -192,8 +192,8 @@ rcli XRANGE content.blobs - + COUNT 200 | grep '"event_type":"fetch_failed"'
 ## API (dev only)
 
 ```bash
-uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8041 --reload --log-config src/core/log_config.json
-curl -s localhost:8041/health | jq
+uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8001 --reload --log-config src/core/log_config.json
+curl -s localhost:8001/health | jq
 ```
 
 ## Tests
@@ -221,7 +221,7 @@ uv run ty check          # non-gating, advisory only
 
 ## Redis
 
-Redis is Archiver-operated shared infrastructure — inspect, don't administer.
+The broker is `co-broker`, operated from CannObserv/broker — inspect, don't administer.
 
 `rcli` is the alias defined under [Inspecting the consume path](#inspecting-the-consume-path).
 

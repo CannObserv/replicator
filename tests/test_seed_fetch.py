@@ -384,7 +384,7 @@ def test_the_fact_stream_default_follows_the_command_stream(topic, override, exp
 
 
 async def test_watching_leaves_no_consumer_group_behind(fake_redis):
-    """``content.blobs`` is Archiver-operated: a stray group's PEL grows forever.
+    """``content.blobs`` lives on the shared broker: a stray group's PEL grows forever.
 
     A plain XREAD reads without joining a group at all, which is what keeps an
     operator tool from leaving state on shared infrastructure.
