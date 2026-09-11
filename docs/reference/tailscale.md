@@ -60,18 +60,41 @@ direct path formed at 1 ms. From the watcher VM (`lax`) the same hop never left
 DERP(sea), at 36–40 ms. The difference is visible in the worker's own boot line:
 the `content.fetch-policy` replay took **333 ms** there and **39 ms** here.
 
-## Identity survives a reboot
+## Identity survives a reboot — and what the boot taught the floor check
 
-Rebooted 2026-09-11 before any traffic: back in ~7 s with the same node ID, the
-same addresses and the same tag; `tailscaled` active with `NRestarts=0`, and the
-path to `broker` direct again. #88 repeats this with the service enabled, which
-is what settles whether the unit's `After=tailscaled.service` alone keeps
-`check_redis_floor.sh` from reporting `UNVERIFIED` at boot.
+Rebooted four times on 2026-09-11, once before any traffic and three times with
+the service enabled. Every time: the same node ID, addresses and tag;
+`replicator` back and active with `NRestarts=0` within ~4 s; the path to
+`broker` direct again.
+
+The three service boots measured what `After=tailscaled.service` does and does
+not buy the floor check. Offsets are from tailscaled starting:
+
+| Boot | tailscaled Running | `check_redis_floor.sh` | Result |
+|---|---|---|---|
+| `After=` only | +1.65 s | +0.73 s | `UNVERIFIED` — `No address associated with hostname` |
+| + a wait for the tailnet address | +0.61 s | +0.80 s, address already local | `UNVERIFIED` — same error |
+| + the floor check retrying (#88) | +1.65 s | retried, +1.76 s | `broker reachable after 1s`, 7.0.15 meets the floor |
+
+`No address associated with hostname` is `EAI_NODATA` — the cohort's `Error -5`
+— and it is an *answer*: MagicDNS is up but does not yet return `broker`.
+`After=` orders only against tailscaled starting, and the second boot proved an
+address wait guards the wrong thing, since the address was local while the name
+still failed. So the check retries the dependency itself, for
+`REPLICATOR_REDIS_FLOOR_WAIT` ([ENVIRONMENT.md](../ENVIRONMENT.md)). It is
+notifier#43's R1 on the name side: that reboot measured a 2.4 s margin for a
+bind and warned it could invert; this one was ~0.2 s for a lookup, and did. The
+worker itself was never affected — its backoff absorbs a slow tailnet.
 
 ## DNS: two names, two resolvers
 
-`tailscale up` points `/etc/resolv.conf` at MagicDNS, and exe.dev writes the VM's
-own names into `/etc/hosts`:
+exeuntu ships no system resolver here — `systemd-resolved` is `not-found`, and
+masked on `co-broker` and `co-registrar` — so tailscaled runs in direct mode:
+`tailscale up` rewrote `/etc/resolv.conf` to MagicDNS (the original,
+`nameserver 1.1.1.1`, is at `/etc/resolv.pre-tailscale-backup.conf`), and that
+survives reboots. **Every** lookup on this host goes through tailscaled, public
+names included — the cost notifier#43 D8 accepted. exe.dev writes the VM's own
+names into `/etc/hosts`:
 
 ```
 replicator     -> 100.114.136.20   (MagicDNS)

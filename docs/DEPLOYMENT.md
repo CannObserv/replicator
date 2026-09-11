@@ -23,7 +23,7 @@ The worker binds no port; 8000 is reserved for the API, 8001 is dev. No tailnet 
 
 The change bus runs on `co-broker` (tailnet `broker`), operated from CannObserv/broker (broker#1). Replicator is a **client** — the `replicator` ACL user (broker#2) — and never ships a broker. The `redis-server` here is a binary for tests that spawn their own; its service is masked.
 
-**Redis ≥ 7.0 is Replicator-critical.** Replicator is the cluster's first user of `AsyncBusConsumer.claim_stale`, which reads `XAUTOCLAIM`'s three-element reply — the deleted-ids element added in Redis **server** 7.0. Below that, the crash-recovery path raises. `scripts/check_redis_floor.sh` guards this as an `ExecStartPre`, ordered `After=tailscaled.service` so it sees the broker at boot (#88). (The broker runs 7.0.15.)
+**Redis ≥ 7.0 is Replicator-critical.** Replicator is the cluster's first user of `AsyncBusConsumer.claim_stale`, which reads `XAUTOCLAIM`'s three-element reply — the deleted-ids element added in Redis **server** 7.0. Below that, the crash-recovery path raises. `scripts/check_redis_floor.sh` guards this as an `ExecStartPre`. On a cold boot `After=tailscaled.service` is not enough — MagicDNS answers `broker` with no address for a moment after tailscaled starts — so the check retries an unreachable broker for `REPLICATOR_REDIS_FLOOR_WAIT` (#88). (The broker runs 7.0.15.)
 
 The **redis-py client** resolves `>=5,<8` transitively via `co-core-aio[bus]`. Don't re-pin it narrower.
 
