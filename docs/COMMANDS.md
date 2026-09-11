@@ -119,7 +119,16 @@ scoped to its own topics, permanently and by design, so the operator surface spl
 
 | Runnable here | Denied — ask the broker operator |
 |---|---|
-| `XLEN`, `XRANGE`, `XINFO STREAM`, `INFO` | `XPENDING`, `SCAN`, `XINFO GROUPS`, `XINFO CONSUMERS`, `CLIENT LIST`, `ACL LOG`, `SELECT` |
+| `XLEN`, `XRANGE`, `XINFO STREAM`, `INFO` | `XPENDING`, `SCAN`, `XINFO GROUPS`, `XINFO CONSUMERS`, `CLIENT LIST`, `ACL LOG`, `SELECT`, **`XDEL`** |
+
+**`XDEL` is the one that is not a diagnostic, and it makes the DLQ write-only from here (#86).**
+The grant covers `XADD <topic>.dlq` — the first half of a dead-letter, which is why the fate
+works at all — but not removing an entry afterwards, so the service that fills its own
+dead-letter queue cannot empty it. Confirmed 2026-09-10 draining the `alias_unknown` frame
+from the #86 rehearsal: `XDEL content.replicate.dlq <id>` answered
+`NOPERM this user has no permissions to run the 'xdel' command`. `XTRIM` is untested and
+presumed denied with it; neither is worth retrying, because triaging a frame is reading it,
+which is granted — only the disposal has to be asked for.
 
 The denied column is marked `# NOPERM` at each use below rather than removed, because the
 command is still the right one to ask for — and two of them answer questions nothing else can.
@@ -131,9 +140,12 @@ See [Redis](#redis) for what to know before asking.
 # filter to entries idle at least that long (what claim_stale would reclaim).
 rcli XPENDING content.fetch replicator.fetch - + 10      # NOPERM as replicator
 
-# Dead-lettered frames.
+# Dead-lettered frames. Reading and triaging them is granted; *removing* one is
+# not — XDEL is NOPERM, so a drained queue is a broker-operator ask (#86).
 rcli XLEN content.fetch.dlq
 rcli XRANGE content.fetch.dlq - + COUNT 5
+rcli XLEN content.replicate.dlq
+rcli XRANGE content.replicate.dlq - + COUNT 5
 
 # Dedupe keys (one per handled command, TTL REPLICATOR_DEDUPE_TTL_SECONDS).
 # What they guard and what a cold start does without them: CONVENTIONS.md,
