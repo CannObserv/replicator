@@ -8,11 +8,13 @@ src.worker.main`` under distinct consumer names — ``REPLICATOR_CONSUMER_NAME``
 which involves no systemd and so runs no ``ExecStartPre``.
 
 That was harmless while replication was unprovisioned and every command refused.
-It stops being harmless the moment an alias table exists: ``AGENTS.md`` instructs
-loading ``/etc/replicator/.env`` for shell work, so a worker started that way
-inherits the production ADC *and* the production alias table, and a feature
-branch acquires a write identity against a bucket whose objects cannot be deleted
-by anyone who holds it (#38, #52).
+It stopped being harmless on 2026-09-10, when ``primary`` was provisioned on this
+VM (#86): ``AGENTS.md`` instructs loading ``/etc/replicator/.env`` for shell work,
+so a worker started that way inherits the production ADC *and* the production
+alias table, and a feature branch acquires a write identity against a bucket whose
+objects cannot be deleted by anyone who holds it (#38, #52). The guard below is
+what stands between that and a write, so this host is now the case it was written
+for rather than the one it anticipated.
 
 **The verdict is the script's, not a reimplementation.** The script distinguishes
 seven conditions and argues each: ahead of ``origin/main`` refuses because those
