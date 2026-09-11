@@ -124,8 +124,8 @@ scoped to its own topics, permanently and by design, so the operator surface spl
 **`XDEL` is the one that is not a diagnostic, and it makes the DLQ write-only from here (#86).**
 The grant covers `XADD <topic>.dlq` — the first half of a dead-letter, which is why the fate
 works at all — but not removing an entry afterwards, so the service that fills its own
-dead-letter queue cannot empty it. Confirmed 2026-09-10 draining the `alias_unknown` frame
-from the #86 rehearsal: `XDEL content.replicate.dlq <id>` answered
+dead-letter queue cannot empty it. Found draining the `alias_unknown` frame the #86
+rehearsal parked on 2026-09-10 at 21:02:02Z: `XDEL content.replicate.dlq <id>` answered
 `NOPERM this user has no permissions to run the 'xdel' command`. `XTRIM` is untested and
 presumed denied with it; neither is worth retrying, because triaging a frame is reading it,
 which is granted — only the disposal has to be asked for.
