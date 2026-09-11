@@ -147,6 +147,10 @@ rcli XRANGE content.fetch.dlq - + COUNT 5
 rcli XLEN content.replicate.dlq
 rcli XRANGE content.replicate.dlq - + COUNT 5
 
+# Disposal, once a frame is triaged and its command closed. Denied today; the
+# ask, and the open question of whether it should stay denied, is broker#12.
+rcli XDEL content.replicate.dlq 1789074122299-0          # NOPERM as replicator
+
 # Dedupe keys (one per handled command, TTL REPLICATOR_DEDUPE_TTL_SECONDS).
 # What they guard and what a cold start does without them: CONVENTIONS.md,
 # "The `replicator:cmd:*` keys". SCAN is an operator command — the worker only
