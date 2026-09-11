@@ -31,7 +31,7 @@ def write_aliases(tmp_path, mapping):
     return path
 
 
-def test_an_unset_path_provisions_nothing(monkeypatch):
+def test_an_unset_path_provisions_nothing():
     """The default posture, and it is the safe one (T5).
 
     No file means no alias resolves, so every replicate command is refused. That
