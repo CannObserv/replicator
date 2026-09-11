@@ -162,9 +162,11 @@ rcli XLEN content.replicate.dlq
 rcli XRANGE content.replicate.dlq - + COUNT 5
 
 # Disposal, once a frame is triaged and its command closed. One entry at a
-# time by id — there is no XTRIM here, deliberately, so a drain cannot become
-# a wipe. Resting state for both queues is 0 (broker#12).
-rcli XDEL content.replicate.dlq <entry-id>
+# time by id, which is the whole point of a selector: a drain cannot become a
+# wipe. Resting state for both queues is 0 — verified 2026-09-11, both at
+# XLEN 0 (broker#12). The id comes from the XRANGE above.
+ENTRY_ID=1789074122299-0
+rcli XDEL content.replicate.dlq "$ENTRY_ID"
 
 # Dedupe keys (one per handled command, TTL REPLICATOR_DEDUPE_TTL_SECONDS).
 # What they guard and what a cold start does without them: CONVENTIONS.md,
