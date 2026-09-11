@@ -644,3 +644,23 @@ async def test_the_success_line_logs_the_whole_key_it_wrote(store, blob_uri, cap
     assert record.key == effect.blob_name
     assert record.key == LONG_DESTINATION
     assert record.outcome == "wrote"
+
+
+async def test_no_bound_below_the_provider_ceiling_survives_here(store, blob_uri, caplog):
+    """The property, where the test above pins only the instance (CR 11).
+
+    A 176-character key catches the truncation that shipped, and would *not*
+    catch one re-added at a higher bound — which the comment beside this code
+    invites a reader to consider. So this asserts against a key near the ceiling
+    the provider itself imposes (GCS stops at 1024 bytes for an object name): any
+    bound below that fails here, and a bound above it could not apply to a key
+    the provider would accept.
+    """
+    near_ceiling = "organizations/" + "/".join("s" * 61 for _ in range(16)) + "/report.pdf"
+    assert 1000 < len(near_ceiling) <= 1024
+    writer = FakeGcs(result(GcsCreateOutcome.WROTE, public_url=PUBLIC_URL, generation=1))
+    with caplog.at_level("INFO", logger="src.worker.replicate"):
+        await handler_for(store, writer)(command(blob_uri, destination=near_ceiling))
+
+    [record] = [r for r in caplog.records if r.message == "replicated a blob"]
+    assert record.key == near_ceiling
