@@ -144,8 +144,9 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
   no DLQ (#17).** `dead_letter` acks inside itself, so a fact is published
   *before* it — as `XADD <topic>.dlq` then `XACK`, the form broker#2's ACL grants
   (#79). It grants no `XDEL`, so **a parked frame is drained by the broker
-  operator, never here** (#86). Retry cadence is `REPLICATOR_CLAIM_MIN_IDLE_MS`; a failing *cycle* is
-  `run_loop`'s problem, not the message's.
+  operator, not here** — pending broker#12 (#86). Retry cadence is
+  `REPLICATOR_CLAIM_MIN_IDLE_MS`; a failing *cycle* is `run_loop`'s problem, not
+  the message's.
 - **A capped broker refuses only its `denyoom` commands, and the worker retries
   the two it meets at runtime (#79).** `XADD` and `SET` are refused and retried
   indefinitely — `OutOfMemoryError` is transient and exempt from the delivery
