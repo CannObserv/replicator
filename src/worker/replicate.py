@@ -453,7 +453,11 @@ def build_replicate_handler(
                 # log identically. Unbounded is safe here in a way it is not at
                 # the refusal sites — the segment allow-list has already rejected
                 # every control character, and the provider accepted the key,
-                # which for GCS caps it at 1024 bytes.
+                # which for GCS caps it at 1024 bytes. **That ceiling is GCS's,
+                # not this module's**: `ConditionalWriter` is a Protocol so a
+                # second provider can satisfy it, and nothing here bounds a key's
+                # length. Re-ask this question when one lands, rather than
+                # assuming every provider brings a limit.
                 "key": key,
             },
         )
