@@ -1,7 +1,7 @@
 # Replicator Moves to Its Own VM — `co-replicator`
 
 **Date:** 2026-09-11
-**Status:** Approved (brainstorming, 2026-09-11).
+**Status:** Done, 2026-09-12. Outcomes are recorded inline: D7, steps 12 and 18, Phases 6 and 7.
 **Issue:** #88
 **Cohort:** CannObserv/notifier#43 (the pattern) → CannObserv/broker#1 (the neutral broker) →
 CannObserv/archiver#193 (the move this one most resembles) → this. Framing from
@@ -61,11 +61,11 @@ buckets are `US-WEST1`, next to `pdx`.
 
 ## Prerequisites (operator)
 
-- [ ] `EXE_API_TOKEN` in this repo's `.env`, scoped to at least `new` and `whoami`. Neither is there today.
-- [ ] `TAILSCALE_KEY_REPLICATOR` in this repo's `.env`: single-tag `tag:replicator`,
+- [x] `EXE_API_TOKEN` in this repo's `.env`, scoped to at least `new` and `whoami`. Neither is there today.
+- [x] `TAILSCALE_KEY_REPLICATOR` in this repo's `.env`: single-tag `tag:replicator`,
       pre-approved, non-ephemeral, minted **before** first join. A tagged key applies its tag set
       wholesale, and retagging costs a `logout` plus a fresh `up` (notifier#43 F1).
-- [ ] Tailscale policy: confirm `tag:replicator` is declared (broker#1's broker rule lists it as a
+- [x] Tailscale policy: confirm `tag:replicator` is declared (broker#1's broker rule lists it as a
       `src`, which implies it). Add the D5 admin edge:
 
   ```jsonc
@@ -74,7 +74,7 @@ buckets are `US-WEST1`, next to `pdx`.
               "dst": ["tag:replicator"], "users": ["exedev", "root"] } ]
   ```
 
-- [ ] An explicit go before `new` runs. It creates a billable resource.
+- [x] An explicit go before `new` runs. It creates a billable resource.
 
 ## Plan
 
@@ -181,6 +181,9 @@ Phases 1–3 run from a session on the watcher VM. From the end of Phase 3, sess
     - the GCS preflight fails;
     - fetch failures appear that the old host never produced.
 
+    *Closed 2026-09-12:* none fired, and Phase 7 removed the old host's checkout,
+    credentials and unit, so there is nothing left to roll back to.
+
 ### Phase 5: Docs *(lands right after step 15 passes)*
 
 Present-tense claims only. History keeps its facts: archiver's lesson is that renaming a port in
@@ -218,6 +221,11 @@ an incident narrative falsifies it.
 
 26. At least 24 hours on `co-replicator`, including step 17's reboot, before any Phase 7 step.
 
+    *Outcome:* 2026-09-11 17:29:08Z → 2026-09-12 17:29:08Z. 26 real fetches, each
+    publishing `blob_available`, and no warning, error, `fetch_failed` or dead letter. The
+    only restarts were step 17's reboots, the last at 19:47Z, and `NRestarts=0` after it.
+    The path to `broker` stayed direct.
+
 ### Phase 7: Decommission on the watcher VM *(explicit go; a script the operator runs there)*
 
 `tag:replicator` has no route to the watcher VM, so the operator runs this on that host, from a
@@ -242,10 +250,37 @@ session outside the checkout being removed.
 32. Tailscale: remove the D5 `:22` edge, and `tag:watcher` from the `ssh` source list.
 33. Record: zero units matching `replicator` on the watcher VM, and the reclaim, honestly (~215 MB).
 
+*Outcome, 2026-09-12:* the operator ran the script on the watcher VM at 20:21Z. It
+verified zero units matching `replicator`, and that only `co-pypi-reader.json` and the
+archive remain. Four departures from the steps above:
+
+- **Step 29 archived nothing new.** watcher#296, filed after this design, deletes the
+  watcher VM, and the archive's loss there was accepted (#296 Phase 8). An archived
+  `.env` would only have kept our broker credential on that host until then, so the
+  script shredded it once its sha256 matched `co-replicator`'s copy. The same rule
+  covered every file with a counterpart here: nothing was removed unless it was
+  byte-identical to the copy on `co-replicator`. The archive holds the unit alone.
+- **Step 31's dependency check found one reference, and it was benign.** Archiver's
+  checkout on the watcher VM lists `/home/exedev/replicator` in
+  `SOCRATICODE_LINKED_PROJECTS`. SocratiCode skips a linked path that does not exist
+  (`loadLinkedProjects`, `fs.existsSync`, socraticode 1.13.3), so the entry now costs
+  archiver cross-repo search reach and nothing else. It stays, as archiver's file.
+- **The session transcripts travelled after all.** Step 9 copied memory only; the
+  project directory also held 21 transcripts (41 MB). They went to `co-replicator`
+  before the removal, under the same project key, so `claude --resume` finds them.
+- **Step 33's reclaim went unmeasured.** It is moot once #296 deletes the VM.
+
+Step 32 was done by the operator before the script ran. Its first edit also removed
+`autogroup:member` from the `ssh` block. That left this node's `SSHPolicy.rules`
+empty, which the netmap showed and `tailscale status` did not; it was restored the
+same day.
+
 ### Cross-repo follow-ups *(filed with each repo's own token, never committed)*
 
 - **watcher#282:** replicator has left, and its Phase 4 step 17 is done by us. "Retain both
   checkouts" doesn't apply to this one. `tag:watcher` now describes one service.
+  *Retargeted:* #282 closed 2026-09-11, superseded by watcher#296, which moves watcher
+  and deletes the shared VM; the note went there, as #296's first prerequisite.
 - **broker#8:** replicator's latency and path, from step 16.
 - **notifier#57:** replicator's checkout now lives on `co-replicator`, which bears on its Q4.
 - **A new replicator issue:** the D8 escalation (signing / URL allowlist / private-range refusal).
@@ -269,18 +304,18 @@ session outside the checkout being removed.
 
 ## Success criteria
 
-- [ ] `co-replicator` in `pdx`, tailnet `replicator` / `tag:replicator`, non-expiring, survives a
+- [x] `co-replicator` in `pdx`, tailnet `replicator` / `tag:replicator`, non-expiring, survives a
       reboot with the same identity and `NRestarts=0`, with the service enabled
-- [ ] No service port reachable on `tag:replicator`, and the temporary `:22` edge removed
-- [ ] Full suite green on `co-replicator`: default, `-m integration`, `-m gcs`, and ruff
-- [ ] `check_redis_floor.sh` reports the broker version at boot, not `UNVERIFIED`
-- [ ] A real `content.fetch` → `blob_available` → `watcher.blobs` round trip, on the new host
-- [ ] Cold and warm broker latency recorded **with path**; the path to `broker` is direct
-- [ ] No reference to 8040/8041 or to a shared VM as a present-tense claim, outside `docs/plans/`
-- [ ] The fetch contract's trust section describes the real boundary; the escalation issue is filed
-- [ ] Nothing named `replicator` remains on the watcher VM except `co-pypi-reader.json` and the
-      root-only archive; reclaim recorded
-- [ ] Development happens on `co-replicator`: agent memory, `gh` and worktrees all work there
+- [x] No service port reachable on `tag:replicator`, and the temporary `:22` edge removed
+- [x] Full suite green on `co-replicator`: default, `-m integration`, `-m gcs`, and ruff
+- [x] `check_redis_floor.sh` reports the broker version at boot, not `UNVERIFIED`
+- [x] A real `content.fetch` → `blob_available` → `watcher.blobs` round trip, on the new host
+- [x] Cold and warm broker latency recorded **with path**; the path to `broker` is direct
+- [x] No reference to 8040/8041 or to a shared VM as a present-tense claim, outside `docs/plans/`
+- [x] The fetch contract's trust section describes the real boundary; the escalation issue is filed
+- [x] Nothing named `replicator` remains on the watcher VM except `co-pypi-reader.json` and the
+      root-only archive (the reclaim went unmeasured: moot, since watcher#296 deletes the VM)
+- [x] Development happens on `co-replicator`: agent memory, `gh` and worktrees all work there
 
 ## Out of scope
 

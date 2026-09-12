@@ -84,10 +84,10 @@ template for any future backend change:
    Commands in the PEL naming `file://` blobs are refused `blob_expired`, not
    `invalid_source` — the issuer is told to fetch again, which is the truth
    after a flip.
-5. `rm -rf /var/lib/replicator/blobs` — held until the pre-flip `file://`
-   horizon passed (2026-08-27), since nothing reclaims it under `gcs`. The tree
-   is on the **watcher VM** and goes with #88's decommission; `co-replicator`
-   never had one. ~2 MB.
+5. ~~`rm -rf /var/lib/replicator/blobs`~~ — held until the pre-flip `file://`
+   horizon passed (2026-08-27), since nothing reclaims it under `gcs`, then done
+   2026-09-12 by #88's decommission of the watcher VM, which held the only tree
+   (~2 MB). `co-replicator` never had one.
 
 What has to exist, and why each part:
 

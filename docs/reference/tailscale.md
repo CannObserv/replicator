@@ -28,11 +28,19 @@ Replicator is a pure broker client plus internet egress. **No rule lists
 | Rule | Why |
 |---|---|
 | `tag:replicator → tag:broker:6379` | The bus. The only `src` rule this node has |
-| `tag:watcher → tag:replicator:22` + an `ssh` block admitting `tag:watcher` and `autogroup:member` | **Temporary** — the build-phase admin path from the old host, removed at #88's decommission |
+| The tailnet's `autogroup:member → *:*`, plus an `ssh` block admitting `autogroup:member` as `exedev` or `root` | Admin reach, from your own devices only (watcher#296 D3). No tagged node reaches this one |
 
 Tailscale SSH needs **both** halves. Peer visibility follows `acls` rules, not
 `ssh` rules: without the network rule the node is absent from the peer's netmap,
 MagicDNS will not resolve it, and the `ssh` rule is never consulted (archiver#193).
+
+The build phase's `tag:watcher → tag:replicator:22` edge, and `tag:watcher` in the
+`ssh` block, came out at #88's decommission (2026-09-12). What this node enforces
+is in its netmap, which needs root here: `sudo tailscale debug netmap`. Its
+`PacketFilter` admits only `autogroup:member` devices, and `SSHPolicy.rules` holds
+one rule, those devices as `exedev`/`root`. **Read `SSHPolicy.rules` after any
+policy edit that touches `ssh`.** The first edit here left it empty, so nobody had
+Tailscale SSH, while `tailscale status` looked no different.
 
 Verified 2026-09-11 in both directions: from here, `broker:6379` answers
 `-NOAUTH`, while `watcher:22/8000/8001/5432` and `broker:22/9000` are filtered;
@@ -170,7 +178,7 @@ build that followed moved every key and env file over stdin for this reason.
 
 | Token | Direction | Where |
 |---|---|---|
-| Tailscale **auth key** (`tskey-auth-…`) | this VM → joins the tailnet | repo `.env` on the operator host as `TAILSCALE_KEY_REPLICATOR`; spent at join, never copied here |
+| Tailscale **auth key** (`tskey-auth-…`) | this VM → joins the tailnet | spent at join, never copied here; its copy in the old host's repo `.env` (`TAILSCALE_KEY_REPLICATOR`) went with that checkout at #88's decommission |
 | exe.dev **API token** (`exe1.…`) | agent → `POST https://exe.dev/exec` | repo `.env` as `EXE_API_TOKEN`; scope `new`/`ls`/`whoami`, no `rm` |
 | Redis password (inside `REPLICATOR_REDIS_URL`) | worker → broker, as the `replicator` ACL user | `/etc/replicator/.env`, unit-scoped |
 | GCS service-account keys | worker, wheelhouse step, `gcs`-marked tests | `/etc/replicator/*.json`, `root:exedev 0640` |
