@@ -218,8 +218,9 @@ def guard_production_target(topic: str, *, db: int, production: bool, info_sourc
         return
     if not production:
         raise ProductionTargetError(
-            f"{topic} on db {db} is the live command stream — the running worker will fetch "
-            f"these URLs for real. Pass --production to mean it."
+            f"{topic} on db {db} is the live command stream, and Watcher is its issuer: the "
+            f"running worker will fetch these URLs for real, on a command Watcher never "
+            f"issued. Pass --production to mean it, as an operator act under Watcher's identity."
         )
     if info_source_id == SEED_INFO_SOURCE_ID:
         raise ProductionTargetError(
