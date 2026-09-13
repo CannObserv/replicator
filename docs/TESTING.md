@@ -15,9 +15,11 @@ allowed to touch.
 
 **Where fakeredis diverges.** It is sound for consumer-group *mechanics* — what state a command leaves behind — but diverges on *lifecycle* and *blocking* semantics: it registers a consumer on an empty `XREADGROUP` (real Redis waits for a delivery, GH #3) and it ignores `block` (worked around by `IDLE_SLEEP_SECONDS` in `src/worker/loop.py`). Rule of thumb: an assertion about **what state results** is safe against the fake; an assertion about **when Redis does something** needs a live broker. Both divergences were found by running against the real server, not by the suite.
 
-Live-broker tests use the `real_redis` fixture (`tests/conftest.py`), which connects to `REPLICATOR_TEST_REDIS_URL` (default `redis://localhost:6379/15`), skips when nothing answers (an *auth* failure re-raises — a misconfigured broker must not pass as a skip), expires stray `replicator.itest.*` keys from crashed runs once per session, and refuses db 0 outright — db 0 carries the live `content.fetch` stream that the running `replicator.service` consumes, so a test frame written there would be fetched for real. Confine such tests to scratch stream keys via the `scratch_topic` fixture (`tests/worker/conftest.py`), whose teardown also removes `<topic>.dlq`; the database guard is the backstop, not the plan.
+Live-broker tests use the `real_redis` fixture (`tests/conftest.py`), which connects to `REPLICATOR_TEST_REDIS_URL` (default `redis://localhost:6379/15` — a scratch server on this host, never the broker), skips when nothing answers (an *auth* failure re-raises — a misconfigured broker must not pass as a skip), expires stray `replicator.itest.*` keys from crashed runs once per session, and refuses db 0 outright — db 0 carries the live `content.fetch` stream that the running `replicator.service` consumes, so a test frame written there would be fetched for real. Confine such tests to scratch stream keys via the `scratch_topic` fixture (`tests/worker/conftest.py`), whose teardown also removes `<topic>.dlq`; the database guard is the backstop, not the plan.
 
-**The shared broker is no longer a `real_redis` target (broker#2's ACL cutover).** `select` is not among the `replicator` user's granted commands, so pointing `REPLICATOR_TEST_REDIS_URL` at `broker:6379/15` fails every live-broker test with `NoPermissionError: this user has no permissions to run the 'select' command`, on connect and before any test body runs. (`xpending`, `scan`, `xinfo|groups`, `xinfo|consumers`, `client|list` and `acl|log` are denied too — the operator half of that split is tabulated in [COMMANDS.md](COMMANDS.md#inspecting-the-consume-path). It is why a connection-shape question like #85's has to be answered from the broker side rather than from here. The grant's full shape is broker#2's to state, not this file's.) That is the grant working: db 15 on a broker whose db 0 carries the live `content.fetch` stream is one typo away from the stream `replicator.service` is consuming. Run a scratch server instead — `redis-server --port 6399 --save '' --appendonly no` and `REPLICATOR_TEST_REDIS_URL=redis://localhost:6399/15` — which is what the default `localhost:6379/15` assumes and what `test_oom_integration.py` already does for itself.
+**The shared broker is not a `real_redis` target, twice over.** First, broker#2's ACL cutover: `select` is not among the `replicator` user's granted commands, so pointing `REPLICATOR_TEST_REDIS_URL` at `broker:6379/15` fails every live-broker test with `NoPermissionError: this user has no permissions to run the 'select' command`, on connect and before any test body runs. (`xpending`, `scan`, `xinfo|groups`, `xinfo|consumers`, `client|list` and `acl|log` are denied too — the operator half of that split is tabulated in [COMMANDS.md](COMMANDS.md#inspecting-the-consume-path). It is why a connection-shape question like #85's has to be answered from the broker side rather than from here. The grant's full shape is broker#2's to state, not this file's.) That is the grant working: db 15 on a broker whose db 0 carries the live `content.fetch` stream is one typo away from the stream `replicator.service` is consuming.
+
+Second, and for any credential: **the broker has one database** since 2026-09-10 (`databases 1`, broker#5). `SELECT 15` fails outright there, and db 0 — the only one — is the database this fixture refuses, so a repointed URL has nowhere to land (#90). That is deliberate on the broker's side, the database-index half of its R4 guard — `citest` closes the topic-name half, and neither substitutes for the other, since Redis ACLs cannot partition by database index — and the db-0 refusal here stays: on a one-database broker it is what keeps a test run off the database the live stream is on. Nor does the default point at the broker: `localhost` on `co-replicator` is not `co-broker` (#88). Run a scratch server on the default's port — `redis-server --bind 127.0.0.1 --save '' --appendonly no`, which the default finds with no variable set, since nothing else here listens on 6379 and the packaged service is masked. `test_oom_integration.py` spawns its own and needs neither.
 
 **One namespace the sweeper cannot reach.** `process_message` writes `replicator:cmd:<stream>:<command_id>` (`replicator:cmd:fetch:…` for an end-to-end fetch run — segmented since #29, and the only non-stream key this service writes anywhere: [CONVENTIONS.md](CONVENTIONS.md#the-replicatorcmd-keys)), a constant prefix outside `replicator.itest.*`, so an end-to-end test deletes its own keys via the `dedupe_keys` fixture and shortens their TTL. `test_an_end_to_end_run_only_creates_predictable_keys` asserts the whole promise: every key a run creates is either an itest stream or a dedupe key.
 
@@ -83,7 +85,7 @@ negative lookahead. Pinned by `test_the_test_bucket_is_not_a_superstring_of_prod
 
 A test that genuinely writes is marked `@pytest.mark.gcs` and requests the
 `gcs_bucket` fixture. The marker is **separate from `integration`**: that one
-means the live VM Redis, which is local, free and routinely run, and a marker
+means a scratch `redis-server`, which is local, free and routinely run, and a marker
 that also writes to a bucket changes what `-m integration` costs.
 
 ```bash
@@ -154,9 +156,9 @@ everything, since nothing marked can run without it.
 
 All three are dev-only and belong in the repo `.env` or the invoking shell —
 never in `/etc/replicator/.env`, which is the file the service reads. Contrast
-`REPLICATOR_TEST_REDIS_URL`, which *does* default: db 15 on localhost cannot be
-the live database, and `real_redis` refuses db 0 outright. No bucket name has
-that property.
+`REPLICATOR_TEST_REDIS_URL`, which *does* default: localhost is never the broker,
+the broker has no db 15, and `real_redis` refuses db 0 outright. No bucket name
+has that property.
 
 ## Testing against a broker at its cap (#79)
 

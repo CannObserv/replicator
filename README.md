@@ -145,7 +145,7 @@ closes. Every flag, and what `--watch` can see: [`docs/COMMANDS.md`](docs/COMMAN
 
 ```bash
 uv run pytest                          # default suite; integration and gcs deselected
-uv run pytest --no-cov -m integration  # live-broker tests (scratch db, never db 0), plus the
+uv run pytest --no-cov -m integration  # a scratch redis-server, never the broker, plus the
                                        # OOM rows against a broker they spawn (#79)
 uv run pytest --no-cov -m gcs          # T4 rows against the GCS test bucket (#38)
 uv run ruff check .

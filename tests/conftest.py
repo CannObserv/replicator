@@ -23,7 +23,9 @@ from redis.exceptions import TimeoutError as RedisTimeoutError
 from src.core.config import get_settings
 from src.storage.gcs import GcsBlobStore
 
-# Scratch database for live-broker tests. Deliberately not db 0 — see real_redis.
+# A scratch redis-server on this host, never the broker: that has had one
+# database since broker#5, so db 15 does not exist there and db 0 is the one
+# real_redis refuses (#90).
 DEFAULT_TEST_REDIS_URL = "redis://localhost:6379/15"
 
 # Keys a crashed run left behind get a TTL rather than an immediate delete: long
@@ -58,8 +60,8 @@ PRODUCTION_ENV = (
 # default** (#38, #51): absent means the `@pytest.mark.gcs` tests skip, and never
 # means "use whatever the code would have picked" — which on a worker configured
 # for production is the production bucket. `REPLICATOR_TEST_REDIS_URL` may
-# default because db 15 on localhost cannot be the live database and `real_redis`
-# refuses db 0 outright; no bucket name has that property.
+# default because localhost is never the broker, the broker has no db 15, and
+# `real_redis` refuses db 0 outright; no bucket name has that property.
 TEST_BUCKET_ENV = "REPLICATOR_TEST_GCS_BUCKET"
 TEST_CREDENTIALS_ENV = "REPLICATOR_TEST_GCS_CREDENTIALS"
 
@@ -328,7 +330,8 @@ async def real_redis() -> AsyncGenerator:
     Some properties are about *when* Redis acts, not what state results, and
     fakeredis diverges on exactly those (GH #3). Those assertions need the real
     server — a scratch ``redis-server``, since the production broker's ACL refuses
-    these tests (CannObserv/broker#2).
+    these tests (CannObserv/broker#2) and its only database is the one refused
+    below (CannObserv/broker#5).
 
     **Never db 0.** That database carries the live ``content.fetch`` stream the
     running ``replicator.service`` is consuming, so a test frame written there
