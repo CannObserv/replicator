@@ -142,8 +142,8 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
 - **Deterministic ⇒ DLQ; transient ⇒ retry; completed without bytes ⇒ fact + ack,
   no DLQ (#17).** `dead_letter` acks inside itself, so a fact is published
   *before* it — as `XADD <topic>.dlq` then `XACK`, the form broker#2's ACL grants
-  (#79). **Draining the queue is ours too**, by `XDEL` on the two `.dlq`
-  streams and nowhere else (broker#12, #86). Retry cadence is
+  (#79). **Draining the queue is ours too**, by `XDEL` on `<topic>.dlq` and
+  nowhere else (broker#12, #86). Retry cadence is
   `REPLICATOR_CLAIM_MIN_IDLE_MS`; a failing *cycle* is `run_loop`'s problem, not
   the message's.
 - **A capped broker refuses only its `denyoom` commands, and the worker retries
