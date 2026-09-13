@@ -58,11 +58,14 @@ uv run python -m scripts.seed_fetch \
   https://example.test/a https://example.test/b
 ```
 
-**Never `--redis-url "$REPLICATOR_REDIS_URL"` (#90).** That is the worker's credential, and it reaches
-`content.fetch` only through a gap in the broker's ACL — the key pattern its inbox needs meeting
-the `+xadd` its fact streams need — which CannObserv/broker#14 closes with a selector. Until then a
-frame there is fetched for real on a command Watcher never issued; afterwards it is `NOPERM`, and
-the script exits 1 on the first attempt rather than retrying. `--production` still guards db 0 +
+**Never `--redis-url "$REPLICATOR_REDIS_URL"` (#90).** That is the worker's credential, and every
+key it can write is production — `replicator.itest.*` is not among its patterns — while the
+script's guard knows only `content.fetch`: `--topic content.blobs` would put a command on a fact
+stream other services consume, and nothing would refuse it. `content.fetch` itself it reaches only
+through a gap in the broker's ACL — the key pattern its inbox needs meeting the `+xadd` its fact
+streams need — which CannObserv/broker#14 closes with a selector. Until then a frame there is
+fetched for real on a command Watcher never issued; afterwards it is `NOPERM`, and the script exits
+1 on the first attempt rather than retrying. `--production` still guards db 0 +
 `content.fetch`, but using it is an operator act under Watcher's identity, not an example. A
 scratch topic on the broker itself takes `citest`, whose only keys are `probe.*` and
 `replicator.itest.*`, so it cannot name a production topic — not provisioned on this VM.
