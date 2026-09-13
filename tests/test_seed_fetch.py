@@ -263,6 +263,16 @@ def test_a_refused_target_names_whose_stream_it_is(capsys):
     assert "Watcher's identity" in capsys.readouterr().err
 
 
+def test_the_production_flag_says_whose_identity_it_takes():
+    """CR 3: ``--help`` is where an operator first meets the flag, and it was the
+    one surface still reading as the whole permission (#90).
+
+    Whitespace is collapsed first because argparse re-wraps help to the
+    terminal's width, which can split the phrase across lines.
+    """
+    assert "Watcher's identity" in " ".join(build_parser().format_help().split())
+
+
 async def test_the_last_id_of_an_empty_stream_reads_from_the_beginning(fake_redis):
     assert await last_id(fake_redis, BLOBS) == "0-0"
 
