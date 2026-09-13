@@ -29,7 +29,8 @@ AGENTS.md :: enumerated :: four documents under `docs/contracts/`
 # XAUTOCLAIM's reply shape is Redis wire format, and the ≥7.0 floor beside it is
 # what the sentence exists to state; a fourth element would rewrite both.
 AGENTS.md :: stable :: `XAUTOCLAIM`'s three-element reply
-# The same clause in DEPLOYMENT.md's Redis-floor paragraph, which the AGENTS.md
-# line summarises; the unpinned entry acknowledged both. Re-read there for #91:
-# the same warrant holds, and that sentence names the third element outright.
+# Added 2026-09-13 (#91), after the first pass: the same clause in DEPLOYMENT.md's
+# Redis-floor paragraph, which the AGENTS.md line summarises, and which the
+# unpinned entry matched only by coincidence. Read here, the same warrant holds,
+# and this sentence names the third element outright.
 docs/DEPLOYMENT.md :: stable :: `XAUTOCLAIM`'s three-element reply
