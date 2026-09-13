@@ -251,15 +251,16 @@ def test_a_refused_target_names_whose_stream_it_is(capsys):
     """#90: the flag alone read as the whole permission, and it is not.
 
     Watcher issues ``content.fetch``, so a seeded frame there is a command Watcher
-    never issued — an operator act under Watcher's identity. This host's
-    ``replicator`` credential reaches the stream only through an ACL gap
-    CannObserv/broker#14 closes, which is why the refusal says so at the moment
-    an operator is about to lean on it.
+    never issued — an operator act under Watcher's identity, not this host's
+    ``replicator`` credential, whose reach to the stream is an ACL gap
+    CannObserv/broker#14 closes. The refusal is where an operator stands when
+    they need to hear whose identity that takes, so the assertion pins that
+    half rather than the bare name (CR 1).
     """
     code = main(["--redis-url", "redis://localhost:1/0", "--topic", streams.CONTENT_FETCH, URL])
 
     assert code == 2
-    assert "Watcher" in capsys.readouterr().err
+    assert "Watcher's identity" in capsys.readouterr().err
 
 
 async def test_the_last_id_of_an_empty_stream_reads_from_the_beginning(fake_redis):
