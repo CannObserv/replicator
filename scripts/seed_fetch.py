@@ -408,7 +408,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--production",
         action="store_true",
-        help=f"allow publishing to {streams.CONTENT_FETCH} on db 0, which the live worker consumes",
+        help=(
+            f"allow publishing to {streams.CONTENT_FETCH} on db 0, which the live worker "
+            "consumes — Watcher's stream, so an operator act under Watcher's identity"
+        ),
     )
     parser.add_argument(
         "--dry-run",
