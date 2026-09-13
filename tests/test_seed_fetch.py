@@ -21,6 +21,7 @@ from co_core.pure.models.changes import (
 )
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import NoPermissionError
 from ulid import ULID
 
 from scripts.seed_fetch import (
@@ -244,6 +245,21 @@ def test_a_refused_target_names_the_flag_that_would_allow_it(capsys):
 
     assert code == 2
     assert "--production" in capsys.readouterr().err
+
+
+def test_a_refused_target_names_whose_stream_it_is(capsys):
+    """#90: the flag alone read as the whole permission, and it is not.
+
+    Watcher issues ``content.fetch``, so a seeded frame there is a command Watcher
+    never issued — an operator act under Watcher's identity. This host's
+    ``replicator`` credential reaches the stream only through an ACL gap
+    CannObserv/broker#14 closes, which is why the refusal says so at the moment
+    an operator is about to lean on it.
+    """
+    code = main(["--redis-url", "redis://localhost:1/0", "--topic", streams.CONTENT_FETCH, URL])
+
+    assert code == 2
+    assert "Watcher" in capsys.readouterr().err
 
 
 async def test_the_last_id_of_an_empty_stream_reads_from_the_beginning(fake_redis):
@@ -513,6 +529,32 @@ async def test_a_failure_partway_through_still_names_what_went_out(
     captured = capsys.readouterr()
     assert survivor.command_id in captured.out
     assert "1 of 3" in captured.err
+
+
+async def test_a_refused_write_ends_the_run_on_the_first_attempt(
+    fake_redis, owned_client, monkeypatch, capsys
+):
+    """An ACL denial is an exit 1 here, not the worker's indefinite retry (#90).
+
+    The worker classifies ``NoPermissionError`` as transient (#82): a grant the
+    broker got wrong must not close valid commands. An operator tool owes nothing
+    to commands it has not published, so retrying would only hide a credential
+    that cannot write this stream — ``replicator`` on ``content.fetch``, once
+    CannObserv/broker#14 scopes ``+xadd`` to what each service produces.
+    """
+    attempts: list[str] = []
+
+    async def refusing_xadd(name, fields, **kwargs):
+        attempts.append(name)
+        raise NoPermissionError("No permissions to access a key")
+
+    monkeypatch.setattr(fake_redis, "xadd", refusing_xadd)
+
+    code = await run(seed_args("--topic", TOPIC, URL, "https://example.test/b"))
+
+    assert code == 1
+    assert attempts == [TOPIC]
+    assert "0 of 2" in capsys.readouterr().err
 
 
 async def test_a_watch_that_cannot_read_is_an_error_not_a_traceback(
