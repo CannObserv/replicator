@@ -617,10 +617,13 @@ async def run(
         # there is nothing to respond to. Move either off the loop only if it
         # ever moves out of startup.
         writers = build_writers(aliases)
-        # Default start_id="$" reads only messages added after group creation.
-        # The MVP seed harness controls when commands appear, so a backlog drain
-        # ("0") is not needed; REPLICATOR_CONSUMER_START_ID flips it once a live
-        # issuer exists — see the setting for the XGROUP SETID caveat.
+        # Default start_id="$" reads only messages added after group creation,
+        # and is read only then: ensure_group leaves an existing group alone, so
+        # flipping REPLICATOR_CONSUMER_START_ID moves nothing on a broker that has
+        # both groups — see the setting for the XGROUP SETID caveat. On a fresh
+        # broker, Watcher's commands published before the first boot are skipped;
+        # they close no fact, which is the silence the issuer's reaper re-issues
+        # through (issuer contract MUST-6), so "$" stands with a live issuer too.
         await consumer.ensure_group(start_id=settings.consumer_start_id)
         await replicate_consumer.ensure_group(start_id=settings.consumer_start_id)
         # One instance, deliberately shared: the sweep measures the tree and the

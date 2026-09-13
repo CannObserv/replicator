@@ -172,8 +172,9 @@ class Settings(BaseSettings):
     # opened in another repo, with no local symptom. The byte path stops fetching
     # instead, transiently, so commands wait on the bus until space frees.
     #
-    # 2 GiB against the host's headroom: room for far more than
-    # the seed harness produces, well short of an outage.
+    # 2 GiB against the host's headroom: far more than a TTL's worth of the live
+    # stream — 58 blobs, 7.8 MB, in the 7 days to 2026-09-13 — and well short of
+    # an outage.
     blob_max_total_bytes: int = Field(
         default=2 * 1024 * 1024 * 1024, validation_alias="REPLICATOR_BLOB_MAX_TOTAL_BYTES"
     )
