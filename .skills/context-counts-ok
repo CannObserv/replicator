@@ -6,20 +6,30 @@
 # stack's "one formatter, two installers" now reads "its formatter, its
 # installers" — both numbers were rhetorical and neither is checkable here.
 #
+# Pinned 2026-09-13 (#91): every entry names the file it was judged against. This
+# file is per-repo and a run is per-file, so an unpinned entry was reported
+# ambiguous on every --file run against another doc (skills#279). Pinned, it sits
+# those runs out, and when its own text changes it is reported stale, not
+# ambiguous — the expiry the grammar promises (skills#251).
+#
 # --- enumerated: the counted things are named in the same clause or the list
 # --- immediately under it, so the number is checkable by reading the section.
-enumerated :: **two backends** (`local`, `gcs`)
-enumerated :: Three that bite, each symptomless until it matters:
-enumerated :: Two env files, and the boundary between them
-enumerated :: **Two blob backends, one seam.**
-enumerated :: the worker retries the two it meets at runtime
-enumerated :: **Three stream kinds, three sets of rules.**
+AGENTS.md :: enumerated :: **two backends** (`local`, `gcs`)
+AGENTS.md :: enumerated :: Three that bite, each symptomless until it matters:
+AGENTS.md :: enumerated :: Two env files, and the boundary between them
+AGENTS.md :: enumerated :: **Two blob backends, one seam.**
+AGENTS.md :: enumerated :: the worker retries the two it meets at runtime
+AGENTS.md :: enumerated :: **Three stream kinds, three sets of rules.**
 # The three contracts and their four documents are the four `docs/contracts/`
 # rows in ## Detail Docs, one line down the same file.
-enumerated :: **Three normative contracts bound the wire and the roadmap**
-enumerated :: four documents under `docs/contracts/`
+AGENTS.md :: enumerated :: **Three normative contracts bound the wire and the roadmap**
+AGENTS.md :: enumerated :: four documents under `docs/contracts/`
 #
 # --- stable: structural, and cannot change without the sentence being rewritten.
 # XAUTOCLAIM's reply shape is Redis wire format, and the ≥7.0 floor beside it is
 # what the sentence exists to state; a fourth element would rewrite both.
-stable :: `XAUTOCLAIM`'s three-element reply
+AGENTS.md :: stable :: `XAUTOCLAIM`'s three-element reply
+# The same clause in DEPLOYMENT.md's Redis-floor paragraph, which the AGENTS.md
+# line summarises; the unpinned entry acknowledged both. Re-read there for #91:
+# the same warrant holds, and that sentence names the third element outright.
+docs/DEPLOYMENT.md :: stable :: `XAUTOCLAIM`'s three-element reply
