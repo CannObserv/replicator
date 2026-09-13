@@ -120,24 +120,26 @@ see [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) for what each one is and why.
 
 ## Seeding a fetch
 
-Nothing in the cluster issues `content.fetch` commands until the Watcher cutover, so
-`scripts/seed_fetch.py` is the issuer. The target is never defaulted — `--redis-url` and
-`--topic` are both required, and db 0 + `content.fetch` (the one pair the running worker
-consumes, and therefore actually fetches over the network) additionally needs `--production`
-**and** a real `--info-source-id`, since the facts it publishes echo that value cluster-wide:
+Watcher has issued `content.fetch` since watcher#241, so the deployed loop is proven by its
+traffic, not by a seeded command: each `stored a blob and published blob_available` in
+`sudo journalctl -u replicator` is one of Watcher's commands closing.
+
+`scripts/seed_fetch.py` publishes to **scratch** streams. The target is never defaulted —
+`--redis-url` and `--topic` are both required — and `--dry-run` prints the frames without
+contacting a broker at all:
 
 ```bash
-# Fetches the local /health app — a target we control, so the smoke test costs
-# nobody else a request. Start it first (see Dev server below).
+# The scratch redis-server the integration tests use (docs/TESTING.md) — reaches no worker.
 uv run python -m scripts.seed_fetch \
-  --redis-url redis://localhost:6379/0 --topic content.fetch \
-  --production --info-source-id isrc-01J9ZK7Q --watch http://localhost:8001/health
+  --redis-url redis://localhost:6379/15 --topic replicator.itest.seed \
+  https://example.test/a
 ```
 
-`--watch` tails the fact stream until each command has an outcome — a `blob_available`, or a
-`fetch_failed` naming the reason it closed. It reads `content.blobs` for `content.fetch` and
-`<topic>.blobs` otherwise, so a scratch seed watches its own facts. Add `--dry-run` to print
-the frames without contacting a broker at all.
+**The live stream is not an example here (#90).** db 0 + `content.fetch` still needs
+`--production` and a real `--info-source-id`, but a frame there is fetched for real on a
+command Watcher never issued — an operator act under Watcher's identity, never this host's
+`replicator` credential, which reaches that stream only through an ACL gap CannObserv/broker#14
+closes. Every flag, and what `--watch` can see: [`docs/COMMANDS.md`](docs/COMMANDS.md).
 
 ## Test & lint
 

@@ -175,9 +175,9 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
   resolved as a path, writers keyed by alias, refusals before credentials, provider
   failures classified by HTTP status. Read
   [docs/CONVENTIONS.md](docs/CONVENTIONS.md) first.
-- **Nothing but the seed script writes to `content.fetch`.** `scripts/seed_fetch.py`
-  requires `--production` for the one combination the live worker consumes: a frame
-  there is fetched for real.
+- **Watcher alone issues `content.fetch` (#90).** `scripts/seed_fetch.py` seeds
+  scratch streams; the live one takes `--production` and Watcher's identity, never
+  `replicator`'s.
 - **Three normative contracts bound the wire and the roadmap** — four documents
   under `docs/contracts/`, linked from sibling repos and indexed below.
   `tests/test_boundaries.py` enforces the charter in CI; change a charter and its

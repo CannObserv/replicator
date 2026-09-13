@@ -1,11 +1,11 @@
-"""Publish ``content.fetch`` commands — the MVP's command issuer.
+"""Publish ``content.fetch`` commands to a scratch stream — the seed harness.
 
-Replicator's loop is driven by commands, and until Watcher is cut over (parent
-strategy Phase 4) nothing in the cluster issues them. This script is that issuer:
-it mints a ULID ``command_id`` per URL and XADDs a ``ContentFetchCommand`` frame
-built by co-core's own ``to_wire``. It is not scaffolding — it is also what drives
-the live end-to-end test, so it earns a permanent place next to
-``sync_wheelhouse.py`` and ``check_redis_floor.sh``. Design:
+It was the MVP's command issuer. Watcher has issued the live stream since
+watcher#241, so what keeps this script is the scratch one: it mints a ULID
+``command_id`` per URL and XADDs a ``ContentFetchCommand`` frame built by
+co-core's own ``to_wire``, and it is what drives the live-broker end-to-end test
+(``tests/worker/test_loop_integration.py``) — which earns it a permanent place
+next to ``sync_wheelhouse.py`` and ``check_redis_floor.sh``. Design:
 ``docs/plans/2026-07-31-replicator-mvp-open-questions-design.md`` §2.
 
     uv run python -m scripts.seed_fetch \
@@ -15,11 +15,17 @@ the live end-to-end test, so it earns a permanent place next to
 
 **The live worker fetches whatever lands on ``content.fetch``.** A frame added to
 that stream on db 0 is picked up by ``replicator.service``, fetched over the
-network, and written to the blob directory. So the target is never defaulted —
+network, and written to the blob store. So the target is never defaulted —
 ``--redis-url`` and ``--topic`` are both required, and the one combination that
 actually reaches the running service (db 0 *and* ``content.fetch``) additionally
 requires ``--production``. A flag rather than a prompt: the script has to stay
 usable non-interactively.
+
+The flag is a guard, not a grant (#90). A frame there is a command Watcher never
+issued — an operator act under Watcher's identity, never this host's
+``replicator`` credential, which reaches ``content.fetch`` only through an ACL gap
+CannObserv/broker#14 closes. Nothing in this repo documents that target as an
+example.
 
 Every command carries an ``info_source_id``, required on the wire since co-core
 0.8.0 and echoed onto both facts (#28). It defaults to a placeholder no issuer's
@@ -158,9 +164,9 @@ class HeaderAction(argparse.Action):
     A repeated name is a usage error rather than last-wins, because a dict would
     otherwise swallow one silently — the same reasoning that makes the worker
     refuse a case-collision (#11). What this deliberately does *not* do is
-    duplicate the worker's guard list: sending a refused header is how an
-    operator exercises the refusal against a live worker, and a script that
-    pre-empted it would leave that path testable only in the unit suite.
+    duplicate the worker's guard list: a copy here would drift from the list the
+    worker enforces, and a script that pre-empted it could never put a refused
+    frame in front of a consumer to watch it close.
     """
 
     def __call__(
@@ -272,8 +278,8 @@ async def publish(
     on URL two must not swallow the id of URL one.
 
     ``headers`` / ``timeout_seconds`` are keyword-only and shared by every URL in
-    the run: this is the only issuer there is today, so it is also the only way
-    to exercise the worker's request-option path against a live broker (#11).
+    the run. Watcher sends its own on the live stream; these put the same options
+    on a scratch frame, for a consumer built on that topic to act on (#11).
     """
     publisher = AsyncBusPublisher(client)
     results = []

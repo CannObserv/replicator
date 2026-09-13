@@ -41,9 +41,10 @@ REPLICATOR_REPLICATE_CONSUMER_NAME="replicator-replicate-$(whoami)-dev" \
 
 ### Seeding commands
 
-`scripts/seed_fetch.py` is the MVP's command issuer — nothing else publishes to
-`content.fetch` until the Watcher cutover (parent strategy Phase 4). The target is
-never defaulted: `--redis-url` and `--topic` are both required.
+`scripts/seed_fetch.py` publishes `content.fetch` frames to a **scratch** stream. The live
+stream is Watcher's — its issuer since watcher#241, whose traffic is what shows the deployed loop
+working (the journal line closing this section). The target is never defaulted: `--redis-url`
+and `--topic` are both required.
 
 ```bash
 # Safe rehearsal: print the frames, contact nothing.
@@ -51,27 +52,28 @@ uv run python -m scripts.seed_fetch \
   --redis-url redis://localhost:6379/15 --topic replicator.itest.seed \
   --dry-run https://example.test/a
 
-# Scratch database — reaches no worker.
+# The scratch redis-server from TESTING.md — reaches no worker.
 uv run python -m scripts.seed_fetch \
   --redis-url redis://localhost:6379/15 --topic replicator.itest.seed \
   https://example.test/a https://example.test/b
-
-# The live loop. --production is required for db 0 + content.fetch, because the
-# running service will fetch these URLs for real — and so is a real
-# --info-source-id, because the facts it publishes echo that value onto the
-# cluster's own content.blobs. --watch tails the fact stream until each command
-# has an outcome — blob_available, or a fetch_failed naming the reason. Exit 1 if
-# a command failed or no fact ever arrived; exit 2 if either opt-in is missing.
-# The target below is the local /health app — start it first (see API, below).
-uv run python -m scripts.seed_fetch \
-  --redis-url redis://localhost:6379/0 --topic content.fetch \
-  --production --info-source-id isrc-01J9ZK7Q --watch http://localhost:8001/health
 ```
 
-`--watch` reads `content.blobs` for `content.fetch` and `<topic>.blobs` otherwise, so the
-scratch invocation above watches its own facts rather than production's. `--blobs-topic`
-overrides that. One stream, both outcomes: an issuer needs a single consumer group to see
-whether its command produced bytes or a reason.
+**Never `--redis-url "$REPLICATOR_REDIS_URL"` (#90).** That is the worker's credential, and it reaches
+`content.fetch` only through a gap in the broker's ACL — the key pattern its inbox needs meeting
+the `+xadd` its fact streams need — which CannObserv/broker#14 closes with a selector. Until then a
+frame there is fetched for real on a command Watcher never issued; afterwards it is `NOPERM`, and
+the script exits 1 on the first attempt rather than retrying. `--production` still guards db 0 +
+`content.fetch`, but using it is an operator act under Watcher's identity, not an example. A
+scratch topic on the broker itself takes `citest`, whose only keys are `probe.*` and
+`replicator.itest.*`, so it cannot name a production topic — not provisioned on this VM.
+
+`--watch` reads `content.blobs` for `content.fetch` and `<topic>.blobs` otherwise, so a scratch
+seed never watches production's facts; `--blobs-topic` overrides that. One stream, both outcomes:
+an issuer needs a single consumer group to see whether its command produced bytes or a reason.
+**A fact arrives only from a consumer built on that topic**, though — `test_loop_integration.py`
+builds one, and a `uv run` worker never does, because its topics are defaulted arguments rather
+than settings — so from the command line a scratch `--watch` waits out `--watch-timeout` and
+exits 1.
 
 `--info-source-id` sets the domain key the command carries and both facts echo, required on the
 wire since co-core 0.8.0 (#28). It defaults to `seed-harness-not-a-real-info-source`, which no
@@ -80,29 +82,26 @@ synthetic. **The live target refuses that default, and a blank value**, exiting 
 broadcasts whatever is passed here to the cluster, so it has to name a real InfoSource.
 
 `--header` and `--timeout` set the command's per-fetch request options (#11). They apply to
-every URL in the run, and omitting them is the pre-#11 wire exactly.
+every URL in the run, and omitting them is the pre-#11 wire exactly. A dry run prints them inside
+the payload, after the script's own stripping — the value that would actually travel:
 
 ```bash
-# Pin the User-Agent — the fingerprint-continuity case Watcher needs at cutover.
+# Pin the User-Agent, as Watcher does for fingerprint continuity.
 # --header is repeatable; the name is case-insensitive (the worker folds it).
 uv run python -m scripts.seed_fetch \
   --redis-url redis://localhost:6379/15 --topic replicator.itest.seed \
   --header 'User-Agent: watcher/0.1.0' --header 'Accept: text/html' \
-  --timeout 5 --watch https://example.test/a
-
-# Exercise the refusal path: a Host override is refused before any request goes
-# out, closing the command as fetch_failed / invalid_request_options.
-uv run python -m scripts.seed_fetch \
-  --redis-url redis://localhost:6379/15 --topic replicator.itest.seed \
-  --header 'Host: elsewhere.test' --watch https://example.test/a
+  --timeout 5 --dry-run https://example.test/a
 ```
 
 The script rejects a malformed `--header` and a repeated name (exit 2) but deliberately does
-**not** pre-empt the worker's refusal list — sending a refused header is how the refusal is
-exercised against a live worker. The full list is in
+**not** pre-empt the worker's refusal list: a `Host` override publishes cleanly here, and the
+worker refuses it before any request goes out, closing the command as `fetch_failed` /
+`invalid_request_options`. The full list is in
 [`docs/contracts/content-fetch-issuer-reference.md`](contracts/content-fetch-issuer-reference.md).
 
-Watch the other side with `sudo journalctl -u replicator -f`.
+Watch the live side with `sudo journalctl -u replicator -f`: each `stored a blob and published
+blob_available` is one of Watcher's commands closing.
 
 ### Inspecting the consume path
 

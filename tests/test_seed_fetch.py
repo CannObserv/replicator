@@ -1,4 +1,4 @@
-"""The MVP command issuer: ``scripts/seed_fetch.py``.
+"""The seed harness: ``scripts/seed_fetch.py``.
 
 The script is the only thing in the repo that *writes* to ``content.fetch``, and
 the live worker fetches whatever lands there for real. Its guard rail therefore
@@ -647,7 +647,7 @@ def test_a_broker_that_refuses_the_connection_is_an_error_not_a_traceback(capsys
 
 
 async def test_published_commands_carry_the_request_options(fake_redis):
-    """The only issuer there is, so the only way to exercise #11 on a live worker."""
+    """Both options ride the frame, where a consumer on that topic acts on them (#11)."""
     await publish(
         fake_redis,
         TOPIC,

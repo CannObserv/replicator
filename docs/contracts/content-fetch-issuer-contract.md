@@ -4,8 +4,9 @@
 the sole producer of `content.blobs`, so the contract lives with the behaviour it describes. Issuer
 repos link here rather than copying; a copy drifts from the code the day it is written.
 
-**Audience:** any service publishing a `ContentFetchCommand` — today
-[`scripts/seed_fetch.py`](../../scripts/seed_fetch.py), from Phase 4 Watcher.
+**Audience:** any service publishing a `ContentFetchCommand` — Watcher, the live stream's issuer
+since [watcher#241](https://github.com/CannObserv/watcher/issues/241), and
+[`scripts/seed_fetch.py`](../../scripts/seed_fetch.py) on scratch streams.
 
 **Companion.** [`content-fetch-issuer-reference.md`](content-fetch-issuer-reference.md) carries the
 parts an issuer *looks up* rather than reads through — equally normative, split out in #24 so this

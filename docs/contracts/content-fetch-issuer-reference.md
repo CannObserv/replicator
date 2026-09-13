@@ -325,8 +325,10 @@ Integrity rests entirely on **bus access control**, and that control is no longe
 The broker runs on its own node (`co-broker`, CannObserv/broker#1) and Replicator on another
 (`co-replicator`, #88), so what holds the line is **per-service Redis ACL users** — who may `XADD`
 to `content.fetch` is a broker grant (CannObserv/broker#2) — and the **Tailscale ACL**, which admits
-only the bus participants to the broker at all. This section named "the moment the bus spans hosts"
-as the point where message signing or a URL allowlist becomes the conversation. That moment has
+only the bus participants to the broker at all. **That grant is wider than declared today** (#90):
+`replicator` can `XADD` the stream too — its read pattern meeting the `+xadd` its fact streams need
+— a gap CannObserv/broker#14 closes, not a second issuer. This section named "the moment the bus
+spans hosts" as the point where message signing or a URL allowlist becomes the conversation. That moment has
 passed, and the conversation is #89; until it concludes, nothing in this contract changes.
 
 **`headers` widens that capability, and the widening is bounded here rather than by the broker.**
@@ -342,9 +344,8 @@ Two properties an issuer can rely on: a refused command is refused **before** an
 and header **values never reach the journal** — only names are logged, so an `Authorization` an
 issuer attaches is not re-exposed one layer down.
 
-Relatedly: nothing but the seed script writes to `content.fetch` today, and `seed_fetch.py`
-requires `--production` for the one target the live worker consumes. A frame on that stream is
-fetched for real.
+Relatedly: Watcher is the only issuer, and `seed_fetch.py` requires `--production` for the one
+target the live worker consumes. A frame on that stream is fetched for real.
 
 **`content.replicate` does not inherit this section.** A write is bounded by nothing a read is, so
 the argument — and an earlier escalation trigger — is made again in

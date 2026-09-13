@@ -47,7 +47,7 @@ src/core/logging.py  — build_json_formatter() + ColorMessageFilter + configure
 src/core/log_config.json — uvicorn --log-config; routes uvicorn's own loggers through that formatter
 src/core/config.py   — Settings / env access (see Environment Variables)
 scripts/        — sync_wheelhouse.py, check_redis_floor.sh, check_main_checkout.sh, seed_fetch.py
-scripts/seed_fetch.py — the MVP command issuer; publishes content.fetch, --watch tails the facts
+scripts/seed_fetch.py — the seed harness; publishes content.fetch to scratch streams, --watch tails the facts
 tests/          — Mirrors src/ structure; integration tests in `@pytest.mark.integration`
 docs/           — Reference docs; the Detail Docs index in AGENTS.md is the roster
 docs/contracts/ — Normative contracts, linked to from sibling repos: the issuer-facing half of the wire, and the boundaries charter (what Replicator may become)
