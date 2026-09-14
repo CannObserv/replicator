@@ -103,9 +103,10 @@ def test_every_line_leads_with_a_tracked_doc(sections: list[str], tracked_files:
             return any(f.startswith(doc) for f in tracked_files)
         return doc in tracked_files
 
-    unled = [s for s in sections if lead_doc(s) is None]
+    leads = [(s, lead_doc(s)) for s in sections]
+    unled = [s for s, doc in leads if doc is None]
     assert not unled, f"{ADVICE_PATH} lines must lead with `<doc>: `: {unled}"
-    dead = [s for s in sections if not tracked(lead_doc(s))]
+    dead = [s for s, doc in leads if doc is not None and not tracked(doc)]
     assert not dead, (
         f"{ADVICE_PATH} lines lead with a doc this tree does not track, so the "
         f"advice points nowhere: {dead}. Retarget or remove them."
