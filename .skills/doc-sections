@@ -1,0 +1,25 @@
+# Advice for shipping-work-python-fastapi's doc-check.sh (Step 1.5): the doc
+# sections printed under a hit, one per line, verbatim. Blank lines and
+# #-comment lines ignored; a # later in a line is content. This file REPLACES
+# the script's two built-in lines wholesale (#93, gregoryfoster/skills#261) —
+# those name a route table this worker-first service does not keep, and no doc
+# under docs/, so a scripts/ hit never reached docs/COMMANDS.md.
+#
+# Each line leads with the doc it routes to, `<doc>: `, and ends with the paths
+# that send you there. Keep it beside doc-sensitive-paths, the list it routes:
+# an entry added there with no line here is a hit the advice says nothing about.
+#
+# Guarded by tests/test_doc_sections.py: every lead doc must be tracked, so a
+# renamed doc is a red test rather than advice that points nowhere. Whether a
+# line routes a given path is prose, and deliberately unchecked
+# (gregoryfoster/skills#284).
+
+AGENTS.md: Project Layout (a new package under src/), the co-core pin under Environment & Tooling (pyproject.toml), Server Lifecycle (deploy/), and the Detail Docs roster of docs/*.md
+docs/DEPLOYMENT.md: the co-core pin and wheelhouse story (pyproject.toml, uv.lock); the systemd unit and its guards (deploy/)
+docs/ARCHITECTURE.md: Project Layout, one line per module (src/, scripts/)
+docs/ENVIRONMENT.md: every REPLICATOR_* variable, its default and the reasoning behind it (src/core/config.py)
+docs/COMMANDS.md: every script with its flags (scripts/) — README.md's Setup, Seeding a fetch and Deploy blocks repeat some of them
+docs/TESTING.md: what each CI job runs and why, which tests/test_ci.py pins (.github/workflows/)
+docs/contracts/: normative and linked from sibling repos, so drift here is cross-repo — change a charter and tests/test_boundaries.py together, and file a changed issuer obligation in each issuer's repo
+docs/SKILLS.md: skill and vendor inventory, hook registration and suspension, Submodules in CI, and the doc-check section on both lists (skills/, .claude/, .gitmodules, doc-sensitive-paths, doc-sections)
+AGENTS.md: Code Exploration Notes — re-run codebase_context_index in the same change as a manifest description edit (.socraticodecontextartifacts.json)

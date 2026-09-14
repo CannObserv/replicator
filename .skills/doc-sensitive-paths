@@ -72,7 +72,13 @@ skills/
 # its own section in docs/SKILLS.md, and a doc-drift guard blind to its own
 # configuration is the one blind spot it can least afford. Slash-less, so it
 # matches at any depth and adds no churn.
+#
+# doc-sections is the same gate's advice, described in the same section (#93).
+# Named rather than widened to .skills/: the refresh hook commits
+# .skills/doctor.sh and the weekly context-cadence job .skills/context-*, so a
+# .skills/ entry would trip the gate on commits with no doc consequence.
 doc-sensitive-paths
+doc-sections
 
 # The SocratiCode manifest is a source, not the artifact — editing it without
 # re-indexing leaves the highest-authority answer stale (docs/SOCRATICODE.md).
