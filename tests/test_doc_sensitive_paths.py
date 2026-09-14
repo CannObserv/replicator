@@ -133,7 +133,7 @@ def test_every_entry_matches_a_tracked_file(entries: list[str], tracked_files: l
 
 
 def test_entries_the_list_must_keep_covering(entries: list[str], tracked_files: list[str]) -> None:
-    """The four low-churn files the list is tailored to watch (#75 CR).
+    """The low-churn files the list is tailored to watch (#75 CR, #93).
 
     Named individually rather than left to the dead-entry sweep: each was added
     because a *specific* doc section drifts with it, and a broad entry that
