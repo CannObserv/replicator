@@ -19,7 +19,7 @@ docs/DEPLOYMENT.md: the co-core pin and wheelhouse story (pyproject.toml, uv.loc
 docs/ARCHITECTURE.md: Project Layout, one line per module (src/, scripts/)
 docs/ENVIRONMENT.md: every REPLICATOR_* variable, its default and the reasoning behind it (src/core/config.py)
 docs/COMMANDS.md: every script with its flags (scripts/) — README.md's Setup, Seeding a fetch and Deploy blocks repeat some of them
-docs/TESTING.md: what each CI job runs and why, which tests/test_ci.py pins (.github/workflows/)
+docs/TESTING.md: what the test and gcs jobs run and why; a checkout change also reaches docs/SKILLS.md's Submodules in CI (.github/workflows/)
 docs/contracts/: normative and linked from sibling repos, so drift here is cross-repo — change a charter and tests/test_boundaries.py together, and file a changed issuer obligation in each issuer's repo
-docs/SKILLS.md: skill and vendor inventory, hook registration and suspension, Submodules in CI, and the doc-check section on both lists (skills/, .claude/, .gitmodules, doc-sensitive-paths, doc-sections)
+docs/SKILLS.md: the skill and vendor inventory, hook registration and suspension, and The doc-check lists section (skills/, .claude/, .gitmodules, doc-sensitive-paths, doc-sections)
 AGENTS.md: Code Exploration Notes — re-run codebase_context_index in the same change as a manifest description edit (.socraticodecontextartifacts.json)

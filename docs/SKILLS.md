@@ -151,9 +151,10 @@ a `docs/contracts/` hit could not point at `tests/test_boundaries.py`, nor a
 
 Each line leads with the doc it routes to and ends with the paths that send a
 reader there. Two routes are choices rather than transcriptions:
-`.github/workflows/` goes to `docs/TESTING.md`, where what each CI job runs is
-written down, and the manifest goes to the re-index rule in AGENTS.md rather
-than to `docs/SOCRATICODE.md`, which is generated and does not state it.
+`.github/workflows/` goes to `docs/TESTING.md`, which records what the test and
+`gcs` jobs run, and on to [Submodules in CI](#submodules-in-ci) for a checkout
+change; the manifest goes to the re-index rule in AGENTS.md rather than to
+`docs/SOCRATICODE.md`, which is generated and only points there.
 
 The two files resolve independently, and since gregoryfoster/skills#284 a hit
 with only one of them tailored ends with `Note: this project tailors …`, naming
