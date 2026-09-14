@@ -148,6 +148,8 @@ def test_entries_the_list_must_keep_covering(entries: list[str], tracked_files: 
         ".gitmodules": "docs/SKILLS.md vendor submodule table",
         # The list must cover itself: editing it obsoletes its own doc section.
         ".skills/doc-sensitive-paths": "docs/SKILLS.md sensitive-path section",
+        # And its advice, for the same reason — the same section describes it.
+        ".skills/doc-sections": "docs/SKILLS.md advice on a hit (#93)",
         # AGENTS.md Project Layout names every module under src/.
         "src/worker/main.py": "AGENTS.md Project Layout",
     }
@@ -161,5 +163,10 @@ def test_entries_the_list_must_keep_covering(entries: list[str], tracked_files: 
 
 def test_named_paths_are_actually_tracked(tracked_files: list[str]) -> None:
     """Guard the guard: the paths above must exist, or the test above is vacuous."""
-    for path in (".claude/settings.json", ".gitmodules", ".skills/doc-sensitive-paths"):
+    for path in (
+        ".claude/settings.json",
+        ".gitmodules",
+        ".skills/doc-sensitive-paths",
+        ".skills/doc-sections",
+    ):
         assert path in tracked_files, f"{path} is no longer tracked"
