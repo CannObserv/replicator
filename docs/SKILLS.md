@@ -90,7 +90,7 @@ that hold has ended — see [The curating-context v1.2 hold (ended)](#the-curati
 `docs/plans/` is the default governed by `writing-plans`. Override with a single-line
 `.skills/plans_dir` file at the repo root if a different path is ever wanted.
 
-## The doc-check sensitive-path list
+## The doc-check lists
 
 `.skills/doc-sensitive-paths` replaces — **not extends** — the built-in
 `SENSITIVE_PATHS` in `shipping-work-python-fastapi/scripts/doc-check.sh`, the
@@ -129,23 +129,50 @@ What the tailoring here decided (#75, and its code review):
   redundant for *matching* — segment matching already makes `skills/` hit
   `*/skills/*` — and is kept for the dead-entry census rather than the match:
   it is what reports that tree emptying.
-- **The list covers itself** via a slash-less `doc-sensitive-paths` entry.
-  Editing it is the change that obsoletes this very section.
+- **The list covers itself** via a slash-less `doc-sensitive-paths` entry, and
+  its advice via `doc-sections` (#93). Editing either is the change that
+  obsoletes this very section. Both are named rather than widened to
+  `.skills/`, which the refresh hook and the weekly `context-cadence` job
+  commit into with no doc consequence.
 - **The rest of `docs/` is out, as a trade-off rather than an oversight.**
   AGENTS.md's Detail Docs list is a by-name inventory of `docs/*.md`, so a new
   doc does need an AGENTS.md line the gate will not ask for. A blanket `docs/`
   entry would fire on every branch that edits prose — most of them — and a gate
   that always fires is one nobody reads.
 
-One thing the override cannot reach: `DOC_SECTIONS`, the advice printed on exit
-1, is not project-configurable, so it still names a "route table" this
-worker-first service has no equivalent of, and cannot point at
-`tests/test_boundaries.py` when a `docs/contracts/` charter changes. Filed
-upstream as gregoryfoster/skills#261.
+### The advice on a hit
 
-Verify a change to the list with the gate itself — `bash
-skills/shipping-work-python-fastapi/scripts/doc-check.sh` on a clean branch
-prints the list source it consulted and names any entry that matches nothing.
+`.skills/doc-sections` is the other half: the doc sections the gate prints on
+exit 1, one per line in the same grammar, and it too **replaces** the built-in
+`DOC_SECTIONS` (gregoryfoster/skills#261). The defaults name a "route table"
+this worker-first service has no equivalent of, and no doc under `docs/` — so
+a `docs/contracts/` hit could not point at `tests/test_boundaries.py`, nor a
+`scripts/` hit at `docs/COMMANDS.md` (#93).
+
+Each line leads with the doc it routes to and ends with the paths that send a
+reader there. Two routes are choices rather than transcriptions:
+`.github/workflows/` goes to `docs/TESTING.md`, where what each CI job runs is
+written down, and the manifest goes to the re-index rule in AGENTS.md rather
+than to `docs/SOCRATICODE.md`, which is generated and does not state it.
+
+The two files resolve independently, and since gregoryfoster/skills#284 a hit
+with only one of them tailored ends with `Note: this project tailors …`, naming
+the half still on defaults. Both are tailored here, so a hit prints
+`(advice: .skills/doc-sections)` and no note.
+
+[`tests/test_doc_sections.py`](../tests/test_doc_sections.py) requires every
+line to lead with a tracked doc — the list's dead-entry rule, applied to the one
+decidable part of prose. Upstream checks nothing about advice, so a renamed doc
+would otherwise go on being named. Whether a line routes a given path is
+deliberately untested: a checker for that is satisfied by pasting paths into the
+advice, which makes the advice worse (#284). So **keep the file beside the
+list** — an entry added to `doc-sensitive-paths` with no line here is a hit the
+advice says nothing about.
+
+Verify a change to either file with the gate itself — `bash
+skills/shipping-work-python-fastapi/scripts/doc-check.sh` prints the list
+source it consulted and names any entry that matches nothing; on a hit it names
+the advice source too.
 
 ## The curating-context v1.2 hold (ended)
 
