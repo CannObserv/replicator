@@ -67,13 +67,13 @@ def entries() -> list[str]:
     return parse_list(LIST_PATH.read_text())
 
 
-@pytest.fixture(scope="module")
-def tracked_files() -> list[str]:
+def read_tracked_files() -> list[str]:
     """Every tracked path, read the way the gate reads it.
 
     `core.quotePath=false` for the same reason the script sets it: git
     otherwise C-quotes any non-ASCII path, and the leading quote defeats the
-    anchored arm of the matcher.
+    anchored arm of the matcher. `test_doc_sections.py` reads through this
+    too, so both guards see the tree one way.
     """
     out = subprocess.run(
         ["git", "-c", "core.quotePath=false", "ls-files"],
@@ -83,6 +83,11 @@ def tracked_files() -> list[str]:
         check=True,
     )
     return out.stdout.split("\n")
+
+
+@pytest.fixture(scope="module")
+def tracked_files() -> list[str]:
+    return read_tracked_files()
 
 
 @pytest.mark.parametrize(

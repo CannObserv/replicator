@@ -19,12 +19,11 @@ advice worse (gregoryfoster/skills#284).
 """
 
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
 
-from tests.test_doc_sensitive_paths import parse_list
+from tests.test_doc_sensitive_paths import parse_list, read_tracked_files
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ADVICE_PATH = REPO_ROOT / ".skills" / "doc-sections"
@@ -48,15 +47,7 @@ def sections() -> list[str]:
 
 @pytest.fixture(scope="module")
 def tracked_files() -> list[str]:
-    """Every tracked path; `core.quotePath=false` as in the list's own test."""
-    out = subprocess.run(
-        ["git", "-c", "core.quotePath=false", "ls-files"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return out.stdout.split("\n")
+    return read_tracked_files()
 
 
 @pytest.mark.parametrize(
