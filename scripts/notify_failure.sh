@@ -190,12 +190,16 @@ fi
 # What the exit code meant, since curl's own sentence was never going to survive
 # the redirect above. Only the codes this path can realistically produce are
 # named; anything else reports the number, which is still greppable.
+#
+# No 22 arm: curl returns it only under --fail, which is deliberately not passed
+# (CR 15). Without it a 4xx/5xx comes back as RC 0 with the code in STATUS, which
+# is what lets the last arm tell a 500 apart from a refusal — an arm claiming to
+# handle error statuses would have misdirected a reader looking for exactly that.
 case "${RC}" in
   2)  REASON="bad curl configuration — check REPLICATOR_NOTIFY_TIMEOUT_SECONDS" ;;
   3)  REASON="malformed REPLICATOR_NOTIFY_URL" ;;
   6)  REASON="could not resolve the notifier host" ;;
   7)  REASON="connection refused by the notifier" ;;
-  22) REASON="notifier answered with an error status" ;;
   28) REASON="timed out after ${TIMEOUT}s" ;;
   35 | 60) REASON="TLS handshake or certificate failure" ;;
   0)  REASON="notifier answered ${STATUS:-<none>}, which is not a 2xx" ;;
