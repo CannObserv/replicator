@@ -211,3 +211,15 @@ docs/DEPLOYMENT.md :: retarget :: behind, and the co-core pin. `AGENTS.md` keeps
 docs/DEPLOYMENT.md :: retarget :: restart command; the reasoning behind each of them is here. The variables
 docs/DEPLOYMENT.md :: retarget :: [ENVIRONMENT.md](ENVIRONMENT.md).
 docs/DEPLOYMENT.md :: rename :: ## Infrastructure
+
+# ---- #94 CR 18 ----
+# The bullet's opening line was rewritten in place to put REPLICATOR_BLOB_BACKEND
+# back in the policy file — a class-A constraint the curation had demoted inside
+# overview prose. `tighten` is the mechanical warrant (rewritten in place, atoms
+# preserved, claims_dropped: 0); note it is the unusual direction, adding a word
+# rather than removing one, which is the point of the fix.
+tighten :: - **Two blob backends, one seam.** `local` announces `file://` and `gcs` announces
+# Phase 6.5 renamed this heading after the split's no-loss run had already
+# passed, so the warrant was missed at the time: `#\d{2,}` in a permanent anchor
+# slug is a class 3b seam, and ENVIRONMENT.md's link was retargeted with it.
+docs/DEPLOYMENT.md :: rename :: ### When the worker fails, who is told (#94)
