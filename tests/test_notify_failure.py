@@ -17,6 +17,7 @@ handler guarantees, and the POST is the part that may not arrive.
 
 import json
 import os
+import re
 import subprocess
 import threading
 import time
@@ -295,6 +296,31 @@ def test_the_dispatch_is_time_bounded(hung_notifier):
     # 28 is curl's timeout code; asserting it rules out the test passing because
     # the connection was refused rather than because the ceiling was enforced.
     assert any(r.get("curl_exit") == 28 for r in _records(result)), _records(result)
+
+
+def test_a_timeout_above_the_units_own_ceiling_is_refused():
+    """A dispatch ceiling above `TimeoutStartSec=` would be enforced by systemd instead.
+
+    And systemd enforces it by killing the handler, which is the "notification
+    becomes a second failed unit" outcome the whole gap exists to prevent. CR 4
+    validated the format and left the ceiling open (CR 12).
+    """
+    result = _run(UNIT_NAME, env={"REPLICATOR_NOTIFY_TIMEOUT_SECONDS": "99999"})
+
+    assert result.returncode == 0, result.stderr
+    assert "99999" in result.stderr, result.stderr
+    assert "ceiling" in result.stderr.lower(), result.stderr
+
+
+def test_the_unit_ceiling_and_the_scripts_cap_are_one_decision():
+    """The script's cap is meaningless if the unit's own timeout drops below it."""
+    unit = (REPO_ROOT / "deploy" / "replicator-failure-notify@.service").read_text()
+    timeout_start = int(re.search(r"^TimeoutStartSec=(\d+)$", unit, flags=re.MULTILINE).group(1))
+    cap = int(re.search(r"^TIMEOUT_MAX=(\d+)$", NOTIFY.read_text(), flags=re.MULTILINE).group(1))
+
+    assert cap < timeout_start, (
+        f"the script caps dispatch at {cap}s but the unit kills it at {timeout_start}s"
+    )
 
 
 def test_the_script_never_reads_an_env_file_itself():

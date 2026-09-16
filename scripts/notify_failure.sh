@@ -58,7 +58,15 @@ TOKEN="${REPLICATOR_NOTIFY_TOKEN:-}"
 # would otherwise reach the failure record as a bare `curl_exit: 2`, which reads
 # as "the notifier is down" — so an operator mid-incident chases the wrong VM
 # instead of their own typo. Same rule REPLICATOR_REDIS_FLOOR_WAIT follows.
+#
+# The cap is the second half and not optional (CR 12). Validating only the shape
+# left 99999 acceptable, and the handler unit kills this process at
+# TimeoutStartSec — so an over-large value is enforced by SIGKILL rather than by
+# curl, which is exactly the "notification becomes a second failed unit" outcome
+# the ceiling exists to prevent. TIMEOUT_MAX must stay below that directive;
+# tests/test_notify_failure.py reads both and pins the relation.
 TIMEOUT_DEFAULT=10
+TIMEOUT_MAX=30
 TIMEOUT="${REPLICATOR_NOTIFY_TIMEOUT_SECONDS:-${TIMEOUT_DEFAULT}}"
 case "${TIMEOUT}" in
   '' | *[!0-9]* | 0)
@@ -66,6 +74,10 @@ case "${TIMEOUT}" in
     TIMEOUT="${TIMEOUT_DEFAULT}"
     ;;
 esac
+if [ "${TIMEOUT}" -gt "${TIMEOUT_MAX}" ]; then
+  echo "notify_failure: REPLICATOR_NOTIFY_TIMEOUT_SECONDS=${TIMEOUT} is above the ${TIMEOUT_MAX}s ceiling the unit's own TimeoutStartSec allows — using ${TIMEOUT_MAX}" >&2
+  TIMEOUT="${TIMEOUT_MAX}"
+fi
 
 # Read by the unit from /run/replicator/build-id, which outlives a failed start —
 # that persistence is the point here, since the build that failed is exactly what
