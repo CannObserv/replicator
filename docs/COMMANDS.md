@@ -320,10 +320,16 @@ git submodule update --remote --merge         # pull upstream skill changes
 
 ```bash
 bash scripts/check_main_checkout.sh                     # what the unit asserts before it starts
+bash scripts/notify_failure.sh replicator.service       # what OnFailure= runs; records, never dispatches unset
 
 sudo cp deploy/replicator.service /etc/systemd/system/replicator.service
+sudo cp 'deploy/replicator-failure-notify@.service' /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now replicator
+# BOTH unit files, and the second one has no restart to pair with it — it is a
+# template nothing runs until a unit fails. Which is also why skipping it is
+# silent: the miss surfaces at the first incident, the one moment it was meant
+# to help (#94).
 
 git pull --ff-only && uv sync --frozen && sudo systemctl restart replicator  # merged on GitHub
 git push && uv sync --frozen && sudo systemctl restart replicator            # merged locally
@@ -335,6 +341,11 @@ git push && uv sync --frozen && sudo systemctl restart replicator            # m
 # deploy/replicator.service needs the cp above re-run before the reload, or the
 # worker comes up on new code under the old unit with nothing to show for it.
 diff /etc/systemd/system/replicator.service deploy/replicator.service
+diff '/etc/systemd/system/replicator-failure-notify@.service' 'deploy/replicator-failure-notify@.service'
 
 sudo journalctl -u replicator -f
+journalctl -t replicator-failure                        # what the OnFailure= handler reported
+# NOT `journalctl -u replicator-failure-notify@replicator.service` — `%n` keeps
+# the suffix, so the instance is ...@replicator.service.service and the obvious
+# name matches nothing. SyslogIdentifier= is what makes the line above work.
 ```
