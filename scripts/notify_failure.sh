@@ -98,10 +98,15 @@ PAYLOAD="$(
     "$(_json "${UNIT}")" "$(_json "${HOST}")" "$(_json "${BUILD}")" "${MESSAGE}" "${NOW}"
 )"
 
+# No --show-error: curl's stderr is discarded below, so the flag was dead config
+# and the sentence it prints was being dropped (CR 2). What replaces it is the
+# exit-code mapping further down — curl's codes are stable and documented, and
+# reading them costs no tempfile on a path that runs only during an incident.
+#
 # Built as an array so an unset token contributes no argument at all, rather than
 # an empty -H that curl would send as a bare header.
 CURL_ARGS=(
-  --silent --show-error
+  --silent
   --request POST
   --header 'Content-Type: application/json'
   --max-time "${TIMEOUT}"
@@ -125,7 +130,22 @@ if [ "${RC}" -eq 0 ] && [ "${STATUS#2}" != "${STATUS}" ] && [ ${#STATUS} -eq 3 ]
   exit 0
 fi
 
-printf '{"level":"ERROR","event":"unit_failed_notify_failed","unit":"%s","notify_dispatched":false,"curl_exit":%s,"http_status":"%s"}\n' \
-  "$(_json "${UNIT}")" "${RC}" "$(_json "${STATUS:-<none>}")" >&2
-echo "notify_failure: dispatch failed — the incident is recorded above, not delivered" >&2
+# What the exit code meant, since curl's own sentence was never going to survive
+# the redirect above. Only the codes this path can realistically produce are
+# named; anything else reports the number, which is still greppable.
+case "${RC}" in
+  2)  REASON="bad curl configuration — check REPLICATOR_NOTIFY_TIMEOUT_SECONDS" ;;
+  3)  REASON="malformed REPLICATOR_NOTIFY_URL" ;;
+  6)  REASON="could not resolve the notifier host" ;;
+  7)  REASON="connection refused by the notifier" ;;
+  22) REASON="notifier answered with an error status" ;;
+  28) REASON="timed out after ${TIMEOUT}s" ;;
+  35 | 60) REASON="TLS handshake or certificate failure" ;;
+  0)  REASON="notifier answered ${STATUS:-<none>}, which is not a 2xx" ;;
+  *)  REASON="curl exit ${RC}" ;;
+esac
+
+printf '{"level":"ERROR","event":"unit_failed_notify_failed","unit":"%s","notify_dispatched":false,"curl_exit":%s,"http_status":"%s","reason":"%s"}\n' \
+  "$(_json "${UNIT}")" "${RC}" "$(_json "${STATUS:-<none>}")" "$(_json "${REASON}")" >&2
+echo "notify_failure: dispatch failed (${REASON}) — the incident is recorded above, not delivered" >&2
 exit 0
