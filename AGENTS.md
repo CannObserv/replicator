@@ -124,9 +124,10 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
   `command_id:occurred_at`). `info_source_id` and replicate's
   `info_item_rep_spec_id` are **echoed, never read** — each `test_boundaries.py`
   carve-out is one field wide, and adding one edits the charter (#28, #29).
-- **Two blob backends, one seam.** `local` announces `file://` and `gcs` announces
-  `gs://`; `local` stays the compiled-in default deliberately (#7). Every
-  `BlobStore` call from a coroutine goes through `asyncio.to_thread`.
+- **Two blob backends, one seam.** `REPLICATOR_BLOB_BACKEND` selects them: `local`
+  announces `file://` and `gcs` announces `gs://`, and `local` stays the
+  compiled-in default deliberately (#7). Every `BlobStore` call from a coroutine
+  goes through `asyncio.to_thread`.
   [docs/STORAGE.md](docs/STORAGE.md) is the authority — read it before touching
   either store.
 - **Store, then publish — never the reverse.** A fact pointing at absent bytes is
