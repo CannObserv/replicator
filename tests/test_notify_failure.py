@@ -242,14 +242,21 @@ def test_the_dispatch_is_time_bounded(notifier):
     assert result.returncode == 0, result.stderr
 
 
-def test_the_script_never_reads_the_repo_env_file():
-    """AGENTS.md's env boundary: the repo `.env` holds org-wide PATs the handler must never load."""
-    text = NOTIFY.read_text()
+def test_the_script_never_reads_an_env_file_itself():
+    """AGENTS.md's env boundary: the repo `.env` holds org-wide PATs the handler must never load.
 
-    assert "/etc/replicator/.env" not in text or "sourc" not in text.lower(), (
-        "the handler must take config from the environment systemd gives it, "
-        "not source an env file itself"
-    )
-    assert ".env" not in text.replace("/etc/replicator/.env", ""), (
-        "no reference to a repo-local .env belongs in this script"
-    )
+    Asserted unconditionally (CR 6). The previous form led with
+    ``"/etc/replicator/.env" not in text or …``, and since the script names no env
+    file at all the left side was always true — so the check that mattered never
+    ran. Config reaches this script only as environment systemd already exported,
+    which is what keeps the choice of file in the unit where the boundary is
+    documented.
+    """
+    text = NOTIFY.read_text()
+    # Comments are prose, and prose is full of ". " — the loader check below has to
+    # read code only, or it matches the end of an ordinary sentence.
+    code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+
+    assert ".env" not in text, "no env file belongs in this script — the unit chooses it"
+    for loader in (". ", "source ", "set -a"):
+        assert loader not in code, f"the handler loads an env file itself via {loader!r}"
