@@ -30,6 +30,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 UNIT = REPO_ROOT / "deploy" / "replicator.service"
 GUARD = REPO_ROOT / "scripts" / "check_main_checkout.sh"
 FLOOR = REPO_ROOT / "scripts" / "check_redis_floor.sh"
+NOTIFY_UNIT = REPO_ROOT / "deploy" / "replicator-failure-notify@.service"
+NOTIFY = REPO_ROOT / "scripts" / "notify_failure.sh"
 
 # systemd's DefaultTimeoutStartSec, which governs the unit because it sets no
 # TimeoutStartSec of its own: every ExecStartPre shares this one budget.
@@ -239,4 +241,96 @@ def test_the_main_checkout_guard_runs_before_the_build_id_stamp():
 
     assert guard_at < stamp_at, (
         f"{GUARD.name} runs at ExecStartPre #{guard_at}, after the BUILD_ID stamp at #{stamp_at}"
+    )
+
+
+# The unit bounds its restart loops and then stays `failed` on purpose, so the
+# terminal state is by design — but a terminal state nobody is told about is the
+# outage (#94). The unit's own comment claimed failure was visible "in systemctl
+# status + OnFailure=" while carrying no OnFailure= directive at all: the comment
+# was the only thing asserting it, and on 2026-09-16 the unit sat failed for 56
+# minutes until a *sibling repo* noticed from the broker side. These assert the
+# handler is wired, so the claim and the ini file cannot drift apart again.
+
+
+def test_the_unit_names_an_onfailure_handler():
+    """The terminal `failed` state has to page someone, not just sit in the journal."""
+    assert _directive("OnFailure"), "OnFailure= is not set — a failed unit notifies nobody"
+
+
+def test_the_onfailure_handler_is_the_notifier_template():
+    """Wired to the template in ``deploy/``, instantiated with the failed unit's name.
+
+    ``%n`` is what lets one handler serve any unit that points at it, and it is
+    the only way the notification can name which unit failed — a handler that
+    cannot say what broke is barely better than the journal line it replaces.
+    """
+    handler = _directive("OnFailure")
+
+    assert NOTIFY_UNIT.exists(), f"{NOTIFY_UNIT.name} is missing from deploy/"
+    assert handler.startswith("replicator-failure-notify@"), (
+        f"expected the replicator-failure-notify@ template, got {handler!r}"
+    )
+    assert "%n" in handler, f"handler {handler!r} is not instantiated with %n"
+
+
+def test_the_onfailure_handler_cannot_retrigger_itself():
+    """A handler that can fail into itself turns one outage into an unbounded loop.
+
+    systemd honours ``OnFailure=`` on the handler too, so the template must not
+    carry one, and it must not restart: a notification is a one-shot attempt
+    whose failure is logged and dropped, never retried into a second unit start.
+    """
+    text = NOTIFY_UNIT.read_text()
+
+    assert not re.search(r"^OnFailure=", text, flags=re.MULTILINE), (
+        f"{NOTIFY_UNIT.name} sets OnFailure=, so a failing notification would recurse"
+    )
+    assert re.search(r"^Type=oneshot$", text, flags=re.MULTILINE), (
+        f"{NOTIFY_UNIT.name} must be Type=oneshot"
+    )
+
+
+def test_the_notify_script_is_wired_to_the_handler():
+    """The template has to run the real script, not merely sit beside it."""
+    assert NOTIFY.exists(), f"{NOTIFY.name} is missing from scripts/"
+    assert NOTIFY.name in NOTIFY_UNIT.read_text(), (
+        f"{NOTIFY_UNIT.name} does not invoke {NOTIFY.name}"
+    )
+
+
+def test_the_notify_handler_is_greppable_by_a_stable_identifier():
+    """Retrieval must not depend on the instance name, which is not what anyone would guess.
+
+    ``%n`` expands to the *full* unit name, suffix included, so
+    ``OnFailure=replicator-failure-notify@%n.service`` instantiates as
+    ``replicator-failure-notify@replicator.service.service`` — a doubled suffix.
+    That is the canonical systemd idiom and it is kept, because ``%i`` is then the
+    precise name of the unit that failed and that is what the record and the
+    notification carry. The cost is that the obvious
+    ``journalctl -u replicator-failure-notify@replicator.service`` finds nothing,
+    which is a bad thing to discover mid-incident (observed in the #94 rehearsal).
+
+    A ``SyslogIdentifier=`` pays that cost off: ``journalctl -t`` reaches the
+    record whatever the instance is called.
+    """
+    text = NOTIFY_UNIT.read_text()
+
+    assert re.search(r"^SyslogIdentifier=\S+$", text, flags=re.MULTILINE), (
+        f"{NOTIFY_UNIT.name} sets no SyslogIdentifier, so the record is only reachable "
+        "under a doubled-suffix unit name nobody would guess"
+    )
+
+
+def test_the_notify_handler_reads_the_production_env_file():
+    """The notifier endpoint is configuration, so it lives where the unit's config lives.
+
+    ``/etc/replicator/.env`` is the only file the service reads (AGENTS.md's env
+    boundary), and it must be optional (``-``) so an absent file leaves the
+    handler writing its journal record rather than failing to start.
+    """
+    text = NOTIFY_UNIT.read_text()
+
+    assert re.search(r"^EnvironmentFile=-/etc/replicator/\.env$", text, flags=re.MULTILINE), (
+        f"{NOTIFY_UNIT.name} must read /etc/replicator/.env, optionally"
     )

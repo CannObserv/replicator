@@ -1,0 +1,255 @@
+"""`scripts/notify_failure.sh` behaves correctly, driven as a process (#94).
+
+Split from `tests/test_deploy.py`, which owns the *wiring* — that the unit sets
+`OnFailure=`, that it names the template, that the template runs this script.
+This file owns the script's own behaviour, reached by a different mechanism
+(`subprocess` against a stub HTTP server rather than a regex over an ini file),
+per the same split `tests/test_check_main_checkout.py` makes for the checkout
+guard.
+
+**The contract under test is "never make the outage worse".** This script runs
+only when `replicator.service` has already failed, so every branch exits 0 and
+every failure of its own is reported in the record it was going to write anyway.
+A notifier that is down, slow, unauthenticated or unconfigured must still leave a
+journal line naming the unit that failed — that line is the floor the whole
+handler guarantees, and the POST is the part that may not arrive.
+"""
+
+import json
+import os
+import subprocess
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+NOTIFY = REPO_ROOT / "scripts" / "notify_failure.sh"
+
+UNIT_NAME = "replicator.service"
+
+# Every variable the script reads. Scrubbed from each invocation below so a
+# developer who sourced /etc/replicator/.env into their shell cannot turn an
+# "unconfigured" assertion green by having configured it — the same reasoning
+# tests/test_check_main_checkout.py applies to REPLICATOR_ALLOW_ANY_CHECKOUT.
+NOTIFY_VARS = (
+    "REPLICATOR_NOTIFY_URL",
+    "REPLICATOR_NOTIFY_TOKEN",
+    "REPLICATOR_NOTIFY_TIMEOUT_SECONDS",
+)
+
+
+def _run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    """Run the real script with a scrubbed environment."""
+    clean = {k: v for k, v in os.environ.items() if k not in NOTIFY_VARS}
+    clean.update(env or {})
+    return subprocess.run(
+        ["bash", str(NOTIFY), *args],
+        capture_output=True,
+        text=True,
+        env=clean,
+        timeout=30,
+    )
+
+
+def _records(result: subprocess.CompletedProcess[str]) -> list[dict]:
+    """Every JSON object the script emitted, across both streams.
+
+    Which stream carries the record is not the contract — that it is machine
+    readable and names the unit is. Non-JSON lines are ignored rather than
+    asserted against, so a future human-readable line cannot fail these tests.
+    """
+    found = []
+    for stream in (result.stdout, result.stderr):
+        for line in stream.splitlines():
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                found.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return found
+
+
+class _Stub(BaseHTTPRequestHandler):
+    """Records one POST body, answers with whatever status the test asked for."""
+
+    status = 202
+    received: list[dict] = []
+
+    def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler's spelling
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode()
+        try:
+            parsed = json.loads(body)
+        except json.JSONDecodeError:
+            parsed = {"_raw": body}
+        type(self).received.append(
+            {"body": parsed, "auth": self.headers.get("Authorization")},
+        )
+        self.send_response(type(self).status)
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+    def log_message(self, *args):
+        """Silence the default stderr access log — pytest captures it as noise."""
+
+
+@pytest.fixture
+def notifier():
+    """A stub notifier on a loopback port of its own.
+
+    Never the real `http://notifier:9000`: this suite must not dispatch
+    notifications to the cohort's live service, and must pass on a machine with
+    no tailnet at all.
+    """
+    _Stub.received = []
+    _Stub.status = 202
+    server = HTTPServer(("127.0.0.1", 0), _Stub)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server, _Stub
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def _url(server: HTTPServer) -> str:
+    host, port = server.server_address[:2]
+    return f"http://{host}:{port}/v1/notifications"
+
+
+# The floor: a record naming the failed unit, on every path, always exit 0.
+
+
+def test_an_unconfigured_notifier_still_records_the_failure():
+    """The journal line is the guarantee; the POST is the part that may not arrive."""
+    result = _run(UNIT_NAME)
+
+    assert result.returncode == 0, result.stderr
+    records = _records(result)
+    assert records, f"no JSON record emitted; stderr={result.stderr!r}"
+    assert any(r.get("unit") == UNIT_NAME for r in records), records
+
+
+def test_the_record_is_marked_critical():
+    """Severity has to be in the record, or a journal filter cannot find it."""
+    result = _run(UNIT_NAME)
+
+    assert any(r.get("level") == "CRITICAL" for r in _records(result)), _records(result)
+
+
+def test_a_missing_unit_argument_still_exits_zero():
+    """A handler invoked wrongly must not add a second failed unit to the incident."""
+    result = _run()
+
+    assert result.returncode == 0, result.stderr
+    assert _records(result), "a misinvocation still has to leave a trace"
+
+
+# The POST, when one is configured.
+
+
+def test_a_configured_notifier_receives_the_failed_unit(notifier):
+    server, stub = notifier
+
+    result = _run(UNIT_NAME, env={"REPLICATOR_NOTIFY_URL": _url(server)})
+
+    assert result.returncode == 0, result.stderr
+    assert len(stub.received) == 1, stub.received
+    assert UNIT_NAME in json.dumps(stub.received[0]["body"]), stub.received[0]
+
+
+def test_a_configured_token_is_sent_as_a_bearer(notifier):
+    server, stub = notifier
+
+    _run(
+        UNIT_NAME,
+        env={"REPLICATOR_NOTIFY_URL": _url(server), "REPLICATOR_NOTIFY_TOKEN": "s3cret"},
+    )
+
+    assert stub.received[0]["auth"] == "Bearer s3cret", stub.received[0]
+
+
+def test_no_authorization_header_is_sent_without_a_token(notifier):
+    """An empty bearer is worse than none — it reads as a configured credential."""
+    server, stub = notifier
+
+    _run(UNIT_NAME, env={"REPLICATOR_NOTIFY_URL": _url(server)})
+
+    assert stub.received[0]["auth"] is None, stub.received[0]
+
+
+# Every way the POST can fail, none of which may fail the handler.
+
+
+def test_an_unreachable_notifier_is_not_fatal():
+    """Broker outages and notifier outages correlate — this is the likely case, not the edge."""
+    # Port 1 on loopback: reliably closed, and refused immediately rather than
+    # timing out, so this asserts the failure branch without spending the timeout.
+    result = _run(UNIT_NAME, env={"REPLICATOR_NOTIFY_URL": "http://127.0.0.1:1/v1/notifications"})
+
+    assert result.returncode == 0, result.stderr
+    assert any(r.get("unit") == UNIT_NAME for r in _records(result)), _records(result)
+
+
+def test_a_notifier_error_status_is_not_fatal(notifier):
+    server, stub = notifier
+    stub.status = 500
+
+    result = _run(UNIT_NAME, env={"REPLICATOR_NOTIFY_URL": _url(server)})
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_a_failed_dispatch_is_itself_recorded():
+    """Silent loss of the notification would recreate the gap #94 is about."""
+    result = _run(UNIT_NAME, env={"REPLICATOR_NOTIFY_URL": "http://127.0.0.1:1/v1/notifications"})
+
+    combined = result.stdout + result.stderr
+    assert "notify" in combined.lower(), combined
+    assert any(
+        "fail" in json.dumps(r).lower() or r.get("notify_dispatched") is False
+        for r in _records(result)
+    ), _records(result)
+
+
+def test_a_malformed_url_is_not_fatal():
+    result = _run(UNIT_NAME, env={"REPLICATOR_NOTIFY_URL": "not-a-url"})
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_the_dispatch_is_time_bounded(notifier):
+    """A hung notifier must not hold the handler open indefinitely.
+
+    systemd gives the handler its own start timeout; blowing through it would
+    turn the notification into a second failed unit.
+    """
+    server, _ = notifier
+
+    result = _run(
+        UNIT_NAME,
+        env={
+            "REPLICATOR_NOTIFY_URL": _url(server),
+            "REPLICATOR_NOTIFY_TIMEOUT_SECONDS": "1",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_the_script_never_reads_the_repo_env_file():
+    """AGENTS.md's env boundary: the repo `.env` holds org-wide PATs the handler must never load."""
+    text = NOTIFY.read_text()
+
+    assert "/etc/replicator/.env" not in text or "sourc" not in text.lower(), (
+        "the handler must take config from the environment systemd gives it, "
+        "not source an env file itself"
+    )
+    assert ".env" not in text.replace("/etc/replicator/.env", ""), (
+        "no reference to a repo-local .env belongs in this script"
+    )

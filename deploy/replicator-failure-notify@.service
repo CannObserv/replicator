@@ -1,0 +1,59 @@
+[Unit]
+Description=Report that %i entered a failed state
+# Deliberately NO OnFailure= of its own. systemd honours OnFailure= on handler
+# units too, so a handler that can fail into itself turns one failed unit into an
+# unbounded chain. scripts/notify_failure.sh exits 0 on every path for the same
+# reason; this is the belt to that script's braces, and tests/test_deploy.py
+# asserts the absence so a later edit cannot reintroduce the loop.
+#
+# No After=/Wants= either. This runs *because* something already failed, and
+# ordering it behind anything is a way for it not to run at all. It needs no
+# broker (the broker being down is a reason it fires) and reaches the notifier,
+# when one is configured, by plain tailnet HTTP.
+
+[Service]
+Type=oneshot
+User=exedev
+WorkingDirectory=/home/exedev/replicator
+
+# How the record is actually retrieved, and it is not `journalctl -u`.
+#
+# `%n` in the caller's OnFailure= expands to the full unit name *including* the
+# suffix, so this template instantiates as
+# `replicator-failure-notify@replicator.service.service` — a doubled suffix. That
+# is the canonical systemd idiom and it is kept deliberately: it is what makes
+# `%i` below the precise name of the unit that failed, which is what the record
+# and the notification carry. `%N` would read better here and would cost that
+# precision.
+#
+# The cost is paid off with this identifier rather than with fidelity. Measured
+# in the #94 rehearsal: the intuitive
+# `journalctl -u replicator-failure-notify@replicator.service` returns nothing,
+# which is a bad thing to learn mid-incident. Use:
+#
+#   journalctl -t replicator-failure
+#
+# tests/test_deploy.py pins the presence of this line, not its value.
+SyslogIdentifier=replicator-failure
+
+# The build that failed. /run/replicator/build-id outlives a failed start —
+# nothing removes it — which is exactly the property an incident record wants,
+# and the reason replicator.service stamps it only after its checkout guard has
+# passed. Optional: a unit that failed in ExecStartPre before the stamp has no
+# file here, and the record then says `<unknown>` rather than failing to write.
+EnvironmentFile=-/run/replicator/build-id
+
+# Production config only, and optional. This is the same env boundary
+# replicator.service keeps: the file below is the only one the services read, and
+# the repo-local dev file — which carries org-wide GitHub PATs a notification
+# handler has no use for — is never loaded by anything systemd starts. Optional
+# ('-') so a host without the file still gets the journal record.
+EnvironmentFile=-/etc/replicator/.env
+
+ExecStart=/bin/bash /home/exedev/replicator/scripts/notify_failure.sh %i
+
+# The script bounds its own dispatch with REPLICATOR_NOTIFY_TIMEOUT_SECONDS and
+# exits 0 regardless. This is the outer bound for everything else — a DNS lookup
+# wedged on a degraded tailnet, which is precisely the condition that fires this
+# handler. Comfortably above the dispatch ceiling's default of 10s.
+TimeoutStartSec=60

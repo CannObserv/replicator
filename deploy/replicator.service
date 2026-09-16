@@ -36,6 +36,24 @@ After=network.target tailscaled.service
 StartLimitIntervalSec=3600
 StartLimitBurst=3
 
+# The other half of "stay failed": tell someone. The comment above claimed this
+# directive existed for months while the ini file carried no OnFailure= at all,
+# and on 2026-09-16 the unit sat failed for 56 minutes — the notice came from a
+# sibling repo watching the broker from another VM, not from this host (#94).
+#
+# `%n` is the full name of the unit that failed, so one template serves any unit
+# pointing here and the notification can say what broke. The handler is oneshot,
+# carries no OnFailure= of its own, and exits 0 on every path: it fires because
+# something already failed, so it must not be able to fail into itself.
+#
+# Firing is not delivery. With no REPLICATOR_NOTIFY_URL configured the handler
+# writes a CRITICAL journal record and stops there — deliberately, so this lands
+# without waiting on a notifier channel, and so a notifier outage (which
+# correlates with the broker outages that fire this) degrades to the record
+# rather than to nothing. `deploy/replicator-failure-notify@.service` carries the
+# rest.
+OnFailure=replicator-failure-notify@%n.service
+
 [Service]
 Type=simple
 User=exedev
