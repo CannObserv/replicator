@@ -15,12 +15,14 @@ journal line naming the unit that failed — that line is the floor the whole
 handler guarantees, and the POST is the part that may not arrive.
 """
 
+import glob
 import json
 import os
 import re
 import subprocess
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
 
@@ -321,6 +323,101 @@ def test_the_unit_ceiling_and_the_scripts_cap_are_one_decision():
     assert cap < timeout_start, (
         f"the script caps dispatch at {cap}s but the unit kills it at {timeout_start}s"
     )
+
+
+def test_a_bad_timeout_is_named_and_defaulted():
+    """CR 4's behaviour, which shipped with no test of its own (CR 13)."""
+    result = _run(UNIT_NAME, env={"REPLICATOR_NOTIFY_TIMEOUT_SECONDS": "abc"})
+
+    assert result.returncode == 0, result.stderr
+    assert "abc" in result.stderr, result.stderr
+    assert "not a positive integer" in result.stderr, result.stderr
+
+
+def test_a_failed_dispatch_records_why(notifier):
+    """CR 2's reason mapping, untested until now (CR 13)."""
+    result = _run(UNIT_NAME, env={"REPLICATOR_NOTIFY_URL": "http://127.0.0.1:1/v1/notifications"})
+
+    reasons = [r.get("reason") for r in _records(result) if r.get("reason")]
+    assert reasons, _records(result)
+    assert "refused" in reasons[0].lower(), reasons
+
+
+def test_both_dispatch_records_name_the_host_and_build(notifier):
+    """CR 9's behaviour: each record attributes itself without correlation (CR 13)."""
+    server, _ = notifier
+
+    result = _run(
+        UNIT_NAME,
+        env={"REPLICATOR_NOTIFY_URL": _url(server), "BUILD_ID": "deadbee"},
+    )
+
+    dispatched = [r for r in _records(result) if "notify_dispatched" in r]
+    assert dispatched, _records(result)
+    for record in dispatched:
+        assert record.get("host"), record
+        assert record.get("build") == "deadbee", record
+
+
+def test_the_token_never_reaches_the_curl_command_line(notifier):
+    """CR 5's security property, proven once by hand and by nothing repeatable (CR 13).
+
+    Reads the argv of every process on the box while the dispatch is in flight.
+    The stub stalls so there is a window to look in; without one the check races
+    the request and passes for the wrong reason.
+    """
+    secret = "TOKEN" + uuid.uuid4().hex
+
+    server = _HungServer(("127.0.0.1", 0), _HungStub)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        clean = {k: v for k, v in os.environ.items() if k not in NOTIFY_VARS}
+        clean.update(
+            {
+                "REPLICATOR_NOTIFY_URL": _url(server),
+                "REPLICATOR_NOTIFY_TOKEN": secret,
+                "REPLICATOR_NOTIFY_TIMEOUT_SECONDS": "5",
+            }
+        )
+        proc = subprocess.Popen(
+            ["bash", str(NOTIFY), UNIT_NAME],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=clean,
+        )
+        try:
+            # Scan the WHOLE window rather than stopping at the first curl. An
+            # earlier version stopped as soon as it saw `b"curl"` anywhere in any
+            # argv, which matched an unrelated process on the first pass — before
+            # the dispatch had spawned — so it exited having looked at nothing.
+            # It passed with the token back on argv, proving only that it ran.
+            deadline = time.monotonic() + 3
+            saw_curl = False
+            leaked: list[str] = []
+            while time.monotonic() < deadline:
+                for cmdline in glob.glob("/proc/[0-9]*/cmdline"):
+                    try:
+                        argv = Path(cmdline).read_bytes()
+                    except OSError:
+                        continue
+                    # argv[0]'s basename, not a substring anywhere in the line:
+                    # any process whose arguments merely mention curl would do.
+                    argv0 = argv.split(b"\0", 1)[0]
+                    if os.path.basename(argv0.decode(errors="replace")) == "curl":
+                        saw_curl = True
+                    if secret.encode() in argv:
+                        leaked.append(cmdline)
+                time.sleep(0.05)
+
+            assert saw_curl, "never caught curl in flight — the check proved nothing"
+            assert not leaked, f"the token is in the argv of: {leaked[:3]}"
+        finally:
+            proc.kill()
+            proc.wait()
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_the_script_never_reads_an_env_file_itself():
