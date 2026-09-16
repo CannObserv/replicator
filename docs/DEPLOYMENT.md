@@ -25,7 +25,24 @@ unit runs on is in [INFRASTRUCTURE.md](INFRASTRUCTURE.md).
 
 `ExecStart` uses `--frozen --no-sync`, so dependency sync is a deploy step, not a service-start side effect.
 
-**Three starts an hour, and an iterative session will spend them.** `StartLimitIntervalSec=3600` with `StartLimitBurst=3` is sized against `worst_case_outage_seconds` so a permanently unreachable Redis surfaces as a *stopped unit* rather than a hot restart loop. The cost is that a fourth `systemctl restart` inside an hour — ordinary when shipping several commits in one sitting — fails with `Start request repeated too quickly` and `Result: start-limit-hit`, which reads as a broken deploy and is not one: the previous instance stops cleanly and logs `worker stopped` on its way out. `sudo systemctl reset-failed replicator` clears the counter; then `start` as normal. Check `systemctl status` for `start-limit-hit` before debugging the build — #77 hit this twice in one session.
+**Six starts in two hours, and an iterative session will spend them.** `StartLimitIntervalSec=7200` with `StartLimitBurst=6` is sized against `worst_case_outage_seconds` so a permanently unreachable Redis surfaces as a *stopped unit* rather than a hot restart loop. The cost is that a fourth `systemctl restart` inside an hour — ordinary when shipping several commits in one sitting — fails with `Start request repeated too quickly` and `Result: start-limit-hit`, which reads as a broken deploy and is not one: the previous instance stops cleanly and logs `worker stopped` on its way out. `sudo systemctl reset-failed replicator` clears the counter; then `start` as normal. Check `systemctl status` for `start-limit-hit` before debugging the build — #77 hit this twice in one session.
+
+**Why six and not three (#94).** Three starts absorbed 30 minutes of broker outage. On 2026-09-16 the broker was away for 58, and the only reason this unit was not asked to survive the whole of it is that the network degraded from ~14:28 while the worker's cycles did not fail *continuously* until ~15:00. Six starts absorb an hour, and `tests/test_deploy.py` pins that against `WORST_OBSERVED_CLUSTER_OUTAGE_SECONDS` — the worst outage this cluster has actually had — rather than against internal consistency alone. Raise that constant when a worse one happens and the test will tell you whether the unit still covers it. Widening the fuse is safer than it was, because the other half finally exists: before #94 a unit that gave up was discovered by whoever next looked, and a longer fuse on a silent failure would be the wrong trade.
+
+### Rehearsing reconnection (#94)
+
+Two halves, because neither mechanism can test the other:
+
+```bash
+uv run pytest --no-cov -m integration tests/worker/test_reconnect_integration.py
+sudo bash scripts/rehearse_reconnect.sh
+```
+
+The pytest half stops and restarts a real `redis-server` it spawns and asserts the in-process property: the loop rides out a survivable outage, gives up on a sustained one, and a worker started fresh against a recovered broker picks up what was stranded. It runs with the AOF on, because the incident being modelled had the group survive; `--appendonly no` would model `NOGROUP` instead.
+
+The script half drives what a pytest cannot — systemd's restart semantics — against a scratch unit under `/run/systemd/system` and a broker it owns. It asserts the worker exits, that systemd restarts it, **that the start budget survives the outage**, and that consumption resumes with no human step. That third assertion is the one #94 turns on: on 2026-09-16 the unit was `failed` sixteen minutes before the broker came back. Set `StartLimitBurst=1` in `deploy/` and the script reproduces that failure by name.
+
+Neither touches `co-broker` or `replicator.service`: the script checks the spawned broker's own reported pid before driving it, and refuses a port answered by anything else.
 
 **`/etc/systemd/system/replicator.service` is a *copy*, not a symlink to `deploy/`.** So the `cp` above is load-bearing and `daemon-reload` alone silently does nothing — systemd re-reads the installed file, which is still the old one. The failure has no symptom at restart: the worker comes up on the new code under the *old* unit, and the mismatch only surfaces the first time a directive actually matters. Nothing guards it, either — `tests/test_deploy.py` reads the repo file, which is exactly the copy that is still correct. Diff the two when a restart follows a unit edit (#11 deploy).
 

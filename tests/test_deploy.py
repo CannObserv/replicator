@@ -90,6 +90,36 @@ def test_the_start_limit_window_fits_a_burst_of_slow_exits():
     assert window >= burst * settings.worst_case_outage_seconds
 
 
+# The longest broker outage this cluster has actually had: 2026-09-16, degraded
+# from ~14:28 UTC until redis-server answered again at 15:26:34 (CannObserv/broker#17,
+# reported to us in #94). A number from an incident, not a guess — raise it when a
+# worse one happens, and let that raise fail this test rather than pass silently.
+WORST_OBSERVED_CLUSTER_OUTAGE_SECONDS = 58 * 60
+
+
+def test_the_unit_absorbs_the_worst_outage_this_cluster_has_had():
+    """Surviving a *real* outage unaided, not merely tripping the limiter coherently.
+
+    The test above is internal consistency — the window fits the exits. This one
+    is the external fact #94 was filed about: `burst` exits have to add up to more
+    wall-clock than the broker has ever actually been away, or the unit stays
+    `failed` while the broker is still coming back and an operator is required.
+
+    At the values #94 found (3 x ~10 min = 30 min) the 2026-09-16 outage was
+    nearly twice the budget, and survived only by the accident of when continuous
+    failure began — the worker did not start failing until ~15:00.
+    """
+    settings = Settings()
+    burst = int(_directive("StartLimitBurst"))
+    absorbed = burst * settings.worst_case_outage_seconds
+
+    assert absorbed >= WORST_OBSERVED_CLUSTER_OUTAGE_SECONDS, (
+        f"the unit absorbs {absorbed / 60:.0f} min across {burst} starts, but this "
+        f"cluster has had a {WORST_OBSERVED_CLUSTER_OUTAGE_SECONDS / 60:.0f} min "
+        "outage — it would have needed an operator"
+    )
+
+
 def test_the_stop_timeout_outlasts_a_blocking_read():
     """SIGTERM is only checked between polls, so the grace period must exceed one."""
     settings = Settings()

@@ -204,8 +204,15 @@ curl -s localhost:8001/health | jq
 uv run pytest                              # full suite, coverage gate active
 uv run pytest --no-cov tests/worker/       # subset; skip the gate (it measures all of src/)
 uv run pytest --no-cov -m integration      # a scratch redis-server (TESTING.md), plus the OOM
-                                           # rows against a broker they spawn themselves (#79);
-                                           # skip the gate
+                                           # rows against a broker they spawn themselves (#79)
+                                           # and the reconnection rows against one they stop and
+                                           # restart (#94); skip the gate
+
+sudo bash scripts/rehearse_reconnect.sh    # the half a pytest cannot reach: systemd's own restart
+                                           # semantics across a broker outage (#94). Spawns its
+                                           # own broker and a scratch unit under /run/systemd/
+                                           # system — never co-broker, never replicator.service.
+                                           # --keep leaves both up for inspection.
 uv run pytest --no-cov -m gcs              # the T4 rows against the real replicate bucket, and the
                                            # temp store against its own (#7). Skips per destination:
                                            # no REPLICATOR_TEST_GCS_CREDENTIALS skips everything,
