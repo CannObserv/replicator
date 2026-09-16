@@ -420,6 +420,34 @@ def test_the_token_never_reaches_the_curl_command_line(notifier):
         server.server_close()
 
 
+def test_a_token_carrying_a_newline_is_refused_not_truncated(notifier):
+    """curl's config is line-oriented, so a newline silently shortens the credential (CR 14).
+
+    Measured rather than assumed: curl does **not** treat the remainder as a new
+    directive — an injected `user = "…"` line is ignored and no Basic auth is
+    sent. What it does is end the quoted value at the newline and dispatch
+    `Bearer tok`, exit 0. So the risk is not injection but a silently wrong
+    credential, whose 401 reads as the notifier's fault rather than the token's —
+    the same masquerade CR 4 removed for the timeout.
+    """
+    server, stub = notifier
+
+    result = _run(
+        UNIT_NAME,
+        env={
+            "REPLICATOR_NOTIFY_URL": _url(server),
+            "REPLICATOR_NOTIFY_TOKEN": "tok\ntrailing",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "REPLICATOR_NOTIFY_TOKEN" in result.stderr, result.stderr
+    assert "newline" in result.stderr.lower(), result.stderr
+    # Refused means unsent, not sent-truncated.
+    if stub.received:
+        assert stub.received[0]["auth"] != "Bearer tok", stub.received[0]
+
+
 def test_the_script_never_reads_an_env_file_itself():
     """AGENTS.md's env boundary: the repo `.env` holds org-wide PATs the handler must never load.
 

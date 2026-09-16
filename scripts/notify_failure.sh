@@ -53,6 +53,20 @@ set -uo pipefail
 UNIT="${1:-<unknown>}"
 URL="${REPLICATOR_NOTIFY_URL:-}"
 TOKEN="${REPLICATOR_NOTIFY_TOKEN:-}"
+# A newline is refused rather than escaped (CR 14). curl's config format is
+# line-oriented, and a value containing one ends at the newline — measured: the
+# remainder is NOT taken as a directive (an injected `user = "…"` line is ignored
+# and no Basic auth is sent), so the risk is not injection. It is that curl would
+# dispatch a silently shortened credential, whose 401 reads as the notifier's
+# fault rather than the token's — the same masquerade CR 4 removed for the
+# timeout. Dropping the header is the honest failure: the record still says the
+# dispatch went out, and the line below says why it was unauthenticated.
+case "${TOKEN}" in
+  *[$'\n\r']*)
+    echo "notify_failure: REPLICATOR_NOTIFY_TOKEN contains a newline, which curl's config format cannot carry — dispatching without it" >&2
+    TOKEN=""
+    ;;
+esac
 
 # Named and defaulted rather than handed to curl as-is (CR 4). An unusable value
 # would otherwise reach the failure record as a bare `curl_exit: 2`, which reads
