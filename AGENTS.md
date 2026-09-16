@@ -150,7 +150,8 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
   subclasses in `_TRANSIENT_ERRORS`, exempt from the delivery ceiling, so an OOM
   is a *publishing* incident and a wrong grant backs off rather than closing
   valid commands. Boot-only `XGROUP CREATE … MKSTREAM` is the one refusal that
-  does **not** retry. Never answer an OOM with a client-level retry, which
+  does **not** retry. Cap a broker the tests spawn, **never the shared one**, and
+  never answer an OOM with a client-level retry, which
   republishes an `XADD` the broker already applied. Which commands are refused,
   why each classification, and the costs both carry:
   [docs/CONVENTIONS.md](docs/CONVENTIONS.md).
