@@ -57,14 +57,11 @@ Full tool table, prefetch query, per-tool guidance, cross-repo search:
 
 ## Project Layout
 
-`src/worker/` is the primary process — the bus consumer, with the byte path, the
-failure fact, the retention sweep, the pacer, and the `content.fetch-policy` reader
-each behind their own seam. `src/storage/` is the content-addressed temp store behind
-the `BlobStore` protocol — **two backends** (`local`, `gcs`), selected by
-`REPLICATOR_BLOB_BACKEND`, default `local` (#7). `src/api/` is the dev-only `/health`
-app; `src/core/` holds config, logging, and the consume path's failure vocabulary;
-`tests/` mirrors `src/`. Every module with the job it owns:
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+`src/worker/` is the primary process — the bus consumer. `src/storage/` is the
+content-addressed temp store; `src/api/` is the dev-only `/health` app;
+`src/core/` holds config, logging, and the consume path's failure vocabulary;
+`tests/` mirrors `src/`. The seams each module sits behind, and every module with
+the job it owns: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Infrastructure
 
@@ -74,7 +71,7 @@ Main is the deployed code.
 Worker binds no port; 8001 is dev, 8000 reserved. **The broker is `co-broker`**
 (CannObserv/broker); Replicator is a client, never ships one. Server **≥ 7.0** is
 critical — `claim_stale` reads `XAUTOCLAIM`'s three-element reply — guarded by
-`scripts/check_redis_floor.sh`. Ports, redis-py pin: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+`scripts/check_redis_floor.sh`. Ports, redis-py pin: [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md).
 
 ## Server Lifecycle
 
@@ -128,9 +125,8 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
   `info_item_rep_spec_id` are **echoed, never read** — each `test_boundaries.py`
   carve-out is one field wide, and adding one edits the charter (#28, #29).
 - **Two blob backends, one seam.** `local` announces `file://` and `gcs` announces
-  `gs://`; `local` stays the compiled-in default deliberately (#7).
-  Every `BlobStore` call from a coroutine goes through `asyncio.to_thread`, which
-  puts it in the unit's shutdown budget, not just the handler's.
+  `gs://`; `local` stays the compiled-in default deliberately (#7). Every
+  `BlobStore` call from a coroutine goes through `asyncio.to_thread`.
   [docs/STORAGE.md](docs/STORAGE.md) is the authority — read it before touching
   either store.
 - **Store, then publish — never the reverse.** A fact pointing at absent bytes is
@@ -145,24 +141,18 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
   `schema_version` first.
 - **Deterministic ⇒ DLQ; transient ⇒ retry; completed without bytes ⇒ fact + ack,
   no DLQ (#17).** `dead_letter` acks inside itself, so a fact is published
-  *before* it — as `XADD <topic>.dlq` then `XACK`, the form broker#2's ACL grants
-  (#79). **Draining the queue is ours too**, by `XDEL` on `<topic>.dlq` and
-  nowhere else (broker#12, #86). Retry cadence is
-  `REPLICATOR_CLAIM_MIN_IDLE_MS`; a failing *cycle* is `run_loop`'s problem, not
-  the message's.
-- **A capped broker refuses only its `denyoom` commands, and the worker retries
-  the two it meets at runtime (#79).** `XADD` and `SET` are refused and retried
-  indefinitely — `OutOfMemoryError` is transient and exempt from the delivery
-  ceiling — while the consume path reads, acks and reclaims throughout. The
-  third, `XGROUP CREATE … MKSTREAM`, is boot-only and does **not** retry: a first
-  boot against a capped broker exits and systemd restarts. Verified against a
-  broker the tests spawn, **never the shared one**. Never answer an OOM with a
-  client-level retry, which republishes an `XADD` the broker already applied.
-- **An ACL denial is transient too (#82).** `NoPermissionError` is the second
-  `ResponseError` subclass in `_TRANSIENT_ERRORS`, so a grant broker#1's cutover
-  got wrong backs off instead of closing valid commands with a terminal
-  `fetch_failed(handler_error)` — at the deliberate cost that a grant nobody
-  fixes retries forever.
+  *before* it; **draining the queue is ours too** (broker#12, #86). Retry cadence
+  is `REPLICATOR_CLAIM_MIN_IDLE_MS`; a failing *cycle* is `run_loop`'s problem,
+  not the message's.
+- **A capped broker and an ACL denial are both transient (#79, #82).**
+  `OutOfMemoryError` and `NoPermissionError` are the two `ResponseError`
+  subclasses in `_TRANSIENT_ERRORS`, exempt from the delivery ceiling, so an OOM
+  is a *publishing* incident and a wrong grant backs off rather than closing
+  valid commands. Boot-only `XGROUP CREATE … MKSTREAM` is the one refusal that
+  does **not** retry. Never answer an OOM with a client-level retry, which
+  republishes an `XADD` the broker already applied. Which commands are refused,
+  why each classification, and the costs both carry:
+  [docs/CONVENTIONS.md](docs/CONVENTIONS.md).
 - **The `replicator:cmd:*` keys are the only non-stream keys on the broker (#80).**
   Per-stream dedupe — `SET NX EX` after a *completing* close, `EXISTS` before the
   handler — so losing them costs one TTL window of re-fetches, never correctness:
@@ -183,9 +173,8 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
   scratch streams; the live one takes `--production` and Watcher's identity, never
   `replicator`'s.
 - **Three normative contracts bound the wire and the roadmap** — four documents
-  under `docs/contracts/`, linked from sibling repos and indexed below.
-  `tests/test_boundaries.py` enforces the charter in CI; change a charter and its
-  tests together.
+  under `docs/contracts/`, indexed below. `tests/test_boundaries.py` enforces the
+  charter in CI; change a charter and its tests together.
 
 ## Common Commands
 
@@ -232,12 +221,7 @@ Skills in `skills/` (agentskills.io) and `.claude/skills/` (Claude Code). Refere
 ```
 Types: feat, fix, refactor, docs, test, chore
 
-**Logging:**
-```python
-from src.core.logging import get_logger
-
-logger = get_logger(__name__)
-```
+**Logging:** `from src.core.logging import get_logger`, then `logger = get_logger(__name__)`.
 Entry points only: `configure_logging()` is called once inside the FastAPI `lifespan` or the worker's `run()`. Never in library modules.
 The stack itself: [docs/STYLE.md](docs/STYLE.md).
 
@@ -245,9 +229,8 @@ The stack itself: [docs/STYLE.md](docs/STYLE.md).
 - All UTC
 - ISO 8601: `YYYY-MM-DDTHH:MM:SS.ffffffZ` (timestamps), `YYYY-MM-DD` (dates)
 
-**General:** imports at file top and explicit, docstrings on public modules,
-classes and functions, small focused functions, and tests mirroring source — each
-with its rationale and ruff gate in [docs/STYLE.md](docs/STYLE.md).
+**General:** house style — imports, docstrings, function size, tests mirroring
+source — each with its rationale and ruff gate in [docs/STYLE.md](docs/STYLE.md).
 
 ## Detail Docs
 
@@ -255,7 +238,8 @@ with its rationale and ruff gate in [docs/STYLE.md](docs/STYLE.md).
 - [docs/STREAMS.md](docs/STREAMS.md) — what each stream carries, one bullet per rule `AGENTS.md` states in a line
 - [docs/CONVENTIONS.md](docs/CONVENTIONS.md) — the rules common to every stream: idempotency, validation, DLQ, `claim_stale`; and the `replicator:cmd:*` keys (#80)
 - [docs/STORAGE.md](docs/STORAGE.md) — blob paths and modes, the populations under `REPLICATOR_BLOB_DIR`, TTL and ceilings
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — VM topology, ports, the unit's lifecycle, the co-core pin
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — the unit's lifecycle, its start guards, what it reports when it fails, the co-core pin
+- [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) — VM topology, ports, the broker, and the buckets either side of the test/production line
 - [docs/reference/tailscale.md](docs/reference/tailscale.md) — this node: tailnet, ACL, DNS, broker latency
 - [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) — every variable either env file carries, and the boundary between them
 - [docs/TESTING.md](docs/TESTING.md) — fakeredis's divergences, the keys an integration run may create, why production `co-gcs-replication` is unreachable (#38)

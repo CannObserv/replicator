@@ -15,7 +15,7 @@
 docs/ARCHITECTURE.md :: keeps the rules needed on nearly every task; what each
 docs/ARCHITECTURE.md :: Reference docs; the Detail Docs index in AGENTS.md is the roster
 docs/CONVENTIONS.md :: touches, with the reasoning that makes each one non-negotiable.
-docs/DEPLOYMENT.md :: keeps the two-env-file boundary and the
+docs/DEPLOYMENT.md :: `AGENTS.md` keeps the two-env-file boundary and
 docs/STYLE.md :: Code style beyond the conventions `AGENTS.md` keeps inline. Today that is the
 
 # --- narrative, not a pointer: the 2026-08-14 branch-deploy incident that #37
@@ -58,12 +58,11 @@ docs/contracts/replicator-boundaries.md :: The fallback default (was the interim
 docs/ARCHITECTURE.md :: What each stream carries, and the reasoning behind each rule
 # Pre-existing, unrelated to the split: provenance in a heading is legitimate here —
 # the two issue numbers are what distinguishes this bucket from the production one.
-docs/DEPLOYMENT.md :: The GCS test bucket — the opposite grant, on purpose
+docs/INFRASTRUCTURE.md :: The GCS test bucket — the opposite grant, on purpose
 # The GCS test bucket stayed in DEPLOYMENT.md's Infrastructure section through the
 # #67 split — this pointer still resolves to what it names.
 # 2026-08-19, #67 CR #14. The new ENVIRONMENT.md preamble points back at
 # DEPLOYMENT.md for the lifecycle and the unit — neither moved in this split.
-docs/ENVIRONMENT.md :: and the unit itself are in [DEPLOYMENT.md](DEPLOYMENT.md).
 
 docs/STREAMS.md :: Each rule `AGENTS.md` states in one line, with the reasoning
 # --- judged during the #72 curation -------------------------------------
@@ -87,3 +86,10 @@ docs/SKILLS.md :: doc does need an AGENTS.md line the gate will not ask for. A b
 # or out of; same shape as the eleven already judged legitimate above, and
 # renaming it would break inbound anchors for no gain this run can claim.
 docs/TESTING.md :: Testing against a broker at its cap (#79)
+
+# ---- #94 curation ----
+# Back-references to AGENTS.md that name a rule, not a location. Each still
+# points at something that did not move in this change: the env boundary is
+# still AGENTS.md's, and the handler variables still sit in DEPLOYMENT.md.
+scripts/notify_failure.sh :: # AGENTS.md treats this env boundary as a security boundary, and argv is the
+docs/DEPLOYMENT.md :: - **`REPLICATOR_NOTIFY_TOKEN`** — sent as `Authorization: Bearer`

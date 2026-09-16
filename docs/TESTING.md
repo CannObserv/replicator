@@ -77,7 +77,7 @@ makes production untestable (#38).
   which is the behaviour that made an existence-based preflight untestable and
   wrong at the same time.
 
-The bucket and the SA are provisioned (#50) — `gs://co-gcs-test-replication` and `co-gcs-test-replicator@co-gcs.iam.gserviceaccount.com`, with `roles/storage.objectAdmin` on that bucket and no write on production. The resource, what it deliberately differs from production in, and how each property was verified: **The GCS test bucket** in [DEPLOYMENT.md](DEPLOYMENT.md).
+The bucket and the SA are provisioned (#50) — `gs://co-gcs-test-replication` and `co-gcs-test-replicator@co-gcs.iam.gserviceaccount.com`, with `roles/storage.objectAdmin` on that bucket and no write on production. The resource, what it deliberately differs from production in, and how each property was verified: **The GCS test bucket** in [INFRASTRUCTURE.md](INFRASTRUCTURE.md).
 
 **The bucket is `co-gcs-test-replication`, not `co-gcs-replication-test`.** A
 suffixed name contains the production name, which would force the scan to carry a

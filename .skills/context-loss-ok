@@ -148,3 +148,66 @@ tighten :: - [docs/SKILLS.md](docs/SKILLS.md) — vendored skill inventory, refr
 tighten :: - [docs/SOCRATICODE.md](docs/SOCRATICODE.md) — the full tool table, the prefetch query, per-tool gotchas, and cross-repo search
 tighten :: - [docs/contracts/content-fetch-issuer-reference.md](docs/contracts/content-fetch-issuer-reference.md) — its lookup half: the refusal list, the failure taxonomy, the silent conditions, trust posture
 tighten :: - [docs/contracts/content-replicate-issuer-contract.md](docs/contracts/content-replicate-issuer-contract.md) — the replicate trust model and issuer obligations, settled ahead of the code (#34)
+
+# ---- #94 curation (AGENTS.md 6169 -> 5911) ----
+#
+# Every entry below was read against its replacement. `--claims` reports
+# claims_dropped: 0 for this run, so no backticked span, issue reference or link
+# target was lost by any of these rewrites -- only words were.
+#
+# The two broker-refusal bullets (OOM #79, ACL #82) collapsed into one. Both are
+# carried in far more depth at docs/CONVENTIONS.md:26-33, which the tightened
+# bullet now points at; restoring the prose there would append a near-duplicate
+# beside the canonical treatment, which Phase 5 forbids.
+#
+# The DLQ bullet dropped its wire-form half (XADD/XACK, XDEL scope) -- carried
+# whole at docs/CONVENTIONS.md:11. The blob-backend bullet dropped the
+# shutdown-budget clause -- carried at docs/STORAGE.md:72-79.
+#
+# Project Layout was demoted to docs/ARCHITECTURE.md's own Project Layout
+# section (6 lines relocated verbatim); the lines here are the pointer that
+# replaced it.
+tighten :: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+tighten :: `scripts/check_redis_floor.sh`. Ports, redis-py pin: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+tighten :: `gs://`; `local` stays the compiled-in default deliberately (#7).
+tighten :: Every `BlobStore` call from a coroutine goes through `asyncio.to_thread`, which
+tighten :: puts it in the unit's shutdown budget, not just the handler's.
+tighten :: *before* it — as `XADD <topic>.dlq` then `XACK`, the form broker#2's ACL grants
+tighten :: (#79). **Draining the queue is ours too**, by `XDEL` on `<topic>.dlq` and
+tighten :: nowhere else (broker#12, #86). Retry cadence is
+tighten :: - **A capped broker refuses only its `denyoom` commands, and the worker retries
+tighten :: the two it meets at runtime (#79).** `XADD` and `SET` are refused and retried
+tighten :: indefinitely — `OutOfMemoryError` is transient and exempt from the delivery
+tighten :: ceiling — while the consume path reads, acks and reclaims throughout. The
+tighten :: third, `XGROUP CREATE … MKSTREAM`, is boot-only and does **not** retry: a first
+tighten :: boot against a capped broker exits and systemd restarts. Verified against a
+tighten :: broker the tests spawn, **never the shared one**. Never answer an OOM with a
+tighten :: client-level retry, which republishes an `XADD` the broker already applied.
+tighten :: - **An ACL denial is transient too (#82).** `NoPermissionError` is the second
+tighten :: `ResponseError` subclass in `_TRANSIENT_ERRORS`, so a grant broker#1's cutover
+tighten :: got wrong backs off instead of closing valid commands with a terminal
+tighten :: `fetch_failed(handler_error)` — at the deliberate cost that a grant nobody
+tighten :: fixes retries forever.
+tighten :: under `docs/contracts/`, linked from sibling repos and indexed below.
+tighten :: tests together.
+tighten :: **Logging:**
+tighten :: ```python
+tighten :: from src.core.logging import get_logger
+tighten :: logger = get_logger(__name__)
+tighten :: **General:** imports at file top and explicit, docstrings on public modules,
+tighten :: with its rationale and ruff gate in [docs/STYLE.md](docs/STYLE.md).
+retarget :: - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — VM topology, ports, the unit's lifecycle, the co-core pin
+
+# ---- #94 curation, the docs/DEPLOYMENT.md -> docs/INFRASTRUCTURE.md split ----
+#
+# Scoped to that file: these are judged for the split run, not the policy run.
+# `--claims` reports claims_dropped: 0, so the split carried every atom across.
+#
+# The intro described the doc's whole scope, and half that scope left in this
+# same change; the replacement names what stayed and links what went. The
+# heading became the new document's own title, which is what a split does.
+docs/DEPLOYMENT.md :: retarget :: Dedicated-VM topology, the systemd unit's lifecycle and the guards it starts
+docs/DEPLOYMENT.md :: retarget :: behind, and the co-core pin. `AGENTS.md` keeps the two-env-file boundary and the
+docs/DEPLOYMENT.md :: retarget :: restart command; the reasoning behind each of them is here. The variables
+docs/DEPLOYMENT.md :: retarget :: [ENVIRONMENT.md](ENVIRONMENT.md).
+docs/DEPLOYMENT.md :: rename :: ## Infrastructure

@@ -261,7 +261,7 @@ jobs:
 
       # Second identity, after the wheelhouse is already mirrored: objectAdmin on
       # co-gcs-test-replication and no grant whatsoever on the production bucket
-      # (docs/DEPLOYMENT.md, "The GCS test bucket").
+      # (docs/INFRASTRUCTURE.md, "The GCS test bucket").
       - name: Authenticate to Google Cloud (WIF, test bucket writer)
         id: gcs_auth
         uses: google-github-actions/auth@v2

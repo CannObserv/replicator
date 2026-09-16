@@ -21,6 +21,14 @@ content.replicate (cmd) → guards → create-if-absent ────────
 
 ## Project Layout
 
+`src/worker/` is the primary process — the bus consumer, with the byte path, the
+failure fact, the retention sweep, the pacer, and the `content.fetch-policy` reader
+each behind their own seam. `src/storage/` is the content-addressed temp store behind
+the `BlobStore` protocol — **two backends** (`local`, `gcs`), selected by
+`REPLICATOR_BLOB_BACKEND`, default `local` (#7). `src/api/` is the dev-only `/health`
+app; `src/core/` holds config, logging, and the consume path's failure vocabulary;
+`tests/` mirrors `src/`.
+
 ```
 src/worker/     — Bus consumer; the primary process
 src/worker/main.py   — Entry point: client lifetime, consumer group, signals, backend selection
@@ -46,7 +54,8 @@ src/worker/checkout.py — Is this checkout main's code? Asked before a write id
 src/core/logging.py  — build_json_formatter() + ColorMessageFilter + configure_logging() + get_logger()
 src/core/log_config.json — uvicorn --log-config; routes uvicorn's own loggers through that formatter
 src/core/config.py   — Settings / env access (see Environment Variables)
-scripts/        — sync_wheelhouse.py, check_redis_floor.sh, check_main_checkout.sh, seed_fetch.py
+scripts/        — sync_wheelhouse.py, check_redis_floor.sh, check_main_checkout.sh, notify_failure.sh, seed_fetch.py
+scripts/notify_failure.sh — the OnFailure= handler's body: records the incident, dispatches it when configured (#94)
 scripts/seed_fetch.py — the seed harness; publishes content.fetch to scratch streams, --watch tails the facts
 tests/          — Mirrors src/ structure; integration tests in `@pytest.mark.integration`
 docs/           — Reference docs; the Detail Docs index in AGENTS.md is the roster

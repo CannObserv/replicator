@@ -49,7 +49,7 @@ ancestor-permission trap below stops existing. It does **not** remove the
 coupling — it changes its kind, from a filesystem mode this process can inspect
 to an IAM grant it cannot. `preflight_object_store` proves the bucket is there
 and readable *by the worker*; whether the consumer may read is verified where
-the grant is made ([DEPLOYMENT.md](DEPLOYMENT.md)), not at boot.
+the grant is made ([INFRASTRUCTURE.md](INFRASTRUCTURE.md)), not at boot.
 
 **A missing blob is a `FileNotFoundError` on both backends.** The object store
 translates the SDK's `NotFound`, so the consume path keeps one catch for "these

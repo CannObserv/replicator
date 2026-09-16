@@ -436,7 +436,7 @@ expiry out and emits a fresh fact carrying the new value.
 `REPLICATOR_BLOB_TTL_SECONDS` and the reap comes from a lifecycle rule configured in Google Cloud;
 a rule shorter than the setting would announce a window the bucket will not honour, which is the one
 way this value can be wrong in the unsafe direction. The worker logs the horizon at boot beside the
-bucket so the pairing is checkable, and `docs/DEPLOYMENT.md` records the provisioned rule.
+bucket so the pairing is checkable, and `docs/INFRASTRUCTURE.md` records the provisioned rule.
 
 Also, on the reaper [MUST-6](content-fetch-issuer-contract.md#6-handle-fetch_failed-and-keep-a-reaper-anyway)
 keeps:
