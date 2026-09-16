@@ -125,8 +125,11 @@ RC=$?
 # — is a failed dispatch, reported and dropped. There is no retry: systemd is not
 # holding a queue for us, and the record above already survived.
 if [ "${RC}" -eq 0 ] && [ "${STATUS#2}" != "${STATUS}" ] && [ ${#STATUS} -eq 3 ]; then
-  printf '{"level":"INFO","event":"unit_failed_notified","unit":"%s","notify_dispatched":true,"http_status":%s}\n' \
-    "$(_json "${UNIT}")" "${STATUS}" >&2
+  # http_status is quoted in BOTH branches (CR 3). It was a JSON number here and
+  # a string below, and one field name with two types breaks the consumer this
+  # payload exists to feed.
+  printf '{"level":"INFO","event":"unit_failed_notified","unit":"%s","notify_dispatched":true,"http_status":"%s"}\n' \
+    "$(_json "${UNIT}")" "$(_json "${STATUS}")" >&2
   exit 0
 fi
 
