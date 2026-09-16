@@ -19,7 +19,8 @@ import json
 import os
 import subprocess
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -112,6 +113,47 @@ def notifier():
     thread.start()
     try:
         yield server, _Stub
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+class _HungStub(BaseHTTPRequestHandler):
+    """Accepts the connection and never answers, until the client gives up."""
+
+    def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler's spelling
+        self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        # Comfortably past any timeout under test; the client hangs up first.
+        time.sleep(10)
+
+    def log_message(self, *args):
+        """Silence the default stderr access log — pytest captures it as noise."""
+
+
+class _HungServer(ThreadingHTTPServer):
+    """Threaded and non-blocking on close, or teardown waits out the stall itself.
+
+    On a plain `HTTPServer` the sleeping handler holds the single serve loop, so
+    `shutdown()` blocks until it returns and this one test cost the suite the
+    full stall. Threaded, with the abandoned handler left as a daemon.
+    """
+
+    daemon_threads = True
+    block_on_close = False
+
+
+@pytest.fixture
+def hung_notifier():
+    """A stub that accepts and then stalls — the shape a degraded tailnet produces.
+
+    Distinct from `notifier`: a refused connection fails fast and never reaches
+    the timeout, so only a stub that answers nothing exercises the ceiling.
+    """
+    server = _HungServer(("127.0.0.1", 0), _HungStub)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
     finally:
         server.shutdown()
         server.server_close()
@@ -223,14 +265,22 @@ def test_a_malformed_url_is_not_fatal():
     assert result.returncode == 0, result.stderr
 
 
-def test_the_dispatch_is_time_bounded(notifier):
+def test_the_dispatch_is_time_bounded(hung_notifier):
     """A hung notifier must not hold the handler open indefinitely.
 
     systemd gives the handler its own start timeout; blowing through it would
-    turn the notification into a second failed unit.
-    """
-    server, _ = notifier
+    turn the notification into a second failed unit — and a hung notifier is the
+    expected case here, since the outages that fire this handler are the ones
+    that degrade the tailnet both VMs sit on.
 
+    Pointed at a stub that never answers (CR 7). It previously used the
+    *responsive* stub, so it spent no time at the timeout and asserted nothing
+    the other tests did not already cover.
+    """
+    server = hung_notifier
+    budget = 3
+
+    start = time.monotonic()
     result = _run(
         UNIT_NAME,
         env={
@@ -238,8 +288,13 @@ def test_the_dispatch_is_time_bounded(notifier):
             "REPLICATOR_NOTIFY_TIMEOUT_SECONDS": "1",
         },
     )
+    elapsed = time.monotonic() - start
 
     assert result.returncode == 0, result.stderr
+    assert elapsed < budget, f"took {elapsed:.1f}s against a 1s ceiling — not bounded"
+    # 28 is curl's timeout code; asserting it rules out the test passing because
+    # the connection was refused rather than because the ceiling was enforced.
+    assert any(r.get("curl_exit") == 28 for r in _records(result)), _records(result)
 
 
 def test_the_script_never_reads_an_env_file_itself():
