@@ -155,8 +155,11 @@ def test_entries_the_list_must_keep_covering(entries: list[str], tracked_files: 
         ".skills/doc-sensitive-paths": "docs/SKILLS.md sensitive-path section",
         # And its advice, for the same reason — the same section describes it.
         ".skills/doc-sections": "docs/SKILLS.md advice on a hit (#93)",
-        # AGENTS.md Project Layout names every module under src/.
-        "src/worker/main.py": "AGENTS.md Project Layout",
+        # docs/ARCHITECTURE.md Project Layout names every module under src/, one
+        # line each. AGENTS.md's own Project Layout named them until #94's
+        # curation demoted the per-module prose there; it now carries only the
+        # top-level packages, so this file's drift partner is the reference doc.
+        "src/worker/main.py": "docs/ARCHITECTURE.md Project Layout",
     }
     uncovered = {
         path: why
