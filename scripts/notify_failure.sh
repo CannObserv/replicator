@@ -82,8 +82,10 @@ esac
 TIMEOUT_DEFAULT=10
 TIMEOUT_MAX=30
 TIMEOUT="${REPLICATOR_NOTIFY_TIMEOUT_SECONDS:-${TIMEOUT_DEFAULT}}"
+# No '' arm: ${VAR:-default} substitutes on null as well as unset, so an empty
+# value is already the default by the time it reaches here (CR 17).
 case "${TIMEOUT}" in
-  '' | *[!0-9]* | 0)
+  *[!0-9]* | 0)
     echo "notify_failure: REPLICATOR_NOTIFY_TIMEOUT_SECONDS=${TIMEOUT} is not a positive integer — using ${TIMEOUT_DEFAULT}" >&2
     TIMEOUT="${TIMEOUT_DEFAULT}"
     ;;
