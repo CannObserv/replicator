@@ -197,6 +197,16 @@ The unit bounds its restart loops and then stays `failed` on purpose — that is
 
 The handler cannot make an incident worse, by construction: it is `Type=oneshot`, it carries no `OnFailure=` of its own (systemd honours the directive on handler units too, so one that could fail into itself would chain), and `scripts/notify_failure.sh` exits `0` on every path — unconfigured, no `curl`, unreachable notifier, malformed URL, 5xx, or timeout. A notifier outage correlates with the broker outages that fire this, so an undeliverable dispatch is the expected case and degrades to the journal record rather than to a second failed unit.
 
+#### The three variables the handler reads
+
+All three live in `/etc/replicator/.env` and are read by the `OnFailure=` handler **only** — never by the worker, which is why they are here rather than in [ENVIRONMENT.md](ENVIRONMENT.md) with the settings `src/core/config.py` parses.
+
+- **`REPLICATOR_NOTIFY_URL`** — where the incident is POSTed. **Unset by default, and that is a working posture, not a broken one**: the handler writes its `CRITICAL` journal record and dispatches nothing, which is how this shipped, so the `OnFailure=` wiring did not have to wait on a notifier channel being provisioned. The payload is a self-describing incident object (`level`, `event`, `unit`, `host`, `build`, `message`, `timestamp`), deliberately **not** the cohort notifier's `{template_id, variables, channel_ids}` request shape — pointing this at `http://notifier:9000` means that endpoint maps one onto the other, and keeping the mapping out of the script is what lets the same handler serve a plain webhook. A dispatch that fails is logged and dropped, never retried: systemd is holding no queue, and the journal record already survived.
+- **`REPLICATOR_NOTIFY_TOKEN`** — sent as `Authorization: Bearer`. Unset means **no header at all**, not an empty bearer, which would read as a configured credential that is merely wrong. Passed to `curl` through a `--config` on **stdin, never argv**, so it does not appear in `ps` or `/proc/<pid>/cmdline` for the life of the dispatch — AGENTS.md treats this env boundary as a security boundary, and argv is the usual way a secret crosses one.
+- **`REPLICATOR_NOTIFY_TIMEOUT_SECONDS`** — ceiling on one dispatch; default `10`, well inside the handler unit's own `TimeoutStartSec=60`. That gap is deliberate: the hung-notifier case is the *expected* one here, since the outages that fire this handler are the ones that degrade the tailnet both VMs sit on, and blowing the outer timeout would turn a notification into a second failed unit. A value that is not a positive integer is **named in the journal and replaced by the default** rather than handed to `curl` — unvalidated it came back as a bare `curl_exit: 2`, indistinguishable mid-incident from the notifier being down, so an operator would chase the wrong VM instead of their own typo.
+
+A failed dispatch records `reason` alongside `curl_exit`, mapped from curl's exit code (`6` unresolvable, `7` refused, `28` timed out, `35`/`60` TLS, …), because curl's own error sentence is discarded with its stderr.
+
 ### The co-core pin, and why the patch floor is load-bearing
 
 `co-core` and `co-core-aio` come from the private GCS index `gs://co-gcs-pypi`,
