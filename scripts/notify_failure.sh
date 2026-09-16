@@ -126,11 +126,24 @@ CURL_ARGS=(
   --write-out '%{http_code}'
   --data "${PAYLOAD}"
 )
-if [ -n "${TOKEN}" ]; then
-  CURL_ARGS+=(--header "Authorization: Bearer ${TOKEN}")
-fi
+# The token goes in on STDIN, never in argv (CR 5). A curl invocation carrying
+# `--header "Authorization: Bearer ..."` publishes the credential to every user
+# on the box for the life of the process, via ps and /proc/<pid>/cmdline —
+# AGENTS.md treats this env boundary as a security boundary, and argv is the
+# usual way one leaks. curl's config format is `key = "value"` with backslash
+# escapes, so the two characters that can break out of it are escaped first.
+_dispatch() {
+  if [ -n "${TOKEN}" ]; then
+    local escaped="${TOKEN//\\/\\\\}"
+    escaped="${escaped//\"/\\\"}"
+    printf 'header = "Authorization: Bearer %s"\n' "${escaped}" \
+      | curl "${CURL_ARGS[@]}" --config - "${URL}"
+  else
+    curl "${CURL_ARGS[@]}" "${URL}"
+  fi
+}
 
-STATUS="$(curl "${CURL_ARGS[@]}" "${URL}" 2>/dev/null)"
+STATUS="$(_dispatch 2>/dev/null)"
 RC=$?
 
 # A 2xx is delivery; everything else — transport failure, malformed URL, 4xx, 5xx
