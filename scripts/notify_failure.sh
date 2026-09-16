@@ -71,7 +71,10 @@ esac
 # that persistence is the point here, since the build that failed is exactly what
 # an incident record needs to name.
 BUILD="${BUILD_ID:-<unknown>}"
-HOST="$(hostname 2>/dev/null || echo '<unknown>')"
+# `||` alone catches a non-zero exit but not empty output (CR 8), and an empty
+# `host` in an incident record is ambiguous where `<unknown>` is merely unknown.
+HOST="$(hostname 2>/dev/null)"
+HOST="${HOST:-<unknown>}"
 NOW="$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)"
 
 # Minimal JSON string escaping: backslash first (or it would re-escape the quotes
