@@ -89,6 +89,10 @@ Three that bite, each symptomless until it matters:
   at the writer (#52).
 - **`/etc/systemd/system/replicator.service` is a copy, not a symlink** — `cp` it
   after every edit to `deploy/`, because `daemon-reload` alone re-reads the old file.
+  **Two unit files now** (#94): `replicator-failure-notify@.service` is the
+  `OnFailure=` handler, copied the same way, and a missed `cp` stays invisible until
+  the first failure. Read what it reported with `journalctl -t replicator-failure` —
+  `journalctl -u` finds nothing, because `%n` doubles the suffix.
 - **The daily skills-refresh hook commits without pushing**, which is one of the
   states the checkout guard refuses. Check `git status -sb` before a restart.
 

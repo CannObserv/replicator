@@ -172,6 +172,8 @@ review had already changed — see **the marked suite** in [TESTING.md](TESTING.
 | Testing a worktree/branch | `uv run python -m src.worker.main` (set distinct `REPLICATOR_CONSUMER_NAME` **and** `REPLICATOR_REPLICATE_CONSUMER_NAME` — **required** while the service runs, since #77 makes both loops derive the names the unit registers under) |
 | Debugging the live service | `sudo journalctl -u replicator -f` |
 | After editing `deploy/replicator.service` | `sudo cp deploy/replicator.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart replicator` |
+| After editing `deploy/replicator-failure-notify@.service` | `sudo cp 'deploy/replicator-failure-notify@.service' /etc/systemd/system/ && sudo systemctl daemon-reload` — **no restart**, it is a template nothing runs until a unit fails |
+| Reading what the failure handler reported | `journalctl -t replicator-failure` — **not** `journalctl -u`, see below |
 | After a co-core version bump | re-run `sync_wheelhouse.py`, then `uv sync` |
 | `Start request repeated too quickly` | `sudo systemctl reset-failed replicator && sudo systemctl start replicator` — the rate limit, not a broken build |
 
@@ -182,6 +184,18 @@ review had already changed — see **the marked suite** in [TESTING.md](TESTING.
 **`/etc/systemd/system/replicator.service` is a *copy*, not a symlink to `deploy/`.** So the `cp` above is load-bearing and `daemon-reload` alone silently does nothing — systemd re-reads the installed file, which is still the old one. The failure has no symptom at restart: the worker comes up on the new code under the *old* unit, and the mismatch only surfaces the first time a directive actually matters. Nothing guards it, either — `tests/test_deploy.py` reads the repo file, which is exactly the copy that is still correct. Diff the two when a restart follows a unit edit (#11 deploy).
 
 The copy is deliberate, for the same reason `/etc/replicator/.env` is not read from the repo: the live unit must survive a repo reset, a worktree switch, or a branch checkout that happens to be mid-edit.
+
+**Two unit files now, and the second one is easy to forget.** `deploy/replicator-failure-notify@.service` is the `OnFailure=` handler, and it is a copy under `/etc/systemd/system/` exactly like the worker's unit — with one difference that makes its absence quieter: nothing runs it until something fails, so a missed `cp` is invisible until the first incident, which is the one moment it was supposed to help. `systemctl status replicator-failure-notify@replicator.service.service` answering `Unit ... not found` is how that looks. There is no restart to pair with the copy.
+
+### When the worker fails, who is told (#94)
+
+The unit bounds its restart loops and then stays `failed` on purpose — that is the design, and it stays. What was missing was the other half. `deploy/replicator.service` claimed in its own comments that a failure was visible "in `systemctl status` + `OnFailure=`" while the ini file carried **no `OnFailure=` directive at all**. On 2026-09-16 the unit sat `failed` for 56 minutes and what noticed was a *sibling repo* reading the broker from another VM, not this host.
+
+`OnFailure=replicator-failure-notify@%n.service` closes it. The handler writes a `CRITICAL` journal record naming the unit, the host and the build, then POSTs the same incident to `REPLICATOR_NOTIFY_URL` when one is configured. With that variable unset — how it ships — the record is the whole behaviour, which is deliberate: the wiring did not have to wait on a notifier channel, and enabling delivery later is a line in `/etc/replicator/.env`, not a code change.
+
+**Read it with `journalctl -t replicator-failure`, not `journalctl -u`.** `%n` expands to the full unit name *including* its suffix, so the handler instantiates as `replicator-failure-notify@replicator.service.service` — a doubled suffix. That is the canonical systemd idiom and it is kept, because it is what makes the record name the failed unit precisely; the price is that the obvious `journalctl -u replicator-failure-notify@replicator.service` returns nothing at all. Measured in the #94 rehearsal, which is a bad place to learn it. The `SyslogIdentifier=replicator-failure` in the handler exists to pay that price off, and `tests/test_deploy.py` pins its presence.
+
+The handler cannot make an incident worse, by construction: it is `Type=oneshot`, it carries no `OnFailure=` of its own (systemd honours the directive on handler units too, so one that could fail into itself would chain), and `scripts/notify_failure.sh` exits `0` on every path — unconfigured, no `curl`, unreachable notifier, malformed URL, 5xx, or timeout. A notifier outage correlates with the broker outages that fire this, so an undeliverable dispatch is the expected case and degrades to the journal record rather than to a second failed unit.
 
 ### The co-core pin, and why the patch floor is load-bearing
 
