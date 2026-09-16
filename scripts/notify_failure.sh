@@ -156,8 +156,8 @@ if [ "${RC}" -eq 0 ] && [ "${STATUS#2}" != "${STATUS}" ] && [ ${#STATUS} -eq 3 ]
   # http_status is quoted in BOTH branches (CR 3). It was a JSON number here and
   # a string below, and one field name with two types breaks the consumer this
   # payload exists to feed.
-  printf '{"level":"INFO","event":"unit_failed_notified","unit":"%s","notify_dispatched":true,"http_status":"%s"}\n' \
-    "$(_json "${UNIT}")" "$(_json "${STATUS}")" >&2
+  printf '{"level":"INFO","event":"unit_failed_notified","unit":"%s","host":"%s","build":"%s","notify_dispatched":true,"http_status":"%s"}\n' \
+    "$(_json "${UNIT}")" "$(_json "${HOST}")" "$(_json "${BUILD}")" "$(_json "${STATUS}")" >&2
   exit 0
 fi
 
@@ -176,7 +176,11 @@ case "${RC}" in
   *)  REASON="curl exit ${RC}" ;;
 esac
 
-printf '{"level":"ERROR","event":"unit_failed_notify_failed","unit":"%s","notify_dispatched":false,"curl_exit":%s,"http_status":"%s","reason":"%s"}\n' \
-  "$(_json "${UNIT}")" "${RC}" "$(_json "${STATUS:-<none>}")" "$(_json "${REASON}")" >&2
+# unit, host and build are repeated rather than left to the record above (CR 9):
+# a consumer that ingests only the dispatch-outcome line can attribute it without
+# having to correlate two records.
+printf '{"level":"ERROR","event":"unit_failed_notify_failed","unit":"%s","host":"%s","build":"%s","notify_dispatched":false,"curl_exit":%s,"http_status":"%s","reason":"%s"}\n' \
+  "$(_json "${UNIT}")" "$(_json "${HOST}")" "$(_json "${BUILD}")" "${RC}" \
+  "$(_json "${STATUS:-<none>}")" "$(_json "${REASON}")" >&2
 echo "notify_failure: dispatch failed (${REASON}) — the incident is recorded above, not delivered" >&2
 exit 0
