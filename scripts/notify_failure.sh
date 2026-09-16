@@ -53,7 +53,19 @@ set -uo pipefail
 UNIT="${1:-<unknown>}"
 URL="${REPLICATOR_NOTIFY_URL:-}"
 TOKEN="${REPLICATOR_NOTIFY_TOKEN:-}"
-TIMEOUT="${REPLICATOR_NOTIFY_TIMEOUT_SECONDS:-10}"
+
+# Named and defaulted rather than handed to curl as-is (CR 4). An unusable value
+# would otherwise reach the failure record as a bare `curl_exit: 2`, which reads
+# as "the notifier is down" — so an operator mid-incident chases the wrong VM
+# instead of their own typo. Same rule REPLICATOR_REDIS_FLOOR_WAIT follows.
+TIMEOUT_DEFAULT=10
+TIMEOUT="${REPLICATOR_NOTIFY_TIMEOUT_SECONDS:-${TIMEOUT_DEFAULT}}"
+case "${TIMEOUT}" in
+  '' | *[!0-9]* | 0)
+    echo "notify_failure: REPLICATOR_NOTIFY_TIMEOUT_SECONDS=${TIMEOUT} is not a positive integer — using ${TIMEOUT_DEFAULT}" >&2
+    TIMEOUT="${TIMEOUT_DEFAULT}"
+    ;;
+esac
 
 # Read by the unit from /run/replicator/build-id, which outlives a failed start —
 # that persistence is the point here, since the build that failed is exactly what
