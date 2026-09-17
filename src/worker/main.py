@@ -20,6 +20,7 @@ from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any
 
+import httpx
 from co_core.pure.adapters.bus import streams
 from co_core_aio.bus import AsyncBusConsumer
 from co_core_aio.fetch import AsyncFetchDriver
@@ -35,6 +36,7 @@ from src.storage.local import LocalBlobStore, ensure_directory
 from src.storage.sweeper import BlobUsage
 from src.worker.aliases import AliasTable, load_alias_table
 from src.worker.checkout import checkout_refusal
+from src.worker.egress import GuardedTransport, blocked_networks
 from src.worker.handler import build_handler
 from src.worker.loop import FETCH_SPEC, REPLICATE_SPEC, run_loop
 from src.worker.policy import (
@@ -53,6 +55,34 @@ logger = get_logger(__name__)
 # Signals that mean "stop taking new work". SIGINT is included so an interactive
 # Ctrl-C drains the same way systemd's SIGTERM does.
 _STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
+
+
+def build_fetch_client(settings: Settings) -> httpx.AsyncClient:
+    """The worker's fetch client, behind the destination guard (#95).
+
+    Built here rather than inside ``AsyncFetchDriver`` because the guard is a
+    fact about *this* service's network position, not about the driver three
+    services share: ``co_core_aio`` has no business knowing that Replicator sits
+    on a tailnet. The driver's no-argument form builds a bare client, so this is
+    the seam that makes the guard real — ``tests/worker/test_main.py`` pins that
+    the worker uses it.
+
+    ``follow_redirects=True`` matches the client the driver would have built.
+    The guard does not need redirects off — it runs per hop, which is the whole
+    reason it is a transport — and turning them off would break every issuer
+    whose URL redirects for ordinary reasons.
+
+    The range table is parsed here, at boot, before the consumer group is
+    joined: a malformed CIDR is a worker that does not start, rather than a
+    guard silently holding fewer ranges than the env file claims.
+    """
+    return httpx.AsyncClient(
+        transport=GuardedTransport(
+            httpx.AsyncHTTPTransport(),
+            blocked=blocked_networks(settings.blocked_destination_cidrs),
+        ),
+        follow_redirects=True,
+    )
 
 
 def warn_if_unreachable(blob_dir: Path) -> None:
@@ -571,7 +601,7 @@ async def run(
         # httpx.AsyncClient whose connection pool is the point, and a per-message
         # driver would open and discard a pool per fetch. Closed in the same
         # finally as the Redis client — both are ours because we opened them.
-        fetcher = AsyncFetchDriver()
+        fetcher = AsyncFetchDriver(build_fetch_client(settings))
         # Installed inside the try so the handlers are always removed again —
         # outside it, a failure between install and the try would leak global
         # signal state (harmless for a dying process, not for an in-process test).

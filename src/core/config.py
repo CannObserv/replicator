@@ -381,10 +381,57 @@ class Settings(BaseSettings):
         default=120.0, validation_alias="REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS"
     )
 
+    # The destination guard's range table (#89's decision, #95). What a fetch may
+    # not reach *from this host* — the config taxonomy's first row, facts about
+    # this host, which is why it is env rather than compiled in.
+    #
+    # A plain string, split below, rather than a `tuple[str, ...]`: pydantic-
+    # settings reads a list-annotated field as JSON, and the operator's line in
+    # /etc/replicator/.env would then be a quoted JSON array in a file systemd
+    # reads — a spelling nobody gets right the first time and whose failure is a
+    # worker that will not boot.
+    #
+    # `None` — the variable unset — means the compiled deny set in
+    # `src.worker.egress`, never an empty one. The table has one home; this
+    # field only says whether an operator replaced it.
+    blocked_destinations: str | None = Field(
+        default=None, validation_alias="REPLICATOR_BLOCKED_DESTINATIONS"
+    )
+
     log_level: str = Field(default="INFO", validation_alias="REPLICATOR_LOG_LEVEL")
 
     # Stamped by the systemd unit's ExecStartPre; "dev" outside systemd.
     build_id: str = Field(default="dev", validation_alias="BUILD_ID")
+
+    @property
+    def blocked_destination_cidrs(self) -> tuple[str, ...] | None:
+        """The operator's range table, or ``None`` for the compiled deny set.
+
+        The CIDRs are *not* parsed here — ``src.worker.egress.blocked_networks``
+        does that, at boot, before the consumer group is joined, so a typo is a
+        worker that fails to start rather than a guard that quietly holds fewer
+        ranges than the file claims. Parsing here instead would put the deny set
+        in two modules, which is the shape the table is trying not to have.
+        """
+        if self.blocked_destinations is None:
+            return None
+        return tuple(part.strip() for part in self.blocked_destinations.split(",") if part.strip())
+
+    @model_validator(mode="after")
+    def _a_configured_guard_names_at_least_one_range(self) -> "Settings":
+        """There is no spelling of this variable that means "fetch anything".
+
+        An empty value would be the one-token "off" the guard deliberately does
+        not have (#95): a dev host that must reach its own ``/health`` names the
+        ranges it still wants refused, so the weakening is a fact about the env
+        file rather than about a boolean nobody greps for.
+        """
+        if self.blocked_destinations is not None and not self.blocked_destination_cidrs:
+            raise ValueError(
+                "REPLICATOR_BLOCKED_DESTINATIONS is set but names no range — unset it "
+                "for the default deny set; there is no value that means 'fetch anything'"
+            )
+        return self
 
     @field_validator("blob_prefix")
     @classmethod

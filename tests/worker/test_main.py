@@ -16,6 +16,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import httpx
 import pytest
 from co_core.effects.fetch import FetchResult
 from co_core.pure.adapters.bus import streams
@@ -24,12 +25,14 @@ from co_core.pure.models.changes import FetchPolicyState
 from co_core.pure.util.hashing import sha256
 
 import src.worker.main
-from src.core.config import get_settings
+from src.core.config import Settings, get_settings
 from src.core.logging import configure_logging
 from src.storage.local import LocalBlobStore
 from src.storage.sweeper import SweepResult
+from src.worker.egress import GuardedTransport
 from src.worker.main import (
     build_consumer,
+    build_fetch_client,
     consumer_name_for,
     install_signal_handlers,
     remove_signal_handlers,
@@ -495,6 +498,12 @@ async def test_run_closes_the_fetch_driver(monkeypatch, fake_redis, tmp_path):
     closed = []
 
     class RecordingDriver:
+        def __init__(self, client):
+            # The run() seam passes the guarded client (#95); a stub that took
+            # no argument would make this test pass while the worker fetched
+            # through an unguarded one.
+            assert isinstance(client._transport, GuardedTransport)
+
         async def execute(self, effect):
             raise AssertionError("no fetch expected in this test")
 
@@ -521,6 +530,9 @@ async def test_run_dispatches_to_the_byte_path(monkeypatch, fake_redis, tmp_path
     monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
 
     class StubDriver:
+        def __init__(self, client):
+            self._client = client
+
         async def execute(self, effect):
             return FetchResult(
                 content=b"page bytes",
@@ -1359,3 +1371,44 @@ async def test_the_gcs_boot_log_states_the_horizon_it_will_publish(
     assert stated, "the object-store boot line is missing"
     assert stated[0]["blob_ttl_seconds"] == 604800.0
     assert "daysSinceCustomTime" in json.dumps(stated[0])
+
+
+def test_the_worker_builds_its_fetch_client_behind_the_destination_guard(monkeypatch):
+    """The guard is only a guard if the worker's own client is the guarded one.
+
+    ``AsyncFetchDriver()`` with no argument builds a bare ``httpx.AsyncClient``,
+    and a guard nobody composes in is a module with passing tests and no effect
+    (#95). This asserts the seam rather than the behaviour: the behaviour is
+    ``tests/worker/test_egress.py``'s.
+    """
+    monkeypatch.delenv("REPLICATOR_BLOCKED_DESTINATIONS", raising=False)
+
+    client = build_fetch_client(Settings())
+
+    assert isinstance(client, httpx.AsyncClient)
+    assert isinstance(client._transport, GuardedTransport)
+    assert client.follow_redirects is True, (
+        "redirects stay on — the guard checks each hop rather than refusing the feature"
+    )
+
+
+def test_the_operators_ranges_reach_the_worker_guard(monkeypatch):
+    """A configured table is the one the worker enforces, not just the one it parses."""
+    monkeypatch.setenv("REPLICATOR_BLOCKED_DESTINATIONS", "10.0.0.0/8")
+
+    client = build_fetch_client(Settings())
+
+    assert [str(net) for net in client._transport._blocked] == ["10.0.0.0/8"]
+
+
+def test_a_malformed_range_stops_the_worker_at_boot(monkeypatch):
+    """A typo is a worker that will not start, not a guard holding fewer ranges.
+
+    Parsed here rather than at settings construction so the deny set has one
+    home; the cost of that choice is that this must be checked at boot, which is
+    what this test pins.
+    """
+    monkeypatch.setenv("REPLICATOR_BLOCKED_DESTINATIONS", "10.0.0.0/8, not-a-range")
+
+    with pytest.raises(ValueError, match="not-a-range"):
+        build_fetch_client(Settings())

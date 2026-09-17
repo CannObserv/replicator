@@ -381,3 +381,42 @@ def test_a_non_positive_blob_timeout_fails_at_startup(monkeypatch):
 
     with pytest.raises(ValidationError):
         get_settings()
+
+
+def test_the_destination_guard_defaults_to_unset(monkeypatch):
+    """Unset is the *default* table, not an empty one (#95).
+
+    The field carries ``None`` rather than a spelled-out list so the deny set
+    has one home — ``src.worker.egress`` — instead of two that drift. What
+    ``None`` then means is that module's test to make.
+    """
+    monkeypatch.delenv("REPLICATOR_BLOCKED_DESTINATIONS", raising=False)
+
+    assert Settings().blocked_destination_cidrs is None
+
+
+def test_the_destination_guard_takes_a_comma_separated_list(monkeypatch):
+    """Comma-separated, not JSON.
+
+    pydantic-settings reads a ``list``-annotated field as JSON, which would make
+    the operator's env line ``["10.0.0.0/8", ...]`` — quoting no one gets right
+    in a systemd-read file on the first try. The field is a plain string and the
+    split is ours.
+    """
+    monkeypatch.setenv("REPLICATOR_BLOCKED_DESTINATIONS", "10.0.0.0/8, 127.0.0.0/8 ")
+
+    assert Settings().blocked_destination_cidrs == ("10.0.0.0/8", "127.0.0.0/8")
+
+
+def test_a_destination_guard_naming_nothing_is_refused(monkeypatch):
+    """There is no spelling that means "fetch anything".
+
+    An empty value is the shape a hurried afternoon reaches for, and nothing
+    afterwards reads it back. Refused at settings construction — before the
+    group is joined and before a command can be read — like the gcs/bucket
+    pairing above.
+    """
+    monkeypatch.setenv("REPLICATOR_BLOCKED_DESTINATIONS", "  ,  ")
+
+    with pytest.raises(ValidationError, match="names no range"):
+        Settings()

@@ -93,6 +93,19 @@ class FailureReason(StrEnum):
     with #17 rather than left to the first issuer using ``If-Match`` to discover.
     """
 
+    DESTINATION_REFUSED = "destination_refused"
+    """The URL resolved into a range this host will not fetch from (#89, #95).
+
+    Loopback, RFC 1918, link-local, ULA, or the tailnet's CGNAT range. Terminal:
+    a private destination is private again on the next reclaim, and the issuer
+    hears the refusal rather than watching the command retry to the ceiling.
+
+    **Checked per redirect hop, not only on the submitted URL**, so a 2xx issuer
+    can still see this token for a public URL that redirected somewhere it may
+    not follow — the ``detail`` names the address and the range, which is the
+    only way the issuer can tell the two cases apart.
+    """
+
     NOT_MODIFIED = "not_modified"
     """A conditional GET that succeeded: 304, and the issuer's bytes still stand.
 
