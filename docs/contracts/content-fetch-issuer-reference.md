@@ -201,6 +201,7 @@ are the whole value of the six:
 | URL not fetchable (bad scheme / invalid URL) | fact, then `content.fetch.dlq` | `fetch_failed` · `not_fetchable` |
 | Body over `REPLICATOR_MAX_BLOB_BYTES` (default 64 MiB) | fact, then `content.fetch.dlq` | `fetch_failed` · `too_large` |
 | Unsendable `headers` / `timeout_seconds` | fact, then `content.fetch.dlq`, **before the fetch** | `fetch_failed` · `invalid_request_options` |
+| Destination in a range this host will not fetch from — loopback, RFC 1918, link-local, ULA, or the tailnet's CGNAT `100.64.0.0/10` (#95) | fact, then `content.fetch.dlq`, **before the request goes out**, and on **each redirect hop** | `fetch_failed` · `destination_refused` |
 | HTTP 5xx / 408 / 429, or a network error | retry indefinitely, default ~60 s cadence | delayed fact, or **nothing while it retries** |
 | Blob tree over `REPLICATOR_BLOB_MAX_TOTAL_BYTES` | parked in the PEL until a sweep frees space | delayed fact, or **nothing while it waits** |
 | Unclassified handler error | retried to the delivery ceiling (~4 reclaims / ~4 min at default settings), then fact + DLQ | `fetch_failed` · `handler_error` (+ `attempts`) |
@@ -321,15 +322,43 @@ Replicator's side remains an operator responsibility, not a bus-level one.
 issue an arbitrary outbound HTTP request from Replicator's host and store the response. There is no
 signing, no allowlist, and no issuer identity on the frame.
 
-Integrity rests entirely on **bus access control**, and that control is no longer a loopback bind.
+Integrity rests on **bus access control plus a destination guard**, and that control is no longer a
+loopback bind.
 The broker runs on its own node (`co-broker`, CannObserv/broker#1) and Replicator on another
 (`co-replicator`, #88), so what holds the line is **per-service Redis ACL users** — who may `XADD`
 to `content.fetch` is a broker grant (CannObserv/broker#2) — and the **Tailscale ACL**, which admits
 only the bus participants to the broker at all. **That grant is wider than declared today** (#90):
 `replicator` can `XADD` the stream too — its read pattern meeting the `+xadd` its fact streams need
 — a gap CannObserv/broker#14 closes, not a second issuer. This section named "the moment the bus
-spans hosts" as the point where message signing or a URL allowlist becomes the conversation. That moment has
-passed, and the conversation is #89; until it concludes, nothing in this contract changes.
+spans hosts" as the point where message signing or a URL allowlist becomes the conversation. That
+moment passed, the conversation was #89, and it concluded in **neither of those**:
+
+- **No message signing.** Nothing is added to the frame and there is still no issuer identity on
+  it. The grant that is too wide is a *broker* grant, and CannObserv/broker#14's per-service
+  selectors are where it narrows — the broker already knows which account wrote a frame, which is
+  the fact signing would otherwise have to re-establish on the wire. Signing buys something only
+  against a writer that *holds* a legitimate grant and is compromised, which is not a threat this
+  contract claims today.
+- **No URL allowlist.** Declined on the boundaries charter's first and third tests, and declined
+  for the issuer's sake: deciding which URLs are fetched is Watcher's job across an open-ended
+  corpus, and a list maintained here would be a second copy of that decision with no mechanism to
+  stay in sync. The copy that drifts is the one that refuses a legitimate fetch.
+- **A destination guard instead** (#95), which is the row above. It bounds where a fetch may
+  *point* rather than who may issue one, because those are different questions and only the second
+  was ever answered by a grant.
+
+**Why the guard, concretely.** The bytes a fetch returns are stored in `co-gcs-blobs` and announced
+on `content.blobs`, where every consumer SA can read them — so an unbounded destination made this an
+instrument for reading whatever Replicator's network position reaches and republishing it
+cluster-wide. On these VMs that is not hypothetical: exeuntu's socket-activated Shelley agent UI
+answers `GET http://127.0.0.1:9999/` with **200**, unauthenticated.
+
+**What the guard does not close, stated rather than omitted:** a name that resolves to a public
+address at check time and a private one at connect time — DNS rebinding — is still reachable in
+principle. The guard resolves and checks every address a name answers with, then hands the name to
+the transport, which resolves again. Closing that window means pinning the address through the
+connection, which is materially more machinery than the threat justifies while both the tailnet ACL
+and the broker's grants bound who can aim a command at a hostile origin.
 
 **`headers` widens that capability, and the widening is bounded here rather than by the broker.**
 A bus writer can now attach an arbitrary header — an `Authorization` among them — to a host of its

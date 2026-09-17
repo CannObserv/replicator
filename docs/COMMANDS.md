@@ -100,7 +100,9 @@ uv run python -m scripts.seed_fetch \
 The script rejects a malformed `--header` and a repeated name (exit 2) but deliberately does
 **not** pre-empt the worker's refusal list: a `Host` override publishes cleanly here, and the
 worker refuses it before any request goes out, closing the command as `fetch_failed` /
-`invalid_request_options`. The full list is in
+`invalid_request_options`. The same is true of a destination the worker will not fetch — a
+`http://127.0.0.1:…` URL seeds cleanly here and closes as `destination_refused` (#95), which is
+worth knowing before seeding a local test server. The full list is in
 [`docs/contracts/content-fetch-issuer-reference.md`](contracts/content-fetch-issuer-reference.md).
 
 Watch the live side with `sudo journalctl -u replicator -f`: each `stored a blob and published

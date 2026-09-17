@@ -171,6 +171,12 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
   resolved as a path, writers keyed by alias, refusals before credentials, provider
   failures classified by HTTP status. Read
   [docs/CONVENTIONS.md](docs/CONVENTIONS.md) first.
+- **A fetch may not reach this host, its network, or the tailnet (#89, #95).**
+  `REPLICATOR_BLOCKED_DESTINATIONS` carries the range table; unset means the deny set
+  in `src/worker/egress.py`, never an empty one. Enforced in an `httpx` transport, so
+  it runs on **each redirect hop** — a check on `command.url` is walked around by a
+  302. The decision declined a URL allowlist and message signing by name; the grant
+  half is CannObserv/broker#14's. Refusals: `destination_refused`, terminal.
 - **Watcher alone issues `content.fetch` (#90).** `scripts/seed_fetch.py` seeds
   scratch streams; the live one takes `--production` and Watcher's identity, never
   `replicator`'s.

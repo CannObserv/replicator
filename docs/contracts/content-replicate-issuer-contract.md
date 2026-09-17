@@ -54,9 +54,16 @@ removes that bound, so the conclusion is reached again rather than inherited:
 
 Every archive.org claim below is read from that [IAS3 API documentation](https://archive.org/developers/ias3.html) — cited because T4 and T5 rest on it, and because it corrects the intuition rather than confirming it.
 
-The conclusion is the same — one localhost broker on one trusted VM, therefore proportionate — but
+The conclusion is the same — bus access control is proportionate to this capability — but
 the **escalation trigger is not**, and that is the whole reason this section exists rather than a
 cross-reference.
+
+**The premise it originally rested on is gone, and the conclusion survives it anyway (#89).** That
+premise was "one localhost broker on one trusted VM". The broker has run on its own node since
+CannObserv/broker#1 and Replicator on another since #88, so what bounds the writers is now
+per-service Redis ACL users (CannObserv/broker#2) and the Tailscale ACL admitting only bus
+participants. Restated rather than quietly left standing, because a trust argument whose stated
+premise is false is worse than no argument: the next reader cannot tell which half to re-derive.
 
 ---
 
@@ -83,9 +90,18 @@ Two properties the issuer can rely on, mirroring the fetch guarantees: a refused
 ### T2 — The alias namespace is a capability namespace
 
 There is no issuer identity on the frame, so any bus writer can name any alias, and an alias is
-therefore **all-or-nothing**. Under one localhost broker with one writer that is proportionate — the
-same argument the fetch document makes, and it survives the change of direction only because the set
-of writers is one.
+therefore **all-or-nothing**. That is proportionate only while the set of *granted* writers is one —
+the same argument the fetch document makes, and it survives the change of direction only for that
+reason.
+
+⚠ **The declared set is one; the granted set is two, and that is trigger 1 below (#89).**
+CannObserv/broker#14 measured the live ACL: a service's key patterns apply to every command it
+holds, so `replicator` — which must read `content.replicate` — can also `XADD` to it. The second
+writer is this service rather than a third party, so nothing forges commands today, but the
+operator cannot currently say *which* writer may use *which* alias, and that is precisely what
+trigger 1 names. **The answer is broker#14's per-service selectors, not issuer identity on the
+frame**: the grant is the thing that is wrong, the broker is where it is fixed, and it already
+knows which account wrote a frame. Until it lands, T2's containment below is what stands.
 
 ⚙ It is bounded anyway, the cheap way, exactly as the request-options refusal table bounds `headers`:
 **an alias resolves only if the operator provisioned it on this host.** The provisioned set is a fact
@@ -236,17 +252,30 @@ The fetch document's trigger is "the moment the bus spans hosts or tenants." Rep
 
 1. **A second service gains write access to `content.replicate`.** All-or-nothing aliases stop being
    proportionate the moment more than one writer exists, because the operator loses the ability to
-   say *which* writer may use *which* alias. That needs issuer identity on the frame — signed
-   envelopes or a per-issuer credential — and it does not exist today.
+   say *which* writer may use *which* alias. **Met, in capability, as of CannObserv/broker#14's
+   measurement** — `replicator`'s own grant reaches the stream it consumes. Answered by that
+   issue's per-service selectors rather than by issuer identity on the frame (T2), because a grant
+   that is wider than declared is a broker fact, not a wire fact.
 2. **The broker leaves localhost, or the worker fleet shards across hosts.** Alias resolution becomes
    remote at that point. The answer is workload identity — a per-host service account with its own
    IAM binding — **not** a credential on the wire. Stated explicitly because "just put a token in the
    payload" is the shape this failure mode reliably takes, and T1 is the line it crosses.
+   **Met since CannObserv/broker#1 and #88**, and the wire is unchanged by it: every alias still
+   resolves locally, so T1 holds as written. What it leaves is a provisioning question rather than a
+   protocol one — whether this node's binding is its own service account or one it shares — and that
+   is the operator's to confirm per host.
 3. **A provider is proposed that cannot resolve its credential locally.** Refuse the provider; do not
-   widen the payload.
+   widen the payload. Not met.
 
-None of the three is met today. Message signing and per-alias grants are the conversation when one
-is, and not before.
+**Two of the three are now met (#89), and neither answer is on the wire.** Trigger 1 is a broker
+grant to narrow; trigger 2 is a provisioning fact to confirm. No payload field, no signature, no
+credential travels — which is the outcome T1 exists to protect and the reason these triggers were
+written down before they fired. Message signing becomes the conversation if a writer that *holds* a
+legitimate grant is compromised, and not before.
+
+**The fetch document's destination guard (#95) does not extend here.** A replicate destination is
+host-bound by the alias (T3) rather than named by the issuer, so there is no address for a guard to
+refuse; the containment check is the alias's root, and it already runs.
 
 ---
 
