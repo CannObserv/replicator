@@ -28,6 +28,7 @@ scan lost three times: they are only ever as complete as the last probe.
 import asyncio
 import re
 import string
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Protocol
 from urllib.parse import urlsplit
@@ -347,6 +348,12 @@ def build_replicate_handler(
     """
 
     async def handle(command: ContentReplicateCommand) -> None:
+        # The consume path is serial, so this window is also how long the group
+        # goes without reading — a queued command ages for exactly as long as the
+        # one before it takes (#96, CannObserv/broker#20). Started before the
+        # guards rather than around the write: a refusal is fast, but only the
+        # whole handler is the number the loop is held for.
+        started = time.monotonic()
         binding = aliases.resolve(command.credentials_alias)
         if binding is None:
             # The alias name is a *key* here and nowhere else — never logged as a
@@ -459,6 +466,12 @@ def build_replicate_handler(
                 # length. Re-ask this question when one lands, rather than
                 # assuming every provider brings a limit.
                 "key": key,
+                # The one number nothing else keeps, exactly as on the fetch
+                # line: the fact records what was written and where, never how
+                # long it took. Journal-only, and journal-only on purpose —
+                # adding it to the wire would be a contract edit, and the
+                # question it answers is an operator's (#96).
+                "duration_ms": round((time.monotonic() - started) * 1000, 1),
             },
         )
 

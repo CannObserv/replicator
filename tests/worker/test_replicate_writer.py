@@ -22,6 +22,8 @@ the half that had a bug: every provider exception was transient, so a 403 on a
 misprovisioned bucket retried forever and the issuer waited forever.
 """
 
+import asyncio
+
 import pytest
 from co_core.effects.gcs import GcsCreateResult
 from co_core.pure.models.changes import ReplicationCompleteEvent, ReplicationFailedEvent
@@ -48,9 +50,14 @@ class FakeGcs:
         self._raises = raises
         self.effects = []
         self.streams = []
+        # Only the duration test sets this; a write that takes no time at all is
+        # what every other test here wants.
+        self.delay_seconds = 0.0
 
     async def create_if_absent(self, effect):
         self.effects.append(effect)
+        if self.delay_seconds:
+            await asyncio.sleep(self.delay_seconds)
         # Recorded here, not asserted later: the handler closes the handle on the
         # way out, and a closed file raises on ``seekable()``. What matters is
         # what the *driver* was given, which is only observable now.
@@ -664,3 +671,28 @@ async def test_no_bound_below_the_provider_ceiling_survives_here(store, blob_uri
 
     [record] = [r for r in caplog.records if r.message == "replicated a blob"]
     assert record.key == near_ceiling
+
+
+async def test_the_success_line_reports_how_long_the_handler_took(store, blob_uri, caplog):
+    """The one number nothing else keeps, and the one #96 was asked for.
+
+    The broker sizes its undelivered-age warning per group from how long a
+    handler holds the loop (``GROUP_WARN_UNDELIVERED_AGE_SECONDS``,
+    CannObserv/broker#20), and the consume path is serial — a queued entry ages
+    for exactly as long as the entry before it takes. When #96 asked, this stream
+    had carried one command in its life and the answer had to come from a
+    benchmark; the fetch line has carried ``duration_ms`` since #4, so the next
+    time it is asked the journal answers.
+
+    Measured around the *whole* handler rather than the write: the guards, the
+    source download, and the fact all happen inside the window the loop is not
+    reading in. The fake sleeps so the assertion is about an elapsed measurement
+    rather than about the key being present.
+    """
+    writer = FakeGcs(result(GcsCreateOutcome.WROTE, public_url=PUBLIC_URL, generation=1))
+    writer.delay_seconds = 0.05
+    with caplog.at_level("INFO", logger="src.worker.replicate"):
+        await handler_for(store, writer)(command(blob_uri))
+
+    (record,) = [r for r in caplog.records if r.message == "replicated a blob"]
+    assert record.duration_ms >= 50
