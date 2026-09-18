@@ -36,7 +36,7 @@ existed.
 |---|---|---|
 | Qdrant | `https://index.taild0fb76.ts.net:6333` | **The full MagicDNS name** — `index` alone is not in the certificate's SAN. TLS is not optional: upstream refuses to send `QDRANT_API_KEY` over a non-TLS, non-loopback connection, which is why the store serves TLS at all. |
 | Ollama | `http://index:11434` | `nomic-embed-text`, 768 dimensions — the store's, not this repo's choice. **Unauthenticated**: any node the ACL admits can reach it. Tailnet reachability is not authorization. |
-| Collections | `codebase_replicator`, `context_replicator`, `replicator_symgraph_{file,index,meta}` | Named by `projectId` in `.socraticode.json`. Without that file the id is `sha256(<absolute path>)[:12]` — `2a818eb7302d` for this checkout — which is not even per-host. |
+| Collections | `codebase_replicator`, `context_replicator`, `replicator_symgraph_{file,index,meta}` — all green since 2026-09-18 | Named by `projectId` in `.socraticode.json`. Without that file the id is `sha256(<absolute path>)[:12]` — `2a818eb7302d` for this checkout — which is not even per-host, and no collection under that hash has ever existed. |
 | Key | `QDRANT_API_KEY`, `.claude/settings.local.json` | See [ENVIRONMENT.md](ENVIRONMENT.md). |
 
 Both endpoints are reached over the tailnet, so the ACL must admit this VM to

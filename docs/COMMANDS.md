@@ -370,8 +370,10 @@ bash skills-vendor/gregoryfoster-skills/skills/init-socraticode/scripts/prefligh
 systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% \
   choom -n 500 -- node "$SOCRATICODE_DRIVER" health-check . --probe src/worker/main.py
 
-# The index itself. Same cap; archiver's 3.9 GB VM took 50 min for a repo this
-# size. Embedding runs on co-index, so the CPU cost here is small.
+# The index itself. Same cap. Measured here 2026-09-18: 21 min wall for the full
+# tree — 1708 code points, 335 context points, 25/25 artifacts — with available
+# memory never below 2.33 GB and the worker at NRestarts=0 throughout. Embedding
+# runs on co-index, so almost none of that is local CPU.
 systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% \
   choom -n 500 -- node "$SOCRATICODE_DRIVER" index .
 ```
