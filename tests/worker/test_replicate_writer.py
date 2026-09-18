@@ -45,19 +45,20 @@ PUBLIC_URL = "https://storage.googleapis.com/example-replication-bucket/organiza
 class FakeGcs:
     """Stands in for ``AsyncGcsDriver``, recording the effect it was handed."""
 
-    def __init__(self, result=None, raises=None):
+    def __init__(self, result=None, raises=None, delay_seconds=0.0):
         self._result = result
         self._raises = raises
+        # Constructor-injected like the other two (CR 5): only the duration test
+        # asks for a write that takes time, and an attribute set after the fact
+        # is the shape that leaks once a fixture starts sharing one of these.
+        self._delay_seconds = delay_seconds
         self.effects = []
         self.streams = []
-        # Only the duration test sets this; a write that takes no time at all is
-        # what every other test here wants.
-        self.delay_seconds = 0.0
 
     async def create_if_absent(self, effect):
         self.effects.append(effect)
-        if self.delay_seconds:
-            await asyncio.sleep(self.delay_seconds)
+        if self._delay_seconds:
+            await asyncio.sleep(self._delay_seconds)
         # Recorded here, not asserted later: the handler closes the handle on the
         # way out, and a closed file raises on ``seekable()``. What matters is
         # what the *driver* was given, which is only observable now.
@@ -689,8 +690,9 @@ async def test_the_success_line_reports_how_long_the_handler_took(store, blob_ur
     reading in. The fake sleeps so the assertion is about an elapsed measurement
     rather than about the key being present.
     """
-    writer = FakeGcs(result(GcsCreateOutcome.WROTE, public_url=PUBLIC_URL, generation=1))
-    writer.delay_seconds = 0.05
+    writer = FakeGcs(
+        result(GcsCreateOutcome.WROTE, public_url=PUBLIC_URL, generation=1), delay_seconds=0.05
+    )
     with caplog.at_level("INFO", logger="src.worker.replicate"):
         await handler_for(store, writer)(command(blob_uri))
 
