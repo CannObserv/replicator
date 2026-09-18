@@ -23,3 +23,4 @@ docs/TESTING.md: what the test and gcs jobs run and why; a checkout change also 
 docs/contracts/: normative and linked from sibling repos, so drift here is cross-repo — change a charter and tests/test_boundaries.py together, file a changed issuer obligation in each issuer's repo, and check README.md's two Issuing paragraphs, which summarize the obligations
 docs/SKILLS.md: the skill and vendor inventory, hook registration and suspension, and The doc-check lists section (skills/, .claude/, .gitmodules, doc-sensitive-paths, doc-sections)
 AGENTS.md: Code Exploration Notes — re-run codebase_context_index in the same change as a manifest description edit (.socraticodecontextartifacts.json)
+docs/SOCRATICODE.md: the store's endpoints, the collection names projectId fixes, and which siblings a cross-repo search reaches (.socraticode.json, the store block in .claude/settings.json) — docs/INFRASTRUCTURE.md carries co-index itself, and docs/ENVIRONMENT.md the key's env file

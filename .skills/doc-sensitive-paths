@@ -83,3 +83,11 @@ doc-sections
 # The SocratiCode manifest is a source, not the artifact — editing it without
 # re-indexing leaves the highest-authority answer stale (docs/SOCRATICODE.md).
 .socraticodecontextartifacts.json
+
+# The store this repo is a client of (#92). `projectId` names the collections
+# five repos share on co-index, and `linkedProjects` names which siblings a
+# cross-repo search reaches — neither is derivable from the tree, and both are
+# described in docs/SOCRATICODE.md and docs/INFRASTRUCTURE.md. Slash-less, and
+# distinct from .socraticodecontextartifacts.json above: segment matching is
+# exact, so this entry does not also claim the manifest.
+.socraticode.json
