@@ -1,6 +1,8 @@
 # Environment Variables
 
-Every variable Replicator reads, with the reasoning behind each default. Two env
+Every variable Replicator reads, indexed here, with the reasoning behind each
+default — except the blob and temp-store settings, whose reasoning sits beside
+the behaviour it argues about in [STORAGE.md](STORAGE.md#variables). Two env
 files carry them, and the boundary between the two is hard:
 `/etc/replicator/.env` is the **only** file `replicator.service` reads, and the
 repo `.env` holds dev/agent secrets the worker has no use for — org-wide PATs
