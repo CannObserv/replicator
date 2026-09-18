@@ -80,13 +80,22 @@ while adopting the shared SocratiCode index:
 
 ```bash
 cat /proc/self/oom_score_adj                                          # -1000, from a session shell
-cat /proc/$(systemctl show -p MainPID --value replicator)/oom_score   # 670 at the default adj 0
+cat /proc/$(systemctl show -p MainPID --value replicator)/oom_score   # 72 at adj -900; 670 before
 ```
 
-So without the directive the asymmetry ran the wrong way. Under memory
-exhaustion the kernel would pick the worker — 670 against 0 — and spare the dev
-tooling that created the pressure. co-replicator is 3.9 GB with **no swap** and
-is also the dev workspace, so that is not a remote condition.
+**`-1000` is not a low score, it is ineligibility** — the OOM killer skips such a
+process entirely. 28 processes here hold it. So the directive was never going to
+win a comparison against them; what it changes is the worker's rank among the
+processes that *can* be chosen, and there it is decisive: 670 put the worker
+second from the top of that list, and 72 puts it at the bottom. co-replicator is
+3.9 GB with **no swap** and is also the dev workspace, so this is not a remote
+condition.
+
+**What now sits at the top of the eligible list is `tailscaled`, at 675.** Read
+that against CannObserv/broker#17, where the failure *was* the tailnet: killing
+tailscaled takes the bus away exactly as effectively as killing this worker, and
+no directive of ours reaches a system unit. Measured 2026-09-18, filed as an
+observation rather than fixed here.
 
 CannObserv/broker#17 is what it costs when it fires, and it fires in a shape
 worth recognising: launching a SocratiCode server on the broker's VM took the
@@ -103,9 +112,10 @@ Three things this is not:
   SocratiCode server is in [COMMANDS.md](COMMANDS.md).
 - **Not reachable with `earlyoom`.** It floors a `--prefer` match at 300, while
   a service at adj 0 reads ~670 on this kernel — it would choose the worker too.
-- **Not `-1000`.** That is exemption, and an exempt worker that leaks is
-  unreclaimable. `-900` is the cohort's value (CannObserv/broker#25): last to be
-  chosen, not immune. `tests/test_deploy.py` pins both bounds, for both units.
+- **Not `-1000`.** That is the exemption above, and an exempt worker that leaks
+  is unreclaimable — the kernel would work through everything else on the box
+  first. `-900` is the cohort's value (CannObserv/broker#25): last of the
+  eligible, not exempt. `tests/test_deploy.py` pins both bounds, for both units.
 
 The handler unit carries it for a sharper reason than the worker does: memory
 exhaustion is one of the conditions that *fires* it, so the moment it is most
