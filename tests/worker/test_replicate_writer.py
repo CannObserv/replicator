@@ -695,4 +695,7 @@ async def test_the_success_line_reports_how_long_the_handler_took(store, blob_ur
         await handler_for(store, writer)(command(blob_uri))
 
     (record,) = [r for r in caplog.records if r.message == "replicated a blob"]
-    assert record.duration_ms >= 50
+    # Bounded on both sides (CR 4): a lower bound alone passes a field emitted in
+    # microseconds or accumulated twice, and a number that reads high is exactly
+    # the error that would mis-size somebody's threshold.
+    assert 50 <= record.duration_ms < 5_000
