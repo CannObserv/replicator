@@ -466,11 +466,22 @@ def build_replicate_handler(
                 # length. Re-ask this question when one lands, rather than
                 # assuming every provider brings a limit.
                 "key": key,
-                # The one number nothing else keeps, exactly as on the fetch
-                # line: the fact records what was written and where, never how
-                # long it took. Journal-only, and journal-only on purpose —
-                # adding it to the wire would be a contract edit, and the
-                # question it answers is an operator's (#96).
+                # The whole handler: the guards, the source download, the
+                # provider write and the fact, which together are how long the
+                # group went without reading.
+                #
+                # **Not the same window as the fetch line's field of this name**,
+                # and the two are easy to read as one series (CR 1). That one is
+                # ``FetchResult.duration_ms`` — the origin round trip alone, with
+                # the pacing wait on its own ``paced_seconds`` and the store
+                # write counted nowhere. So fetch's number understates its
+                # handler and this one does not, which matters precisely where
+                # both get quoted: sizing somebody's threshold against how long
+                # this consumer holds a group (#96, CannObserv/broker#20).
+                #
+                # Journal-only, and journal-only on purpose — adding it to the
+                # wire would be a contract edit, and the question it answers is
+                # an operator's.
                 "duration_ms": round((time.monotonic() - started) * 1000, 1),
             },
         )
