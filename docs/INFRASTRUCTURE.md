@@ -62,7 +62,7 @@ because `grep` across the cluster wants them anyway. State on 2026-09-18:
 | `../archiver` | `codebase_archiver` | indexed on co-index (archiver#226) |
 | `../broker` | `codebase_broker` | indexed on co-index (broker#17) |
 | `../notifier` | `codebase_notifier` | indexed on co-index (notifier#57) |
-| `../watcher` | `codebase_3c54a78f3ffa` | **wrong collection** — watcher has not adopted a `projectId`, so its path hashes; skipped in silence |
+| `../watcher` | `codebase_3c54a78f3ffa` | **wrong collection** — watcher's adoption is CannObserv/watcher#300, in flight; until it lands its path hashes, and the skip is silent |
 
 Re-check when a sibling adopts or renames, and `git pull` the clone that is
 behind:
