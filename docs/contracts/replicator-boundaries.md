@@ -213,8 +213,8 @@ DLQ for being paced.
 **It also inherits the ceiling's granularity, and parking alone is therefore not a sufficient
 mechanism.** A parked message returns via `claim_stale`, so the finest per-host spacing it can
 express is `REPLICATOR_CLAIM_MIN_IDLE_MS` — **60 s by default**. Watcher's baseline today is
-`DEFAULT_MIN_INTERVAL = 1.0` s (`src/core/rate_limiter.py`), backing off to
-`BACKOFF_MAX_INTERVAL = 60.0` s. So parking matches the *backoff* case almost exactly and
+`DEFAULT_MIN_INTERVAL = 1.0` s (`watcher/src/core/rate_limiter.py` as it stood then; the
+file was deleted with the cutover), backing off to `BACKOFF_MAX_INTERVAL = 60.0` s. So parking matches the *backoff* case almost exactly and
 misses the *normal* case by 60×: implemented naively, every host would be paced at 1/60th of
 the rate the cluster runs at now. The failure is silent and in the safe direction, which is
 what makes it easy to ship.
@@ -269,15 +269,17 @@ record" and wants its own decision. #19 made it more defensible without making i
 Recorded here for the same reason `blob_uri` is: an unwritten gap and a decorative charter are the
 same thing to a reader.
 
-**The stream is a precondition of the Phase 4 cutover, not a follow-on to it.** Watcher's limiter
-(`src/core/rate_limiter.py::acquire_for_domain`, fed by 429s its own fetch path observes) is
-load-bearing today and stops functioning the moment that fetch path becomes a publish path — it does
-not fail, it silently becomes decorative, pacing publication rather than origin requests. #12's default closed that window on the consumer side and #19
-supplies the numbers; **what remains is issuer-side** — Watcher publishing its `Domain` rows
-onto this stream, tracked at
-[CannObserv/watcher#245](https://github.com/CannObserv/watcher/issues/245). Until it does,
-every host resolves to the fallback, which is the pre-#19 behaviour and is why the consumer
-half could land first.
+**The stream was a precondition of the Phase 4 cutover, not a follow-on to it — and both halves
+have now landed.** Watcher's limiter (`acquire_for_domain`, fed by 429s its own fetch path
+observed) was load-bearing until that fetch path became a publish path, at which point it would
+not have failed but silently become decorative, pacing publication rather than origin requests.
+#12's default closed that window on the consumer side and #19 supplied the numbers; the
+issuer-side half — Watcher publishing its `Domain` rows onto this stream — shipped with
+[CannObserv/watcher#245](https://github.com/CannObserv/watcher/issues/245), closed 2026-08-06.
+Watcher's limiter module is gone, replaced by its `content.fetch-policy` producer, and its
+four inert rate-limiter columns were dropped in watcher#272. A host with no published policy
+still resolves to the fallback, which is the pre-#19 behaviour and is why the consumer half
+could land first.
 
 ## Reviewing a proposed payload field
 
