@@ -497,12 +497,15 @@ async def test_run_closes_the_fetch_driver(monkeypatch, fake_redis, tmp_path):
 
     closed = []
 
+    clients = []
+
     class RecordingDriver:
         def __init__(self, client):
             # The run() seam passes the guarded client (#95); a stub that took
             # no argument would make this test pass while the worker fetched
             # through an unguarded one.
             assert isinstance(client._transport, GuardedTransport)
+            clients.append(client)
 
         async def execute(self, effect):
             raise AssertionError("no fetch expected in this test")
@@ -515,6 +518,11 @@ async def test_run_closes_the_fetch_driver(monkeypatch, fake_redis, tmp_path):
     await run(_stopped())
 
     assert closed == [True]
+    # **The driver closing is not the client closing** (CR 1). ``AsyncFetchDriver``
+    # releases its client only when it built it, so a run that injects one must
+    # release it itself — and a stub driver, which is what every test here uses,
+    # cannot show that. This is the assertion that would have caught the leak.
+    assert [client.is_closed for client in clients] == [True]
 
 
 async def test_run_dispatches_to_the_byte_path(monkeypatch, fake_redis, tmp_path):

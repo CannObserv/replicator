@@ -592,6 +592,12 @@ async def run(
     # Constructed inside the try, like the signal handlers: anything opened
     # between here and the try would leak the Redis client if it raised.
     fetcher: AsyncFetchDriver | None = None
+    # **Ours to close, and the driver will not do it** (CR 1). ``AsyncFetchDriver``
+    # closes its client only when it built it — ``_owns_client`` is False the
+    # moment one is injected — so ``fetcher.aclose()`` below is a no-op for this
+    # client and the pool would leak. Bound here for the same reason ``fetcher``
+    # is: the finally must be able to name it however the try failed.
+    fetch_client: httpx.AsyncClient | None = None
     # Bound before the try for the same reason ``fetcher`` is: the finally block
     # below iterates it, and a failure between here and its assignment would
     # raise NameError over the real error.
@@ -601,7 +607,10 @@ async def run(
         # httpx.AsyncClient whose connection pool is the point, and a per-message
         # driver would open and discard a pool per fetch. Closed in the same
         # finally as the Redis client — both are ours because we opened them.
-        fetcher = AsyncFetchDriver(build_fetch_client(settings))
+        # The *client* is released separately, just below: an injected one is
+        # not the driver's to close (CR 1).
+        fetch_client = build_fetch_client(settings)
+        fetcher = AsyncFetchDriver(fetch_client)
         # Installed inside the try so the handlers are always removed again —
         # outside it, a failure between install and the try would leak global
         # signal state (harmless for a dying process, not for an in-process test).
@@ -804,6 +813,11 @@ async def run(
             remove_signal_handlers()
         if fetcher is not None:
             await fetcher.aclose()
+        if fetch_client is not None:
+            # After the driver, not instead of it: aclose() is idempotent and a
+            # future co-core that does own an injected client must not find this
+            # one already closed out from under it.
+            await fetch_client.aclose()
         for alias, writer in writers.items():
             # Ours because we built them: the driver closes the transport it
             # owns, and a client left open holds an HTTP session past shutdown.
