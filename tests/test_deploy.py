@@ -40,10 +40,16 @@ NOTIFY = REPO_ROOT / "scripts" / "notify_failure.sh"
 DEFAULT_TIMEOUT_START_SEC = 90
 
 
-def _directive(name: str) -> str:
-    """The last value assigned to ``name`` in the unit (systemd's own semantics)."""
-    matches = re.findall(rf"^{name}=(.*)$", UNIT.read_text(), flags=re.MULTILINE)
-    assert matches, f"{name} is not set in {UNIT.name}"
+def _directive(name: str, unit: Path = UNIT) -> str:
+    """The last value assigned to ``name`` in ``unit`` (systemd's own semantics).
+
+    ``unit`` defaults to the worker's, which is what every caller but the
+    memory-protection test wants. That test asks the same question of both
+    units, and a second copy of this parsing would be two spellings of one
+    systemd rule, free to drift.
+    """
+    matches = re.findall(rf"^{name}=(.*)$", unit.read_text(), flags=re.MULTILINE)
+    assert matches, f"{name} is not set in {unit.name}"
     return matches[-1].strip()
 
 
@@ -404,14 +410,11 @@ def test_the_production_units_outrank_dev_tooling_for_the_oom_killer(unit: Path)
     ``earlyoom`` does not close it either: it floors a ``--prefer`` match at 300,
     and a service at adj 0 reads ~670 here, so it too would choose the worker.
     """
-    text = unit.read_text()
-    matches = re.findall(r"^OOMScoreAdjust=(-?\d+)$", text, flags=re.MULTILINE)
-
-    assert matches, (
-        f"{unit.name} sets no OOMScoreAdjust, so it scores ~670 against the "
-        "exempt (-1000) processes of any dev session on this VM"
+    assert re.search(r"^OOMScoreAdjust=", unit.read_text(), flags=re.MULTILINE), (
+        f"{unit.name} sets no OOMScoreAdjust, so it sits at the default 0 and reads "
+        "~670 — second from the top of this VM's eligible list"
     )
-    adjust = int(matches[-1])
+    adjust = int(_directive("OOMScoreAdjust", unit))
     assert adjust <= COHORT_OOM_SCORE_ADJUST, (
         f"{unit.name} sets OOMScoreAdjust={adjust}, which does not outrank dev tooling"
     )
