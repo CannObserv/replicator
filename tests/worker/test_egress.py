@@ -18,6 +18,7 @@ import socket
 
 import httpx
 import pytest
+from co_core_aio.fetch import AsyncFetchDriver
 
 from src.core.errors import (
     FailureReason,
@@ -27,6 +28,7 @@ from src.core.errors import (
     TransientFetchError,
 )
 from src.worker.egress import DEFAULT_BLOCKED_DESTINATIONS, GuardedTransport, blocked_networks
+from tests.worker.conftest import command
 
 
 def _never_called(request: httpx.Request) -> httpx.Response:  # pragma: no cover - asserts
@@ -262,3 +264,40 @@ async def test_an_unencodable_hostname_is_terminal():
         await transport.handle_async_request(httpx.Request("GET", "http://toolong.invalid/"))
 
     assert caught.value.reason is FailureReason.NOT_FETCHABLE
+
+
+async def test_a_refusal_survives_the_driver_and_reaches_the_handler(handler):
+    """CR 3: the refusal has to cross httpx's stack and ``_fetch``'s except clauses.
+
+    Every other test here calls the transport directly, which proves the range
+    arithmetic and nothing about the path the exception actually travels. In
+    between sit ``AsyncClient``'s redirect loop and ``_fetch``, whose
+    ``except httpx.HTTPError`` would reclassify anything it caught as
+    *transient* — a refusal that landed there would retry to the delivery
+    ceiling and dead-letter as ``handler_error``, telling the issuer nothing
+    about why. So this drives the **real** ``AsyncFetchDriver`` over a guarded
+    client and asserts the reason the contract's refusal row promises.
+
+    Finding 2 in this same review is why the seam is worth a test rather than an
+    argument: it is where the guard already broke once.
+    """
+    reached = []
+
+    def inner(request: httpx.Request) -> httpx.Response:  # pragma: no cover - asserts
+        reached.append(str(request.url))
+        return httpx.Response(200)
+
+    client = httpx.AsyncClient(
+        transport=GuardedTransport(
+            httpx.MockTransport(inner),
+            blocked=blocked_networks(None),
+            resolve=_resolver({"shelley.invalid": ["127.0.0.1"]}),
+        ),
+        follow_redirects=True,
+    )
+    async with client:
+        with pytest.raises(PermanentFetchError) as caught:
+            await handler(AsyncFetchDriver(client))(command(url="http://shelley.invalid:9999/"))
+
+    assert caught.value.reason is FailureReason.DESTINATION_REFUSED
+    assert reached == [], "the refusal must precede the request, not follow it"
