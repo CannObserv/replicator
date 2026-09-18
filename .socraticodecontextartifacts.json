@@ -53,7 +53,7 @@
     {
       "name": "temp-storage",
       "path": "./docs/STORAGE.md",
-      "description": "The blob tree: file://<blob_dir>/<ab>/<cd>/<sha256>.bin with a constant .bin extension, temp-file + os.replace so presence means complete, and creation-only 0644/0755 modes with the startup reachability warning. Retention: the TTL runs from last reference (os.utime on the store short-circuit), the three populations under REPLICATOR_BLOB_DIR and why in-flight .tmp files are not garbage, the byte ceiling as backpressure rather than a faster clock, the single BlobUsage with two writers, orphan recording, and why the sweep runs in the worker rather than a systemd timer."
+      "description": "The blob tree: file://<blob_dir>/<ab>/<cd>/<sha256>.bin with a constant .bin extension, temp-file + os.replace so presence means complete, and creation-only 0644/0755 modes with the startup reachability warning. Retention: the TTL runs from last reference (os.utime on the store short-circuit), the three populations under REPLICATOR_BLOB_DIR and why in-flight .tmp files are not garbage, the byte ceiling as backpressure rather than a faster clock, the single BlobUsage with two writers, orphan recording, and why the sweep runs in the worker rather than a systemd timer. Carries the REPLICATOR_BLOB_* variables and REPLICATOR_MAX_BLOB_BYTES themselves since #92, under ## Variables; docs/ENVIRONMENT.md indexes them by name."
     },
     {
       "name": "infrastructure-topology",
@@ -68,7 +68,7 @@
     {
       "name": "environment-variables",
       "path": "./docs/ENVIRONMENT.md",
-      "description": "Every environment variable Replicator reads, with the reasoning behind each default, and the hard boundary between /etc/replicator/.env (the only file the service reads) and the repo .env (dev/agent secrets). Split out of docs/DEPLOYMENT.md. Since #92 a third carrier is documented alongside them: .claude/settings.json holds the six non-secret values addressing the shared SocratiCode store and .claude/settings.local.json holds QDRANT_API_KEY, both read by the agent harness and by nothing the service starts."
+      "description": "Every environment variable Replicator reads, indexed in one place, with the reasoning behind each default — except the blob and temp-store settings, whose reasoning sits beside the behaviour it argues about in docs/STORAGE.md (#92). Also the hard boundary between /etc/replicator/.env (the only file the service reads) and the repo .env (dev/agent secrets). Split out of docs/DEPLOYMENT.md. Since #92 a third carrier is documented alongside them: .claude/settings.json holds the six non-secret values addressing the shared SocratiCode store and .claude/settings.local.json holds QDRANT_API_KEY, both read by the agent harness and by nothing the service starts."
     },
     {
       "name": "testing-reference",

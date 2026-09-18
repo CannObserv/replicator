@@ -223,3 +223,65 @@ tighten :: - **Two blob backends, one seam.** `local` announces `file://` and `g
 # passed, so the warrant was missed at the time: `#\d{2,}` in a permanent anchor
 # slug is a class 3b seam, and ENVIRONMENT.md's link was retargeted with it.
 docs/DEPLOYMENT.md :: rename :: ### When the worker fails, who is told (#94)
+
+# ---- #92 curation (AGENTS.md 6153 -> 5991 exact tokens) ----
+#
+# Eleven class-C rewrites in place, no demotion: `--claims` reports
+# claims_dropped: 0 against 149 atoms, so not one backticked span, issue
+# reference or link target of the base file was dropped -- only words were. Each
+# line below was read against its replacement.
+#
+# What the rewrites stopped repeating, and where it still lives:
+#   * The replicate-loop bullet's five-item list was a table of contents for
+#     docs/CONVENTIONS.md, which the same bullet tells you to read first.
+#   * The two broker-refusal pointers ("which commands are refused, why each
+#     classification, and the costs both carry") named the sections of
+#     docs/CONVENTIONS.md they point at.
+#   * The two systemd units share one rule -- copy, not symlink -- so it is
+#     stated once and both units named under it. Every atom kept, including
+#     `journalctl -t replicator-failure` and the `%n` gotcha.
+#   * "Three normative contracts ... four documents" needed the ## Detail Docs
+#     index to disambiguate, and that index is the next section.
+#   * The wheelhouse sync COMMAND was verbatim twice in this file; the copy
+#     under Common Commands went and its comment now points at the one that
+#     kept its reasoning. Only the comment is a loss; the command is still
+#     inline under Environment & Tooling.
+#   * "# these do not exercise all of src/" restated the --no-cov rationale
+#     given one command above it.
+tighten :: **Worker-first.** Primary process = bus consumer (`src/worker/main.py`), not an HTTP API. The FastAPI app is a `/health` surface only, dev-only until a status endpoint is wanted.
+tighten :: **Cap anything that launches a SocratiCode server** — uncapped, one cost this cluster 58 min of bus (#94). Invocations in [docs/COMMANDS.md](docs/COMMANDS.md). A green `codebase_search` is also not evidence every linked sibling answered: three silent-skip modes, and which sibling is in one today, in [docs/SOCRATICODE.md](docs/SOCRATICODE.md).
+tighten :: - **`/etc/systemd/system/replicator.service` is a copy, not a symlink** — `cp` it
+tighten ::   after every edit to `deploy/`, because `daemon-reload` alone re-reads the old file.
+tighten ::   **Two unit files now** (#94): `replicator-failure-notify@.service` is the
+tighten ::   `OnFailure=` handler, copied the same way, and a missed `cp` stays invisible until
+tighten ::   the first failure. Read what it reported with `journalctl -t replicator-failure` —
+tighten :: For shell commands (dev only), load both — the snippet is under Common Commands.
+tighten ::   `info_item_rep_spec_id` are **echoed, never read** — each `test_boundaries.py`
+tighten ::   [docs/STORAGE.md](docs/STORAGE.md) is the authority — read it before touching
+tighten ::   either store.
+tighten ::   republishes an `XADD` the broker already applied. Which commands are refused,
+tighten ::   why each classification, and the costs both carry:
+tighten ::   [docs/CONVENTIONS.md](docs/CONVENTIONS.md).
+tighten :: - **The replicate loop writes for `gcs` (#29)** — create-if-absent, `blob_uri` never
+tighten ::   resolved as a path, writers keyed by alias, refusals before credentials, provider
+tighten ::   failures classified by HTTP status. Read
+tighten ::   [docs/CONVENTIONS.md](docs/CONVENTIONS.md) first.
+tighten :: - **Three normative contracts bound the wire and the roadmap** — four documents
+tighten ::   under `docs/contracts/`, indexed below. `tests/test_boundaries.py` enforces the
+tighten ::   charter in CI; change a charter and its tests together.
+tighten :: # Mirror the private index, then install
+tighten :: # Integration tests (a scratch redis-server, or one the test spawns; --no-cov —
+tighten :: # these do not exercise all of src/)
+
+# ---- #92 curation, second pass to reach the budget exactly ----
+# The exact count (6015) sat 15 over where the offline estimate had read 5991,
+# so four more lines were tightened. `--claims` still reports claims_dropped: 0.
+#
+# "Red -> Green -> Refactor" restates what "TDD required" already says and what
+# the model already knows -- the one `default` warrant in this run. The three
+# index lines lost a conjunction, a repeated "and", and the word "normative",
+# which the Bus Conventions bullet above now states once for all four contracts.
+default :: TDD required. Red → Green → Refactor. No production code without a failing test first.
+tighten :: - [docs/CONVENTIONS.md](docs/CONVENTIONS.md) — the rules common to every stream: idempotency, validation, DLQ, `claim_stale`; and the `replicator:cmd:*` keys (#80)
+tighten :: - [docs/STYLE.md](docs/STYLE.md) — the logging stack: formatter, installers, and the non-JSON journald lines
+tighten :: - [docs/contracts/content-fetch-issuer-contract.md](docs/contracts/content-fetch-issuer-contract.md) — what a `content.fetch` producer must do; normative, linked from issuer repos

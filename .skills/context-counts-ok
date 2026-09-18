@@ -21,8 +21,6 @@ AGENTS.md :: enumerated :: **Two blob backends, one seam.**
 AGENTS.md :: enumerated :: **Three stream kinds, three sets of rules.**
 # The three contracts and their four documents are the four `docs/contracts/`
 # rows in ## Detail Docs, one line down the same file.
-AGENTS.md :: enumerated :: **Three normative contracts bound the wire and the roadmap**
-AGENTS.md :: enumerated :: four documents under `docs/contracts/`
 #
 # --- stable: structural, and cannot change without the sentence being rewritten.
 # XAUTOCLAIM's reply shape is Redis wire format, and the ≥7.0 floor beside it is
@@ -42,5 +40,4 @@ docs/DEPLOYMENT.md :: stable :: `XAUTOCLAIM`'s three-element reply
 # that OnFailure= names it, so a second file cannot silently become one or three.
 # The two _TRANSIENT_ERRORS members — src/worker/loop.py:80, imported and
 # asserted by tests/worker/test_oom_integration.py against a live broker.
-AGENTS.md :: gated :: **Two unit files now** (#94)
 AGENTS.md :: gated :: `OutOfMemoryError` and `NoPermissionError` are the two

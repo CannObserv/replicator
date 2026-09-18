@@ -90,7 +90,7 @@ Three ways a linked repo contributes nothing, none of which the tool result says
 So a green `codebase_search` is never evidence that every sibling answered. Which
 sibling is in which state on this VM — and the drift a real checkout is exposed
 to that a one-file stub is not — is in
-[INFRASTRUCTURE.md](INFRASTRUCTURE.md#the-semantic-index-is-co-index--a-store-this-repo-is-a-client-of-92),
+[INFRASTRUCTURE.md](INFRASTRUCTURE.md#the-semantic-index-is-co-index--a-store-this-repo-is-a-client-of),
 because this file is regenerated wholesale and would take it along.
 
 ## Graph health

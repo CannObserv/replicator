@@ -6,13 +6,13 @@ Be terse. Prefer fragments over full sentences. Skip filler and preamble. Sacrif
 
 Retrieval, fingerprinting, and temporary storage layer for the Cannabis Observer cluster.
 
-**Worker-first.** Primary process = bus consumer (`src/worker/main.py`), not an HTTP API. The FastAPI app is a `/health` surface only, dev-only until a status endpoint is wanted.
+**Worker-first.** Primary process = bus consumer (`src/worker/main.py`), not an HTTP API. The FastAPI app is a dev-only `/health` surface.
 
 The command → fact flow: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Development Methodology
 
-TDD required. Red → Green → Refactor. No production code without a failing test first.
+TDD required: no production code without a failing test first.
 
 ## Environment & Tooling
 
@@ -56,7 +56,7 @@ Full tool table, prefetch query, per-tool guidance, cross-repo search:
 
 **`mcp-driver.mjs` lies twice** — silently through the `skills/` symlink (skills#177), falsely from a worktree (skills#180). Use `"$SOCRATICODE_DRIVER"`; disbelieve health findings outside the main checkout ([docs/SKILLS.md](docs/SKILLS.md)).
 
-**Cap anything that launches a SocratiCode server** — uncapped, one cost this cluster 58 min of bus (#94). Invocations in [docs/COMMANDS.md](docs/COMMANDS.md). A green `codebase_search` is also not evidence every linked sibling answered: three silent-skip modes, and which sibling is in one today, in [docs/SOCRATICODE.md](docs/SOCRATICODE.md).
+**Cap anything that launches a SocratiCode server** — uncapped, one cost this cluster 58 min of bus (#94). Invocations in [docs/COMMANDS.md](docs/COMMANDS.md). A green `codebase_search` is also not evidence every linked sibling answered: the silent-skip modes, and which sibling is in one, are in [docs/SOCRATICODE.md](docs/SOCRATICODE.md).
 
 ## Project Layout
 
@@ -87,11 +87,11 @@ Three that bite, each symptomless until it matters:
 - **The service refuses to start off `main`, or off unpushed commits** (#37, #48).
   `REPLICATOR_ALLOW_ANY_CHECKOUT=1` overrides; a dev worker asks the same question
   at the writer (#52).
-- **`/etc/systemd/system/replicator.service` is a copy, not a symlink** — `cp` it
-  after every edit to `deploy/`, because `daemon-reload` alone re-reads the old file.
-  **Two unit files now** (#94): `replicator-failure-notify@.service` is the
-  `OnFailure=` handler, copied the same way, and a missed `cp` stays invisible until
-  the first failure. Read what it reported with `journalctl -t replicator-failure` —
+- **Both installed units are copies, not symlinks** — `cp` after every edit to
+  `deploy/`, because `daemon-reload` alone re-reads the old file.
+  `/etc/systemd/system/replicator.service`, and since #94 the `OnFailure=` handler
+  `replicator-failure-notify@.service`, whose missed `cp` stays invisible until the
+  first failure. Read what it reported with `journalctl -t replicator-failure`;
   `journalctl -u` finds nothing, because `%n` doubles the suffix.
 - **The daily skills-refresh hook commits without pushing**, which is one of the
   states the checkout guard refuses. Check `git status -sb` before a restart.
@@ -114,7 +114,7 @@ widen their blast radius. Anything the service needs goes in `/etc/replicator/.e
 New settings take the `REPLICATOR_` prefix (cohort convention). `BUILD_ID` is the
 one deliberate exception, stamped generically by the unit.
 
-For shell commands (dev only), load both — the snippet is under Common Commands.
+Load both for shell commands (dev only); the snippet is under Common Commands.
 Every variable, which file carries it, and each default's reasoning:
 [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md).
 
@@ -125,14 +125,13 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
 - **At-least-once ⇒ idempotent.** The command dedupes on `command_id`; both facts
   are keyed per *occurrence* (`content_fingerprint:command_id`,
   `command_id:occurred_at`). `info_source_id` and replicate's
-  `info_item_rep_spec_id` are **echoed, never read** — each `test_boundaries.py`
+  `info_item_rep_spec_id` are **echoed, never read** — a `test_boundaries.py`
   carve-out is one field wide, and adding one edits the charter (#28, #29).
 - **Two blob backends, one seam.** `REPLICATOR_BLOB_BACKEND` selects them: `local`
   announces `file://` and `gcs` announces `gs://`, and `local` stays the
   compiled-in default deliberately (#7). Every `BlobStore` call from a coroutine
   goes through `asyncio.to_thread`.
-  [docs/STORAGE.md](docs/STORAGE.md) is the authority — read it before touching
-  either store.
+  [docs/STORAGE.md](docs/STORAGE.md) is the authority for either store.
 - **Store, then publish — never the reverse.** A fact pointing at absent bytes is
   unrepairable by the consumer; stored bytes with no fact repair themselves on the
   reclaim.
@@ -155,9 +154,8 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
   valid commands. Boot-only `XGROUP CREATE … MKSTREAM` is the one refusal that
   does **not** retry. Cap a broker the tests spawn, **never the shared one**, and
   never answer an OOM with a client-level retry, which
-  republishes an `XADD` the broker already applied. Which commands are refused,
-  why each classification, and the costs both carry:
-  [docs/CONVENTIONS.md](docs/CONVENTIONS.md).
+  republishes an `XADD` the broker already applied. Each classification and what it
+  costs: [docs/CONVENTIONS.md](docs/CONVENTIONS.md).
 - **The `replicator:cmd:*` keys are the only non-stream keys on the broker (#80).**
   Per-stream dedupe — `SET NX EX` after a *completing* close, `EXISTS` before the
   handler — so losing them costs one TTL window of re-fetches, never correctness:
@@ -170,23 +168,20 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
   `content.blobs` and `content.artifacts` each carry both outcomes of their
   command; `content.fetch-policy` is read **groupless** — no group, no ack, no
   DLQ.
-- **The replicate loop writes for `gcs` (#29)** — create-if-absent, `blob_uri` never
-  resolved as a path, writers keyed by alias, refusals before credentials, provider
-  failures classified by HTTP status. Read
-  [docs/CONVENTIONS.md](docs/CONVENTIONS.md) first.
+- **The replicate loop writes for `gcs` (#29)** — create-if-absent, and `blob_uri` is
+  never resolved as a path. Read [docs/CONVENTIONS.md](docs/CONVENTIONS.md) first.
 - **A fetch may not reach loopback, RFC 1918, or the tailnet (#89, #95).** Per redirect hop.
 - **Watcher alone issues `content.fetch` (#90).** `scripts/seed_fetch.py` seeds
   scratch streams; the live one takes `--production` and Watcher's identity, never
   `replicator`'s.
-- **Three normative contracts bound the wire and the roadmap** — four documents
-  under `docs/contracts/`, indexed below. `tests/test_boundaries.py` enforces the
-  charter in CI; change a charter and its tests together.
+- **The `docs/contracts/` documents are normative**, indexed below.
+  `tests/test_boundaries.py` enforces the charter in CI; change a charter and its
+  tests together.
 
 ## Common Commands
 
 ```bash
-# Mirror the private index, then install
-uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
+# Mirror the private index first — command under Environment & Tooling
 uv sync
 
 # Load environment (required before running the worker or gh)
@@ -198,8 +193,7 @@ uv run pytest
 # Run a subset of tests (skip the coverage gate, which measures all of src/)
 uv run pytest --no-cov tests/path/to/test.py
 
-# Integration tests (a scratch redis-server, or one the test spawns; --no-cov —
-# these do not exercise all of src/)
+# Integration tests (a scratch redis-server, or one the test spawns; --no-cov again)
 uv run pytest --no-cov -m integration
 
 # Run linter
@@ -242,18 +236,18 @@ source — each with its rationale and ruff gate in [docs/STYLE.md](docs/STYLE.m
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — founding design, the command → fact flow, module by module; read before changing one
 - [docs/STREAMS.md](docs/STREAMS.md) — what each stream carries, one bullet per rule `AGENTS.md` states in a line
-- [docs/CONVENTIONS.md](docs/CONVENTIONS.md) — the rules common to every stream: idempotency, validation, DLQ, `claim_stale`; and the `replicator:cmd:*` keys (#80)
+- [docs/CONVENTIONS.md](docs/CONVENTIONS.md) — the rules common to every stream: idempotency, validation, DLQ, `claim_stale`, and the `replicator:cmd:*` keys (#80)
 - [docs/STORAGE.md](docs/STORAGE.md) — blob paths and modes, the populations under `REPLICATOR_BLOB_DIR`, TTL and ceilings
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — the unit's lifecycle, its start guards, what it reports when it fails, the co-core pin
 - [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) — VM topology, ports, the broker, and the buckets either side of the test/production line
 - [docs/reference/tailscale.md](docs/reference/tailscale.md) — this node: tailnet, ACL, DNS, broker latency
 - [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) — every variable either env file carries, and the boundary between them
 - [docs/TESTING.md](docs/TESTING.md) — fakeredis's divergences, the keys an integration run may create, why production `co-gcs-replication` is unreachable (#38)
-- [docs/STYLE.md](docs/STYLE.md) — the logging stack: formatter, installers, and the non-JSON journald lines
+- [docs/STYLE.md](docs/STYLE.md) — the logging stack: formatter, installers, the non-JSON journald lines
 - [docs/COMMANDS.md](docs/COMMANDS.md) — every runnable command, with flags
 - [docs/SKILLS.md](docs/SKILLS.md) — vendored skill inventory, refresh procedure, doc-check lists
 - [docs/SOCRATICODE.md](docs/SOCRATICODE.md) — full tool table, prefetch query, per-tool gotchas, cross-repo search
-- [docs/contracts/content-fetch-issuer-contract.md](docs/contracts/content-fetch-issuer-contract.md) — what a `content.fetch` producer must do; normative, linked from issuer repos
+- [docs/contracts/content-fetch-issuer-contract.md](docs/contracts/content-fetch-issuer-contract.md) — what a `content.fetch` producer must do; linked from issuer repos
 - [docs/contracts/content-fetch-issuer-reference.md](docs/contracts/content-fetch-issuer-reference.md) — its lookup half: refusal list, failure taxonomy, silent conditions, trust posture
 - [docs/contracts/replicator-boundaries.md](docs/contracts/replicator-boundaries.md) — what Replicator may become; run its three tests against any proposed capability
 - [docs/contracts/content-replicate-issuer-contract.md](docs/contracts/content-replicate-issuer-contract.md) — the replicate trust model and issuer obligations (#34)

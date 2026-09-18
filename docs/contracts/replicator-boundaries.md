@@ -367,7 +367,7 @@ bytes this worker cannot verify inverts the claim-check principle, whatever Test
 **Granted instead: retention is a number, not a boundary.** "Holding them briefly" means
 *bounded by the announced `blob_expires_at`*, not any particular magnitude — a longer
 `REPLICATOR_BLOB_TTL_SECONDS` changes duration, not kind, and the raise-on-consumer-request
-path already exists ([ENVIRONMENT.md](../ENVIRONMENT.md)). The issuer-side shape is the
+path already exists ([STORAGE.md](../STORAGE.md#variables)). The issuer-side shape is the
 conditional-GET precedent again: persist the previous `blob_uri` + `blob_expires_at` (a
 reference, not content), re-extract old bytes with current specs
 (CannObserv/watcher#222).

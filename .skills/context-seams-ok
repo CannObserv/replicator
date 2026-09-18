@@ -93,3 +93,41 @@ docs/TESTING.md :: Testing against a broker at its cap (#79)
 # still AGENTS.md's, and the handler variables still sit in DEPLOYMENT.md.
 scripts/notify_failure.sh :: # AGENTS.md treats this env boundary as a security boundary, and argv is the
 docs/DEPLOYMENT.md :: - **`REPLICATOR_NOTIFY_TOKEN`** — sent as `Authorization: Bearer`
+
+# ---- #92 curation ----
+# Three of this run's own headings carried `(#92)` into their anchor slugs and
+# were renamed instead of acknowledged, which is why they are absent here: a
+# provenance suffix in a permanent anchor is a link waiting to break, and
+# docs/SOCRATICODE.md already pointed at one of them. The issue number stays in
+# each section's body, where nothing resolves against it.
+#
+# These three are legitimate. Both back-references point at content that is
+# still in AGENTS.md after this run — checked, not assumed — and the fourth
+# heading predates this curation.
+docs/COMMANDS.md :: AGENTS.md), then set this once per shell; the examples below assume it:
+docs/SKILLS.md :: change; the manifest goes to the re-index rule in AGENTS.md rather than to
+docs/DEPLOYMENT.md :: Rehearsing reconnection (#94)
+
+# ---- #92 curation, the docs/ENVIRONMENT.md -> docs/STORAGE.md split ----
+#
+# Scoped to the file each hit sits in. THREE hits were lies and were FIXED
+# rather than acknowledged, which is why they are absent from this block:
+#   * docs/DEPLOYMENT.md's "every one either env file carries"
+#   * docs/INFRASTRUCTURE.md's pointer for the permanent compiled-in `local`
+#   * docs/contracts/replicator-boundaries.md's for REPLICATOR_BLOB_TTL_SECONDS
+# each named ENVIRONMENT.md for an entry that is now in STORAGE.md.
+#
+# Everything below points at content that did NOT move — the notify variables,
+# the env-file boundary itself, the Qdrant key, REPLICATOR_REDIS_FLOOR_WAIT, the
+# new section's own link back to the doc that indexes it, and the manifest's
+# path field. Each was read against what it points at.
+docs/DEPLOYMENT.md :: themselves are in [ENVIRONMENT.md](ENVIRONMENT.md), which indexes every one and
+docs/DEPLOYMENT.md :: All three live in `/etc/replicator/.env` and are read by the `OnFailure=` handler **only** — never by the worker, which is why they are here rather than in [ENVIRONMENT.md](ENVIRONMENT.md) with the settings `src/core/config.py` parses.
+docs/DEPLOYMENT.md :: and the boundary between them: [ENVIRONMENT.md](ENVIRONMENT.md).
+docs/INFRASTRUCTURE.md :: | Key | `QDRANT_API_KEY`, `.claude/settings.local.json` | See [ENVIRONMENT.md](ENVIRONMENT.md). |
+docs/SOCRATICODE.md :: and nowhere else ([ENVIRONMENT.md](ENVIRONMENT.md)). Capped invocations for
+docs/STORAGE.md :: configuration — [ENVIRONMENT.md](ENVIRONMENT.md) keeps the boundary between that
+docs/reference/tailscale.md :: `REPLICATOR_REDIS_FLOOR_WAIT` ([ENVIRONMENT.md](../ENVIRONMENT.md)). It is
+.socraticodecontextartifacts.json :: "description": "The blob tree: file://<blob_dir>/<ab>/<cd>/<sha256>.bin with a constant .bin extension, temp-file + os.replace so presence means complete, and creation-only 0644/0755 modes with the startup reachability warning. Retention: the TTL runs from last reference (os.utime on the store short-circuit), the three populations under REPLICATOR_BLOB_DIR and why in-flight .tmp files are not garbage, the byte ceiling as backpressure rather than a faster clock, the single BlobUsage with two writers, orphan recording, and why the sweep runs in the worker rather than a systemd timer. Carries the REPLICATOR_BLOB_* variables and REPLICATOR_MAX_BLOB_BYTES themselves since #92, under ## Variables; docs/ENVIRONMENT.md indexes them by name."
+.socraticodecontextartifacts.json :: "description": "VM topology and ports, the systemd unit's lifecycle and its ExecStartPre guards, the checkout guard, and the co-core pin. The environment variables themselves are in docs/ENVIRONMENT.md. Also OOMScoreAdjust=-900 on both units (#92): on exe.dev everything descended from a session inherits oom_score_adj=-1000 and is exempt from the OOM killer, so an unprotected worker at ~670 was what the kernel would pick under pressure the dev tooling created."
+.socraticodecontextartifacts.json :: "path": "./docs/ENVIRONMENT.md",

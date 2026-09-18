@@ -24,7 +24,7 @@ The change bus runs on `co-broker` (tailnet `broker`), operated from CannObserv/
 
 The **redis-py client** resolves `>=5,<8` transitively via `co-core-aio[bus]`. Don't re-pin it narrower.
 
-## The semantic index is `co-index` — a store this repo is a client of (#92)
+## The semantic index is `co-index` — a store this repo is a client of
 
 The cohort's shared Qdrant runs on a fifth VM, **`co-index`** (tailnet `index`),
 built and operated from CannObserv/notifier (notifier#57). Replicator is a
@@ -85,7 +85,7 @@ machine opts out in its own git-ignored `.claude/settings.local.json` with
 The `gcs` blob backend is **what this VM runs**: `/etc/replicator/.env` sets
 `REPLICATOR_BLOB_BACKEND=gcs` / `REPLICATOR_BLOB_BUCKET=co-gcs-blobs` (flipped
 2026-08-20, after watcher#275 deployed `gs://` support). The compiled-in default
-stays `local` — permanently, see ENVIRONMENT.md — so a fresh clone, a test run,
+stays `local` — permanently, see STORAGE.md — so a fresh clone, a test run,
 and any host without this env still get the filesystem backend.
 
 | | Production temp store | Test temp store |

@@ -340,7 +340,7 @@ bash .skills/doctor.sh                        # repair dangling skill symlinks
 git submodule update --remote --merge         # pull upstream skill changes
 ```
 
-## SocratiCode — the shared index on `co-index` (#92)
+## SocratiCode — the shared index on `co-index`
 
 The store, its endpoints and the one-host-per-`projectId` rule are in
 [INFRASTRUCTURE.md](INFRASTRUCTURE.md); the client contract is pinned by

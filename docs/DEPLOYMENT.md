@@ -3,9 +3,10 @@
 The systemd unit's lifecycle, the guards it starts behind, what it reports when
 it fails, and the co-core pin. `AGENTS.md` keeps the two-env-file boundary and
 the restart command; the reasoning behind each of them is here. The variables
-themselves — every one either env file carries — are in
-[ENVIRONMENT.md](ENVIRONMENT.md), and the VM, broker and bucket topology this
-unit runs on is in [INFRASTRUCTURE.md](INFRASTRUCTURE.md).
+themselves are in [ENVIRONMENT.md](ENVIRONMENT.md), which indexes every one and
+sends the blob and temp-store settings on to [STORAGE.md](STORAGE.md); the VM,
+broker and bucket topology this unit runs on is in
+[INFRASTRUCTURE.md](INFRASTRUCTURE.md).
 
 ## Server Lifecycle
 
@@ -70,7 +71,7 @@ All three live in `/etc/replicator/.env` and are read by the `OnFailure=` handle
 
 A failed dispatch records `reason` alongside `curl_exit`, mapped from curl's exit code (`6` unresolvable, `7` refused, `28` timed out, `35`/`60` TLS, …), because curl's own error sentence is discarded with its stderr.
 
-### Memory protection — the worker outranks the dev session that shares this VM (#92)
+### Memory protection — the worker outranks the dev session that shares this VM
 
 Both units set `OOMScoreAdjust=-900`. The reason is a property of exe.dev, not
 of this service: **every process descended from a session is exempt from the OOM
