@@ -87,21 +87,11 @@ Three ways a linked repo contributes nothing, none of which the tool result says
   it names a hash rather than `codebase_<sibling>` — and is then skipped as
   above.
 
-So a green `codebase_search` is never evidence that every sibling answered.
-
-**Today that is `../watcher`**, the one cohort repo that has not adopted a
-`projectId`: `/home/exedev/watcher` hashes to `3c54a78f3ffa`, a collection that
-does not exist. Archiver, broker and notifier each carry a committed
-`.socraticode.json`, and the clones here are fast-forwarded past it. That is also
-the drift this arrangement is exposed to — these are real checkouts rather than
-one-file stubs, so a sibling that changes its `projectId` is only picked up by a
-`git pull` in `../<sibling>`. Re-check with:
-
-```bash
-for d in ../archiver ../broker ../notifier ../watcher; do
-  printf '%s %s\n' "$d" "$(cat $d/.socraticode.json 2>/dev/null || echo MISSING)"
-done
-```
+So a green `codebase_search` is never evidence that every sibling answered. Which
+sibling is in which state on this VM — and the drift a real checkout is exposed
+to that a one-file stub is not — is in
+[INFRASTRUCTURE.md](INFRASTRUCTURE.md#the-semantic-index-is-co-index--a-store-this-repo-is-a-client-of-92),
+because this file is regenerated wholesale and would take it along.
 
 ## Graph health
 

@@ -310,7 +310,7 @@ unnoticed for another nine days.
    develops in worktrees by default, so that is the common case, not the edge one. Believe health
    findings from the main checkout; disregard them anywhere else.
 
-### After an `init-socraticode` re-run, re-apply three things
+### After an `init-socraticode` re-run, re-apply four things
 
 The skill regenerates `docs/SOCRATICODE.md` **wholesale** and re-copies the health hook, so a re-run
 reverts local corrections without saying so. Check these before committing its output:
@@ -320,6 +320,7 @@ reverts local corrections without saying so. Check these before committing its o
 | `node "$SOCRATICODE_DRIVER"` in the Graph health block | `node skills/init-socraticode/scripts/mcp-driver.mjs` | The template's path is the one that exits 0 printing nothing (skills#177) — the doc would teach the broken invocation |
 | `.claude/hooks/socraticode-health.sh` as a symlink | a copy (step C) | skills#179; `tests/test_skills_hook.py` fails, so this one is caught |
 | `codebase_context_index` | — | `AGENTS.md` and every doc here are registered artifacts; nothing re-embeds them |
+| The Cross-repo search section's three silent-skip modes, and its pointer into `docs/INFRASTRUCTURE.md` | whatever the template writes for `linkedProjects` | #92. A linked repo contributes nothing when its path does not resolve, when its collection was never indexed, or when it resolves to a path hash instead of `codebase_<sibling>` — and the tool result says so in none of the three. The per-sibling state is in `docs/INFRASTRUCTURE.md` precisely so a re-run cannot take it; the *pointer* still has to survive |
 
 Repo-specific *prose* needs no re-applying — it lives in `AGENTS.md` under
 `## Code Exploration Notes (repo-specific)`, outside the marker pair, which is why it goes there and

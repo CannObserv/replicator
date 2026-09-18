@@ -43,6 +43,36 @@ Both endpoints are reached over the tailnet, so the ACL must admit this VM to
 `tag:index:6333,11434`. **A missing ACL rule presents as a DNS failure, not a
 permission denial** — the same shape as #88 and archiver#193.
 
+The client toolchain is Node, installed for the user rather than the system:
+`/home/exedev/.local/node` (official v24.21.0 tarball, sha256 verified against
+`SHASUMS256.txt`), with `node`/`npm`/`npx` symlinked into `~/.local/bin`, which is
+already on `PATH`. No `sudo`, nothing in `apt`'s way, and removable by deleting
+the two paths. Without it the `codebase_*` tools cannot start, and the daily
+health hook says so once per UTC day rather than failing quietly (skills#281).
+
+**The siblings `linkedProjects` names are real checkouts here, not one-file
+stubs.** Either works — the path only selects which collection to query, and no
+source is read from it — but a checkout carries the sibling's *own*
+`.socraticode.json`, so it only learns a renamed `projectId` on a `git pull`,
+where a stub is a local declaration that cannot fall behind. These are checkouts
+because `grep` across the cluster wants them anyway. State on 2026-09-18:
+
+| Link | Resolves to | |
+|---|---|---|
+| `../archiver` | `codebase_archiver` | indexed on co-index (archiver#226) |
+| `../broker` | `codebase_broker` | indexed on co-index (broker#17) |
+| `../notifier` | `codebase_notifier` | indexed on co-index (notifier#57) |
+| `../watcher` | `codebase_3c54a78f3ffa` | **wrong collection** — watcher has not adopted a `projectId`, so its path hashes; skipped in silence |
+
+Re-check when a sibling adopts or renames, and `git pull` the clone that is
+behind:
+
+```bash
+for d in ../archiver ../broker ../notifier ../watcher; do
+  printf '%s %s\n' "$d" "$(cat "$d/.socraticode.json" 2>/dev/null || echo MISSING)"
+done
+```
+
 **One host indexes a `projectId`, and for `replicator` that host is this one.**
 Nothing enforces it: a clone elsewhere that holds the key writes to the same
 collections, because a session's startup auto-resume updates them and its status
