@@ -81,6 +81,15 @@ FORBIDDEN_TRACKED_ENV = (
     "QDRANT_PORT",
 )
 
+# The same splitters, asked of the git-ignored file — which the server reads
+# *before* the tracked one. `QDRANT_API_KEY` is deliberately absent: that file
+# is where the key belongs.
+FORBIDDEN_LOCAL_ENV = (
+    "QDRANT_COLLECTION_PREFIX",
+    "QDRANT_HOST",
+    "QDRANT_PORT",
+)
+
 
 @pytest.fixture(scope="module")
 def config() -> dict:
@@ -270,6 +279,40 @@ class TestKeyIsNotCommittable:
             if KEY_ASSIGNMENT.search(line)
         ]
         assert not offenders, f"a tracked file assigns a key-shaped QDRANT_API_KEY: {offenders}"
+
+
+class TestLocalSettingsCarryOnlyTheKey:
+    """The git-ignored file outranks the tracked one, and nothing else checks it."""
+
+    @pytest.mark.parametrize("name", FORBIDDEN_LOCAL_ENV)
+    def test_no_namespace_splitter_in_local_settings(self, name: str) -> None:
+        """A prefix here splits the namespace for all five repos, silently.
+
+        Resolution order is the process environment, then
+        `.claude/settings.local.json`, then `.claude/settings.json`, then user
+        settings — so this file **outranks** the one `TestStoreConfig` pins, and
+        a value set here wins. `QDRANT_COLLECTION_PREFIX` is the dangerous one:
+        it is prepended to the store-wide `socraticode_metadata` collection as
+        well as to this project's, so one machine setting it splits the cohort's
+        namespace for every other client, and every health check still reports
+        green.
+
+        Skipped where the file does not exist, which is every CI checkout: this
+        guards the developer VM, which is the only place the file lives.
+        """
+        if not LOCAL_SETTINGS.exists():
+            pytest.skip("no .claude/settings.local.json on this host")
+        env = json.loads(LOCAL_SETTINGS.read_text()).get("env", {})
+        assert name not in env, (
+            f"{name} in {LOCAL_SETTINGS_REL} overrides the tracked settings and is "
+            "invisible to every other check"
+        )
+
+    def test_branch_awareness_is_not_enabled_locally(self) -> None:
+        if not LOCAL_SETTINGS.exists():
+            pytest.skip("no .claude/settings.local.json on this host")
+        env = json.loads(LOCAL_SETTINGS.read_text()).get("env", {})
+        assert env.get("SOCRATICODE_BRANCH_AWARE") in (None, "false")
 
 
 class TestLinkedProjectsHaveOneSource:
