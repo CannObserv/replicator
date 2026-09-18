@@ -1393,6 +1393,11 @@ def test_the_worker_builds_its_fetch_client_behind_the_destination_guard(monkeyp
 
     client = build_fetch_client(Settings())
 
+    # ``_transport`` is private, and deliberately reached for anyway (CR 8):
+    # httpx exposes no public accessor, and the alternative — asserting through
+    # a request — is what ``test_egress.py`` covers end to end. An httpx upgrade
+    # that renames it fails here loudly, which is the right failure: it means
+    # nothing is checking that the worker's client is the guarded one.
     assert isinstance(client, httpx.AsyncClient)
     assert isinstance(client._transport, GuardedTransport)
     assert client.follow_redirects is True, (

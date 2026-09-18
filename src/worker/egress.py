@@ -191,10 +191,13 @@ def _default_port(url: httpx.URL) -> int:
 def _containing(address: str, blocked: tuple[Network, ...]) -> Network | None:
     """The first blocked range holding ``address``, or ``None``.
 
-    An address that does not parse is not silently allowed: it cannot have come
-    from ``getaddrinfo``, so it came from somewhere this function does not model
-    and the safe reading of an unmodelled destination is to let the transport
-    below fail on it rather than to claim it was checked.
+    **The unparseable branch is unreachable, and says so rather than implying a
+    policy** (CR 9). Both callers hand this a string that has already parsed: a
+    URL literal checked by ``_addresses``, or an address ``getaddrinfo``
+    returned. There is no input that reaches the ``except`` below, so it is not
+    a fail-open decision about unmodelled destinations — it is the arm that
+    keeps a guard from raising ``ValueError`` out of a transport if that ever
+    stops being true. If it starts executing, the bug is upstream of here.
     """
     try:
         parsed = ipaddress.ip_address(address)

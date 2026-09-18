@@ -75,6 +75,17 @@ def build_fetch_client(settings: Settings) -> httpx.AsyncClient:
     The range table is parsed here, at boot, before the consumer group is
     joined: a malformed CIDR is a worker that does not start, rather than a
     guard silently holding fewer ranges than the env file claims.
+
+    ⚠ **Passing a transport disables httpx's environment proxies** (CR 4).
+    ``AsyncClient`` computes ``allow_env_proxies = trust_env and transport is
+    None`` (0.28.1), so ``HTTP_PROXY`` / ``HTTPS_PROXY`` reached the client
+    ``AsyncFetchDriver()`` used to build and do not reach this one. Nothing sets
+    either variable on this host or in ``deploy/``, so this changes no
+    behaviour today — it is recorded because the failure is silent: an operator
+    who sets ``HTTPS_PROXY`` in ``/etc/replicator/.env`` expecting egress
+    control would get a direct connection and no error. Wiring the proxy back in
+    would also mean the guard checked the *proxy's* address rather than the
+    origin's, so it is a decision, not an oversight to correct in passing.
     """
     return httpx.AsyncClient(
         transport=GuardedTransport(
