@@ -29,10 +29,11 @@ Auth is ADC. Pin the current minor — `>=0.13.1,<0.14` — and raise the **patc
 <!-- BEGIN socraticode-policy -->
 ## Code Exploration Policy
 
-SocratiCode is the preferred semantic-search tool here once indexed (local Qdrant
-store + on-disk graph; manifest `.socraticodecontextartifacts.json`). Its MCP tools
-are **deferred** — schemas load only after the `ToolSearch` prefetch that
-`.claude/hooks/socraticode-reminder.sh` prints each session.
+SocratiCode is the preferred semantic-search tool here once indexed (the cohort's
+shared Qdrant on `co-index`, not a local store; manifest
+`.socraticodecontextartifacts.json`). Its MCP tools are **deferred** — schemas load
+only after the `ToolSearch` prefetch that `.claude/hooks/socraticode-reminder.sh`
+prints each session.
 
 **Negative rule.** Use SocratiCode MCP tools first for semantic questions ("where is
 X", "how does Y work", "what depends on Z"). Reach for `grep`/`rg` only on exact
@@ -51,9 +52,11 @@ Full tool table, prefetch query, per-tool guidance, cross-repo search:
 
 ## Code Exploration Notes (repo-specific)
 
-**The manifest is a source, not the artifact.** Nothing re-embeds it, so re-run `codebase_context_index` in the same change as a `description` edit — otherwise the stalest answer is the one with the most authority (#19 CR #17).
+**The manifest is a source, not the artifact.** Nothing re-embeds it — re-run `codebase_context_index` in the same change as a `description` edit, or the stalest answer carries the most authority (#19 CR #17).
 
-**`mcp-driver.mjs` lies twice — silently through the `skills/` symlink (skills#177), falsely from a worktree (skills#180).** Use `"$SOCRATICODE_DRIVER"`; disbelieve health findings outside the main checkout. Both in [docs/SKILLS.md](docs/SKILLS.md).
+**`mcp-driver.mjs` lies twice** — silently through the `skills/` symlink (skills#177), falsely from a worktree (skills#180). Use `"$SOCRATICODE_DRIVER"`; disbelieve health findings outside the main checkout ([docs/SKILLS.md](docs/SKILLS.md)).
+
+**Cap anything that launches a SocratiCode server** — uncapped, one cost this cluster 58 min of bus (#94). Invocations in [docs/COMMANDS.md](docs/COMMANDS.md). A green `codebase_search` is also not evidence every linked sibling answered: three silent-skip modes, and which sibling is in one today, in [docs/SOCRATICODE.md](docs/SOCRATICODE.md).
 
 ## Project Layout
 

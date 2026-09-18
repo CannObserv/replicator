@@ -24,6 +24,32 @@ The change bus runs on `co-broker` (tailnet `broker`), operated from CannObserv/
 
 The **redis-py client** resolves `>=5,<8` transitively via `co-core-aio[bus]`. Don't re-pin it narrower.
 
+## The semantic index is `co-index` — a store this repo is a client of (#92)
+
+The cohort's shared Qdrant runs on a fifth VM, **`co-index`** (tailnet `index`),
+built and operated from CannObserv/notifier (notifier#57). Replicator is a
+**client**: no Qdrant, no Ollama, no Docker image here. `docker.service` and
+`docker.socket` are disabled on this VM, and `/var/lib/docker` has never
+existed.
+
+| | Value | Why that form |
+|---|---|---|
+| Qdrant | `https://index.taild0fb76.ts.net:6333` | **The full MagicDNS name** — `index` alone is not in the certificate's SAN. TLS is not optional: upstream refuses to send `QDRANT_API_KEY` over a non-TLS, non-loopback connection, which is why the store serves TLS at all. |
+| Ollama | `http://index:11434` | `nomic-embed-text`, 768 dimensions — the store's, not this repo's choice. **Unauthenticated**: any node the ACL admits can reach it. Tailnet reachability is not authorization. |
+| Collections | `codebase_replicator`, `context_replicator`, `replicator_symgraph_{file,index,meta}` | Named by `projectId` in `.socraticode.json`. Without that file the id is `sha256(<absolute path>)[:12]` — `2a818eb7302d` for this checkout — which is not even per-host. |
+| Key | `QDRANT_API_KEY`, `.claude/settings.local.json` | See [ENVIRONMENT.md](ENVIRONMENT.md). |
+
+Both endpoints are reached over the tailnet, so the ACL must admit this VM to
+`tag:index:6333,11434`. **A missing ACL rule presents as a DNS failure, not a
+permission denial** — the same shape as #88 and archiver#193.
+
+**One host indexes a `projectId`, and for `replicator` that host is this one.**
+Nothing enforces it: a clone elsewhere that holds the key writes to the same
+collections, because a session's startup auto-resume updates them and its status
+and query calls start the file watcher. A checkout that must exist on another
+machine opts out in its own git-ignored `.claude/settings.local.json` with
+`SOCRATICODE_AUTO_RESUME=off` and `SOCRATICODE_WATCHER=off`. It can still search.
+
 ## The temp-blob buckets — live since 2026-08-20 (#7)
 
 The `gcs` blob backend is **what this VM runs**: `/etc/replicator/.env` sets

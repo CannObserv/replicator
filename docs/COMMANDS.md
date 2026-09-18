@@ -340,6 +340,64 @@ bash .skills/doctor.sh                        # repair dangling skill symlinks
 git submodule update --remote --merge         # pull upstream skill changes
 ```
 
+## SocratiCode — the shared index on `co-index` (#92)
+
+The store, its endpoints and the one-host-per-`projectId` rule are in
+[INFRASTRUCTURE.md](INFRASTRUCTURE.md); the client contract is pinned by
+`tests/test_socraticode_config.py`.
+
+**Cap anything that launches a server.** co-replicator is 3.9 GB with no swap and
+runs the worker beside these sessions. On CannObserv/broker's VM an uncapped
+launch degraded the tailnet for 57m48s with nothing OOM-killed (broker#17, our
+#94). `OOMScoreAdjust=-900` on the units is the other half and is already in
+place ([DEPLOYMENT.md](DEPLOYMENT.md)) — it does not remove the need for the cap,
+because a cgroup cap on a process at `oom_score_adj=-1000` *stalls* it rather
+than killing it, and everything a session starts sits at -1000 here.
+
+```bash
+# Offline, no server, no network — run these first; they catch a malformed
+# config before anything is launched.
+node "$SOCRATICODE_DRIVER" validate-store .      # projectId, store mode, the env block
+node "$SOCRATICODE_DRIVER" validate-manifest .   # every path in the artifacts manifest resolves
+
+# Host readiness: node, npx, trust, and whether the store answers. Run it BARE —
+# inline values would stand in for .claude/settings.json's env block and pass the
+# trust line whether or not the session actually carries it.
+bash skills-vendor/gregoryfoster-skills/skills/init-socraticode/scripts/preflight.sh
+
+# Anything that starts a server, capped. Measured here: ~40 s, worker untouched,
+# available memory never below 2.28 GB.
+systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% \
+  choom -n 500 -- node "$SOCRATICODE_DRIVER" health-check . --probe src/worker/main.py
+
+# The index itself. Same cap; archiver's 3.9 GB VM took 50 min for a repo this
+# size. Embedding runs on co-index, so the CPU cost here is small.
+systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% \
+  choom -n 500 -- node "$SOCRATICODE_DRIVER" index .
+```
+
+`systemd-run --user` needs linger and the `memory`/`cpu` controllers delegated —
+both hold here (`loginctl show-user exedev -p Linger`,
+`/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/cgroup.controllers`).
+
+**Installing the Qdrant API key.** Not runnable from this VM: exe.dev VMs are
+isolated from each other, and #57 D13's `tag:index:22` edge was retired after the
+soak. It runs from an operator machine, the only host that reaches both ends.
+
+```bash
+scp scripts/install_qdrant_key.sh co-replicator.exe.xyz:~/      # from a notifier checkout
+ssh co-index.exe.xyz \
+    "sudo sed -n 's/^QDRANT__SERVICE__API_KEY=//p' /etc/socraticode/qdrant.env" \
+  | ssh co-replicator.exe.xyz 'bash ~/install_qdrant_key.sh ~/replicator'
+```
+
+The key travels on **stdin, never argv** — an argument is in `ps` for the life of
+the call and in the caller's shell history. Expect `installed 64 chars`; **any
+other length is a truncated transfer**, which 401s exactly like a wrong key, and
+the length is the only cheap way to tell them apart. Never run it under `bash -x`
+— tracing a script that touches a credential writes the value to stdout, which is
+how two were leaked during notifier#57.
+
 ## Deploy
 
 ```bash
