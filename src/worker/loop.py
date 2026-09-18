@@ -29,6 +29,7 @@ invariants free to drift.
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -559,6 +560,16 @@ async def process_message[C: Command, R: Report](
 
     # asyncio.CancelledError is a BaseException, so shutdown propagates through
     # these handlers untouched — it is not a message failure.
+    #
+    # Clocked because this loop reads nothing while the handler runs, so the
+    # window below is also how long the group's next entry ages (#96,
+    # CannObserv/broker#20). Reported on the transient arm only, and that is the
+    # arm worth having (CR 2): a handler that succeeded logs its own duration on
+    # its success line, a permanent failure closes the message either way, and
+    # only this one both retries indefinitely — the classes here are exempt from
+    # the delivery ceiling — and can hold the loop for a provider timeout at a
+    # time while doing it.
+    started = time.monotonic()
     try:
         await handler(command)
     except CompletedWithoutBlobError as exc:
@@ -610,6 +621,7 @@ async def process_message[C: Command, R: Report](
                 "command_id": command.command_id,
                 "message_id": message.message_id,
                 "error": f"{type(exc).__name__}: {exc}",
+                "duration_ms": round((time.monotonic() - started) * 1000, 1),
             },
         )
         return Outcome.RETRY

@@ -304,3 +304,31 @@ async def test_a_command_blocked_by_the_blob_ceiling_stays_pending(fake_redis, c
     assert outcome is Outcome.RETRY
     assert fetcher.urls == []
     assert await fake_redis.xlen(dlq_name(TOPIC)) == 0
+
+
+async def test_the_retry_warning_reports_how_long_the_handler_held_the_loop(
+    fake_redis, consumer, settings, caplog
+):
+    """The hold that can actually breach a threshold is a slow *failure* (CR 2).
+
+    ``duration_ms`` on the replicate success line (#96) answers "how long does a
+    handler that worked take". It is the transient arm that has no bound: the
+    entry stays pending, the classes here are exempt from the delivery ceiling,
+    and a 120-second write timeout that keeps timing out holds this loop for two
+    minutes at a time, forever. Timed at this seam rather than in either handler
+    so both command streams report it from one place, and so the number is the
+    loop's own window rather than a handler's account of itself.
+    """
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-slow-transient"))
+
+    async def handler(command: ContentFetchCommand) -> None:
+        await asyncio.sleep(0.05)
+        raise TransientFetchError("the provider accepted the connection and then stalled")
+
+    message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
+    with caplog.at_level("WARNING", logger="src.worker.loop"):
+        outcome = await process_one(fake_redis, consumer, settings, message, handler)
+
+    assert outcome is Outcome.RETRY
+    (record,) = [r for r in caplog.records if r.message.startswith("transient failure")]
+    assert 50 <= record.duration_ms < 5_000
