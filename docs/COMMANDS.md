@@ -294,6 +294,21 @@ sudo journalctl -u replicator -f | grep 'applied a host fetch policy' # host, mi
 sudo journalctl -u replicator | grep 'stricter than the fallback'     # raise REPLICATOR_MIN_HOST_INTERVAL_SECONDS
 ```
 
+How long a handler holds its group — the number CannObserv/broker#20 sizes its
+undelivered-age warning from, because this consume path reads nothing while a handler runs:
+
+```bash
+sudo journalctl -u replicator | grep 'replicated a blob'   # duration_ms: the whole replicate handler
+sudo journalctl -u replicator | grep 'transient failure'   # duration_ms: a hold that ends in a retry, on either stream
+```
+
+The replicate line's `duration_ms` is the whole handler — guards, source download, provider
+write, fact. The **fetch** line's field of that name is not the same window: it is the origin
+round trip alone, with the politeness wait beside it as `paced_seconds` and the store write
+counted nowhere. Measured 2026-09-18 (#96), the replicate handler runs ~0.24 s on today's
+corpus and ~5.3 s for a blob at the `REPLICATOR_MAX_BLOB_BYTES` ceiling; the second grep is
+the one that finds a hold longer than that, and #98 is why it can repeat indefinitely.
+
 `tracked_hosts: 0` with a non-empty `XLEN` means messages arrived and none applied — check for
 `ignoring a ...` warnings on the same boot. The last grep is the one that needs acting on: it
 names a host whose real policy is stricter than the fallback that would replace it if the
