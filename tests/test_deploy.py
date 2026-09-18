@@ -379,20 +379,27 @@ COHORT_OOM_SCORE_ADJUST = -900
 
 @pytest.mark.parametrize("unit", [UNIT, NOTIFY_UNIT], ids=lambda p: p.name)
 def test_the_production_units_outrank_dev_tooling_for_the_oom_killer(unit: Path):
-    """On exe.dev the session's processes are exempt from the OOM killer; ours were not.
+    """This VM's OOM killer must reach the worker last, not first.
 
     Everything descended from an exe.dev session inherits ``oom_score_adj=-1000``
     from ``exe-init`` and ``sshd``: VSCode Server, Claude Code, and any MCP
-    server they start. Measured on this VM while adopting the shared SocratiCode
-    index (#92): every session-descended process scored 0 — unkillable — while
-    this worker scored 670 at the default adj of 0.
+    server they start. **-1000 is ineligibility, not a low score** — the kernel
+    skips such a process entirely, and 28 of them were counted here. So this
+    directive was never going to win a comparison against the dev tooling; what
+    it changes is the worker's rank among the processes that *can* be chosen.
 
-    So the asymmetry runs the wrong way. Under real memory exhaustion the kernel
-    picks the worker, and the dev tooling that caused the pressure survives.
-    CannObserv/broker#17 is what that costs when it fires: a 57-minute bus
-    outage, with nothing OOM-killed at all — the kernel failed *atomic*
-    allocations in ``tailscaled`` while every process stayed alive, and this
-    worker did not reconnect on its own (#94).
+    Measured on this VM while adopting the shared SocratiCode index (#92): the
+    worker read ``oom_score`` 670 at the default adj of 0 — second from the top
+    of the eligible list — and 72 at -900, which is the bottom of it.
+
+    Two things that rank does not buy, both recorded in docs/DEPLOYMENT.md so
+    the doc and this test say the same thing. It is no substitute for capping
+    whatever launches a SocratiCode server, since a cgroup cap on a process at
+    -1000 stalls it rather than killing it. And the process now at the top of
+    the eligible list is ``tailscaled`` at 675 — which is what degraded in
+    CannObserv/broker#17, a 57-minute bus outage with nothing OOM-killed at all:
+    the kernel failed *atomic* allocations while every process stayed alive, and
+    this worker did not reconnect on its own (#94).
 
     ``earlyoom`` does not close it either: it floors a ``--prefer`` match at 300,
     and a service at adj 0 reads ~670 here, so it too would choose the worker.
