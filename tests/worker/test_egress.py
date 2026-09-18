@@ -14,6 +14,8 @@ not the per-range ones — those are arithmetic — but:
 The decision and the three tests it was run through: #89. The scope: #95.
 """
 
+import socket
+
 import httpx
 import pytest
 
@@ -22,6 +24,7 @@ from src.core.errors import (
     PermanentError,
     PermanentFetchError,
     TransientError,
+    TransientFetchError,
 )
 from src.worker.egress import DEFAULT_BLOCKED_DESTINATIONS, GuardedTransport, blocked_networks
 
@@ -213,3 +216,49 @@ async def test_the_default_resolver_is_the_one_the_worker_runs_with():
 
     with pytest.raises(PermanentFetchError):
         await transport.handle_async_request(httpx.Request("GET", "http://localhost:9999/"))
+
+
+async def test_a_resolution_failure_is_transient_not_unclassified():
+    """CR 2: the guard resolves before httpx does, and that moved the failure.
+
+    Before the guard, a name that would not resolve failed *inside* httpx as a
+    ``ConnectError`` — an ``httpx.HTTPError``, which ``_fetch`` maps to
+    ``TransientFetchError`` and the loop retries indefinitely. Resolving first
+    puts a bare ``socket.gaierror`` in its place, which is not an
+    ``httpx.HTTPError``, not a builtin ``ConnectionError``, and not in the
+    loop's ``_TRANSIENT_ERRORS`` — so it would reach the unclassified branch and
+    dead-letter a good command at the delivery ceiling. Exactly the regression
+    ``_fetch``'s own docstring exists to prevent.
+    """
+
+    async def resolve(host: str, port: int) -> list[str]:
+        raise socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution")
+
+    transport = GuardedTransport(
+        httpx.MockTransport(_never_called), blocked=blocked_networks(None), resolve=resolve
+    )
+
+    with pytest.raises(TransientFetchError, match="could not be resolved"):
+        await transport.handle_async_request(httpx.Request("GET", "http://nx.invalid/"))
+
+
+async def test_an_unencodable_hostname_is_terminal():
+    """A label too long for IDNA will be too long on the next reclaim too.
+
+    ``getaddrinfo`` raises ``UnicodeError`` rather than ``gaierror`` for these,
+    and a ``ValueError`` subclass would otherwise take the same unclassified
+    path finding 2 is about — but retrying it forever is the wrong answer, so
+    the two are separated at the raise site rather than lumped together.
+    """
+
+    async def resolve(host: str, port: int) -> list[str]:
+        raise UnicodeError("label empty or too long")
+
+    transport = GuardedTransport(
+        httpx.MockTransport(_never_called), blocked=blocked_networks(None), resolve=resolve
+    )
+
+    with pytest.raises(PermanentFetchError) as caught:
+        await transport.handle_async_request(httpx.Request("GET", "http://toolong.invalid/"))
+
+    assert caught.value.reason is FailureReason.NOT_FETCHABLE

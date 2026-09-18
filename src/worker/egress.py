@@ -20,6 +20,11 @@ destination actually contacted rather than only the first one requested.
 :func:`src.worker.main.run` rather than pushed upstream into a driver three
 services share. Replicator's network position is Replicator's fact.
 
+**Resolving here moves where a name failure surfaces**, so this module owns its
+classification: a resolution failure is transient and an unencodable hostname is
+terminal, because the loop reads the exception *type* and neither is one httpx
+would have raised (CR 2).
+
 **The residual, stated rather than closed: DNS rebinding.** The check resolves
 and inspects every address, then hands the *name* to the inner transport, which
 resolves again — a TOCTOU window an origin controlling its own DNS can aim at.
@@ -37,7 +42,7 @@ from collections.abc import Awaitable, Callable, Iterable, Sequence
 
 import httpx
 
-from src.core.errors import FailureReason, PermanentFetchError
+from src.core.errors import FailureReason, PermanentFetchError, TransientFetchError
 
 # What a fetch may not reach. Every range here is either this host, this host's
 # private network, or the tailnet the bus rides — none of which a public corpus
@@ -147,8 +152,36 @@ class GuardedTransport(httpx.AsyncBaseTransport):
         try:
             ipaddress.ip_address(host)
         except ValueError:
-            return await self._resolve(host, port)
+            return await self._resolve_or_classify(host, port)
         return [host]
+
+    async def _resolve_or_classify(self, host: str, port: int) -> Sequence[str]:
+        """Resolve, translating the two failures resolution has into the loop's.
+
+        **Resolving here moved where a name failure surfaces, and the loop
+        classifies by type** (CR 2). Before this guard, an unresolvable host
+        failed inside httpx as a ``ConnectError`` — an ``httpx.HTTPError``,
+        which ``_fetch`` maps to ``TransientFetchError`` and the loop retries
+        indefinitely. A bare ``socket.gaierror`` in its place is none of the
+        things the loop recognises: not an ``httpx.HTTPError``, not a builtin
+        ``ConnectionError``, not in ``_TRANSIENT_ERRORS``. It would reach
+        ``_handle_unclassified`` and dead-letter a good command at the delivery
+        ceiling because its origin's DNS was briefly unavailable.
+
+        The two failures are kept apart rather than caught together, because
+        only one of them will answer differently next time: a name that does not
+        resolve today may tomorrow, while a label too long to encode is as
+        unfetchable on the next reclaim as on this one.
+        """
+        try:
+            return await self._resolve(host, port)
+        except socket.gaierror as exc:
+            raise TransientFetchError(f"{host} could not be resolved: {exc}") from exc
+        except UnicodeError as exc:
+            raise PermanentFetchError(
+                f"{host} is not an encodable hostname: {exc}",
+                reason=FailureReason.NOT_FETCHABLE,
+            ) from exc
 
 
 def _default_port(url: httpx.URL) -> int:
