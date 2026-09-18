@@ -1,0 +1,16 @@
+# Judged atom drops. An entry names WHY a tightening did not carry a claim
+# across; the atom is written as prove-no-loss.sh reports it, without backticks.
+
+# ---- #92 docs curation ----
+# The co-core floor, stated once in docs/DEPLOYMENT.md (verified present there)
+# rather than twice; CONVENTIONS.md now points at it.
+duplicate :: >=0.13.1
+# The bullet explained a past incident with "this VM being named `watcher`".
+# #88 moved Replicator to co-replicator, tailnet `replicator`, so the gloss
+# named a host this repo has not run on since. The incident itself is kept.
+disproven :: watcher
+# Both rate_limiter atoms: the file 404s on CannObserv/watcher's API — deleted
+# with the Phase 4 cutover, replaced by src/core/fetch_policy.py. One of the two
+# was cited as "load-bearing today".
+disproven :: src/core/rate_limiter.py::acquire_for_domain
+disproven :: src/core/rate_limiter.py

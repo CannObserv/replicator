@@ -285,3 +285,28 @@ default :: TDD required. Red → Green → Refactor. No production code without 
 tighten :: - [docs/CONVENTIONS.md](docs/CONVENTIONS.md) — the rules common to every stream: idempotency, validation, DLQ, `claim_stale`; and the `replicator:cmd:*` keys (#80)
 tighten :: - [docs/STYLE.md](docs/STYLE.md) — the logging stack: formatter, installers, and the non-JSON journald lines
 tighten :: - [docs/contracts/content-fetch-issuer-contract.md](docs/contracts/content-fetch-issuer-contract.md) — what a `content.fetch` producer must do; normative, linked from issuer repos
+
+# ---- #92 docs curation (the five over-budget reference docs) ----
+# Every line below is a class-C rewrite in place; --claims passes with the four
+# judged atom drops in .skills/context-claims-ok. Two shapes:
+#
+#   docs/contracts/replicator-boundaries.md — the passage said Watcher still
+#   owed the issuer half of the policy stream and called a deleted file
+#   "load-bearing today". watcher#245 closed 2026-08-06 and the file 404s;
+#   both checked against the API, not the stale clone on this VM.
+#
+#   docs/CONVENTIONS.md — a stale VM gloss and two asides restating
+#   docs/DEPLOYMENT.md's subject.
+docs/CONVENTIONS.md :: tighten :: - **A consumer *group's* name is co-core's to define, and both defaults derive it (#77, cannobserv#384).** `<service>.<stream-suffix>[-<purpose>]` via `group_name(topic, service)`, so `content.fetch` → `replicator.fetch` and `content.replicate` → `replicator.replicate` — the names live on the broker, audited 2026-09-01. `src/core/config.py` calls the helper rather than writing the strings, because a literal here is a second copy of a rule this repo does not own, and the cluster's group naming has already drifted once. The failure that forecloses is the quiet one: a renamed convention spelled locally as a literal reaches `ensure_group`, which creates a **new empty group beside the real one**, and the worker then polls a stream nothing delivers to. `purpose` is omitted while a service runs one group per stream and disambiguates when it runs more. The floor is co-core `>=0.13.1`, and `uv.lock` plus `ExecStart`'s `--frozen --no-sync` mean a convention change cannot arrive on a deploy without a lockfile commit — which runs the tests that catch it. Config/state streams have no group at all: `group_name` raises on `content.fetch-policy`, and `stream_kind` is the machine-readable form of the three-kind taxonomy this file's rules are organised around.
+docs/CONVENTIONS.md :: tighten :: - **A consumer's name is derived from its group, never from the host (#77).** `<group with dots dashed>-<slot>`, so `replicator.fetch` → `replicator-fetch-1` and `replicator.replicate` → `replicator-replicate-1`, one per group and computed at the wiring seam (`src/worker/main.py::consumer_name_for`). The rule is **stability**: a registration persists until an explicit `XGROUP DELCONSUMER` that nothing calls, so a name carrying anything that varies — a hostname, a pid — mints a fresh registration on each change and abandons the old one holding its PEL, reclaimable only by an `XAUTOCLAIM` at `min_idle_time`. Archiver reached seven registrations on the production broker, six dead (archiver#156); Replicator's hostname-derived spelling additionally read as the *Watcher* service's, this VM being named `watcher`. A stable name makes a restart reuse its registration, so the leak cannot recur — no periodic sweep, and no shutdown hook a `SIGKILL` would skip. Overrides (`REPLICATOR_CONSUMER_NAME`, `REPLICATOR_REPLICATE_CONSUMER_NAME`) are **per group** for the same reason the name is: one process-wide override put a `replicator-fetch-…` consumer inside `replicator.replicate`, a name that misstates its own group. The `-1` is a slot — a second member of a group takes `-2` upward, and must not share a name with the first, since Redis tracks pending entries per consumer name.
+docs/contracts/replicator-boundaries.md :: tighten :: `DEFAULT_MIN_INTERVAL = 1.0` s (`src/core/rate_limiter.py`), backing off to
+docs/contracts/replicator-boundaries.md :: tighten :: `BACKOFF_MAX_INTERVAL = 60.0` s. So parking matches the *backoff* case almost exactly and
+docs/contracts/replicator-boundaries.md :: tighten :: **The stream is a precondition of the Phase 4 cutover, not a follow-on to it.** Watcher's limiter
+docs/contracts/replicator-boundaries.md :: tighten :: (`src/core/rate_limiter.py::acquire_for_domain`, fed by 429s its own fetch path observes) is
+docs/contracts/replicator-boundaries.md :: tighten :: load-bearing today and stops functioning the moment that fetch path becomes a publish path — it does
+docs/contracts/replicator-boundaries.md :: tighten :: not fail, it silently becomes decorative, pacing publication rather than origin requests. #12's default closed that window on the consumer side and #19
+docs/contracts/replicator-boundaries.md :: tighten :: supplies the numbers; **what remains is issuer-side** — Watcher publishing its `Domain` rows
+docs/contracts/replicator-boundaries.md :: tighten :: onto this stream, tracked at
+docs/contracts/replicator-boundaries.md :: tighten :: [CannObserv/watcher#245](https://github.com/CannObserv/watcher/issues/245). Until it does,
+docs/contracts/replicator-boundaries.md :: tighten :: every host resolves to the fallback, which is the pre-#19 behaviour and is why the consumer
+docs/contracts/replicator-boundaries.md :: tighten :: half could land first.
