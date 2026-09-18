@@ -16,6 +16,15 @@ Type=oneshot
 User=exedev
 WorkingDirectory=/home/exedev/replicator
 
+# Same reasoning as replicator.service's, and more load-bearing here (#92).
+# Memory exhaustion on this VM is one of the conditions that fires this handler,
+# so the moment it is most likely to run is the moment an unprotected process is
+# most likely to be killed — and a notification that dies before it is written
+# leaves the failure discovered by whoever next looks, which is the state #94
+# was filed about. Short-lived and ~nothing resident, so the protection costs
+# the box nothing.
+OOMScoreAdjust=-900
+
 # How the record is actually retrieved, and it is not `journalctl -u`.
 #
 # `%n` in the caller's OnFailure= expands to the full unit name *including* the

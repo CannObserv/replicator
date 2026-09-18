@@ -71,6 +71,33 @@ OnFailure=replicator-failure-notify@%n.service
 Type=simple
 User=exedev
 WorkingDirectory=/home/exedev/replicator
+
+# Be the LAST thing this VM's OOM killer chooses, not the first (#92).
+#
+# co-replicator is 3.9 GB with no swap, and it is also the dev workspace. On
+# exe.dev every process descended from a session inherits oom_score_adj=-1000
+# from exe-init and sshd — VSCode Server, Claude Code, and any MCP server they
+# start — which makes them *exempt*. Measured here while adopting the shared
+# SocratiCode index: every session-descended process scored 0, this worker 670.
+# The kernel would therefore have killed the worker to relieve pressure the dev
+# tooling created, and left the tooling running.
+#
+# That is not hypothetical for this cluster. CannObserv/broker#17: launching a
+# SocratiCode server on the broker's VM degraded the network path for 57m48s
+# with NOTHING OOM-killed — the kernel failed *atomic* allocations in
+# tailscaled while every process stayed alive — and this worker did not
+# reconnect on its own (#94). A capped launch is the other half of the fix and
+# belongs to whoever runs the launch (docs/COMMANDS.md); this half is the unit's.
+#
+# -900, not -1000: the cohort's value (CannObserv/broker#25). Last to be chosen,
+# not exempt — an exempt worker that leaks is unreclaimable, and the kernel
+# would work through everything else on the box before touching it.
+# tests/test_deploy.py pins both bounds.
+#
+# earlyoom does not substitute for this: it floors a --prefer match at 300,
+# while a service at the default adj 0 reads ~670 on this kernel, so it too
+# would choose the worker.
+OOMScoreAdjust=-900
 # Creates /var/lib/replicator (REPLICATOR_BLOB_DIR's parent) owned by User=.
 StateDirectory=replicator
 

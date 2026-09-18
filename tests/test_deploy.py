@@ -24,6 +24,8 @@ rule.
 import re
 from pathlib import Path
 
+import pytest
+
 from src.core.config import Settings
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -363,4 +365,50 @@ def test_the_notify_handler_reads_the_production_env_file():
 
     assert re.search(r"^EnvironmentFile=-/etc/replicator/\.env$", text, flags=re.MULTILINE), (
         f"{NOTIFY_UNIT.name} must read /etc/replicator/.env, optionally"
+    )
+
+
+# The kernel's own ceiling: -1000 makes a process unkillable by the OOM killer
+# altogether, which is a worse failure than the one being fixed — a worker
+# leaking memory would then be unreclaimable and the kernel would work its way
+# through everything else on the box first. -900 is the cohort's value
+# (CannObserv/broker#25): last to be chosen, not exempt.
+OOM_FLOOR = -1000
+COHORT_OOM_SCORE_ADJUST = -900
+
+
+@pytest.mark.parametrize("unit", [UNIT, NOTIFY_UNIT], ids=lambda p: p.name)
+def test_the_production_units_outrank_dev_tooling_for_the_oom_killer(unit: Path):
+    """On exe.dev the session's processes are exempt from the OOM killer; ours were not.
+
+    Everything descended from an exe.dev session inherits ``oom_score_adj=-1000``
+    from ``exe-init`` and ``sshd``: VSCode Server, Claude Code, and any MCP
+    server they start. Measured on this VM while adopting the shared SocratiCode
+    index (#92): every session-descended process scored 0 — unkillable — while
+    this worker scored 670 at the default adj of 0.
+
+    So the asymmetry runs the wrong way. Under real memory exhaustion the kernel
+    picks the worker, and the dev tooling that caused the pressure survives.
+    CannObserv/broker#17 is what that costs when it fires: a 57-minute bus
+    outage, with nothing OOM-killed at all — the kernel failed *atomic*
+    allocations in ``tailscaled`` while every process stayed alive, and this
+    worker did not reconnect on its own (#94).
+
+    ``earlyoom`` does not close it either: it floors a ``--prefer`` match at 300,
+    and a service at adj 0 reads ~670 here, so it too would choose the worker.
+    """
+    text = unit.read_text()
+    matches = re.findall(r"^OOMScoreAdjust=(-?\d+)$", text, flags=re.MULTILINE)
+
+    assert matches, (
+        f"{unit.name} sets no OOMScoreAdjust, so it scores ~670 against the "
+        "exempt (-1000) processes of any dev session on this VM"
+    )
+    adjust = int(matches[-1])
+    assert adjust <= COHORT_OOM_SCORE_ADJUST, (
+        f"{unit.name} sets OOMScoreAdjust={adjust}, which does not outrank dev tooling"
+    )
+    assert adjust > OOM_FLOOR, (
+        f"{unit.name} sets OOMScoreAdjust={adjust} — exempt from the OOM killer entirely, "
+        "so a leak here would be unreclaimable"
     )

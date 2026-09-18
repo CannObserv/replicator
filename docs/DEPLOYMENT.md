@@ -70,6 +70,51 @@ All three live in `/etc/replicator/.env` and are read by the `OnFailure=` handle
 
 A failed dispatch records `reason` alongside `curl_exit`, mapped from curl's exit code (`6` unresolvable, `7` refused, `28` timed out, `35`/`60` TLS, …), because curl's own error sentence is discarded with its stderr.
 
+### Memory protection — the worker outranks the dev session that shares this VM (#92)
+
+Both units set `OOMScoreAdjust=-900`. The reason is a property of exe.dev, not
+of this service: **every process descended from a session is exempt from the OOM
+killer.** VSCode Server, Claude Code, and any MCP server they start inherit
+`oom_score_adj=-1000` from `exe-init` and `sshd`. Measured on co-replicator
+while adopting the shared SocratiCode index:
+
+```bash
+cat /proc/self/oom_score_adj                                          # -1000, from a session shell
+cat /proc/$(systemctl show -p MainPID --value replicator)/oom_score   # 670 at the default adj 0
+```
+
+So without the directive the asymmetry ran the wrong way. Under memory
+exhaustion the kernel would pick the worker — 670 against 0 — and spare the dev
+tooling that created the pressure. co-replicator is 3.9 GB with **no swap** and
+is also the dev workspace, so that is not a remote condition.
+
+CannObserv/broker#17 is what it costs when it fires, and it fires in a shape
+worth recognising: launching a SocratiCode server on the broker's VM took the
+bus out for **57m48s with nothing OOM-killed at all**. The kernel failed
+*atomic* allocations in `tailscaled` and `ksoftirqd`, so the network path
+degraded while every process stayed alive — and this worker did not reconnect on
+its own, which is #94.
+
+Three things this is not:
+
+- **Not a substitute for capping the launch.** A cgroup cap on a process at adj
+  -1000 *stalls* it rather than killing it, so the two halves are separate: this
+  is the unit's half, and the capped invocation for anything that starts a
+  SocratiCode server is in [COMMANDS.md](COMMANDS.md).
+- **Not reachable with `earlyoom`.** It floors a `--prefer` match at 300, while
+  a service at adj 0 reads ~670 on this kernel — it would choose the worker too.
+- **Not `-1000`.** That is exemption, and an exempt worker that leaks is
+  unreclaimable. `-900` is the cohort's value (CannObserv/broker#25): last to be
+  chosen, not immune. `tests/test_deploy.py` pins both bounds, for both units.
+
+The handler unit carries it for a sharper reason than the worker does: memory
+exhaustion is one of the conditions that *fires* it, so the moment it is most
+likely to run is the moment an unprotected process is most likely to be killed.
+
+Both files are copies under `/etc/systemd/system/`, so this needs the `cp` pair
+from the table above — and `daemon-reload` alone will silently keep the old
+values.
+
 ### The co-core pin, and why the patch floor is load-bearing
 
 `co-core` and `co-core-aio` come from the private GCS index `gs://co-gcs-pypi`,
