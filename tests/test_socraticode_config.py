@@ -207,21 +207,35 @@ class TestKeyIsNotCommittable:
     """The single global key, and the rule that keeps it out of a public repo."""
 
     def test_local_settings_are_ignored_by_a_rule_this_repo_tracks(self) -> None:
-        """Ask git, and ask it about the *tracked* `.gitignore`.
+        """Two questions, and only `-q` answers the first one.
 
+        **`-v` is not a test of whether the file is ignored.** It reports the
+        *last matching* rule and exits 0 even when that rule is a **negation**,
+        so `.claude/*` followed by `!.claude/*.json` prints
+        `.gitignore:2:!.claude/*.json` and exits 0 while `git add -A` stages the
+        file. Measured against a scratch repository, not assumed. `-q` is the
+        verdict — exit 0 ignored, 1 not — and it is checked first.
+
+        `-v` then answers the *second* question, which is where the rule lives.
         A global `core.excludesfile` or `.git/info/exclude` protects one
-        machine, not the repo — and a reader who checks `git check-ignore`
-        alone cannot tell the two apart. `-v` names the source file, so the
-        assertion is that the rule travels with the clone.
+        machine, not the repo, and a reader who sees only "ignored" cannot tell
+        the two apart. The pattern is checked for a leading `!` as well: a
+        belt-and-braces guard, since `-q` already refuses that state, and it
+        makes this test fail with the reason rather than with a bare exit code.
         """
-        result = _git("check-ignore", "-v", "--", LOCAL_SETTINGS_REL)
-        assert result.returncode == 0, (
+        verdict = _git("check-ignore", "-q", "--", LOCAL_SETTINGS_REL)
+        assert verdict.returncode == 0, (
             f"{LOCAL_SETTINGS_REL} is not ignored — the cohort's Qdrant key is one "
             "`git add -A` from GitHub (notifier#68)"
         )
-        source = result.stdout.split(":", 1)[0]
+
+        described = _git("check-ignore", "-v", "--", LOCAL_SETTINGS_REL)
+        source, _, pattern = described.stdout.split("\t", 1)[0].split(":", 2)
         assert source == ".gitignore", (
             f"the rule lives in {source!r}, which protects this machine rather than every clone"
+        )
+        assert not pattern.startswith("!"), (
+            f"the matching rule {pattern!r} is a negation — it re-includes the file"
         )
 
     def test_local_settings_are_not_tracked(self) -> None:
