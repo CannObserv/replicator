@@ -14,6 +14,7 @@ not the per-range ones — those are arithmetic — but:
 The decision and the three tests it was run through: #89. The scope: #95.
 """
 
+import ipaddress
 import socket
 
 import httpx
@@ -301,3 +302,46 @@ async def test_a_refusal_survives_the_driver_and_reaches_the_handler(handler):
 
     assert caught.value.reason is FailureReason.DESTINATION_REFUSED
     assert reached == [], "the refusal must precede the request, not follow it"
+
+
+@pytest.mark.parametrize(
+    ("label", "host"),
+    [
+        ("decimal", "2130706433"),
+        ("short form", "127.1"),
+    ],
+)
+async def test_an_obfuscated_literal_still_reaches_the_guard(label, host):
+    """CR 7: these are loopback, and they are refused for a non-obvious reason.
+
+    ``ipaddress.ip_address`` **rejects** both spellings — it takes dotted quads
+    only — so they are not recognised as literals and fall through to the
+    resolver, where the platform parses them the way a browser would and the
+    guard catches the address that comes back.
+
+    That is correct by accident of layering rather than by design, which is
+    exactly why it is pinned: a change that tried harder to parse a literal — to
+    skip a resolve, say — would turn both into a bypass with every other test in
+    this file still green.
+    """
+    transport = _guard({host: ["127.0.0.1"]})
+
+    with pytest.raises(PermanentFetchError):
+        await transport.handle_async_request(httpx.Request("GET", f"http://{host}/"))
+
+    with pytest.raises(ValueError):
+        # The fact the refusal above rests on, asserted rather than assumed.
+        ipaddress.ip_address(host)
+
+
+def test_an_octal_literal_is_refused_before_the_guard_sees_it():
+    """The third obfuscated form never reaches this module, and that is fine.
+
+    httpx refuses ``0177.0.0.1`` at URL construction — ``InvalidURL``, which
+    ``_fetch`` already maps to a terminal ``not_fetchable``. Recorded here
+    beside its two siblings so a reader does not conclude the guard handles all
+    three, and so the day httpx stops refusing it, this test says where the
+    coverage went.
+    """
+    with pytest.raises(httpx.InvalidURL):
+        httpx.Request("GET", "http://0177.0.0.1/")
