@@ -191,3 +191,38 @@ docs/contracts/content-replicate-issuer-contract.md :: ### T3a — the *source* 
 docs/contracts/replicator-boundaries.md :: ### The policy stream (shipped, #19)
 docs/contracts/replicator-boundaries.md :: ### The fallback default (was the interim, #12 → #19)
 docs/contracts/replicator-boundaries.md :: ## Asked and answered — the derived-sidecar question (#69, 2026-08-20)
+
+# --- #92 split: content-fetch-issuer-reference.md -> + content-fetch-outcome-reference.md ---
+# Judged 2026-09-19. The doc split on the direction of the traffic: the request
+# side (refusal list, provenance and trust, envelope key, version history) stayed
+# at the old path, the result side (enriched fields, failure taxonomy, silent
+# conditions, DLQ, pacing, duplicate fact, TTL clock, MUST consequences) moved to
+# content-fetch-outcome-reference.md. Eleven anchored links whose target moved were
+# re-aimed in the same change, and `links.dead_anchors` is empty.
+#
+# Every hit below points at content that STAYED, or is the new sibling pointing
+# home, so each is a back-reference that still tells the truth:
+#   * #version-history, #what-the-envelope-key-is-for, #request-options-...,
+#     #invalid_request_options-and-stored-values and #provenance-and-trust all
+#     resolve in the request half, unmoved.
+#   * COMMANDS.md's "the full list" is the refusal list, which stayed.
+#   * The two contracts' companion lines and index entries were rewritten in this
+#     same change to name both references.
+#   * The outcome half's own preamble and its cross-file link point back here by
+#     construction; its manifest description names the titles it now owns.
+docs/COMMANDS.md :: [`docs/contracts/content-fetch-issuer-reference.md`](contracts/content-fetch-issuer-reference.md).
+docs/STREAMS.md :: Its companions `docs/contracts/content-fetch-issuer-reference.md` (#24, the request side)
+docs/contracts/content-fetch-issuer-contract.md :: **Companions.** [`content-fetch-issuer-reference.md`](content-fetch-issuer-reference.md) and
+docs/contracts/content-fetch-issuer-contract.md :: [the reference](content-fetch-issuer-reference.md#version-history).
+docs/contracts/content-fetch-issuer-contract.md :: [the reference](content-fetch-issuer-reference.md#what-the-envelope-key-is-for).
+docs/contracts/content-fetch-issuer-contract.md :: [the reference](content-fetch-issuer-reference.md#request-options-what-replicator-will-send-and-what-it-refuses-11).
+docs/contracts/content-fetch-issuer-contract.md :: [`invalid_request_options` and stored values](content-fetch-issuer-reference.md#invalid_request_options-and-stored-values)
+docs/contracts/content-fetch-issuer-contract.md :: - [`content-fetch-issuer-reference.md`](content-fetch-issuer-reference.md) — **equally normative**,
+docs/contracts/content-fetch-outcome-reference.md :: half of the reference — [`content-fetch-issuer-reference.md`](content-fetch-issuer-reference.md) —
+docs/contracts/content-fetch-outcome-reference.md :: The enriched `blob_available` fields and why they are
+docs/contracts/content-fetch-outcome-reference.md :: [the request-options set](content-fetch-issuer-reference.md#request-options-what-replicator-will-send-and-what-it-refuses-11):
+docs/contracts/content-replicate-issuer-contract.md :: [request](content-fetch-issuer-reference.md) and
+docs/contracts/content-replicate-issuer-contract.md :: [Provenance and trust](content-fetch-issuer-reference.md#provenance-and-trust) settles `content.fetch`
+docs/contracts/replicator-boundaries.md :: - [`content-fetch-issuer-reference.md`](content-fetch-issuer-reference.md) — its lookup half, request side
+.socraticodecontextartifacts.json :: "path": "./docs/contracts/content-fetch-issuer-reference.md",
+.socraticodecontextartifacts.json :: "description": "Outcome half of the content.fetch issuer reference

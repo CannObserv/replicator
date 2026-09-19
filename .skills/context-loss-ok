@@ -310,3 +310,73 @@ docs/contracts/replicator-boundaries.md :: tighten :: onto this stream, tracked 
 docs/contracts/replicator-boundaries.md :: tighten :: [CannObserv/watcher#245](https://github.com/CannObserv/watcher/issues/245). Until it does,
 docs/contracts/replicator-boundaries.md :: tighten :: every host resolves to the fallback, which is the pre-#19 behaviour and is why the consumer
 docs/contracts/replicator-boundaries.md :: tighten :: half could land first.
+
+# --- #92 split: content-fetch-issuer-reference.md -> + content-fetch-outcome-reference.md ---
+# The doc was 12,564 tokens (2,564 over the per-doc budget) and the only one of the
+# five over-budget docs with no citation outside this repo, so it is the one that
+# could be restructured without breaking a sibling's link. It split on the direction
+# of the traffic: the request side stayed here (5,210), the result side moved to
+# content-fetch-outcome-reference.md (8,142). 228 lines relocated verbatim.
+#
+# Every line below is a POINTER this same change invalidated, read against its
+# replacement before being warranted:
+#
+#   * The "What is here rather than there" paragraph described a two-file family.
+#     There are now three files, and the enumeration it gives ("the reasoning behind
+#     the enriched blob_available fields, the condition-by-condition failure
+#     taxonomy") names content that is no longer in the file the paragraph is in.
+#     Rewritten in place to say which half is where; "both files are normative"
+#     became "all three are normative", which is the same rule over a larger set.
+#   * "a change to the failure taxonomy, to the refusal rules" -- the failure taxonomy
+#     moved out, and the outcome half states its own announcement rule. This copy
+#     now reads "to the refusal rules, to the trust posture".
+#   * "the blob_available passthroughs take", "the request-options set above" and
+#     "which is the row above" -- three intra-document references that became
+#     cross-document ones. Each is now a link to the section's new home; the
+#     continuation lines are lost only because the rewrap moved the break points.
+docs/contracts/content-fetch-issuer-reference.md :: retarget :: the payload shapes, the eight MUSTs, and the guarantee/non-guarantee pair. This file carries
+docs/contracts/content-fetch-issuer-reference.md :: retarget :: what an issuer *looks up* — the header and timeout rules it consults when a command is refused,
+docs/contracts/content-fetch-issuer-reference.md :: retarget :: the reasoning behind the enriched `blob_available` fields, the condition-by-condition failure
+docs/contracts/content-fetch-issuer-reference.md :: retarget :: taxonomy, the trust posture the whole capability rests on, and the mechanisms behind several of
+docs/contracts/content-fetch-issuer-reference.md :: retarget :: the MUSTs, each of which states its rule there and explains itself here. The split exists so the
+docs/contracts/content-fetch-issuer-reference.md :: retarget :: contract stays short enough to read start to finish; both files are normative, and a rule does not
+docs/contracts/content-fetch-issuer-reference.md :: retarget :: become advisory by living here.
+docs/contracts/content-fetch-issuer-reference.md :: retarget :: here as well as the rules: a change to the failure taxonomy, to the refusal rules, or to what an
+docs/contracts/content-fetch-issuer-reference.md :: retarget :: one the `blob_available` passthroughs take: a header Replicator silently dropped, or a timeout it
+docs/contracts/content-fetch-issuer-reference.md :: retarget :: refuses the command before contacting the origin — both worse than none. The unsendable set is the request-options set above: anything outside printable
+docs/contracts/content-fetch-issuer-reference.md :: retarget :: US-ASCII, interior HTAB and obs-text included.
+docs/contracts/content-fetch-issuer-reference.md :: retarget :: - **A destination guard instead** (#95), which is the row above. It bounds where a fetch may
+docs/contracts/content-fetch-issuer-reference.md :: retarget :: *point* rather than who may issue one, because those are different questions and only the second
+docs/contracts/content-fetch-issuer-reference.md :: retarget :: was ever answered by a grant.
+
+# --- #92 split: the AGENTS.md Detail Docs roster ---------------------------
+# The split added a 26th reference doc, and AGENTS.md was at exactly 6,000/6,000
+# with no margin, so the new index entry had to be paid for rather than appended.
+# Every entry in the roster spelled its target twice -- once as the link LABEL and
+# again as the link TARGET -- so the label was reduced to the basename. No claim
+# and no atom is dropped: the full path is still in every target, which is what
+# both the link graph and check-seams read. Read against the replacement line by
+# line; the descriptions are untouched.
+#
+# The issuer-reference entry is the exception and is warranted `retarget`: half of
+# what it described -- the failure taxonomy and the silent conditions -- moved into
+# content-fetch-outcome-reference.md in this same change, so the roster now carries
+# one line per doc, as it does for every other entry. Nothing it named was dropped;
+# both halves are named, each beside the file that now holds it.
+AGENTS.md :: tighten :: - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — founding design, the command → fact flow, module by module; read before changing one
+AGENTS.md :: tighten :: - [docs/STREAMS.md](docs/STREAMS.md) — what each stream carries, one bullet per rule `AGENTS.md` states in a line
+AGENTS.md :: tighten :: - [docs/CONVENTIONS.md](docs/CONVENTIONS.md) — the rules common to every stream: idempotency, validation, DLQ, `claim_stale`, and the `replicator:cmd:*` keys (#80)
+AGENTS.md :: tighten :: - [docs/STORAGE.md](docs/STORAGE.md) — blob paths and modes, the populations under `REPLICATOR_BLOB_DIR`, TTL and ceilings
+AGENTS.md :: tighten :: - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — the unit's lifecycle, its start guards, what it reports when it fails, the co-core pin
+AGENTS.md :: tighten :: - [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) — VM topology, ports, the broker, and the buckets either side of the test/production line
+AGENTS.md :: tighten :: - [docs/reference/tailscale.md](docs/reference/tailscale.md) — this node: tailnet, ACL, DNS, broker latency
+AGENTS.md :: tighten :: - [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) — every variable either env file carries, and the boundary between them
+AGENTS.md :: tighten :: - [docs/TESTING.md](docs/TESTING.md) — fakeredis's divergences, the keys an integration run may create, why production `co-gcs-replication` is unreachable (#38)
+AGENTS.md :: tighten :: - [docs/STYLE.md](docs/STYLE.md) — the logging stack: formatter, installers, the non-JSON journald lines
+AGENTS.md :: tighten :: - [docs/COMMANDS.md](docs/COMMANDS.md) — every runnable command, with flags
+AGENTS.md :: tighten :: - [docs/SKILLS.md](docs/SKILLS.md) — vendored skill inventory, refresh procedure, doc-check lists
+AGENTS.md :: tighten :: - [docs/SOCRATICODE.md](docs/SOCRATICODE.md) — full tool table, prefetch query, per-tool gotchas, cross-repo search
+AGENTS.md :: tighten :: - [docs/contracts/content-fetch-issuer-contract.md](docs/contracts/content-fetch-issuer-contract.md) — what a `content.fetch` producer must do; linked from issuer repos
+AGENTS.md :: retarget :: - [docs/contracts/content-fetch-issuer-reference.md](docs/contracts/content-fetch-issuer-reference.md) — its lookup half: refusal list, failure taxonomy, silent conditions, trust posture
+AGENTS.md :: tighten :: - [docs/contracts/replicator-boundaries.md](docs/contracts/replicator-boundaries.md) — what Replicator may become; run its three tests against any proposed capability
+AGENTS.md :: tighten :: - [docs/contracts/content-replicate-issuer-contract.md](docs/contracts/content-replicate-issuer-contract.md) — the replicate trust model and issuer obligations (#34)
