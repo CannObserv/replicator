@@ -30,9 +30,10 @@ The founding design lives in
 
 **Issuing `content.fetch` commands?** Read
 [`docs/contracts/content-fetch-issuer-contract.md`](docs/contracts/content-fetch-issuer-contract.md)
-first — it is the normative issuer contract and its permanent home, with the refusal list, failure
-taxonomy and trust posture in its companion
-[`content-fetch-issuer-reference.md`](docs/contracts/content-fetch-issuer-reference.md).
+first — it is the normative issuer contract and its permanent home, with the refusal list and trust
+posture in [`content-fetch-issuer-reference.md`](docs/contracts/content-fetch-issuer-reference.md)
+and the failure taxonomy in
+[`content-fetch-outcome-reference.md`](docs/contracts/content-fetch-outcome-reference.md).
 Publish through co-core's `to_wire`, never hand-rolled fields. The wire carries one domain key —
 `info_source_id`, echoed onto both facts and read by nothing here — but correlation is still
 entirely the issuer's job, on `command_id`. Most ways of getting either wrong fail silently.

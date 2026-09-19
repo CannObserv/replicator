@@ -8,9 +8,10 @@ repos link here rather than copying; a copy drifts from the code the day it is w
 since [watcher#241](https://github.com/CannObserv/watcher/issues/241), and
 [`scripts/seed_fetch.py`](../../scripts/seed_fetch.py) on scratch streams.
 
-**Companion.** [`content-fetch-issuer-reference.md`](content-fetch-issuer-reference.md) carries the
-parts an issuer *looks up* rather than reads through — equally normative, split out in #24 so this
-file stays readable start to finish. Index at the end.
+**Companions.** [`content-fetch-issuer-reference.md`](content-fetch-issuer-reference.md) and
+[`content-fetch-outcome-reference.md`](content-fetch-outcome-reference.md) carry the
+parts an issuer *looks up* rather than reads through — the request side and the result side, equally
+normative, split out in #24 so this file stays readable start to finish. Index at the end.
 
 **Sibling document.** This settles the *wire*. [`replicator-boundaries.md`](replicator-boundaries.md)
 settles the *service* — what Replicator is allowed to become, and therefore which proposed fields
@@ -97,7 +98,7 @@ never on the envelope key. What its value *is* for:
 
 | Field | Type | Notes |
 |---|---|---|
-| `schema_version` | `int` = 1 | Replicator supports **1 only**; anything else dead-letters (see the [failure taxonomy](content-fetch-issuer-reference.md#failure-taxonomy-what-happens-and-what-the-issuer-sees)) |
+| `schema_version` | `int` = 1 | Replicator supports **1 only**; anything else dead-letters (see the [failure taxonomy](content-fetch-outcome-reference.md#failure-taxonomy-what-happens-and-what-the-issuer-sees)) |
 | `event_type` | `"content_fetch"` | |
 | `occurred_at` | `datetime` | **tz-aware UTC, enforced.** Not used for ordering or expiry here |
 | `command_id` | `str` | **The idempotency key and the sole correlator.** See MUST-1 |
@@ -162,7 +163,7 @@ over-long one, or a validator it could not send back — is dropped rather than 
 rule governs *acting* on them: replaying `etag` or `last_modified` **is**
 conditional GET, so it is gated on your own consumer rather than on Replicator, and
 [MUST-8](#8-do-not-send-a-validator-until-you-handle-not_modified) states the gate. All four, with
-the reasoning, in [the reference](content-fetch-issuer-reference.md#the-enriched-blob_available-fields).
+the reasoning, in [the reference](content-fetch-outcome-reference.md#the-enriched-blob_available-fields).
 
 ### The failure fact
 
@@ -184,12 +185,12 @@ the reasoning, in [the reference](content-fetch-issuer-reference.md#the-enriched
 
 The tokens emitted today are `http_status`, `not_modified`, `not_fetchable`, `too_large`,
 `unsupported_schema_version`, `invalid_request_options` and `handler_error` — one per row of the
-[failure taxonomy](content-fetch-issuer-reference.md#failure-taxonomy-what-happens-and-what-the-issuer-sees),
+[failure taxonomy](content-fetch-outcome-reference.md#failure-taxonomy-what-happens-and-what-the-issuer-sees),
 which states each one's condition. `reason` is a plain `str`, not a `Literal`, so the list is
 additive and a consumer branching on `terminal` first is already correct for tokens that do not
 exist yet. Replicator never emits co-core's `wrong_payload_type`, and everything it emits today is
 `terminal=True` — both deliberate, both in
-[the reference](content-fetch-issuer-reference.md#reading-the-failure-fact).
+[the reference](content-fetch-outcome-reference.md#reading-the-failure-fact).
 
 **`not_modified` is a success wearing this event's name (#17).** A body-less 304 means the origin
 agrees your copy is current: no blob is coming, and none is needed. It rides `fetch_failed` because
@@ -270,7 +271,7 @@ same `blob_uri` — an upsert, not an append.
 **This covers `fetch_failed` too, and there the duplicates are not even identical** — a second
 failure fact under the same `command_id` with a fresh `occurred_at`, so its envelope key differs and
 consumer-side dedup-on-key will not collapse it ([why, and why Replicator cannot engineer it
-away](content-fetch-issuer-reference.md#why-a-duplicate-failure-fact-is-not-identical)). Closing a
+away](content-fetch-outcome-reference.md#why-a-duplicate-failure-fact-is-not-identical)). Closing a
 pending entry must therefore be idempotent in both directions: the same terminal failure applied
 twice, and a failure applied to an entry already closed.
 
@@ -307,7 +308,7 @@ command still retrying, is silent *for now* (#9 §3) with **no latency bound** �
 retry at the `REPLICATOR_CLAIM_MIN_IDLE_MS` cadence indefinitely, and a tree over
 `REPLICATOR_BLOB_MAX_TOTAL_BYTES` parks in the PEL until a sweep frees space. All four, and why
 reporting one would be worse than silence, are in
-[the reference](content-fetch-issuer-reference.md#the-four-silent-conditions).
+[the reference](content-fetch-outcome-reference.md#the-four-silent-conditions).
 
 Which is why the **reaper stays**, demoted from primary mechanism to backstop. A timeout is grounds
 to **re-issue** (fresh `command_id`), not to conclude failure; derive it generously from the reclaim
@@ -317,8 +318,8 @@ duplicate work rather than assuming loss.
 
 **The DLQ is still worth reading** — the only place the silent rows appear at all, and it preserves
 the offending frame, which no fact does. How to read it, and which outcomes are visible, are in the
-reference's [DLQ](content-fetch-issuer-reference.md#reading-the-dlq) and
-[failure taxonomy](content-fetch-issuer-reference.md#failure-taxonomy-what-happens-and-what-the-issuer-sees).
+reference's [DLQ](content-fetch-outcome-reference.md#reading-the-dlq) and
+[failure taxonomy](content-fetch-outcome-reference.md#failure-taxonomy-what-happens-and-what-the-issuer-sees).
 
 ### 7. Copy the bytes before the blob expires
 
@@ -359,7 +360,7 @@ anything. So **record `blob_expires_at` rather than re-deriving a horizon** (can
 Replicator owns and starts the clock where no consumer can see it. The published value can only fall
 **earlier** than the real reap, so acting on it is early, never too late; `None` means unknown, and
 is recorded as absence rather than guessed.
-[Mechanism](content-fetch-issuer-reference.md#how-the-blob-ttl-clock-runs).
+[Mechanism](content-fetch-outcome-reference.md#how-the-blob-ttl-clock-runs).
 
 Also: `blob_uri` is a **`file://` URI on Replicator's host** wherever the default backend is in use
 — the contract is VM-local there, a consumer elsewhere cannot open it, and nothing on the wire says
@@ -444,7 +445,7 @@ Two corollaries, both about values you have stored:
 
 - **No *non-terminal* failure fact** — a command that is retrying announces nothing until it
   either succeeds or is closed. See MUST-6 and
-  [the failure-fact notes](content-fetch-issuer-reference.md#reading-the-failure-fact).
+  [the failure-fact notes](content-fetch-outcome-reference.md#reading-the-failure-fact).
 - **No failure fact where there is nothing safe to key one on** — a frame that is not a
   `content.fetch` command (any `command_id` in it is another command's) or one whose `command_id` is
   blank. Both are dead-lettered rather than run. MUST-1, MUST-6.
@@ -455,7 +456,7 @@ Two corollaries, both about values you have stored:
   your own burst, not against one fetch; different hosts are unaffected by each other. Whether a
   paced command is slept through or parked for the next reclaim depends on the deployed interval,
   and it changes what a reaper should expect —
-  [the reference](content-fetch-issuer-reference.md#pacing-at-the-deployed-defaults).
+  [the reference](content-fetch-outcome-reference.md#pacing-at-the-deployed-defaults).
 - **No ordering.** Two commands issued in sequence may produce facts in either order.
 - **No cross-command dedupe.** Two `command_id`s for one URL are two fetches and two facts, by
   design — that is what makes MUST-1 work.
@@ -468,8 +469,11 @@ Two corollaries, both about values you have stored:
 ## Where the rest of the contract lives
 
 - [`content-fetch-issuer-reference.md`](content-fetch-issuer-reference.md) — **equally normative**,
-  and everything this file points at: the refusal list, the enriched fields, the failure taxonomy,
-  the silent conditions, the DLQ, provenance and trust, and the version history.
+  the request side of everything this file points at: the refusal list, provenance and trust, the
+  envelope key, and the version history.
+- [`content-fetch-outcome-reference.md`](content-fetch-outcome-reference.md) — **equally normative**,
+  the result side: the enriched fields, the failure taxonomy, the silent conditions, the DLQ, pacing,
+  and the blob TTL clock.
 - [`replicator-boundaries.md`](replicator-boundaries.md) — which payload fields this contract will
   never grow (#12).
 - [`2026-07-31-fetch-failed-fact-settled.md`](../plans/2026-07-31-fetch-failed-fact-settled.md) —

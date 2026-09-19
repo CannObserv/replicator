@@ -447,7 +447,8 @@ files passes forever while enforcing nothing — worse than no test, because thi
 ## Refs
 
 - [`content-fetch-issuer-contract.md`](content-fetch-issuer-contract.md) — the wire contract this sits beside
-- [`content-fetch-issuer-reference.md`](content-fetch-issuer-reference.md) — its lookup half
+- [`content-fetch-issuer-reference.md`](content-fetch-issuer-reference.md) — its lookup half, request side
+- [`content-fetch-outcome-reference.md`](content-fetch-outcome-reference.md) — its lookup half, result side
 - #7 — object-store blob backend (the tracked violation)
 - #9, #10, #11 — the Phase 4 contract additions
 - #12 — this charter

@@ -26,7 +26,8 @@ adopters had built.
 
 **Companion.** This states only the **deltas** from
 [`content-fetch-issuer-contract.md`](content-fetch-issuer-contract.md) and its
-[reference](content-fetch-issuer-reference.md). Both remain normative here. The MUST verdict table
+[request](content-fetch-issuer-reference.md) and
+[outcome](content-fetch-outcome-reference.md) references. All remain normative here. The MUST verdict table
 below says which of the seven fetch obligations apply verbatim — read the deep document for any row
 that does not say *no analogue*, because a thin delta doc whose reader never opens the deep one is
 the failure mode this shape trades against.
@@ -439,9 +440,10 @@ Settled in a cannobserv `docs/plans/` design doc alongside #303, not here:
 ## Where the rest of the contract lives
 
 - [`content-fetch-issuer-contract.md`](content-fetch-issuer-contract.md) and its
-  [reference](content-fetch-issuer-reference.md) — **both normative here.** The frame, the MUSTs in
-  full, the failure taxonomy, the silent conditions, the DLQ, and the fetch trust model this document
-  departs from.
+  [request](content-fetch-issuer-reference.md) and
+  [outcome](content-fetch-outcome-reference.md) references — **all normative here.** The frame, the
+  MUSTs in full, the fetch trust model this document departs from, and — in the outcome half — the
+  failure taxonomy, the silent conditions and the DLQ.
 - [`replicator-boundaries.md`](replicator-boundaries.md) — the three tests, the config taxonomy, and
   the payload-field review question (#12).
 - [`2026-08-14-why-the-issuer-renders-settled.md`](../plans/2026-08-14-why-the-issuer-renders-settled.md)

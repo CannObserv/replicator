@@ -234,20 +234,21 @@ source — each with its rationale and ruff gate in [docs/STYLE.md](docs/STYLE.m
 
 ## Detail Docs
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — founding design, the command → fact flow, module by module; read before changing one
-- [docs/STREAMS.md](docs/STREAMS.md) — what each stream carries, one bullet per rule `AGENTS.md` states in a line
-- [docs/CONVENTIONS.md](docs/CONVENTIONS.md) — the rules common to every stream: idempotency, validation, DLQ, `claim_stale`, and the `replicator:cmd:*` keys (#80)
-- [docs/STORAGE.md](docs/STORAGE.md) — blob paths and modes, the populations under `REPLICATOR_BLOB_DIR`, TTL and ceilings
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — the unit's lifecycle, its start guards, what it reports when it fails, the co-core pin
-- [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) — VM topology, ports, the broker, and the buckets either side of the test/production line
-- [docs/reference/tailscale.md](docs/reference/tailscale.md) — this node: tailnet, ACL, DNS, broker latency
-- [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) — every variable either env file carries, and the boundary between them
-- [docs/TESTING.md](docs/TESTING.md) — fakeredis's divergences, the keys an integration run may create, why production `co-gcs-replication` is unreachable (#38)
-- [docs/STYLE.md](docs/STYLE.md) — the logging stack: formatter, installers, the non-JSON journald lines
-- [docs/COMMANDS.md](docs/COMMANDS.md) — every runnable command, with flags
-- [docs/SKILLS.md](docs/SKILLS.md) — vendored skill inventory, refresh procedure, doc-check lists
-- [docs/SOCRATICODE.md](docs/SOCRATICODE.md) — full tool table, prefetch query, per-tool gotchas, cross-repo search
-- [docs/contracts/content-fetch-issuer-contract.md](docs/contracts/content-fetch-issuer-contract.md) — what a `content.fetch` producer must do; linked from issuer repos
-- [docs/contracts/content-fetch-issuer-reference.md](docs/contracts/content-fetch-issuer-reference.md) — its lookup half: refusal list, failure taxonomy, silent conditions, trust posture
-- [docs/contracts/replicator-boundaries.md](docs/contracts/replicator-boundaries.md) — what Replicator may become; run its three tests against any proposed capability
-- [docs/contracts/content-replicate-issuer-contract.md](docs/contracts/content-replicate-issuer-contract.md) — the replicate trust model and issuer obligations (#34)
+- [ARCHITECTURE.md](docs/ARCHITECTURE.md) — founding design, the command → fact flow, module by module; read before changing one
+- [STREAMS.md](docs/STREAMS.md) — what each stream carries, one bullet per rule `AGENTS.md` states in a line
+- [CONVENTIONS.md](docs/CONVENTIONS.md) — the rules common to every stream: idempotency, validation, DLQ, `claim_stale`, and the `replicator:cmd:*` keys (#80)
+- [STORAGE.md](docs/STORAGE.md) — blob paths and modes, the populations under `REPLICATOR_BLOB_DIR`, TTL and ceilings
+- [DEPLOYMENT.md](docs/DEPLOYMENT.md) — the unit's lifecycle, its start guards, what it reports when it fails, the co-core pin
+- [INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) — VM topology, ports, the broker, and the buckets either side of the test/production line
+- [tailscale.md](docs/reference/tailscale.md) — this node: tailnet, ACL, DNS, broker latency
+- [ENVIRONMENT.md](docs/ENVIRONMENT.md) — every variable either env file carries, and the boundary between them
+- [TESTING.md](docs/TESTING.md) — fakeredis's divergences, the keys an integration run may create, why production `co-gcs-replication` is unreachable (#38)
+- [STYLE.md](docs/STYLE.md) — the logging stack: formatter, installers, the non-JSON journald lines
+- [COMMANDS.md](docs/COMMANDS.md) — every runnable command, with flags
+- [SKILLS.md](docs/SKILLS.md) — vendored skill inventory, refresh procedure, doc-check lists
+- [SOCRATICODE.md](docs/SOCRATICODE.md) — full tool table, prefetch query, per-tool gotchas, cross-repo search
+- [content-fetch-issuer-contract.md](docs/contracts/content-fetch-issuer-contract.md) — what a `content.fetch` producer must do; linked from issuer repos
+- [content-fetch-issuer-reference.md](docs/contracts/content-fetch-issuer-reference.md) — its lookup half, request side: refusal list, trust posture
+- [content-fetch-outcome-reference.md](docs/contracts/content-fetch-outcome-reference.md) — its result side: failure taxonomy, silent conditions, the DLQ
+- [replicator-boundaries.md](docs/contracts/replicator-boundaries.md) — what Replicator may become; run its three tests against any proposed capability
+- [content-replicate-issuer-contract.md](docs/contracts/content-replicate-issuer-contract.md) — the replicate trust model and issuer obligations (#34)
