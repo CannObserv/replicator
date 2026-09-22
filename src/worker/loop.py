@@ -1031,6 +1031,10 @@ class PollCadence:
     once the PEL beyond it runs dry, so its bound is one handler *per slow entry*
     rather than one handler.
 
+    What this does not fix: among several slow failing entries, the oldest is
+    reclaimable at every recovery turn and always wins, so the others are never
+    retried (#102). Same idle-clock cause, on the PEL's side of the turn.
+
     Mutable and held by ``run_loop``, not returned, so ``poll_once`` keeps the
     signature its callers index into. Optional there, and a missing one is a fresh
     loop's first poll: claim-first, which is exactly what one poll with no history
