@@ -199,9 +199,10 @@ RestartSec=5
 #
 # The destination guard's resolve is the fifth (#100): it runs ahead of httpx,
 # outside the fetch's own timeout, bounded by RESOLVE_TIMEOUT_SECONDS (10s) in
-# src/worker/egress.py. 170s against 180s. Every term is one operation's bound,
-# not a fetch's — httpx times operations, so a redirect chain or a trickling
-# origin is not inside this sum (#104).
+# src/worker/egress.py. 170s against 180s. The poll and pacing terms are real
+# bounds; the fetch term and this one each bound a single operation or hop, not a
+# fetch — httpx times operations, so a redirect chain or a trickling origin is
+# not inside this sum (#104).
 TimeoutStopSec=180
 
 [Install]
