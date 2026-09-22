@@ -123,9 +123,10 @@ _TRANSIENT_ERRORS: tuple[type[Exception], ...] = (
 
 # Bound on consecutive poison frames stepped over before a reader pauses.
 #
-# Here: claim_stale restarts at 0-0 on every call, so each poison entry must be
-# routed away before the next claim can reach a good message, and the bound keeps
-# a pathological PEL from starving the read path within a single tick.
+# Here: a claim that raises on a poison entry returns nothing else, so each one
+# must be routed away before the next claim can reach a good message, and the
+# bound keeps a pathological PEL from starving the read path within a single
+# tick.
 #
 # Also imported by src/worker/policy.py, whose groupless reader skips by forcing
 # the cursor rather than by dead-lettering (#19). Same shape of hazard — skipping
@@ -1010,42 +1011,32 @@ def _as_str(value: bytes | str) -> str:
     return value.decode() if isinstance(value, bytes) else value
 
 
-async def claim_once(
-    client: Redis,
-    consumer: AsyncBusConsumer,
-    settings: Settings,
-    *,
-    group: str,
-) -> list[BusMessage]:
-    """Reclaim one message abandoned by a crashed (or transiently failing) worker.
+# The head of the pending entries list, as ``XAUTOCLAIM`` spells it.
+PEL_HEAD = "0-0"
 
-    ``count=1`` for the batch-poison reason plus a sharper one: XAUTOCLAIM
-    transfers ownership and resets the idle clock on every entry it returns
-    *before* co-core decodes them, so one poison frame in a batch of ten would
-    strand nine good messages with their timers restarted.
+# A stream id's two halves are unsigned 64-bit integers.
+_U64_MAX = 2**64 - 1
 
-    A poison entry would otherwise jam recovery permanently — ``claim_stale``
-    restarts at ``0-0`` on every call, so the same bad frame is re-claimed and
-    re-raised forever. Routing it to the DLQ and re-claiming is what lets the
-    entries behind it through.
+
+def _after(entry_id: str) -> str:
+    """The first stream id past ``entry_id``, or the PEL's head if nothing can follow.
+
+    Computed because co-core's ``claim_stale`` discards the cursor ``XAUTOCLAIM``
+    returns (#102). A sequence at its limit carries into the millisecond half, as
+    ``streamIncrID`` does server-side; the largest id there is has no successor,
+    and wrapping is what the walk does at the end of the list anyway.
     """
-    for _ in range(MAX_POISON_SKIPS):
-        try:
-            return await consumer.claim_stale(
-                min_idle_ms=settings.claim_min_idle_ms, count=1, start_id="0-0"
-            )
-        except BusMessageAnomaly as exc:
-            await dead_letter_anomaly(client, consumer, exc)
-    logger.warning(
-        "recovery pass hit the poison-skip bound",
-        extra={"skipped": MAX_POISON_SKIPS, "group": group},
-    )
-    return []
+    ms, seq = (int(half) for half in entry_id.split("-"))
+    if seq < _U64_MAX:
+        return f"{ms}-{seq + 1}"
+    if ms < _U64_MAX:
+        return f"{ms + 1}-0"
+    return PEL_HEAD
 
 
 @dataclass(slots=True)
 class PollCadence:
-    """Whose turn the next poll starts with, carried across one loop's cycles (#98).
+    """Whose turn the next poll starts with, and where recovery resumes (#98, #102).
 
     Two sources feed a consume loop — the pending entries list (recovery) and the
     stream (delivery) — and ``poll_once`` tries the PEL first. That alone lets
@@ -1071,18 +1062,88 @@ class PollCadence:
     once the PEL beyond it runs dry, so its bound is one handler *per slow entry*
     rather than one handler.
 
-    What this does not fix: among several slow failing entries, the oldest is
-    reclaimable at every recovery turn and always wins, so the others are never
-    retried (#102). Same idle-clock cause, on the PEL's side of the turn.
+    ``reclaim_from`` is the same idle-clock cause on the PEL's side of the turn
+    (#102). Among several slow failing entries the oldest is reclaimable at every
+    recovery turn, so a claim from ``0-0`` hands it every one and the others are
+    never retried. Where the last claim left off is the other fact about the
+    previous cycle that the next one needs, so it is carried here and
+    ``claim_once`` walks the list from it — see there.
 
     Mutable and held by ``run_loop``, not returned, so ``poll_once`` keeps the
     signature its callers index into. Optional there, and a missing one is a fresh
-    loop's first poll: claim-first, which is exactly what one poll with no history
-    should do. ``run_loop`` is the only caller that has a history to carry, and
-    ``test_loop_recovery.py`` drives the real loop to hold it to that.
+    loop's first poll: claim-first, from the head, which is exactly what one poll
+    with no history should do. ``run_loop`` is the only caller that has a history to
+    carry, and ``test_loop_recovery.py`` drives the real loop to hold it to that.
+
+    Not persisted, deliberately: a restart claims from the head, which costs one
+    pass over entries already visited rather than any correctness.
     """
 
     stream_owed: bool = False
+    reclaim_from: str = PEL_HEAD
+
+
+async def claim_once(
+    client: Redis,
+    consumer: AsyncBusConsumer,
+    settings: Settings,
+    *,
+    group: str,
+    cadence: PollCadence | None = None,
+) -> list[BusMessage]:
+    """Reclaim one message abandoned by a crashed (or transiently failing) worker.
+
+    ``count=1`` for the batch-poison reason plus a sharper one: XAUTOCLAIM
+    transfers ownership and resets the idle clock on every entry it returns
+    *before* co-core decodes them, so one poison frame in a batch of ten would
+    strand nine good messages with their timers restarted.
+
+    **A walk, not a restart (#102).** With a ``cadence`` the claim starts just past
+    the last entry it returned and wraps to the head once nothing lies past it, so
+    every reclaimable entry takes a turn. Restarting at ``0-0`` gave the turn to
+    the *oldest* reclaimable entry every time — and because ``XAUTOCLAIM`` restarts
+    the idle clock of what it claims, a handler slower than ``claim_min_idle_ms``
+    that fails transiently leaves its entry reclaimable the moment it is released.
+    Two such entries, and the younger was delivered once and never again, for as
+    long as the older one's cause lasted; transient failures are exempt from the
+    delivery ceiling, so nothing else ended it. Without a ``cadence`` — a single
+    poll with no history — the claim starts at the head, as it always did.
+
+    What the walk does not lift is ``XAUTOCLAIM``'s own scan limit: at ``count=1``
+    it inspects at most ten pending entries a call, and co-core drops the cursor
+    that says whether it stopped there or at the end, so an empty answer wraps
+    either way. An entry more than ten young entries past the cursor waits for
+    them to age, which they do within one ``claim_min_idle_ms``.
+
+    A poison entry is routed to the DLQ and the walk continues past it. Before the
+    walk, the same bad frame was re-claimed from ``0-0`` and re-raised forever
+    unless it was dead-lettered first; it still has to be, since the claim that
+    raised on it returned nothing else.
+    """
+    start = cadence.reclaim_from if cadence is not None else PEL_HEAD
+    # A pass that began at the head has already looked everywhere a wrap would.
+    wrapped = start == PEL_HEAD
+    for _ in range(MAX_POISON_SKIPS):
+        try:
+            claimed = await consumer.claim_stale(
+                min_idle_ms=settings.claim_min_idle_ms, count=1, start_id=start
+            )
+        except BusMessageAnomaly as exc:
+            await dead_letter_anomaly(client, consumer, exc)
+            start = _after(exc.message_id)
+            continue
+        if claimed or wrapped:
+            if cadence is not None:
+                cadence.reclaim_from = _after(claimed[-1].message_id) if claimed else PEL_HEAD
+            return claimed
+        start, wrapped = PEL_HEAD, True
+    if cadence is not None:
+        cadence.reclaim_from = start
+    logger.warning(
+        "recovery pass hit the poison-skip bound",
+        extra={"skipped": MAX_POISON_SKIPS, "group": group},
+    )
+    return []
 
 
 async def _read(
@@ -1133,7 +1194,7 @@ async def poll_once(
         cadence.stream_owed = False
         if fresh:
             return fresh
-    reclaimed = await claim_once(client, consumer, settings, group=group)
+    reclaimed = await claim_once(client, consumer, settings, group=group, cadence=cadence)
     if reclaimed:
         if cadence is not None:
             cadence.stream_owed = True

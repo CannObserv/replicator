@@ -1,12 +1,15 @@
 """Crash recovery: reclaiming what a dead worker left in the pending list.
 
-``claim_stale`` restarts at ``0-0`` on every call, so these tests pin the two
-properties that follow from it — a poison entry must not jam the pass, and the
-pass must give up rather than spin when the PEL is pathological.
+A claim that raises on a poison entry returns nothing else, so these tests pin
+the two properties that follow from it — a poison entry must not jam the pass,
+and the pass must give up rather than spin when the PEL is pathological.
 
 And the one that follows from running recovery first (#98): first must not mean
 only. A reclaim owes the stream a turn, so a handler slower than
 ``claim_min_idle_ms`` cannot stop the group reading.
+
+And its sequel on the PEL's side (#102): recovery walks the pending list rather
+than restarting at ``0-0``, so the oldest slow failure cannot take every turn.
 """
 
 import asyncio
@@ -17,7 +20,14 @@ from co_core.pure.models.changes import ContentFetchCommand
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 from src.core.errors import TransientError
-from src.worker.loop import MAX_POISON_SKIPS, Outcome, PollCadence, claim_once, poll_once
+from src.worker.loop import (
+    MAX_POISON_SKIPS,
+    Outcome,
+    PollCadence,
+    _after,
+    claim_once,
+    poll_once,
+)
 from tests.worker.conftest import GROUP, TOPIC, drive_loop, make_command, process_one
 
 # How many times the starvation test lets its slow command fail before calling
@@ -47,7 +57,7 @@ async def test_a_message_from_a_dead_consumer_is_reclaimed_and_processed(
 
 
 async def test_a_poison_pel_entry_does_not_jam_recovery(fake_redis, consumer, settings):
-    """claim_stale restarts at 0-0 every call, so a poison entry would block it."""
+    """A poison entry at the head would block every claim from ``0-0``."""
     await fake_redis.xadd(TOPIC, {"event_type": "content_fetch", "payload": "not json"})
     await fake_redis.xadd(TOPIC, make_command(command_id="cmd-behind-poison"))
     await fake_redis.xreadgroup(GROUP, "replicator@dead-worker", {TOPIC: ">"}, count=2)
@@ -125,7 +135,10 @@ async def test_after_a_reclaim_the_stream_gets_the_next_turn(fake_redis, consume
         assert isinstance(message.payload, ContentFetchCommand)
         polled.append(message.payload.command_id)
 
-    assert polled == ["cmd-orphan", "cmd-new", "cmd-orphan"]
+    # Reclaim, read, reclaim. The second reclaim is ``cmd-new`` because recovery
+    # walks the PEL from where it left off (#102), and at a zero window the entry
+    # the stream's turn just delivered is already reclaimable.
+    assert polled == ["cmd-orphan", "cmd-new", "cmd-new"]
 
 
 async def test_the_streams_turn_does_not_hold_up_recovery(
@@ -196,3 +209,143 @@ async def test_a_poison_frame_on_the_streams_turn_still_lets_the_reclaim_run(
     assert message.payload.command_id == "cmd-orphan"
     assert await fake_redis.xlen(dlq_name(TOPIC)) == 1
     assert cadence.stream_owed  # the reclaim owes the next turn in its own right
+
+
+async def pend(fake_redis, *command_ids: str) -> list[str]:
+    """Leave each command pending on a dead consumer, oldest first; return their ids."""
+    ids = [await fake_redis.xadd(TOPIC, make_command(command_id=cid)) for cid in command_ids]
+    await fake_redis.xreadgroup(GROUP, "replicator@dead-worker", {TOPIC: ">"}, count=len(ids))
+    return [entry_id.decode() for entry_id in ids]
+
+
+def command_ids(messages) -> list[str]:
+    return [message.payload.command_id for message in messages]
+
+
+async def test_recovery_walks_the_pending_list_rather_than_restarting_at_its_head(
+    fake_redis, consumer, settings
+):
+    """#102: every reclaimable entry gets a turn, in order, then the walk wraps.
+
+    With the window at zero every entry is reclaimable at every claim, which is
+    the steady state of several slow transient failures: ``XAUTOCLAIM`` restarts
+    the idle clock of whatever it claims, so from ``0-0`` the oldest wins every
+    turn. Three entries rather than two, because skipping only the entry claimed
+    last — the third shape #102 weighed — alternates the first two and passes this
+    with two.
+    """
+    await pend(fake_redis, "cmd-a", "cmd-b", "cmd-c")
+    eager = settings.model_copy(update={"claim_min_idle_ms": 0})
+    cadence = PollCadence()
+
+    claimed = []
+    for _ in range(4):
+        claimed += await claim_once(fake_redis, consumer, eager, group=GROUP, cadence=cadence)
+
+    assert command_ids(claimed) == ["cmd-a", "cmd-b", "cmd-c", "cmd-a"]
+
+
+async def test_the_walk_resumes_where_it_left_off_after_the_pending_list_changes(
+    fake_redis, consumer, settings
+):
+    """The cursor is a position, not an index: an entry acked behind it costs nothing."""
+    await pend(fake_redis, "cmd-a", "cmd-b", "cmd-c")
+    eager = settings.model_copy(update={"claim_min_idle_ms": 0})
+    cadence = PollCadence()
+
+    (first,) = await claim_once(fake_redis, consumer, eager, group=GROUP, cadence=cadence)
+    await consumer.ack(first.message_id)
+    rest = []
+    for _ in range(3):
+        rest += await claim_once(fake_redis, consumer, eager, group=GROUP, cadence=cadence)
+
+    assert command_ids(rest) == ["cmd-b", "cmd-c", "cmd-b"]
+
+
+async def test_an_empty_pass_leaves_the_cursor_at_the_head(fake_redis, consumer, settings):
+    """Nothing reclaimable anywhere: one wrapped claim, then the next pass starts fresh."""
+    ids = await pend(fake_redis, "cmd-a")
+    patient = settings.model_copy(update={"claim_min_idle_ms": 60_000})
+    cadence = PollCadence(reclaim_from=ids[0])
+
+    assert await claim_once(fake_redis, consumer, patient, group=GROUP, cadence=cadence) == []
+    assert cadence.reclaim_from == "0-0"
+
+
+async def test_a_poison_entry_moves_the_walk_past_itself(fake_redis, consumer, settings):
+    """Dead-lettered on the way, and the walk continues behind it rather than restarting."""
+    await pend(fake_redis, "cmd-a")
+    await fake_redis.xadd(TOPIC, {"event_type": "content_fetch", "payload": "not json"})
+    await fake_redis.xreadgroup(GROUP, "replicator@dead-worker", {TOPIC: ">"}, count=1)
+    await pend(fake_redis, "cmd-c")
+    eager = settings.model_copy(update={"claim_min_idle_ms": 0})
+    cadence = PollCadence()
+
+    claimed = []
+    for _ in range(3):
+        claimed += await claim_once(fake_redis, consumer, eager, group=GROUP, cadence=cadence)
+
+    assert command_ids(claimed) == ["cmd-a", "cmd-c", "cmd-a"]
+    assert await fake_redis.xlen(dlq_name(TOPIC)) == 1
+
+
+async def test_a_pass_stopped_by_the_poison_bound_resumes_behind_the_last_skipped(
+    fake_redis, consumer, settings
+):
+    """The bound pauses the walk rather than rewinding it to frames already routed."""
+    poison = [
+        (await fake_redis.xadd(TOPIC, {"event_type": "content_fetch", "payload": "x"})).decode()
+        for _ in range(MAX_POISON_SKIPS + 1)
+    ]
+    await fake_redis.xreadgroup(GROUP, "replicator@dead-worker", {TOPIC: ">"}, count=100)
+    eager = settings.model_copy(update={"claim_min_idle_ms": 0})
+    cadence = PollCadence()
+
+    assert await claim_once(fake_redis, consumer, eager, group=GROUP, cadence=cadence) == []
+
+    assert cadence.reclaim_from == _after(poison[MAX_POISON_SKIPS - 1])
+
+
+@pytest.mark.parametrize(
+    ("entry_id", "after"),
+    [
+        ("1700000000000-0", "1700000000000-1"),
+        ("1700000000000-41", "1700000000000-42"),
+        # The sequence is a u64; its successor is the next millisecond's first.
+        (f"1700000000000-{2**64 - 1}", "1700000000001-0"),
+        # The largest id a stream can hold has no successor, so the walk wraps.
+        (f"{2**64 - 1}-{2**64 - 1}", "0-0"),
+    ],
+)
+def test_the_cursor_starts_just_past_the_entry_claimed(entry_id, after):
+    """co-core discards ``XAUTOCLAIM``'s own cursor, so the next start is computed."""
+    assert _after(entry_id) == after
+
+
+async def test_among_slow_failing_entries_a_younger_one_is_still_retried(
+    fake_redis, consumer, settings
+):
+    """#102's reproduction: ``cmd-b`` would succeed on its second attempt, if it got one.
+
+    Read ``cmd-a``, reclaim it, read ``cmd-b`` on the stream's turn — and then
+    recovery's turn goes to ``cmd-b``, not back to the entry that always wins from
+    ``0-0``. Before the fix ``cmd-b`` was delivered once and never again.
+    """
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-a"))
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-b"))
+    eager = settings.model_copy(update={"claim_min_idle_ms": 0})
+    stop = asyncio.Event()
+    seen: list[str] = []
+
+    async def handler(command: ContentFetchCommand) -> None:
+        seen.append(command.command_id)
+        if len(seen) >= SLOW_ATTEMPTS_BEFORE_GIVING_UP:
+            stop.set()
+        if command.command_id == "cmd-b" and seen.count("cmd-b") > 1:
+            stop.set()
+            return
+        raise TransientError("provider stalled")
+
+    await drive_loop(fake_redis, consumer, eager, handler, stop, deadline=1.0)
+
+    assert seen == ["cmd-a", "cmd-a", "cmd-b", "cmd-b"]

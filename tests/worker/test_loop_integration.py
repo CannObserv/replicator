@@ -28,6 +28,9 @@ Redis acts, or about a reply shape the fake never produces:
    an entry that is reclaimable the moment it is released. The fake settles the
    turn order with the window at zero; this runs it at the ratio the issue
    reproduced, against the clock that makes the ratio matter.
+7. Several slow failing entries (#102). The same restarted idle clock, on the
+   PEL's side of the turn: from ``0-0`` the oldest reclaimable entry wins every
+   recovery turn, so recovery walks the list instead. Run at #98's ratio.
 
 Everything runs on ``replicator.itest.*`` scratch streams. The ``real_redis``
 fixture refuses db 0 outright — the database that carries the live
@@ -355,6 +358,53 @@ async def test_a_handler_slower_than_the_idle_window_does_not_stop_the_group_rea
     assert seen == [slow, slow, behind]
 
 
+async def test_among_slow_failing_entries_a_younger_one_is_still_retried(
+    real_redis, scratch_topic, dedupe_keys, itest_consumer, itest_settings
+):
+    """#102's reproduction, as a test: recovery takes turns across the PEL too.
+
+    Two slow commands fail transiently. ``stuck`` fails every time; ``recovers``
+    fails once and would succeed on its next attempt. Before the fix recovery
+    reclaimed from ``0-0``, where ``stuck`` — its idle clock restarted by its own
+    claim and outrun by its own handler — was reclaimable at every turn, and
+    ``recovers`` was delivered once and never again.
+    """
+    stuck, recovers = (f"cmd-{role}-{uuid.uuid4().hex[:8]}" for role in ("stuck", "recovers"))
+    dedupe_keys.append(FETCH_SPEC.dedupe_key(recovers))
+    settings = itest_settings.model_copy(update={"dedupe_ttl_seconds": DEDUPE_TTL_SECONDS})
+    await real_redis.xadd(scratch_topic, make_command(stuck))
+    await real_redis.xadd(scratch_topic, make_command(recovers))
+    stop = asyncio.Event()
+    seen: list[str] = []
+
+    async def handler(command) -> None:
+        seen.append(command.command_id)
+        if len(seen) >= SLOW_ATTEMPTS_BEFORE_GIVING_UP:
+            stop.set()
+        await asyncio.sleep(SLOW_HANDLER_SECONDS)
+        if command.command_id == recovers and seen.count(recovers) > 1:
+            stop.set()
+            return
+        raise TransientError("provider stalled")
+
+    await asyncio.wait_for(
+        run_loop(
+            client=real_redis,
+            consumer=itest_consumer,
+            group=GROUP,
+            settings=settings,
+            handler=handler,
+            reporter=collected_reports(),
+            spec=FETCH_SPEC,
+            stop=stop,
+        ),
+        timeout=SLOW_ATTEMPTS_BEFORE_GIVING_UP * SLOW_HANDLER_SECONDS + SLOW_RUN_MARGIN_SECONDS,
+    )
+
+    assert seen == [stuck, stuck, recovers, recovers]
+    assert (await real_redis.xpending(scratch_topic, GROUP))["pending"] == 1
+
+
 async def test_a_read_with_nothing_to_read_blocks_for_its_window(itest_consumer):
     """fakeredis returns immediately; the real server waits, and shutdown latency
     is bounded by exactly this.
@@ -417,8 +467,9 @@ async def test_a_poison_entry_whose_frame_is_gone_still_leaves_the_pel(
     """Trimmed between delivery and dead-lettering: the fallback path, live.
 
     A pending entry whose stream entry no longer exists is the shape that would
-    otherwise wedge recovery forever — ``claim_stale`` restarts at ``0-0``, so a
-    frame it cannot decode and cannot copy would be re-raised on every pass.
+    otherwise wedge recovery forever — a claim that raises on a frame returns
+    nothing else, so one it cannot decode and cannot copy would be re-raised on
+    every pass that reached it.
     """
     await real_redis.xadd(scratch_topic, {"event_type": "content_fetch", "payload": "{"})
     with pytest.raises(BusMessageAnomaly) as excinfo:
