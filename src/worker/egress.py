@@ -192,11 +192,16 @@ class GuardedTransport(httpx.AsyncBaseTransport):
         unfetchable on the next reclaim as on this one.
 
         **The deadline abandons the wait, not the resolve** (#100).
-        ``loop.getaddrinfo`` runs in the default executor — shared with every
-        ``BlobStore`` call's ``asyncio.to_thread`` — and cancelling the await
-        leaves that thread to finish on libc's schedule. On a serial consume path
-        that is at most one abandoned thread per attempt, each done long before
-        the next reclaim.
+        ``loop.getaddrinfo`` runs in the default executor, and cancelling the
+        await leaves that thread to finish on libc's schedule — its full retry
+        budget, which the ``search`` line in ``resolv.conf`` can double. A
+        transient failure does not wait for a reclaim before the loop takes the
+        *next* command, so against a dead nameserver the abandoned threads of
+        consecutive commands overlap: a few at once, each outliving its attempt
+        by libc's remaining budget, never an unbounded number (CR 2). They hold
+        workers of the pool every ``BlobStore`` call's ``asyncio.to_thread`` and
+        asyncio's own resolve for a broker reconnect draw on —
+        ``min(32, cpus + 4)``, six on this VM.
         """
         try:
             async with asyncio.timeout(self._resolve_timeout):
