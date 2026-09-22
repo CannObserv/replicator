@@ -438,6 +438,22 @@ def test_the_whole_fetch_ceiling_defaults_to_the_per_operation_one(monkeypatch):
     assert settings.max_fetch_seconds >= settings.max_fetch_timeout_seconds
 
 
+def test_an_operator_can_raise_the_whole_fetch_ceiling(monkeypatch):
+    """CR 9: the setting an operator is told to raise is one they can raise.
+
+    Every other branch of the validator had a test — derived, lowered, refused —
+    and the one where the variable is set to a value it accepts had none, so
+    nothing said the documented answer to "my corpus has slower fetches" works.
+    """
+    monkeypatch.setenv("REPLICATOR_MAX_FETCH_SECONDS", "240")
+    monkeypatch.delenv("REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS", raising=False)
+
+    settings = Settings()
+
+    assert settings.max_fetch_seconds == 240.0
+    assert settings.max_fetch_timeout_seconds == 120.0
+
+
 @pytest.mark.parametrize("value", ["0", "-5", "nan", "inf"])
 def test_a_whole_fetch_ceiling_that_is_not_a_duration_fails_at_startup(monkeypatch, value):
     monkeypatch.setenv("REPLICATOR_MAX_FETCH_SECONDS", value)
