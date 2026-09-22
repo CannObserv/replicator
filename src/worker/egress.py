@@ -264,6 +264,9 @@ class BodyCeilingTransport(httpx.AsyncBaseTransport):
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         response = await self._inner.handle_async_request(request)
+        stream = response.stream
+        if not isinstance(stream, httpx.AsyncByteStream):  # pragma: no cover - async transports
+            raise TypeError(f"an async transport answered with a {type(stream).__name__}")
         kept = response.is_success
         if kept:
             declared = _declared_length(response.headers)
@@ -273,9 +276,7 @@ class BodyCeilingTransport(httpx.AsyncBaseTransport):
         return httpx.Response(
             status_code=response.status_code,
             headers=response.headers,
-            stream=_CeilingStream(
-                response.stream, self._max_bytes, refusing=request.url if kept else None
-            ),
+            stream=_CeilingStream(stream, self._max_bytes, refusing=request.url if kept else None),
             extensions=response.extensions,
         )
 

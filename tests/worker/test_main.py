@@ -1440,7 +1440,9 @@ def test_the_worker_stops_reading_a_body_at_the_blob_ceiling(monkeypatch):
 
     client = build_fetch_client(Settings())
 
-    inner = client._transport._inner
+    guard = client._transport
+    assert isinstance(guard, GuardedTransport)
+    inner = guard._inner
     assert isinstance(inner, BodyCeilingTransport)
     assert inner._max_bytes == 4096
 
