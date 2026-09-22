@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 
 from src.core.config import Settings
+from src.worker.egress import RESOLVE_TIMEOUT_SECONDS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 UNIT = REPO_ROOT / "deploy" / "replicator.service"
@@ -158,7 +159,7 @@ def test_the_stop_timeout_outlasts_the_slowest_fetch_a_command_may_ask_for():
 
 
 def test_the_stop_timeout_absorbs_a_pacing_wait_as_well():
-    """The #12 and #7 terms.
+    """The #12, #7 and #100 terms.
 
     A handler may now sleep out a per-host politeness window before it fetches,
     bounded by the poll window (``build_handler``'s ``park_above_seconds``
@@ -180,6 +181,11 @@ def test_the_stop_timeout_absorbs_a_pacing_wait_as_well():
         # docstring's "three separately-reasonable numbers" became four, which
         # is the failure it predicted.
         + settings.blob_timeout_seconds
+        # The #100 term. The destination guard resolves ahead of httpx, so the
+        # resolve sits outside the fetch's own timeout rather than inside its
+        # connect phase. Five numbers now. One hop's resolve, as the fetch term
+        # is one operation's timeout: httpx bounds operations, not a fetch (#104).
+        + RESOLVE_TIMEOUT_SECONDS
     )
 
     assert timeout_stop > worst_case

@@ -196,6 +196,12 @@ RestartSec=5
 # the sweep runs only on the local backend and the storage round trip only on the
 # object-store one, so no single shutdown pays both. The sum deliberately
 # overcounts rather than encoding that in a test nobody would revisit.
+#
+# The destination guard's resolve is the fifth (#100): it runs ahead of httpx,
+# outside the fetch's own timeout, bounded by RESOLVE_TIMEOUT_SECONDS (10s) in
+# src/worker/egress.py. 170s against 180s. Every term is one operation's bound,
+# not a fetch's — httpx times operations, so a redirect chain or a trickling
+# origin is not inside this sum (#104).
 TimeoutStopSec=180
 
 [Install]
