@@ -1003,12 +1003,64 @@ async def claim_once(
     return []
 
 
+@dataclass
+class PollCadence:
+    """Whose turn the next poll starts with, carried across one loop's cycles (#98).
+
+    Two sources feed a consume loop — the pending entries list (recovery) and the
+    stream (delivery) — and ``poll_once`` tries the PEL first. That alone lets
+    recovery starve delivery outright: ``XAUTOCLAIM`` restarts an entry's idle
+    clock when it claims it, so a handler that outruns ``claim_min_idle_ms`` and
+    fails transiently returns an entry that is reclaimable *again* the moment it is
+    released. Claimed first on every cycle, it keeps ``XREADGROUP`` from ever being
+    issued; the group's ``last-delivered-id`` stops, and everything behind it ages
+    without bound while the worker looks busy. The transient classes are exempt from
+    the delivery ceiling, so nothing ends that but the condition itself — for an ACL
+    denial, an operator.
+
+    So a reclaim owes the stream a turn: the next poll looks there first. At most
+    one reclaim ever runs between two looks at the stream, which bounds how long an
+    undelivered entry can wait at one handler's duration, whatever that duration is.
+
+    Chosen over the two alternatives #98 weighed. Raising ``claim_min_idle_ms``
+    past the slowest handler lengthens every retry to fix a case only the slow ones
+    reach, and a provider timeout plus the SDK's own retry deadline has no ceiling to
+    size it against. Claiming past the entry this consumer just released reads only
+    once the PEL beyond it runs dry, so its bound is one handler *per slow entry*
+    rather than one handler.
+
+    Mutable and held by ``run_loop``, not returned, so ``poll_once`` keeps the
+    signature its callers index into. Optional there, and a missing one is a fresh
+    loop's first poll: claim-first, which is exactly what one poll with no history
+    should do. ``run_loop`` is the only caller that has a history to carry, and
+    ``test_loop_recovery.py`` drives the real loop to hold it to that.
+    """
+
+    stream_owed: bool = False
+
+
+async def _read(
+    client: Redis, consumer: AsyncBusConsumer, *, block_ms: int | None
+) -> list[BusMessage]:
+    """One ``count=1`` read, dead-lettering a frame that will not decode.
+
+    ``block_ms=None`` returns at once rather than blocking — not ``0``, which
+    ``XREADGROUP`` takes as "block forever".
+    """
+    try:
+        return await consumer.read(count=1, block_ms=block_ms)
+    except BusMessageAnomaly as exc:
+        await dead_letter_anomaly(client, consumer, exc)
+        return []
+
+
 async def poll_once(
     client: Redis,
     consumer: AsyncBusConsumer,
     settings: Settings,
     *,
     group: str,
+    cadence: PollCadence | None = None,
 ) -> list[BusMessage]:
     """Source the next message, dead-lettering anything that will not decode.
 
@@ -1021,15 +1073,26 @@ async def poll_once(
     Recovery comes first: work already delivered to a worker that died (or that
     failed transiently here) is older than anything unread, and leaving it while
     new messages flow would let it age indefinitely.
+
+    **First, not only (#98).** After a reclaim the stream is owed a turn, and this
+    poll takes it before reclaiming again — see ``PollCadence``. The turn is a
+    non-blocking look: an idle stream answers at once and the reclaim runs in the
+    same poll, so paying it costs a round trip rather than ``read_block_ms`` on
+    every retry.
     """
+    if cadence is not None and cadence.stream_owed:
+        fresh = await _read(client, consumer, block_ms=None)
+        # Cleared only once the read has answered: a broker that refused it has
+        # not given the stream its turn, and the next cycle should try again.
+        cadence.stream_owed = False
+        if fresh:
+            return fresh
     reclaimed = await claim_once(client, consumer, settings, group=group)
     if reclaimed:
+        if cadence is not None:
+            cadence.stream_owed = True
         return reclaimed
-    try:
-        return await consumer.read(count=1, block_ms=settings.read_block_ms)
-    except BusMessageAnomaly as exc:
-        await dead_letter_anomaly(client, consumer, exc)
-        return []
+    return await _read(client, consumer, block_ms=settings.read_block_ms)
 
 
 async def process_batch[C: Command, R: Report](
@@ -1086,15 +1149,20 @@ async def run_loop[C: Command, R: Report](
     the process dying on every Redis restart and leaning on systemd to bring it
     back through the full ExecStartPre chain. ``asyncio.CancelledError`` is a
     ``BaseException`` and still propagates: shutdown is not a cycle failure.
+
+    The ``PollCadence`` lives here because it is cadence: which source the next
+    poll tries first is a fact about the previous cycle, and this is the only
+    frame that sees both (#98).
     """
     consecutive_failures = 0
+    cadence = PollCadence()
     while not stop.is_set():
         # Bound before the try: the read below is only valid by the except
         # branch always continuing, and a future branch that falls through
         # would hit UnboundLocalError on a path that runs only during an outage.
         messages: list[BusMessage] = []
         try:
-            messages = await poll_once(client, consumer, settings, group=group)
+            messages = await poll_once(client, consumer, settings, group=group, cadence=cadence)
             await process_batch(
                 messages,
                 client=client,

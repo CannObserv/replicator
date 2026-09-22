@@ -23,6 +23,11 @@ Redis acts, or about a reply shape the fake never produces:
    itself, so "the ``fetch_failed`` is on the stream by the time the PEL is
    empty" is an ordering claim about the broker's own state, not about a
    sequence of calls a spy could record.
+6. A handler slower than the idle window (#98). ``XAUTOCLAIM`` restarts an
+   entry's idle clock when it *claims* it, so a slow transient failure hands back
+   an entry that is reclaimable the moment it is released. The fake settles the
+   turn order with the window at zero; this runs it at the ratio the issue
+   reproduced, against the clock that makes the ratio matter.
 
 Everything runs on ``replicator.itest.*`` scratch streams. The ``real_redis``
 fixture refuses db 0 outright — the database that carries the live
@@ -32,6 +37,7 @@ not the plan.
 
 import asyncio
 import time
+import uuid
 from collections.abc import AsyncGenerator
 
 import pytest
@@ -42,6 +48,7 @@ from co_core.pure.util.hashing import sha256
 
 from scripts.seed_fetch import last_id, publish, resolve_blobs_topic, watch_for_facts
 from src.core.config import get_settings
+from src.core.errors import TransientError
 from src.storage.local import LocalBlobStore
 from src.worker.handler import build_handler
 from src.worker.loop import (
@@ -55,7 +62,13 @@ from src.worker.loop import (
 )
 from src.worker.main import build_consumer
 from src.worker.reporter import build_failure_reporter
-from tests.worker.conftest import BODY, FakeFetcher, fetch_result, make_command
+from tests.worker.conftest import (
+    BODY,
+    FakeFetcher,
+    collected_reports,
+    fetch_result,
+    make_command,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -72,6 +85,13 @@ CLAIM_MIN_IDLE_MS = 100
 # that it blocks at all, and every assertion below is a lower bound. It also
 # bounds how long the end-to-end loop takes to notice its stop event.
 READ_BLOCK_MS = 300
+
+# How long the #98 test's slow handler holds the loop before failing: three idle
+# windows, so the entry it releases is reclaimable at once by a wide margin — a
+# scheduler hiccup only makes it more so. And how many attempts it gets before
+# the run is called off: past the one reclaim a fixed loop spends before reading.
+SLOW_HANDLER_SECONDS = 3 * CLAIM_MIN_IDLE_MS / 1000
+SLOW_ATTEMPTS_BEFORE_GIVING_UP = 6
 
 # The end-to-end run writes a real replicator:cmd:* dedupe key. Teardown deletes
 # it; this is the backstop for a run that dies before teardown, and it is short
@@ -282,6 +302,54 @@ async def test_a_reclaim_advances_the_delivery_counter(
     await claim_once(real_redis, itest_consumer, itest_settings, group=GROUP)
 
     assert await times_delivered(real_redis, scratch_topic, delivered.message_id) == 2
+
+
+async def test_a_handler_slower_than_the_idle_window_does_not_stop_the_group_reading(
+    real_redis, scratch_topic, dedupe_keys, itest_consumer, itest_settings
+):
+    """#98's reproduction, as a test: one reclaim between reads, not all of them.
+
+    Before the fix this ran the slow command until the attempt cap and never
+    delivered the one behind it — ``last-delivered-id`` stopped at the first
+    entry while the worker logged a retry every cycle.
+
+    The ids are per run because the command behind completes, and a completing
+    close writes a real dedupe key: a fixed id left by one run would be deduped
+    by the next, never reaching the handler — which reads exactly like the bug.
+    """
+    slow, behind = (f"cmd-{role}-{uuid.uuid4().hex[:8]}" for role in ("slow", "behind"))
+    dedupe_keys.append(FETCH_SPEC.dedupe_key(behind))
+    settings = itest_settings.model_copy(update={"dedupe_ttl_seconds": DEDUPE_TTL_SECONDS})
+    await real_redis.xadd(scratch_topic, make_command(slow))
+    await real_redis.xadd(scratch_topic, make_command(behind))
+    stop = asyncio.Event()
+    seen: list[str] = []
+
+    async def handler(command) -> None:
+        seen.append(command.command_id)
+        if command.command_id == behind:
+            stop.set()
+            return
+        if len(seen) >= SLOW_ATTEMPTS_BEFORE_GIVING_UP:
+            stop.set()
+        await asyncio.sleep(SLOW_HANDLER_SECONDS)
+        raise TransientError("provider stalled")
+
+    await asyncio.wait_for(
+        run_loop(
+            client=real_redis,
+            consumer=itest_consumer,
+            group=GROUP,
+            settings=settings,
+            handler=handler,
+            reporter=collected_reports(),
+            spec=FETCH_SPEC,
+            stop=stop,
+        ),
+        timeout=SLOW_ATTEMPTS_BEFORE_GIVING_UP * SLOW_HANDLER_SECONDS + FACT_TIMEOUT_SECONDS,
+    )
+
+    assert seen == [slow, slow, behind]
 
 
 async def test_a_read_with_nothing_to_read_blocks_for_its_window(itest_consumer):
