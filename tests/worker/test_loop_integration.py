@@ -88,10 +88,13 @@ READ_BLOCK_MS = 300
 
 # How long the #98 test's slow handler holds the loop before failing: three idle
 # windows, so the entry it releases is reclaimable at once by a wide margin — a
-# scheduler hiccup only makes it more so. And how many attempts it gets before
-# the run is called off: past the one reclaim a fixed loop spends before reading.
+# scheduler hiccup only makes it more so. How many attempts it gets before the
+# run is called off: past the one reclaim a fixed loop spends before reading.
+# And the slack past those attempts before the run counts as hung — generous,
+# because the loop exits on its stop event well inside it.
 SLOW_HANDLER_SECONDS = 3 * CLAIM_MIN_IDLE_MS / 1000
 SLOW_ATTEMPTS_BEFORE_GIVING_UP = 6
+SLOW_RUN_MARGIN_SECONDS = 5
 
 # The end-to-end run writes a real replicator:cmd:* dedupe key. Teardown deletes
 # it; this is the backstop for a run that dies before teardown, and it is short
@@ -346,7 +349,7 @@ async def test_a_handler_slower_than_the_idle_window_does_not_stop_the_group_rea
             spec=FETCH_SPEC,
             stop=stop,
         ),
-        timeout=SLOW_ATTEMPTS_BEFORE_GIVING_UP * SLOW_HANDLER_SECONDS + FACT_TIMEOUT_SECONDS,
+        timeout=SLOW_ATTEMPTS_BEFORE_GIVING_UP * SLOW_HANDLER_SECONDS + SLOW_RUN_MARGIN_SECONDS,
     )
 
     assert seen == [slow, slow, behind]
