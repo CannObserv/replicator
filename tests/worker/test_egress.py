@@ -1,6 +1,6 @@
 """The destination guard: what a fetch may reach from this host (#95).
 
-Every test here is a way the guard stops holding. The three that matter most are
+Every test here is a way the guard stops holding. The four that matter most are
 not the per-range ones — those are arithmetic — but:
 
 - **the redirect hop**, because the obvious implementation (a check on
@@ -9,9 +9,14 @@ not the per-range ones — those are arithmetic — but:
 - **every resolved address**, because a name that answers with one public and one
   loopback address is the cheap half of DNS rebinding;
 - **unset means the deny set**, because the failure mode of a guard carried in
-  env is an env file that does not load.
+  env is an env file that does not load;
+- **an answer the guard cannot check is refused**, because the check is a loop
+  over the answer, and an empty one, of any shape, or one that is not an
+  address, would skip the loop rather than fail it — the only way this guard
+  fails *open* rather than closed (#100).
 
-The decision and the three tests it was run through: #89. The scope: #95.
+The decision and the three tests it was run through: #89. The scope: #95, and
+#100 for the resolver seam's failures.
 """
 
 import asyncio
