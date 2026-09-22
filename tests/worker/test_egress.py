@@ -193,7 +193,7 @@ def test_the_refusal_is_terminal():
     raises ``PermanentFetchError``, which the loop closes and reports, rather
     than ``TransientFetchError``, which is exempt from the delivery ceiling — it
     would retry at every reclaim, indefinitely, for a command whose answer will
-    not change, and the issuer would never be told why (CR 3). That exemption is
+    not change, and the issuer would never be told why (#100 CR 3). That exemption is
     exactly why the guard's *unanswerable* resolves are transient (#100): there,
     waiting in the PEL is the point.
     """
@@ -218,7 +218,7 @@ async def test_an_ipv4_mapped_address_is_the_address_it_maps(label, url, mapping
     not — so a guard comparing versions naively lets the most obvious bypass in
     the file straight through.
 
-    **Both paths, because since #100 each unmaps on its own** (CR 1). ``_address``
+    **Both paths, because since #100 each unmaps on its own** (#100 CR 1). ``_address``
     runs on the URL's literal and on every resolved answer, where ``_containing``
     once did it for both; restoring the literal path's pre-#100 spelling,
     ``ipaddress.ip_address(host)``, reopens the literal case alone. The empty
@@ -244,7 +244,7 @@ async def test_the_default_resolver_is_the_one_the_worker_runs_with():
 
 
 async def test_a_resolution_failure_is_transient_not_unclassified():
-    """CR 2: the guard resolves before httpx does, and that moved the failure.
+    """#95 CR 2: the guard resolves before httpx does, and that moved the failure.
 
     Before the guard, a name that would not resolve failed *inside* httpx as a
     ``ConnectError`` — an ``httpx.HTTPError``, which ``_fetch`` maps to
@@ -320,7 +320,7 @@ async def test_an_empty_answer_of_any_shape_is_transient_not_a_pass(label, answe
     ],
 )
 async def test_an_answer_that_is_not_an_address_is_refused_not_passed(label, answer):
-    """#100: the arm CR 9 called unreachable failed *open*.
+    """#100: the arm #95 CR 9 called unreachable failed *open*.
 
     ``_containing`` answered ``None`` — "in no blocked range" — for anything it
     could not parse, so a resolver answering with a name rather than an address
@@ -367,7 +367,7 @@ def test_the_resolve_cap_survives_one_libc_retry():
     Here that costs a ``REPLICATOR_CLAIM_MIN_IDLE_MS`` reclaim for a name that
     was resolving fine.
 
-    **Room for a whole second try, not a hair over the first** (CR 5): the
+    **Room for a whole second try, not a hair over the first** (#100 CR 5): the
     retry only *starts* at 5 s, so a cap of 5.001 s clears the first try's
     timeout and still fails the resolve it exists to let through.
     """
@@ -399,7 +399,7 @@ async def test_an_unencodable_hostname_is_terminal():
 
 
 async def test_a_refusal_survives_the_driver_and_reaches_the_handler(handler):
-    """CR 3: the refusal has to cross httpx's stack and ``_fetch``'s except clauses.
+    """#95 CR 3: the refusal has to cross httpx's stack and ``_fetch``'s except clauses.
 
     Every other test here calls the transport directly, which proves the range
     arithmetic and nothing about the path the exception actually travels. In
@@ -443,7 +443,7 @@ async def test_a_refusal_survives_the_driver_and_reaches_the_handler(handler):
     ],
 )
 async def test_an_obfuscated_literal_still_reaches_the_guard(label, host):
-    """CR 7: these are loopback, and they are refused for a non-obvious reason.
+    """#95 CR 7: these are loopback, and they are refused for a non-obvious reason.
 
     ``ipaddress.ip_address`` **rejects** both spellings — it takes dotted quads
     only — so they are not recognised as literals and fall through to the

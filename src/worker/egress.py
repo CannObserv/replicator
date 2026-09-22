@@ -23,7 +23,7 @@ services share. Replicator's network position is Replicator's fact.
 **Resolving here moves where a name failure surfaces**, so this module owns its
 classification: a resolution failure is transient and an unencodable hostname is
 terminal, because the loop reads the exception *type* and neither is one httpx
-would have raised (CR 2). It also moved *when* one surfaces (#100): httpcore
+would have raised (#95 CR 2). It also moved *when* one surfaces (#100): httpcore
 resolves inside its connect timeout, and a resolve ahead of httpcore is ahead of
 that too, so the guard carries its own — :data:`RESOLVE_TIMEOUT_SECONDS`.
 
@@ -115,7 +115,7 @@ async def _getaddrinfo(host: str, port: int) -> Sequence[str]:
     loop = asyncio.get_running_loop()
     infos = await loop.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
     # typeshed types a sockaddr's first element ``str | int`` to cover every
-    # family; for IPv4 and IPv6 it is the address string (CR 6).
+    # family; for IPv4 and IPv6 it is the address string (#100 CR 6).
     return [str(info[4][0]) for info in infos]
 
 
@@ -179,7 +179,7 @@ class GuardedTransport(httpx.AsyncBaseTransport):
         """Resolve, translating every way resolution fails into the loop's terms.
 
         **Resolving here moved where a name failure surfaces, and the loop
-        classifies by type** (CR 2). Before this guard, an unresolvable host
+        classifies by type** (#95 CR 2). Before this guard, an unresolvable host
         failed inside httpx as a ``ConnectError`` — an ``httpx.HTTPError``,
         which ``_fetch`` maps to ``TransientFetchError`` and the loop retries
         indefinitely. A bare ``socket.gaierror`` in its place is none of the
@@ -200,7 +200,7 @@ class GuardedTransport(httpx.AsyncBaseTransport):
         transient failure does not wait for a reclaim before the loop takes the
         *next* command, so against a dead nameserver the abandoned threads of
         consecutive commands overlap: a few at once, each outliving its attempt
-        by libc's remaining budget, never an unbounded number (CR 2). They hold
+        by libc's remaining budget, never an unbounded number (#100 CR 2). They hold
         workers of the pool every ``BlobStore`` call's ``asyncio.to_thread`` and
         asyncio's own resolve for a broker reconnect draw on —
         ``min(32, cpus + 4)``, six on this VM.
@@ -275,7 +275,7 @@ def _containing(address: Address, blocked: tuple[Network, ...]) -> Network | Non
     Takes an address already parsed, so it has no answer to give about one that
     is not — that question is asked, and refused, at the resolver's boundary in
     :func:`_checkable`. This function answered it with ``None`` until #100: an
-    arm CR 9 called unreachable, and which failed open.
+    arm #95 CR 9 called unreachable, and which failed open.
     """
     for network in blocked:
         if address.version == network.version and address in network:
