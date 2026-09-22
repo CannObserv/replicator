@@ -338,10 +338,14 @@ def test_the_resolve_cap_survives_one_libc_retry():
     the one libc would have finished on its second try, a little after 5 s.
     Here that costs a ``REPLICATOR_CLAIM_MIN_IDLE_MS`` reclaim for a name that
     was resolving fine.
+
+    **Room for a whole second try, not a hair over the first** (CR 5): the
+    retry only *starts* at 5 s, so a cap of 5.001 s clears the first try's
+    timeout and still fails the resolve it exists to let through.
     """
     glibc_per_try_seconds = 5.0
 
-    assert RESOLVE_TIMEOUT_SECONDS > glibc_per_try_seconds
+    assert RESOLVE_TIMEOUT_SECONDS >= 2 * glibc_per_try_seconds
 
 
 async def test_an_unencodable_hostname_is_terminal():
