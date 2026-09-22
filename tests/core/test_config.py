@@ -462,6 +462,22 @@ def test_a_whole_fetch_ceiling_that_is_not_a_duration_fails_at_startup(monkeypat
         Settings()
 
 
+@pytest.mark.parametrize("value", ["0", "-5", "nan", "inf"])
+def test_a_per_operation_ceiling_that_is_not_a_duration_fails_at_startup(monkeypatch, value):
+    """CR 10: the ceiling #104 derives from must be a number, or neither guard holds.
+
+    Two failures, both silent. `inf` derives a whole-fetch deadline of `inf`,
+    which ``asyncio.timeout`` accepts and never fires — a worker that boots with
+    the guard absent, printing `inf` on its ready line as though it were a
+    setting. `nan` disarms #11's own ceiling instead: every comparison against it
+    is false, so a command asking for any timeout at all is accepted.
+    """
+    monkeypatch.setenv("REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS", value)
+
+    with pytest.raises(ValidationError, match="REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS"):
+        Settings()
+
+
 def test_an_unset_whole_fetch_ceiling_follows_a_raised_per_operation_one(monkeypatch):
     """CR 1: a deployment that raised the per-operation ceiling still boots.
 

@@ -382,8 +382,18 @@ class Settings(BaseSettings):
     # read separately. What bounds a whole fetch, and what the unit's
     # TimeoutStopSec is sized against, is max_fetch_seconds below (#104), which
     # may not be set under this.
+    #
+    # Bounded like every other duration here, and load-bearing twice over
+    # (CR 10). `nan` disarms this ceiling itself — every comparison against it is
+    # false, so `_request_timeout` accepts whatever a command asks for — and
+    # since max_fetch_seconds derives from this when unset, `inf` derives a
+    # whole-fetch deadline of `inf`, which asyncio.timeout accepts and never
+    # fires. Both boot silently; both are refused here instead.
     max_fetch_timeout_seconds: float = Field(
-        default=120.0, validation_alias="REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS"
+        default=120.0,
+        gt=0,
+        allow_inf_nan=False,
+        validation_alias="REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS",
     )
 
     # Ceiling on one fetch's whole wall time (#104): the guard's resolve, every
@@ -473,6 +483,9 @@ class Settings(BaseSettings):
         and lifting it is what keeps #104's deploy off the boot path of a host
         that had only ever raised the per-operation ceiling (CR 1).
         """
+        # Assigning inside an "after" validator is safe only while model_config
+        # does not set validate_assignment, which would re-enter this validator
+        # and recurse (CR 12).
         if "max_fetch_seconds" not in self.model_fields_set:
             self.max_fetch_seconds = max(self.max_fetch_seconds, self.max_fetch_timeout_seconds)
             return self
