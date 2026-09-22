@@ -420,3 +420,42 @@ def test_a_destination_guard_naming_nothing_is_refused(monkeypatch):
 
     with pytest.raises(ValidationError, match="names no range"):
         Settings()
+
+
+def test_the_whole_fetch_ceiling_defaults_to_the_per_operation_one(monkeypatch):
+    """#104: the one number that bounds a fetch end to end, not per operation.
+
+    Equal to ``REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS`` by default, so the slowest
+    single operation a command may ask for still fits inside it, and 50x the
+    slowest fetch the journal recorded before it existed (2.3 s over 293).
+    """
+    monkeypatch.delenv("REPLICATOR_MAX_FETCH_SECONDS", raising=False)
+    monkeypatch.delenv("REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS", raising=False)
+
+    settings = Settings()
+
+    assert settings.max_fetch_seconds == 120.0
+    assert settings.max_fetch_seconds >= settings.max_fetch_timeout_seconds
+
+
+@pytest.mark.parametrize("value", ["0", "-5", "nan", "inf"])
+def test_a_whole_fetch_ceiling_that_is_not_a_duration_fails_at_startup(monkeypatch, value):
+    monkeypatch.setenv("REPLICATOR_MAX_FETCH_SECONDS", value)
+
+    with pytest.raises(ValidationError, match="REPLICATOR_MAX_FETCH_SECONDS"):
+        Settings()
+
+
+def test_a_whole_fetch_ceiling_under_the_per_operation_one_fails_at_startup(monkeypatch):
+    """A command may not be allowed a read timeout its whole fetch could never reach.
+
+    #11 refuses a ``timeout_seconds`` over the ceiling rather than clamping it,
+    because a silently shortened timeout reads to the issuer like a slow origin.
+    A whole-fetch ceiling under the per-operation one would be that clamp,
+    applied to every command that asked for the room it was told it had.
+    """
+    monkeypatch.setenv("REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS", "120")
+    monkeypatch.setenv("REPLICATOR_MAX_FETCH_SECONDS", "60")
+
+    with pytest.raises(ValidationError, match="REPLICATOR_MAX_FETCH_SECONDS"):
+        Settings()

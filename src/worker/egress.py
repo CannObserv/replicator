@@ -41,12 +41,17 @@ preserved and certificate verification still keyed to the name, which is
 materially more machinery than the threat justifies today: rebinding needs a
 hostile origin *and* a bus writer the broker granted aiming a command at it, and
 CannObserv/broker#14 bounds the second.
+
+**And how much a fetch may bring back (#104).** :class:`BodyCeilingTransport`
+sits inside the guard on the same client, for the same reason it is a transport:
+the driver reads every hop's body whole, and this is the one place a body passes
+before that. It stops reading at ``REPLICATOR_MAX_BLOB_BYTES``.
 """
 
 import asyncio
 import ipaddress
 import socket
-from collections.abc import Awaitable, Callable, Iterable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
 
 import httpx
 
@@ -81,7 +86,8 @@ DEFAULT_BLOCKED_DESTINATIONS: tuple[str, ...] = (
 # glibc's per-try default (``resolv.conf`` ``timeout:5``), and a cap equal to it
 # fails exactly the resolve a single dropped packet makes slow — the one libc
 # finishes on its second try. A constant rather than a setting, as Watcher's copy
-# of this guard has it; the unit's stop budget counts it (tests/test_deploy.py).
+# of this guard has it. Inside the handler's whole-fetch deadline (#104), which is
+# the term the unit's stop budget counts (tests/test_deploy.py).
 RESOLVE_TIMEOUT_SECONDS = 10.0
 
 Address = ipaddress.IPv4Address | ipaddress.IPv6Address
@@ -220,6 +226,105 @@ class GuardedTransport(httpx.AsyncBaseTransport):
                 reason=FailureReason.NOT_FETCHABLE,
             ) from exc
         return _checkable(host, answer)
+
+
+class BodyCeilingTransport(httpx.AsyncBaseTransport):
+    """Stop reading a body at the blob ceiling, rather than after its last byte (#104).
+
+    ``AsyncFetchDriver`` returns ``response.content``, so the whole body was in
+    memory before ``_raise_for_size`` measured it: ``REPLICATOR_MAX_BLOB_BYTES``
+    decided what was *kept*, not what was *read*. Here, on every hop, a body is
+    counted as it arrives. Beside the destination guard for the guard's reason —
+    the driver takes an injected client, so this needs no change to the driver
+    three services share.
+
+    **A 2xx over the ceiling is refused ``too_large``**, at the chunk that crosses
+    it, or before any byte at all when ``Content-Length`` already says so. The
+    same reason ``_raise_for_size`` gives, earlier, so an issuer sees no change.
+
+    **Anything else is cut short at the ceiling, not refused.** A non-2xx body is
+    never stored or announced — its status is the outcome, and
+    ``_raise_for_status`` reads nothing else — so refusing it would put
+    ``too_large`` on a body nobody asked to keep, and turn a 503's retry or a
+    404's ``http_status`` into a different answer. A 304's ``Content-Length`` may
+    describe the representation it is not sending (RFC 9110 §8.6), which is the
+    other reason the declared length is read on a 2xx only.
+
+    **What is counted is bytes on the wire.** httpx decodes a ``Content-Encoding``
+    after the transport, so a compressed body's decoded size is still checked
+    only by ``_raise_for_size``, after the read: a compression bomb is bounded by
+    this ceiling on the wire and by nothing before decoding. Deflate's worst-case
+    expansion is a fraction of a percent, so an incompressible body within that of
+    the ceiling can be refused here although it would have been kept.
+    """
+
+    def __init__(self, inner: httpx.AsyncBaseTransport, *, max_bytes: int) -> None:
+        self._inner = inner
+        self._max_bytes = max_bytes
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        response = await self._inner.handle_async_request(request)
+        kept = response.is_success
+        if kept:
+            declared = _declared_length(response.headers)
+            if declared is not None and declared > self._max_bytes:
+                await response.aclose()
+                raise _too_large(request.url, f"declares {declared} bytes", self._max_bytes)
+        return httpx.Response(
+            status_code=response.status_code,
+            headers=response.headers,
+            stream=_CeilingStream(
+                response.stream, self._max_bytes, refusing=request.url if kept else None
+            ),
+            extensions=response.extensions,
+        )
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
+class _CeilingStream(httpx.AsyncByteStream):
+    """A response body that ends at ``max_bytes`` — by refusing, or by stopping.
+
+    ``refusing`` is the URL to name in a ``too_large`` refusal, or ``None`` to cut
+    the body short instead. Closing it closes the origin's stream, and an origin
+    stream closed part-way is a connection httpcore drops rather than pools.
+    """
+
+    def __init__(
+        self, inner: httpx.AsyncByteStream, max_bytes: int, *, refusing: httpx.URL | None
+    ) -> None:
+        self._inner = inner
+        self._max_bytes = max_bytes
+        self._refusing = refusing
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        seen = 0
+        async for chunk in self._inner:
+            seen += len(chunk)
+            if seen <= self._max_bytes:
+                yield chunk
+                continue
+            if self._refusing is not None:
+                raise _too_large(self._refusing, f"sent {seen} bytes and more", self._max_bytes)
+            yield chunk[: len(chunk) - (seen - self._max_bytes)]
+            return
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
+def _declared_length(headers: httpx.Headers) -> int | None:
+    """``Content-Length`` as a number, or ``None`` when absent or not ``1*DIGIT``."""
+    value = headers.get("content-length", "").strip()
+    return int(value) if value.isascii() and value.isdigit() else None
+
+
+def _too_large(url: httpx.URL, observed: str, maximum: int) -> PermanentFetchError:
+    return PermanentFetchError(
+        f"{url} {observed}, over the {maximum}-byte ceiling — stopped reading",
+        reason=FailureReason.TOO_LARGE,
+    )
 
 
 def _default_port(url: httpx.URL) -> int:

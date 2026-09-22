@@ -25,6 +25,7 @@ import socket
 
 import httpx
 import pytest
+from co_core.effects.fetch import FetchContent
 from co_core_aio.fetch import AsyncFetchDriver
 
 from src.core.errors import (
@@ -37,6 +38,7 @@ from src.core.errors import (
 from src.worker.egress import (
     DEFAULT_BLOCKED_DESTINATIONS,
     RESOLVE_TIMEOUT_SECONDS,
+    BodyCeilingTransport,
     GuardedTransport,
     blocked_networks,
 )
@@ -481,3 +483,166 @@ def test_an_octal_literal_is_refused_before_the_guard_sees_it():
     """
     with pytest.raises(httpx.InvalidURL):
         httpx.Request("GET", "http://0177.0.0.1/")
+
+
+# --- The body ceiling (#104) --------------------------------------------------
+#
+# REPLICATOR_MAX_BLOB_BYTES decided what was *kept*: the driver read the whole
+# body into memory and the handler measured it afterwards. These are the ways a
+# transport that stops reading at the ceiling could still read past it, or stop
+# something it should have let through.
+
+CEILING = 25
+
+
+class Source(httpx.AsyncByteStream):
+    """An origin's body, one chunk at a time, recording how much was asked of it."""
+
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = chunks
+        self.sent = 0
+        self.closed = False
+
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            self.sent += 1
+            yield chunk
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def _capped(source: Source, *, status: int = 200, headers: dict[str, str] | None = None):
+    """A ``BodyCeilingTransport`` over an origin answering ``status`` with ``source``."""
+    inner = httpx.MockTransport(
+        lambda request: httpx.Response(status, headers=headers or {}, stream=source)
+    )
+    return BodyCeilingTransport(inner, max_bytes=CEILING)
+
+
+async def _read(transport: httpx.AsyncBaseTransport) -> httpx.Response:
+    async with httpx.AsyncClient(transport=transport) as client:
+        return await client.get("https://example.gov/doc.pdf")
+
+
+async def test_a_body_streamed_past_the_ceiling_is_refused_at_the_first_byte_over():
+    """``too_large`` at the chunk that crosses, with the rest never asked for."""
+    source = Source([b"x" * 10] * 100)
+
+    with pytest.raises(PermanentFetchError) as raised:
+        await _read(_capped(source))
+
+    assert raised.value.reason is FailureReason.TOO_LARGE
+    assert source.sent == 3
+    assert source.closed
+
+
+async def test_a_body_declared_over_the_ceiling_is_refused_before_a_byte_is_read():
+    """A ``Content-Length`` over the ceiling is the answer already; reading it would be waste."""
+    source = Source([b"x" * 10] * 100)
+
+    with pytest.raises(PermanentFetchError) as raised:
+        await _read(_capped(source, headers={"content-length": "1000"}))
+
+    assert raised.value.reason is FailureReason.TOO_LARGE
+    assert source.sent == 0
+    assert source.closed
+
+
+async def test_a_body_at_the_ceiling_is_delivered_whole():
+    source = Source([b"x" * 10, b"x" * 10, b"x" * 5])
+
+    response = await _read(_capped(source, headers={"content-length": str(CEILING)}))
+
+    assert response.content == b"x" * CEILING
+
+
+async def test_an_unparseable_declared_length_is_left_to_the_count():
+    """A header the origin garbled is not evidence either way; the bytes still are."""
+    source = Source([b"x" * 10] * 100)
+
+    with pytest.raises(PermanentFetchError):
+        await _read(_capped(source, headers={"content-length": "lots"}))
+
+    assert source.sent == 3
+
+
+async def test_a_non_2xx_body_past_the_ceiling_is_cut_short_rather_than_refused():
+    """Its status is the outcome, and ``_raise_for_status`` must still get to read it.
+
+    A non-2xx body is never stored or announced, so ``too_large`` would name a
+    body nobody asked to keep — and turn a 503's retry, or a 404's
+    ``http_status``, into a different terminal answer. It is still not read past
+    the ceiling, which is the memory half of #104.
+    """
+    source = Source([b"x" * 10] * 100)
+
+    response = await _read(_capped(source, status=503))
+
+    assert response.status_code == 503
+    assert len(response.content) == CEILING
+    assert source.sent == 3
+
+
+async def test_a_304_declaring_a_large_representation_is_not_refused():
+    """RFC 9110 lets a 304 carry the *representation's* ``Content-Length``, and no body."""
+    source = Source([])
+
+    response = await _read(_capped(source, status=304, headers={"content-length": "1000000"}))
+
+    assert response.status_code == 304
+
+
+async def test_the_refusal_reaches_the_handler_through_the_real_driver():
+    """Raised inside httpx's read and out through ``AsyncFetchDriver`` unwrapped.
+
+    httpx maps only its own exceptions, and the driver catches none, so the
+    refusal arrives at ``_fetch`` as the ``PermanentFetchError`` it left as — not
+    an ``httpx.HTTPError`` that ``_fetch`` would call transient.
+    """
+    source = Source([b"x" * 10] * 100)
+    guard = _guard({"example.gov": ["93.184.216.34"]}, inner=_capped(source))
+
+    async with httpx.AsyncClient(transport=guard) as client:
+        with pytest.raises(PermanentFetchError) as raised:
+            await AsyncFetchDriver(client).execute(FetchContent("https://example.gov/a"))
+
+    assert raised.value.reason is FailureReason.TOO_LARGE
+
+
+async def test_an_endless_body_from_a_real_origin_is_refused_and_its_connection_dropped():
+    """Over real httpcore, where a stream closed part-way is a connection dropped.
+
+    No ``Content-Length`` and no end: only the count can stop this, and the origin
+    seeing its socket close is what shows the read stopped rather than the
+    refusal being raised over a body read whole. Loopback, so the bare transport
+    rather than the guard, which would refuse it first.
+    """
+    stopped = asyncio.Event()
+
+    async def endless(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            await reader.readuntil(b"\r\n\r\n")
+            writer.write(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
+            while True:
+                writer.write(b"x" * 1024)
+                await writer.drain()
+        except (ConnectionError, asyncio.CancelledError):
+            pass
+        finally:
+            stopped.set()
+            writer.close()
+
+    server = await asyncio.start_server(endless, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    transport = BodyCeilingTransport(httpx.AsyncHTTPTransport(), max_bytes=64 * 1024)
+    try:
+        async with httpx.AsyncClient(transport=transport) as client:
+            with pytest.raises(PermanentFetchError) as raised:
+                await client.get(f"http://127.0.0.1:{port}/endless")
+        await asyncio.wait_for(stopped.wait(), timeout=5)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert raised.value.reason is FailureReason.TOO_LARGE

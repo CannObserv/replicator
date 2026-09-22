@@ -63,7 +63,7 @@ own fingerprints.
 | Two names differing only in case | Folding them would silently discard one. Refused even when the values agree — the rule is about the shape, not the values |
 | More than **32** headers, or more than **8192 bytes** of them | 8 KiB is the common origin-side limit (nginx, Apache), so past it the far end answers an opaque 400. The constants in [`src/worker/handler.py`](../../src/worker/handler.py) are authoritative |
 | `timeout_seconds` that is zero, negative, NaN, or infinite | Not a duration |
-| `timeout_seconds` over `REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS` (default **120**) | Replicator's consume path is serial, so your timeout is a lien on every *other* issuer's commands too. Ask an operator if 120 s is genuinely too short for a target |
+| `timeout_seconds` over `REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS` (default **120**) | Replicator's consume path is serial, so your timeout is a lien on every *other* issuer's commands too. Ask an operator if 120 s is genuinely too short for a target. It bounds each *operation* (the connect, each read); the whole fetch is bounded by `REPLICATOR_MAX_FETCH_SECONDS` (default **120**, never less than this), and a fetch past that is retried, not refused (#104) |
 
 **Neither field touches identity.** They ride inside `payload`, not the envelope: `command_id`
 remains the sole dedupe key and the sole correlator. Two commands differing only in options are two

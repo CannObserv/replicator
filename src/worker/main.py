@@ -36,7 +36,7 @@ from src.storage.local import LocalBlobStore, ensure_directory
 from src.storage.sweeper import BlobUsage
 from src.worker.aliases import AliasTable, load_alias_table
 from src.worker.checkout import checkout_refusal
-from src.worker.egress import GuardedTransport, blocked_networks
+from src.worker.egress import BodyCeilingTransport, GuardedTransport, blocked_networks
 from src.worker.handler import build_handler
 from src.worker.loop import FETCH_SPEC, REPLICATE_SPEC, run_loop
 from src.worker.policy import (
@@ -86,10 +86,16 @@ def build_fetch_client(settings: Settings) -> httpx.AsyncClient:
     control would get a direct connection and no error. Wiring the proxy back in
     would also mean the guard checked the *proxy's* address rather than the
     origin's, so it is a decision, not an oversight to correct in passing.
+
+    **Inside the guard, the body ceiling** (#104): every hop's body is counted as
+    it arrives against ``REPLICATOR_MAX_BLOB_BYTES``, so the driver's
+    ``response.content`` can no longer hold more than the handler will keep.
+    Inside rather than outside so a refused destination is refused before any
+    response exists to count.
     """
     return httpx.AsyncClient(
         transport=GuardedTransport(
-            httpx.AsyncHTTPTransport(),
+            BodyCeilingTransport(httpx.AsyncHTTPTransport(), max_bytes=settings.max_blob_bytes),
             blocked=blocked_networks(settings.blocked_destination_cidrs),
         ),
         follow_redirects=True,

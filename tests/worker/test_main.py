@@ -29,7 +29,7 @@ from src.core.config import Settings, get_settings
 from src.core.logging import configure_logging
 from src.storage.local import LocalBlobStore
 from src.storage.sweeper import SweepResult
-from src.worker.egress import RESOLVE_TIMEOUT_SECONDS, GuardedTransport
+from src.worker.egress import RESOLVE_TIMEOUT_SECONDS, BodyCeilingTransport, GuardedTransport
 from src.worker.main import (
     build_consumer,
     build_fetch_client,
@@ -1415,18 +1415,34 @@ def test_the_operators_ranges_reach_the_worker_guard(monkeypatch):
 
 
 def test_the_worker_guard_resolves_under_the_budgeted_cap(monkeypatch):
-    """The resolve cap the stop budget sums is the one the worker runs with (#100 CR 9).
+    """The resolve cap the deploy tests reason about is the one the worker runs with (#100 CR 9).
 
-    ``tests/test_deploy.py`` adds ``RESOLVE_TIMEOUT_SECONDS`` to the
-    ``TimeoutStopSec`` sum. A ``resolve_timeout=`` passed in ``build_fetch_client``
-    would change the real cap with that test still green, summing a number the
-    worker does not use.
+    ``tests/test_deploy.py`` added ``RESOLVE_TIMEOUT_SECONDS`` to the
+    ``TimeoutStopSec`` sum until #104 folded it into the whole-fetch deadline, and
+    still asserts it fits inside that deadline. A ``resolve_timeout=`` passed in
+    ``build_fetch_client`` would change the real cap with that test still green,
+    reasoning about a number the worker does not use.
     """
     monkeypatch.delenv("REPLICATOR_BLOCKED_DESTINATIONS", raising=False)
 
     client = build_fetch_client(Settings())
 
     assert client._transport._resolve_timeout == RESOLVE_TIMEOUT_SECONDS
+
+
+def test_the_worker_stops_reading_a_body_at_the_blob_ceiling(monkeypatch):
+    """#104: the ceiling the handler keeps to is the one the worker's client reads to.
+
+    Inside the guard, so a destination is refused before a byte of anything is
+    counted. The same ``_transport`` reach as the guard's own test, for its reason.
+    """
+    monkeypatch.setenv("REPLICATOR_MAX_BLOB_BYTES", "4096")
+
+    client = build_fetch_client(Settings())
+
+    inner = client._transport._inner
+    assert isinstance(inner, BodyCeilingTransport)
+    assert inner._max_bytes == 4096
 
 
 def test_a_malformed_range_stops_the_worker_at_boot(monkeypatch):

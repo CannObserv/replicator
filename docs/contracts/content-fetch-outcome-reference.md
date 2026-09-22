@@ -113,10 +113,10 @@ are the whole value of the six:
 | HTTP 4xx — **412 included**, since a failed precondition on a GET is the issuer's error | fact, then `content.fetch.dlq` | `fetch_failed` · `http_status` (+ `status_code`) |
 | HTTP 304 Not Modified — a conditional GET that **succeeded** (#17) | fact, ack, and **no DLQ entry**; the dedupe key is written | `fetch_failed` · `not_modified` (+ `status_code=304`) |
 | URL not fetchable (bad scheme / invalid URL) | fact, then `content.fetch.dlq` | `fetch_failed` · `not_fetchable` |
-| Body over `REPLICATOR_MAX_BLOB_BYTES` (default 64 MiB) | fact, then `content.fetch.dlq` | `fetch_failed` · `too_large` |
+| Body over `REPLICATOR_MAX_BLOB_BYTES` (default 64 MiB) | fact, then `content.fetch.dlq` — since #104 **Replicator stops reading at the ceiling**, or before any byte when `Content-Length` declares more | `fetch_failed` · `too_large` |
 | Unsendable `headers` / `timeout_seconds` | fact, then `content.fetch.dlq`, **before the fetch** | `fetch_failed` · `invalid_request_options` |
 | Destination in a range this host will not fetch from — loopback, RFC 1918, link-local, ULA, or the tailnet's CGNAT `100.64.0.0/10` (#95) | fact, then `content.fetch.dlq`, **before the request goes out**, and on **each redirect hop** | `fetch_failed` · `destination_refused` |
-| HTTP 5xx / 408 / 429, or a network error | retry indefinitely, default ~60 s cadence | delayed fact, or **nothing while it retries** |
+| HTTP 5xx / 408 / 429, a network error, or a fetch still running at `REPLICATOR_MAX_FETCH_SECONDS` (default 120 s, #104) | retry indefinitely, default ~60 s cadence | delayed fact, or **nothing while it retries** |
 | Blob tree over `REPLICATOR_BLOB_MAX_TOTAL_BYTES` | parked in the PEL until a sweep frees space | delayed fact, or **nothing while it waits** |
 | Unclassified handler error | retried to the delivery ceiling (~4 reclaims / ~4 min at default settings), then fact + DLQ — **if the delivery count cannot be read, retried indefinitely instead** (#103) | `fetch_failed` · `handler_error` (+ `attempts`); **nothing while the count is unreadable** |
 | Success | `blob_available` on `content.blobs` | the fact |

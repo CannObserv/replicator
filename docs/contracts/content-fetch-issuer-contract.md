@@ -105,7 +105,7 @@ never on the envelope key. What its value *is* for:
 | `url` | `str` | What to fetch. **Not** a key. See MUST-3 |
 | `info_source_id` | `str` | **Required.** The domain object this fetch is for. Echoed onto both facts, read by nothing here (#28) |
 | `headers` | `dict[str, str] \| None` | **Honoured since #11.** Merged over the fetcher's defaults, issuer wins. Guards below |
-| `timeout_seconds` | `float \| None` | **Honoured since #11.** Seconds; bounded above. `None` = the driver default |
+| `timeout_seconds` | `float \| None` | **Honoured since #11.** Seconds, **per operation** — the connect, and each read separately — not the whole fetch; bounded above. `None` = the driver default. The whole fetch has its own ceiling, the operator's (#104) |
 
 > **`occurred_at` must carry a timezone.** An `AwareDatetime` on every payload since co-core
 > v0.7.2 (cannobserv#273): a **naive** value is rejected rather than assumed to be UTC, which would

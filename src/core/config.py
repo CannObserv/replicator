@@ -352,13 +352,16 @@ class Settings(BaseSettings):
         default=86_400, validation_alias="REPLICATOR_DEDUPE_TTL_SECONDS"
     )
 
-    # Ceiling on a single fetched body. A storage guard, not a memory one: the
-    # co-core fetch driver reads the whole response into memory before returning
-    # it (httpx `response.content`), so by the time this is checked the bytes are
-    # already resident. Enforcing it would need a streaming fetch co-core does
-    # not expose today. What it does buy is a bound on what reaches the blob
-    # directory, on a disk the host shares with its dev workspace. 64 MiB is far
-    # above any observed page and far below the host's headroom.
+    # Ceiling on a single fetched body. A storage guard, and since #104 a memory
+    # one: the co-core fetch driver reads the whole response into memory before
+    # returning it (httpx `response.content`), so the worker's fetch client counts
+    # each body on the wire and stops reading at this many bytes
+    # (`src.worker.egress.BodyCeilingTransport`) — refusing a 2xx `too_large`,
+    # cutting any other status short. The handler still measures the *decoded*
+    # body before storing it, which is the only check a compressed one gets. What
+    # it buys besides is a bound on what reaches the blob directory, on a disk
+    # the host shares with its dev workspace. 64 MiB is far above any observed
+    # page and far below the host's headroom.
     max_blob_bytes: int = Field(
         default=64 * 1024 * 1024, validation_alias="REPLICATOR_MAX_BLOB_BYTES"
     )
@@ -375,12 +378,32 @@ class Settings(BaseSettings):
     # processes serially, so one command's timeout is a lien on every other
     # command in the group — an unbounded value parks the whole worker.
     #
-    # Bounded above by the unit's TimeoutStopSec, which must exceed this plus
-    # REPLICATOR_READ_BLOCK_MS plus an in-flight sweep: a fetch past that window
-    # is SIGKILLed mid-flight on every deploy. Changing one means revisiting the
-    # other (deploy/replicator.service).
+    # Per operation, not per fetch: httpx applies it to the connect, and to each
+    # read separately. What bounds a whole fetch, and what the unit's
+    # TimeoutStopSec is sized against, is max_fetch_seconds below (#104), which
+    # may not be set under this.
     max_fetch_timeout_seconds: float = Field(
         default=120.0, validation_alias="REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS"
+    )
+
+    # Ceiling on one fetch's whole wall time (#104): the guard's resolve, every
+    # connect, every redirect hop and every read, together. The number above is
+    # not one — httpx applies a timeout per *operation*, so a body trickling in
+    # under the read timeout, or a chain of hops each inside it, ran as long as
+    # the origin liked, and the stop budget summed a term nothing enforced.
+    #
+    # The operator's, not the issuer's: a command's timeout_seconds keeps the
+    # per-operation meaning it always had, and this is the lien the serial consume
+    # path can carry for any one command. Exceeding it is transient, like any
+    # timeout — the command retries at the reclaim cadence — so a corpus with
+    # fetches genuinely longer than this needs it raised, and TimeoutStopSec with
+    # it (tests/test_deploy.py sums it).
+    #
+    # Never under max_fetch_timeout_seconds (validated below): a command may ask
+    # for any per-operation timeout up to that, and one this ceiling could cut
+    # short is the clamp #11 refuses to apply silently.
+    max_fetch_seconds: float = Field(
+        default=120.0, gt=0, allow_inf_nan=False, validation_alias="REPLICATOR_MAX_FETCH_SECONDS"
     )
 
     # The destination guard's range table (#89's decision, #95). What a fetch may
@@ -432,6 +455,17 @@ class Settings(BaseSettings):
             raise ValueError(
                 "REPLICATOR_BLOCKED_DESTINATIONS is set but names no range — unset it "
                 "for the default deny set; there is no value that means 'fetch anything'"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _a_whole_fetch_fits_its_slowest_operation(self) -> "Settings":
+        """The whole-fetch ceiling may not undercut a timeout a command is allowed (#104)."""
+        if self.max_fetch_seconds < self.max_fetch_timeout_seconds:
+            raise ValueError(
+                f"REPLICATOR_MAX_FETCH_SECONDS ({self.max_fetch_seconds}) is under "
+                f"REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS ({self.max_fetch_timeout_seconds}) — "
+                f"a command could ask for a per-operation timeout its whole fetch never reaches"
             )
         return self
 

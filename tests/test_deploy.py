@@ -137,16 +137,19 @@ def test_the_stop_timeout_outlasts_a_blocking_read():
     assert timeout_stop > settings.read_block_ms / 1000
 
 
-def test_the_stop_timeout_outlasts_the_slowest_fetch_a_command_may_ask_for():
-    """The second half of the #11 pairing.
+def test_the_stop_timeout_outlasts_the_slowest_fetch_there_can_be():
+    """The second half of the #11 pairing, and since #104 a real bound.
 
-    A command carries its own ``timeout_seconds`` now, so the handler's budget is
-    no longer the driver's fixed 30s — it is whatever
-    ``REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS`` permits. A poll that starts just
-    before SIGTERM can therefore cost a full read window *plus* a full fetch, and
-    a grace period shorter than the sum SIGKILLs the worker mid-message on every
-    deploy that lands during a slow fetch — turning a routine restart into a
-    stale-claim round-trip.
+    A command carries its own ``timeout_seconds``, so the handler's budget stopped
+    being the driver's fixed 30s at #11. Until #104 this summed
+    ``REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS``, which bounds one httpx *operation*,
+    not a fetch — a trickling body or a chain of redirects ran past it, and a
+    deploy SIGKILLed that fetch partway. ``REPLICATOR_MAX_FETCH_SECONDS`` bounds the
+    whole of it (``test_handler_deadline.py``), so it is the number summed here.
+    A poll that starts just before SIGTERM can cost a full read window *plus* a
+    full fetch, and a grace period shorter than the sum SIGKILLs the worker
+    mid-message on every deploy that lands during a slow fetch — turning a
+    routine restart into a stale-claim round-trip.
 
     Strictly greater, not equal: the sweep is a third term this cannot quantify
     (it rides an uncancellable ``asyncio.to_thread``), so the margin is where it
@@ -155,11 +158,11 @@ def test_the_stop_timeout_outlasts_the_slowest_fetch_a_command_may_ask_for():
     settings = Settings()
     timeout_stop = float(_directive("TimeoutStopSec"))
 
-    assert timeout_stop > settings.read_block_ms / 1000 + settings.max_fetch_timeout_seconds
+    assert timeout_stop > settings.read_block_ms / 1000 + settings.max_fetch_seconds
 
 
 def test_the_stop_timeout_absorbs_a_pacing_wait_as_well():
-    """The #12, #7 and #100 terms.
+    """The #12 and #7 terms, and the #100 term #104 folded into the fetch.
 
     A handler may now sleep out a per-host politeness window before it fetches,
     bounded by the poll window (``build_handler``'s ``park_above_seconds``
@@ -173,7 +176,11 @@ def test_the_stop_timeout_absorbs_a_pacing_wait_as_well():
     worst_case = (
         settings.read_block_ms / 1000  # a poll already in flight
         + settings.read_block_ms / 1000  # the pacing sleep bound, derived from it
-        + settings.max_fetch_timeout_seconds  # the slowest fetch a command may ask for
+        # The whole fetch (#104): the guard's resolve on every hop, every connect,
+        # every read. It replaced two terms, the per-operation timeout and the #100
+        # resolve, each of which bounded one step and neither a fetch — which is
+        # why the sum could leave a trickling origin out.
+        + settings.max_fetch_seconds
         # The #7 term. Storage runs inside ``asyncio.to_thread``, which puts it
         # beyond cancellation exactly as the sweep is, so SIGTERM waits out an
         # upload in flight. Added when the object-store backend made this a
@@ -181,14 +188,21 @@ def test_the_stop_timeout_absorbs_a_pacing_wait_as_well():
         # docstring's "three separately-reasonable numbers" became four, which
         # is the failure it predicted.
         + settings.blob_timeout_seconds
-        # The #100 term. The destination guard resolves ahead of httpx, so the
-        # resolve sits outside the fetch's own timeout rather than inside its
-        # connect phase. Five numbers now. One hop's resolve, as the fetch term
-        # is one operation's timeout: httpx bounds operations, not a fetch (#104).
-        + RESOLVE_TIMEOUT_SECONDS
     )
 
     assert timeout_stop > worst_case
+
+
+def test_the_guards_resolve_cap_fits_inside_the_fetch_deadline():
+    """Why the sum above no longer adds ``RESOLVE_TIMEOUT_SECONDS`` (#100, #104).
+
+    The guard resolves inside ``_fetch``'s deadline — ``test_handler_deadline.py``
+    shows the deadline reaching a stalled resolve first — so the stop budget counts
+    it once, as part of the fetch. What still depends on the cap is the guard's own
+    answer: under the default deadline a resolve that stalls is refused as
+    unresolvable, naming the name, rather than as a fetch that ran long.
+    """
+    assert RESOLVE_TIMEOUT_SECONDS < Settings().max_fetch_seconds
 
 
 # --- Ordering behind the tailnet (#88) ---------------------------------------

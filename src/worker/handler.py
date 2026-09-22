@@ -287,7 +287,9 @@ def build_handler(
         paced_seconds = await _pace(
             pacer, command, stop=stop, park_above_seconds=park_above_seconds
         )
-        result = await _fetch(fetcher, command, options)
+        result = await _fetch(
+            fetcher, command, options, deadline_seconds=settings.max_fetch_seconds
+        )
         # Stamped here rather than at publish: occurred_at is when the fact went
         # onto the bus, which under a reclaim is minutes after the bytes were on
         # the wire. This is the closest the handler can stand to that instant.
@@ -594,7 +596,11 @@ def _invalid_options(detail: str) -> PermanentFetchError:
 
 
 async def _fetch(
-    fetcher: Fetcher, command: ContentFetchCommand, options: RequestOptions
+    fetcher: Fetcher,
+    command: ContentFetchCommand,
+    options: RequestOptions,
+    *,
+    deadline_seconds: float,
 ) -> FetchResult:
     """Fetch the command's URL, mapping httpx's failures into the loop's vocabulary.
 
@@ -606,17 +612,40 @@ async def _fetch(
 
     ``InvalidURL`` and ``UnsupportedProtocol`` are the exceptions: a URL that is
     not a URL will not become one on the next reclaim.
+
+    **The whole fetch runs under one deadline (#104).** ``options.timeout`` is
+    httpx's, and httpx applies it per operation — connect, pool, write, and each
+    read — so it never bounded a fetch: a body trickling in under the read
+    timeout, or a chain of redirects each inside it, held this serial consume
+    path for as long as the origin kept going. ``deadline_seconds``
+    (``REPLICATOR_MAX_FETCH_SECONDS``) is around everything the driver does,
+    which since #95 includes the destination guard's resolve on every hop.
+
+    Transient when it fires, like the per-operation timeouts it sits above, and
+    only when it is *this* deadline that fired: ``expired()`` tells it apart from
+    a ``TimeoutError`` raised inside the fetch, which keeps its own type and
+    message. Cancelling abandons the fetch cleanly — httpx closes the connection
+    rather than returning it to the pool — and a resolve in the executor is left
+    to finish on its own, as #100 already accepts.
     """
     try:
-        return await fetcher.execute(
-            FetchContent(command.url, headers=options.headers, timeout=options.timeout)
-        )
+        async with asyncio.timeout(deadline_seconds) as deadline:
+            return await fetcher.execute(
+                FetchContent(command.url, headers=options.headers, timeout=options.timeout)
+            )
     except (httpx.UnsupportedProtocol, httpx.InvalidURL) as exc:
         raise PermanentFetchError(
             f"{command.url} is not fetchable: {exc}", reason=FailureReason.NOT_FETCHABLE
         ) from exc
     except httpx.HTTPError as exc:
         raise TransientFetchError(f"{command.url} failed to fetch: {exc}") from exc
+    except TimeoutError as exc:
+        if not deadline.expired():
+            raise
+        raise TransientFetchError(
+            f"{command.url} did not finish within the {deadline_seconds}-second fetch deadline "
+            f"(REPLICATOR_MAX_FETCH_SECONDS)"
+        ) from exc
 
 
 async def _pace(
@@ -843,7 +872,13 @@ def _raise_for_ceiling(usage: BlobUsage, ceiling_bytes: int | None) -> None:
 
 
 def _raise_for_size(result: FetchResult, command: ContentFetchCommand, maximum: int) -> None:
-    """Refuse a body too large to keep, before it reaches the blob directory."""
+    """Refuse a body too large to keep, before it reaches the blob directory.
+
+    The second of two checks since #104, and the one that sees the *decoded* body.
+    The worker's fetch client stops reading a body at the same ceiling on the wire
+    (``BodyCeilingTransport``), which bounds memory; a compressed body is decoded
+    after that count, so this is where its real size is judged.
+    """
     if len(result.content) <= maximum:
         return
     raise PermanentFetchError(

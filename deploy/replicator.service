@@ -197,12 +197,12 @@ RestartSec=5
 # object-store one, so no single shutdown pays both. The sum deliberately
 # overcounts rather than encoding that in a test nobody would revisit.
 #
-# The destination guard's resolve is the fifth (#100): it runs ahead of httpx,
-# outside the fetch's own timeout, bounded by RESOLVE_TIMEOUT_SECONDS (10s) in
-# src/worker/egress.py. 170s against 180s. The poll and pacing terms are real
-# bounds; the fetch term and this one each bound a single operation or hop, not a
-# fetch — httpx times operations, so a redirect chain or a trickling origin is
-# not inside this sum (#104).
+# The fetch term is a real bound since #104: REPLICATOR_MAX_FETCH_SECONDS (120s)
+# is one deadline around the whole fetch — the destination guard's resolve on
+# every hop (#100), every connect, every read. Before it the sum carried the
+# per-operation timeout and the resolve as two terms, each bounding a single
+# step and neither a fetch, so a redirect chain or a trickling origin ran past
+# both. 160s against 180s; raising that setting means widening this.
 TimeoutStopSec=180
 
 [Install]
