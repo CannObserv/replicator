@@ -399,9 +399,15 @@ class Settings(BaseSettings):
     # fetches genuinely longer than this needs it raised, and TimeoutStopSec with
     # it (tests/test_deploy.py sums it).
     #
-    # Never under max_fetch_timeout_seconds (validated below): a command may ask
-    # for any per-operation timeout up to that, and one this ceiling could cut
-    # short is the clamp #11 refuses to apply silently.
+    # Never under max_fetch_timeout_seconds: a command may ask for any
+    # per-operation timeout up to that, and one this ceiling could cut short is
+    # the clamp #11 refuses to apply silently. Held two ways, and the split is
+    # what keeps a deploy from breaking an env file that was valid before this
+    # variable existed (CR 1). **Unset, it is derived** — the larger of this
+    # default and the per-operation ceiling — so a host that raised only
+    # REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS keeps booting and keeps the fetches it
+    # allowed. **Set under it, it is refused**, because that is an operator
+    # naming two numbers that contradict each other.
     max_fetch_seconds: float = Field(
         default=120.0, gt=0, allow_inf_nan=False, validation_alias="REPLICATOR_MAX_FETCH_SECONDS"
     )
@@ -460,7 +466,16 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _a_whole_fetch_fits_its_slowest_operation(self) -> "Settings":
-        """The whole-fetch ceiling may not undercut a timeout a command is allowed (#104)."""
+        """The whole-fetch ceiling may not undercut a timeout a command is allowed (#104).
+
+        Derived when the variable is unset, refused when it is set: an operator
+        who never named this number cannot be holding a wrong opinion about it,
+        and lifting it is what keeps #104's deploy off the boot path of a host
+        that had only ever raised the per-operation ceiling (CR 1).
+        """
+        if "max_fetch_seconds" not in self.model_fields_set:
+            self.max_fetch_seconds = max(self.max_fetch_seconds, self.max_fetch_timeout_seconds)
+            return self
         if self.max_fetch_seconds < self.max_fetch_timeout_seconds:
             raise ValueError(
                 f"REPLICATOR_MAX_FETCH_SECONDS ({self.max_fetch_seconds}) is under "

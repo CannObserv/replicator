@@ -446,6 +446,35 @@ def test_a_whole_fetch_ceiling_that_is_not_a_duration_fails_at_startup(monkeypat
         Settings()
 
 
+def test_an_unset_whole_fetch_ceiling_follows_a_raised_per_operation_one(monkeypatch):
+    """CR 1: a deployment that raised the per-operation ceiling still boots.
+
+    The floor below refuses a whole-fetch ceiling *set* under the per-operation
+    one. Applied to the default as well, it would have made an env file that was
+    valid before #104 — one naming only `REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS`,
+    at anything above 120 — a worker that does not start, at the deploy that
+    introduced the variable its operator has never heard of. Unset means derived,
+    so the invariant holds by construction rather than by refusal.
+    """
+    monkeypatch.delenv("REPLICATOR_MAX_FETCH_SECONDS", raising=False)
+    monkeypatch.setenv("REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS", "300")
+
+    assert Settings().max_fetch_seconds == 300.0
+
+
+def test_an_unset_whole_fetch_ceiling_is_not_lowered_by_a_lowered_per_operation_one(monkeypatch):
+    """Derived means "the larger of the two", never "whatever the other one says".
+
+    An operator who tightens what a command may ask for has said nothing about
+    what the worker will spend on a fetch, and reading it as both would shorten
+    a bound they never touched.
+    """
+    monkeypatch.delenv("REPLICATOR_MAX_FETCH_SECONDS", raising=False)
+    monkeypatch.setenv("REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS", "30")
+
+    assert Settings().max_fetch_seconds == 120.0
+
+
 def test_a_whole_fetch_ceiling_under_the_per_operation_one_fails_at_startup(monkeypatch):
     """A command may not be allowed a read timeout its whole fetch could never reach.
 
