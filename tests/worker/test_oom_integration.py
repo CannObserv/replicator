@@ -606,6 +606,11 @@ def production_grant(topic: str, blobs_topic: str, *, xpending: bool = True) -> 
     ``DEDUPE_KEY_PREFIX`` is a constant. The streams this loop never touches drop
     out, because a pattern naming nothing grants nothing.
 
+    **Less one command: ``+xtrim``.** The production selector is ``(+xadd +xtrim
+    …)``, and #106 answered that nothing here trims — so what runs below is the
+    grant CannObserv/broker#41 narrows it to, and passing is the evidence that
+    the narrowed grant is enough for everything this loop does.
+
     **A copy, and what it can and cannot catch.** It fails when the loop starts
     needing a command the production grant does not hold — which is how #103
     went unseen: the ceiling's ``XPENDING`` runs only after an unclassified
@@ -637,7 +642,7 @@ def production_grant(topic: str, blobs_topic: str, *, xpending: bool = True) -> 
         f"~{blobs_topic}",
         f"~{DEDUPE_KEY_PREFIX}*",
         *commands,
-        f"(+xadd +xtrim ~{blobs_topic} ~{dlq_name(topic)})",
+        f"(+xadd ~{blobs_topic} ~{dlq_name(topic)})",
         f"(+set ~{DEDUPE_KEY_PREFIX}*)",
         f"(+xdel ~{dlq_name(topic)})",
     ]

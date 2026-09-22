@@ -226,3 +226,71 @@ def test_the_handle_scan_sees_a_redis_parameter_under_another_name(tmp_path: Pat
         ("_pool", True),
         ("redis", True),
     ]
+
+
+# --- Nothing here trims a stream (#106) -------------------------------------
+#
+# The broker grants `+xtrim` on content.blobs, content.artifacts and both
+# dead-letter queues, and narrows that grant on the strength of #106's answer:
+# nothing in this repo issues XTRIM, and nothing trims through XADD either.
+# Trimming a fact stream past a group's position deletes facts that group has
+# not been delivered, and the broker's probe can only report that afterwards.
+# So the answer is held here, as the keyspace claims above are.
+
+SCRIPTS = REPO / "scripts"
+
+
+def trim_sites(*roots: Path) -> list[tuple[str, int, str]]:
+    """Every way a module under ``roots`` could trim a stream, as (file, line, how).
+
+    Two shapes. An ``.xtrim(...)`` call on any receiver, since a trim through a
+    handle not named ``client`` is still a trim. And a ``BusPublish`` given a
+    ``maxlen``, by keyword or as its third positional argument, which co-core
+    renders as ``XADD MAXLEN`` — a trim the ACL cannot see, because it checks the
+    command and not its arguments.
+    """
+    sites: list[tuple[str, int, str]] = []
+    for root in roots:
+        for path in sorted(root.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                if isinstance(func, ast.Attribute) and func.attr == "xtrim":
+                    sites.append((_relative(path), node.lineno, "xtrim"))
+                name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+                if name == "BusPublish" and (
+                    len(node.args) > 2 or any(kw.arg == "maxlen" for kw in node.keywords)
+                ):
+                    sites.append((_relative(path), node.lineno, "BusPublish maxlen"))
+    return sites
+
+
+def test_nothing_here_trims_a_stream() -> None:
+    """#106: the worker and every operator script, since the question named both."""
+    assert trim_sites(SRC, SCRIPTS) == []
+
+
+@pytest.mark.parametrize(
+    ("source", "how"),
+    [
+        ("await client.xtrim(topic, maxlen=10)", "xtrim"),
+        ("await redis.xtrim(topic, minid='0-1')", "xtrim"),
+        ("BusPublish(topic, fields, 1000)", "BusPublish maxlen"),
+        ("bus.BusPublish(topic, fields, maxlen=1000)", "BusPublish maxlen"),
+    ],
+)
+def test_the_trim_scan_sees_each_way_to_trim(tmp_path: Path, source: str, how: str) -> None:
+    """The detector, against source that trims — a scan that matches nothing passes forever."""
+    (tmp_path / "fake.py").write_text(
+        f"async def f(client, redis, bus, topic, fields):\n    {source}\n"
+    )
+    assert [site[2] for site in trim_sites(tmp_path)] == [how]
+
+
+def test_the_trim_scan_passes_a_publish_without_maxlen(tmp_path: Path) -> None:
+    (tmp_path / "fake.py").write_text(
+        "def f(topic, fields):\n    return BusPublish(topic, fields)\n"
+    )
+    assert trim_sites(tmp_path) == []

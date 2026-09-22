@@ -149,9 +149,19 @@ So `XDEL` works on those two queues and is refused on every other key this crede
 reach — the command streams and the fact streams included. The root permission set never
 gains `+xdel`. Verified on the broker's node against 7.0.15, not from here: this host can
 confirm a drained queue by its depth (`content.replicate.dlq` is 0) but cannot prove the
-selector's shape without deleting something. The grant adds `+xdel` and nothing else, and
-`XTRIM` has never been exercised from this credential — so treat per-id deletion as the only
-disposal available, which is the point of a selector anyway: precise, never a queue wipe.
+selector's shape without deleting something. The grant adds `+xdel` and nothing else, so treat
+per-id deletion as the only disposal available, which is the point of a selector anyway:
+precise, never a queue wipe.
+
+**`XTRIM` is not for these queues, or anything else, from here (#106).** The broker does grant
+it — `(+xadd +xtrim ~content.blobs ~content.artifacts ~content.fetch.dlq ~content.replicate.dlq)`
+— but only because one selector served both commands. Nothing in this repo issues it: not the
+worker, not `scripts/`, not triage, and co-core trims only through a `BusPublish.maxlen`, which
+none of this repo's publishes set. Answered at every call site on 2026-09-22, and
+CannObserv/broker#41 withdraws the grant on that answer; `tests/test_broker_keyspace.py` keeps
+it true. Trimming a fact stream past a group's position deletes facts that group has not been
+delivered, so a drain that wants to go faster than one `XDEL` at a time is a broker issue, not a
+command to reach for.
 
 **Triage before deleting, and not only for correctness.** The broker's probe copies every DLQ
 entry to its `dlq-evidence/` tree on the first tick that sees depth above zero, so a deleted

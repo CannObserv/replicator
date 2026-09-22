@@ -461,8 +461,9 @@ Two corollaries, both about values you have stored:
 - **No cross-command dedupe.** Two `command_id`s for one URL are two fetches and two facts, by
   design — that is what makes MUST-1 work.
 - **No retention guarantee on `content.blobs`.** Replicator never trims it — `BusPublish` takes no
-  `MAXLEN` and nothing here issues `XTRIM` — so whatever policy applies is the broker operator's,
-  not part of this contract. It is not an archive to reconcile against later.
+  `MAXLEN` and nothing here issues `XTRIM`, which `tests/test_broker_keyspace.py` holds (#106) —
+  so whatever policy applies is the broker operator's, not part of this contract. It is not an
+  archive to reconcile against later.
 
 ---
 
