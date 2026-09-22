@@ -191,8 +191,11 @@ def test_the_refusal_is_terminal():
 
     Terminality is structural here, as everywhere in this module: the guard
     raises ``PermanentFetchError``, which the loop closes and reports, rather
-    than ``TransientFetchError``, which would consume the delivery ceiling and
-    dead-letter four reclaims later for a command whose answer will not change.
+    than ``TransientFetchError``, which is exempt from the delivery ceiling — it
+    would retry at every reclaim, indefinitely, for a command whose answer will
+    not change, and the issuer would never be told why (CR 3). That exemption is
+    exactly why the guard's *unanswerable* resolves are transient (#100): there,
+    waiting in the PEL is the point.
     """
     error = PermanentFetchError("x", reason=FailureReason.DESTINATION_REFUSED)
 
