@@ -12,8 +12,8 @@ not the per-range ones — those are arithmetic — but:
   env is an env file that does not load;
 - **an answer the guard cannot check is refused**, because the check is a loop
   over the answer, and an empty one, of any shape, or one that is not an
-  address, would skip the loop rather than fail it — the only way this guard
-  fails *open* rather than closed (#100).
+  address, would skip the loop rather than fail it — the check not raced, as
+  rebinding (the module's stated residual) races it, but never run (#100).
 
 The decision and the three tests it was run through: #89. The scope: #95, and
 #100 for the resolver seam's failures.
