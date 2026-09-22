@@ -287,6 +287,34 @@ async def test_an_empty_answer_is_transient_not_a_pass():
 @pytest.mark.parametrize(
     ("label", "answer"),
     [
+        ("an exhausted generator", lambda: (value for value in [])),
+        ("an empty iterator", lambda: iter(())),
+        ("None", lambda: None),
+    ],
+)
+async def test_an_empty_answer_of_any_shape_is_transient_not_a_pass(label, answer):
+    """#100 CR 7: emptiness is judged on what the loop iterates, not on what came back.
+
+    ``not <generator>`` is ``False`` whatever it will yield, so a guard testing
+    the resolver's return value lets an empty iterator through the same zero-trip
+    loop the empty list used to. Typed ``Sequence`` or not, the seam's shape is
+    one more of the manners this guard must not rest on.
+    """
+
+    async def resolve(host: str, port: int):
+        return answer()
+
+    transport = GuardedTransport(
+        httpx.MockTransport(_never_called), blocked=blocked_networks(None), resolve=resolve
+    )
+
+    with pytest.raises(TransientFetchError, match="no addresses"):
+        await transport.handle_async_request(httpx.Request("GET", "http://empty.invalid/"))
+
+
+@pytest.mark.parametrize(
+    ("label", "answer"),
+    [
         ("a hostname", "localhost"),
         ("an empty string", ""),
     ],

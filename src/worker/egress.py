@@ -239,15 +239,21 @@ def _checkable(host: str, answer: Sequence[str]) -> list[Address]:
     Transient, not terminal: the command is sound and the resolver is not, so
     the command waits in the PEL for the answer to change — or the resolver to be
     fixed — rather than dead-lettering a URL that was never the problem.
+
+    **Emptiness is judged on the list, not on the answer** (#100 CR 7).
+    ``not <generator>`` is ``False`` whatever it yields, so testing the answer
+    let an empty iterator through the same zero-trip loop; ``or ()`` keeps a
+    ``None`` answer on this refusal rather than a ``TypeError``.
     """
-    if not answer:
-        raise TransientFetchError(f"{host} resolved to no addresses")
     try:
-        return [_address(value) for value in answer]
+        addresses = [_address(value) for value in answer or ()]
     except ValueError as exc:
         raise TransientFetchError(
             f"{host} resolved to something that is not an address: {exc}"
         ) from exc
+    if not addresses:
+        raise TransientFetchError(f"{host} resolved to no addresses")
+    return addresses
 
 
 def _address(value: str) -> Address:
