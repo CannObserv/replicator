@@ -26,6 +26,7 @@ that quietly matches nothing passes forever while enforcing nothing.
 """
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -238,6 +239,12 @@ def test_the_handle_scan_sees_a_redis_parameter_under_another_name(tmp_path: Pat
 # So the answer is held here, as the keyspace claims above are.
 
 SCRIPTS = REPO / "scripts"
+DEPLOY = REPO / "deploy"
+HOOKS = REPO / ".claude" / "hooks"
+
+# What a trim would be spelled as outside Python: an operator script or a unit
+# reaching the broker through redis-cli rather than through a client object.
+_TRIM_TEXT = re.compile(r"\bxtrim\b", re.IGNORECASE)
 
 
 def trim_sites(*roots: Path) -> list[tuple[str, int, str]]:
@@ -267,9 +274,53 @@ def trim_sites(*roots: Path) -> list[tuple[str, int, str]]:
     return sites
 
 
+def text_trim_sites(*roots: Path) -> list[tuple[str, int, str]]:
+    """Every `xtrim` in a non-Python file under ``roots``, as (file, line, text).
+
+    The AST scan reaches `*.py` only, and #106's answer covered more than that
+    (CR 11): `scripts/` holds four shell scripts, one of which drives redis, and
+    `deploy/` and `.claude/hooks/` are operator surfaces too. A `redis-cli XTRIM`
+    there is the same grant being used, spelled where no parser was looking.
+
+    Text, not syntax, because these are three languages and the claim is only
+    that the command appears nowhere. A mention inside a comment counts, and
+    should: this repo's answer to CannObserv/broker#41 is that the command has no
+    caller here at all.
+
+    ``.claude/hooks`` is symlinked into the vendored skills, so a refresh there
+    could fail this test on code this repo does not own. In scope anyway: a hook
+    runs on this host, with this credential, and the answer the broker narrowed
+    its grant on was about what runs here — not about what this repo wrote.
+    """
+    sites: list[tuple[str, int, str]] = []
+    for root in roots:
+        for path in sorted(p for p in root.rglob("*") if p.is_file()):
+            if path.suffix == ".py" or "__pycache__" in path.parts:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):  # pragma: no cover - none here today
+                continue
+            for number, line in enumerate(text.splitlines(), start=1):
+                if _TRIM_TEXT.search(line):
+                    sites.append((_relative(path), number, line.strip()))
+    return sites
+
+
 def test_nothing_here_trims_a_stream() -> None:
     """#106: the worker and every operator script, since the question named both."""
     assert trim_sites(SRC, SCRIPTS) == []
+    assert text_trim_sites(SCRIPTS, DEPLOY, HOOKS) == []
+
+
+def test_the_text_trim_scan_sees_a_shell_script_that_trims(tmp_path: Path) -> None:
+    """The second detector, against a violation no AST would parse."""
+    (tmp_path / "drain.sh").write_text("#!/bin/bash\nrcli XTRIM content.fetch.dlq MAXLEN 0\n")
+    (tmp_path / "quiet.py").write_text("# xtrim lives in the python scan, not this one\n")
+
+    assert [site[2] for site in text_trim_sites(tmp_path)] == [
+        "rcli XTRIM content.fetch.dlq MAXLEN 0"
+    ]
 
 
 @pytest.mark.parametrize(
