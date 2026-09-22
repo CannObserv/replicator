@@ -307,11 +307,8 @@ write, fact. The **fetch** line's field of that name is not the same window: it 
 round trip alone, with the politeness wait beside it as `paced_seconds` and the store write
 counted nowhere. Measured 2026-09-18 (#96), the replicate handler runs ~0.24 s on today's
 corpus and ~5.3 s for a blob at the `REPLICATOR_MAX_BLOB_BYTES` ceiling; the second grep is
-the one that finds a hold longer than that. One repeating on the same `command_id` is a
-transient condition that has not cleared, and it can repeat indefinitely — the transient
-classes are exempt from the delivery ceiling. Since #98 it no longer stops the group reading:
-each such retry is followed by a look at the stream, so the undelivered entries behind it wait
-one hold, not all of them.
+the one that finds a hold longer than that. One repeating on the same `command_id` can go on
+indefinitely, but since #98 it no longer stops the group reading.
 
 `tracked_hosts: 0` with a non-empty `XLEN` means messages arrived and none applied — check for
 `ignoring a ...` warnings on the same boot. The last grep is the one that needs acting on: it
