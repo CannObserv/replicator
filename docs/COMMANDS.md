@@ -125,15 +125,11 @@ scoped to its own topics, permanently and by design, so the operator surface spl
 |---|---|
 | `XLEN`, `XRANGE`, `XINFO STREAM`, `XPENDING`, `INFO`, `XDEL` on the two `.dlq` streams | `SCAN`, `XINFO GROUPS`, `XINFO CONSUMERS`, `CLIENT LIST`, `ACL LOG`, `SELECT`, `XDEL` anywhere else |
 
-**`XPENDING` moved columns on 2026-09-22 (broker#39, #103, #107)** — and not as a diagnostic
-courtesy. Probed from this host after the grant landed, which is how every other row here was
-settled: `XPENDING content.fetch replicator.fetch` and the replicate pair both answer, each
-reporting 0 pending (2026-09-22, replacing the `NOPERM` the same command returned at 12:55Z). The loop's delivery ceiling reads it (`_delivery_count`), so until the grant landed
-`REPLICATOR_MAX_DELIVERY_ATTEMPTS` could never fire: an unclassified failure was retried forever
-and never reached `<topic>.dlq`. The grant was built from `MONITOR` captures, and that read runs
-only after a handler fails in a way the loop cannot classify, so no capture saw it.
-`test_the_delivery_ceiling_fires_under_the_production_grant` now drives the ceiling through a copy
-of the production command list.
+**`XPENDING` moved columns on 2026-09-22 (broker#39, #103, #107)**, and not as a diagnostic
+courtesy: the loop's delivery ceiling reads it, so until the grant landed
+`REPLICATOR_MAX_DELIVERY_ATTEMPTS` could never fire. Probed from this host afterwards, the way
+every other row here was settled — both groups answer, each reporting 0 pending, where the same
+command returned `NOPERM` at 12:55Z.
 
 **Draining a dead-letter queue is this service's job, and since 2026-09-11 it has the grant
 for it (#86, broker#12).** It briefly did not: `XADD <topic>.dlq` was granted and the deletion
@@ -155,15 +151,12 @@ selector's shape without deleting something. The grant adds `+xdel` and nothing 
 per-id deletion as the only disposal available, which is the point of a selector anyway:
 precise, never a queue wipe.
 
-**`XTRIM` is not for these queues, or anything else, from here (#106).** The broker does grant
-it — `(+xadd +xtrim ~content.blobs ~content.artifacts ~content.fetch.dlq ~content.replicate.dlq)`
-— but only because one selector served both commands. Nothing in this repo issues it: not the
-worker, not `scripts/`, not triage, and co-core trims only through a `BusPublish.maxlen`, which
-none of this repo's publishes set. Answered at every call site on 2026-09-22, and
-CannObserv/broker#41 withdraws the grant on that answer; `tests/test_broker_keyspace.py` keeps
-it true. Trimming a fact stream past a group's position deletes facts that group has not been
-delivered, so a drain that wants to go faster than one `XDEL` at a time is a broker issue, not a
-command to reach for.
+**`XTRIM` is not for these queues, or anything else, from here (#106).** The broker grants it —
+one selector served both it and `+xadd` — and nothing here issues it, which is the answer
+CannObserv/broker#41 withdraws the grant on and `tests/test_broker_keyspace.py` keeps true.
+Trimming a fact stream past a group's position deletes facts that group has not been delivered,
+so a drain wanting to go faster than one `XDEL` at a time is a broker issue, not a command to
+reach for.
 
 **Triage before deleting, and not only for correctness.** The broker's probe copies every DLQ
 entry to its `dlq-evidence/` tree on the first tick that sees depth above zero, so a deleted
