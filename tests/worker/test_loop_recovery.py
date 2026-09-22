@@ -306,6 +306,28 @@ async def test_a_pass_stopped_by_the_poison_bound_resumes_behind_the_last_skippe
     assert cadence.reclaim_from == _after(poison[MAX_POISON_SKIPS - 1])
 
 
+async def test_a_wrap_does_not_spend_the_poison_bound(fake_redis, consumer, settings):
+    """The bound counts frames routed away; the one wrap a pass makes is not one.
+
+    One frame short of the bound at the head, a good entry behind them, and the
+    cursor past everything: the pass wraps, routes every poison frame, and still
+    reaches the good one. Counting the wrap as a try stops it one short.
+    """
+    poison = [
+        (await fake_redis.xadd(TOPIC, {"event_type": "content_fetch", "payload": "x"})).decode()
+        for _ in range(MAX_POISON_SKIPS - 1)
+    ]
+    await fake_redis.xreadgroup(GROUP, "replicator@dead-worker", {TOPIC: ">"}, count=100)
+    (behind,) = await pend(fake_redis, "cmd-behind-poison")
+    eager = settings.model_copy(update={"claim_min_idle_ms": 0})
+    cadence = PollCadence(reclaim_from=_after(behind))
+
+    claimed = await claim_once(fake_redis, consumer, eager, group=GROUP, cadence=cadence)
+
+    assert command_ids(claimed) == ["cmd-behind-poison"]
+    assert await fake_redis.xlen(dlq_name(TOPIC)) == len(poison)
+
+
 @pytest.mark.parametrize(
     ("entry_id", "after"),
     [

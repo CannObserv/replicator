@@ -1122,14 +1122,17 @@ async def claim_once(
     """
     start = cadence.reclaim_from if cadence is not None else PEL_HEAD
     # A pass that began at the head has already looked everywhere a wrap would.
+    # The wrap happens at most once, so only poison frames count toward the bound.
     wrapped = start == PEL_HEAD
-    for _ in range(MAX_POISON_SKIPS):
+    skipped = 0
+    while skipped < MAX_POISON_SKIPS:
         try:
             claimed = await consumer.claim_stale(
                 min_idle_ms=settings.claim_min_idle_ms, count=1, start_id=start
             )
         except BusMessageAnomaly as exc:
             await dead_letter_anomaly(client, consumer, exc)
+            skipped += 1
             start = _after(exc.message_id)
             continue
         if claimed or wrapped:
