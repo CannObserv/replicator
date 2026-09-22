@@ -14,6 +14,7 @@ not the per-range ones — those are arithmetic — but:
 The decision and the three tests it was run through: #89. The scope: #95.
 """
 
+import asyncio
 import ipaddress
 import socket
 
@@ -28,7 +29,12 @@ from src.core.errors import (
     TransientError,
     TransientFetchError,
 )
-from src.worker.egress import DEFAULT_BLOCKED_DESTINATIONS, GuardedTransport, blocked_networks
+from src.worker.egress import (
+    DEFAULT_BLOCKED_DESTINATIONS,
+    RESOLVE_TIMEOUT_SECONDS,
+    GuardedTransport,
+    blocked_networks,
+)
 from tests.worker.conftest import command
 
 
@@ -243,6 +249,83 @@ async def test_a_resolution_failure_is_transient_not_unclassified():
 
     with pytest.raises(TransientFetchError, match="could not be resolved"):
         await transport.handle_async_request(httpx.Request("GET", "http://nx.invalid/"))
+
+
+async def test_an_empty_answer_is_transient_not_a_pass():
+    """#100: an answer with no addresses must not skip the check.
+
+    The guard refuses by iterating the addresses, so an empty answer runs the
+    loop zero times and hands the request to the inner transport unchecked.
+    ``getaddrinfo`` raises rather than answering empty, but the resolver is an
+    injected seam — a cache or a pinned-address resolver may legitimately
+    answer ``[]`` — and a guard must not depend on its seam's good manners for
+    the direction it fails in. Transient, beside ``gaierror``: an empty answer
+    may be a full one on the next reclaim.
+    """
+    transport = _guard({"empty.invalid": []})
+
+    with pytest.raises(TransientFetchError, match="no addresses"):
+        await transport.handle_async_request(httpx.Request("GET", "http://empty.invalid/"))
+
+
+@pytest.mark.parametrize(
+    ("label", "answer"),
+    [
+        ("a hostname", "localhost"),
+        ("an empty string", ""),
+    ],
+)
+async def test_an_answer_that_is_not_an_address_is_refused_not_passed(label, answer):
+    """#100: the arm CR 9 called unreachable failed *open*.
+
+    ``_containing`` answered ``None`` — "in no blocked range" — for anything it
+    could not parse, so a resolver answering with a name rather than an address
+    let the request through. Unreachable through ``getaddrinfo``, but not through
+    the seam. It fails closed now, and transiently: the command is sound and the
+    resolver is broken, so the command waits for the fix rather than dead-letters.
+    """
+    transport = _guard({"named.invalid": [answer]})
+
+    with pytest.raises(TransientFetchError, match="not an address"):
+        await transport.handle_async_request(httpx.Request("GET", "http://named.invalid/"))
+
+
+async def test_a_resolve_that_never_answers_is_bounded():
+    """#100: resolving ahead of httpx also moved the resolve out of its timeout.
+
+    httpcore resolves inside the connect timeout; this guard resolves before
+    httpcore is reached, so nothing but libc's own retries bounded it — on a
+    serial consume path, a parked resolve is a parked worker. Transient, because
+    a nameserver that dropped this query may answer the next one.
+    """
+
+    async def resolve(host: str, port: int) -> list[str]:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    transport = GuardedTransport(
+        httpx.MockTransport(_never_called),
+        blocked=blocked_networks(None),
+        resolve=resolve,
+        resolve_timeout=0.01,
+    )
+
+    with pytest.raises(TransientFetchError, match="did not resolve within"):
+        await transport.handle_async_request(httpx.Request("GET", "http://blackholed.invalid/"))
+
+
+def test_the_resolve_cap_survives_one_libc_retry():
+    """Why the cap is not Watcher's 5 s (#100).
+
+    glibc's per-try timeout defaults to 5 s (``resolv.conf`` ``timeout:5``), so
+    a 5 s cap fails exactly the resolve a single dropped UDP packet makes slow:
+    the one libc would have finished on its second try, a little after 5 s.
+    Here that costs a ``REPLICATOR_CLAIM_MIN_IDLE_MS`` reclaim for a name that
+    was resolving fine.
+    """
+    glibc_per_try_seconds = 5.0
+
+    assert RESOLVE_TIMEOUT_SECONDS > glibc_per_try_seconds
 
 
 async def test_an_unencodable_hostname_is_terminal():
