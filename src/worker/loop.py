@@ -1025,6 +1025,13 @@ def _after(entry_id: str) -> str:
     returns (#102). A sequence at its limit carries into the millisecond half, as
     ``streamIncrID`` does server-side; the largest id there is has no successor,
     and wrapping is what the walk does at the end of the list anyway.
+
+    **Takes an id the broker minted, and nothing else** (CR 4). Every caller
+    passes one straight from a reply — a claimed message's, or the anomaly's — so
+    a value that is not ``<ms>-<seq>`` raises here, inside ``claim_once``, where
+    it would turn a poison-frame skip into a poll-cycle failure. Stated rather
+    than guarded: a fallback would hide a broker or client that had started
+    spelling ids differently, which is a thing to hear about immediately.
     """
     ms, seq = (int(half) for half in entry_id.split("-"))
     if seq < _U64_MAX:
