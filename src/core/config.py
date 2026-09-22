@@ -314,7 +314,9 @@ class Settings(BaseSettings):
     # which only advances on a claim_stale reclaim — so this is a ceiling in
     # *time* (attempts x claim_min_idle_ms), not in retries. Transient failures
     # are exempt; deterministic ones dead-letter on the first failure without
-    # ever reaching it.
+    # ever reaching it. An unreadable counter retries rather than closing, so
+    # this fires only while the broker grants XPENDING — since broker#39; never
+    # before it (#103).
     max_delivery_attempts: int = Field(
         default=5, validation_alias="REPLICATOR_MAX_DELIVERY_ATTEMPTS"
     )

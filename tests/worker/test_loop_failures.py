@@ -3,7 +3,8 @@
 Three tiers — permanent (DLQ now), transient (retry forever, exempt from the
 ceiling), and unclassified (retry against the ceiling). The ceiling itself is
 read from XPENDING rather than a side counter, so the tests that cover it also
-cover what happens when that row is gone.
+cover what happens when that row is gone — and, since #103, when the read itself
+is refused.
 """
 
 import asyncio
@@ -12,7 +13,7 @@ import pytest
 from co_core.pure.adapters.bus.streams import dlq_name
 from co_core.pure.models.changes import ContentFetchCommand
 from redis.exceptions import ConnectionError as RedisConnectionError
-from redis.exceptions import NoPermissionError, OutOfMemoryError
+from redis.exceptions import NoPermissionError, OutOfMemoryError, ResponseError
 
 from src.core.errors import FailureReason, PermanentFetchError, TransientFetchError
 from src.storage.local import LocalBlobStore
@@ -24,6 +25,7 @@ from tests.worker.conftest import (
     TOPIC,
     FakeFetcher,
     collected_reports,
+    drive_loop,
     make_command,
     process_one,
 )
@@ -279,6 +281,99 @@ async def test_the_missing_pending_row_warning_is_undamped(fake_redis, consumer,
 
     warnings = [r for r in caplog.records if "no pending entry" in r.getMessage()]
     assert len(warnings) == 3
+
+
+# The ways the count's own read has been refused or lost. The first is #103's:
+# the live broker denied this credential XPENDING until broker#39.
+UNREADABLE_COUNT_ERRORS = [
+    pytest.param(
+        NoPermissionError("this user has no permissions to run the 'xpending' command"),
+        id="acl-denied",
+    ),
+    pytest.param(RedisConnectionError("connection reset by peer"), id="broker-gone"),
+    pytest.param(ResponseError("NOGROUP No such key or consumer group"), id="refused"),
+]
+
+
+@pytest.mark.parametrize("count_error", UNREADABLE_COUNT_ERRORS)
+async def test_an_unreadable_delivery_count_retries_the_message_rather_than_failing_the_cycle(
+    fake_redis, consumer, settings, monkeypatch, caplog, count_error
+):
+    """#103: the count failing must not escape the message it was counting.
+
+    ``_delivery_count`` runs inside ``process_message``'s ``except Exception`` arm,
+    after the handler has failed, so an error there escaped as a *cycle* failure:
+    ``run_loop`` blamed the broker, backed off, and the entry came back to fail the
+    same way forever, with the handler's own error surviving only as chained
+    context. Retried rather than dead-lettered, for #82's reason: an unreadable
+    count says nothing about the command, and a wrong terminal fact is the one
+    outcome nothing downstream can repair.
+    """
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-uncountable"))
+
+    async def unreadable(*args, **kwargs):
+        raise count_error
+
+    monkeypatch.setattr(fake_redis, "xpending_range", unreadable)
+    reports = collected_reports()
+
+    async def handler(command: ContentFetchCommand) -> None:
+        raise AttributeError("NoneType has no attribute 'content'")
+
+    message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
+    with caplog.at_level("ERROR", logger="src.worker.loop"):
+        outcome = await process_one(
+            fake_redis, consumer, settings, message, handler, reporter=reports
+        )
+
+    assert outcome is Outcome.RETRY
+    assert (await fake_redis.xpending(TOPIC, GROUP))["pending"] == 1
+    assert await fake_redis.xlen(dlq_name(TOPIC)) == 0
+    assert reports.reports == []
+    # One line that names both failures, the handler's first: that is the bug an
+    # operator is looking for, and the count is why it is not closing.
+    (record,) = [r for r in caplog.records if "delivery count" in r.getMessage()]
+    assert record.levelname == "ERROR"
+    assert record.error == "AttributeError: NoneType has no attribute 'content'"
+    assert record.count_error == f"{type(count_error).__name__}: {count_error}"
+    assert record.exc_info is not None
+    assert isinstance(record.exc_info[1], AttributeError)
+
+
+async def test_an_unreadable_delivery_count_never_fails_a_poll_cycle(
+    fake_redis, consumer, settings, monkeypatch, caplog
+):
+    """#103's loud variant: a handler failing everything must not exit the worker.
+
+    Before the fix every cycle that reached the ceiling's read failed, so a deploy
+    regression failing every command climbed ``REPLICATOR_MAX_CONSECUTIVE_CYCLE_FAILURES``
+    and exited into a systemd restart loop. Now each cycle completes, and the run
+    ends on the attempt budget rather than on an exit.
+    """
+    await fake_redis.xadd(TOPIC, make_command(command_id="cmd-every-time"))
+    eager = settings.model_copy(
+        update={"claim_min_idle_ms": 0, "max_consecutive_cycle_failures": 2}
+    )
+
+    async def denied(*args, **kwargs):
+        raise NoPermissionError("this user has no permissions to run the 'xpending' command")
+
+    monkeypatch.setattr(fake_redis, "xpending_range", denied)
+    stop = asyncio.Event()
+    attempts = 0
+
+    async def handler(command: ContentFetchCommand) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts >= 4:
+            stop.set()
+        raise AttributeError("still broken")
+
+    with caplog.at_level("ERROR", logger="src.worker.loop"):
+        await drive_loop(fake_redis, consumer, eager, handler, stop, deadline=2.0)
+
+    assert attempts == 4
+    assert not [r for r in caplog.records if r.getMessage().startswith("poll cycle")]
 
 
 async def test_a_command_blocked_by_the_blob_ceiling_stays_pending(fake_redis, consumer, settings):

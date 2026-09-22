@@ -118,7 +118,7 @@ are the whole value of the six:
 | Destination in a range this host will not fetch from — loopback, RFC 1918, link-local, ULA, or the tailnet's CGNAT `100.64.0.0/10` (#95) | fact, then `content.fetch.dlq`, **before the request goes out**, and on **each redirect hop** | `fetch_failed` · `destination_refused` |
 | HTTP 5xx / 408 / 429, or a network error | retry indefinitely, default ~60 s cadence | delayed fact, or **nothing while it retries** |
 | Blob tree over `REPLICATOR_BLOB_MAX_TOTAL_BYTES` | parked in the PEL until a sweep frees space | delayed fact, or **nothing while it waits** |
-| Unclassified handler error | retried to the delivery ceiling (~4 reclaims / ~4 min at default settings), then fact + DLQ | `fetch_failed` · `handler_error` (+ `attempts`) |
+| Unclassified handler error | retried to the delivery ceiling (~4 reclaims / ~4 min at default settings), then fact + DLQ — **if the delivery count cannot be read, retried indefinitely instead** (#103) | `fetch_failed` · `handler_error` (+ `attempts`); **nothing while the count is unreadable** |
 | Success | `blob_available` on `content.blobs` | the fact |
 
 Every `fetch_failed` row carries `terminal=True` — the command is closed and no blob will arrive.

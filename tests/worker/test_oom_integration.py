@@ -32,6 +32,11 @@ to refuse a write for the *other* reason broker#1 introduces — an ACL that doe
 not grant it. The apparatus is the same one, so the denial is exercised here
 rather than in a module of its own: ``test_an_acl_denial_is_retried_like_a_cap``.
 
+**And the grant itself, since #103.** That test grants ``+@all`` on purpose, so it
+also granted the ``XPENDING`` the delivery ceiling reads — which the production
+broker refused this credential until broker#39. ``production_grant`` is a copy of
+the real command list, and the ceiling is driven through it.
+
 ``REPLICATOR_TEST_REDIS_URL`` is deliberately never read here. That variable names
 a broker someone else started — once the production one — which is exactly the
 kind of server this module must not touch.
@@ -68,6 +73,7 @@ from src.storage.local import LocalBlobStore
 from src.worker.handler import build_handler
 from src.worker.loop import (
     _TRANSIENT_ERRORS,
+    DEDUPE_KEY_PREFIX,
     FETCH_SPEC,
     REPLICATE_SPEC,
     Outcome,
@@ -486,6 +492,15 @@ def pending(client, topic: str, count: int):
     return holds
 
 
+def exists(client, key: str):
+    """A ``wait_for`` predicate: ``key`` is on the broker. A factory, for ``pending``'s reason."""
+
+    async def present() -> bool:
+        return bool(await client.exists(key))
+
+    return present
+
+
 def delivered_at_least(client, topic: str, message_id: str, attempts: int):
     """A ``wait_for`` predicate: the broker has delivered this entry ``attempts`` times.
 
@@ -579,6 +594,180 @@ async def test_an_acl_denial_is_retried_like_a_cap(
     assert await broker.client.exists(dlq_name(topic)) == 0
     assert await broker.client.exists(blobs_topic) == 0
     assert await broker.client.exists(FETCH_SPEC.dedupe_key("cmd-denied")) == 0
+
+
+def production_grant(topic: str, blobs_topic: str, *, xpending: bool = True) -> list[str]:
+    """The ``replicator`` user's production ACL, moved onto this test's keys (#103).
+
+    Copied from CannObserv/broker ``deploy/redis-acl.conf`` at 7203b7a — the root
+    command list and the three selectors, in its order — with each production key
+    swapped for the scratch one playing its part: ``topic`` for the command stream,
+    ``blobs_topic`` for the fact stream, and the dedupe namespace unchanged, since
+    ``DEDUPE_KEY_PREFIX`` is a constant. The streams this loop never touches drop
+    out, because a pattern naming nothing grants nothing.
+
+    **A copy, and what it can and cannot catch.** It fails when the loop starts
+    needing a command the production grant does not hold — which is how #103
+    went unseen: the ceiling's ``XPENDING`` runs only after an unclassified
+    failure, so the ``MONITOR`` captures the grant was built from never saw it,
+    and #82's test grants ``+@all``. It cannot notice the broker's file changing;
+    that is the broker's own test's job, and the line to re-copy from is cited.
+
+    ``xpending=False`` is the grant as it stood before broker#39.
+    """
+    commands = [
+        "+xread",
+        "+xreadgroup",
+        "+xack",
+        "+xautoclaim",
+        "+xgroup|create",
+        "+xlen",
+        "+xrange",
+        *(["+xpending"] if xpending else []),
+        "+xinfo|stream",
+        "+exists",
+        "+info",
+        "+ping",
+        "+config|get",
+    ]
+    return [
+        "resetchannels",
+        f"~{topic}",
+        f"~{dlq_name(topic)}",
+        f"~{blobs_topic}",
+        f"~{DEDUPE_KEY_PREFIX}*",
+        *commands,
+        f"(+xadd +xtrim ~{blobs_topic} ~{dlq_name(topic)})",
+        f"(+set ~{DEDUPE_KEY_PREFIX}*)",
+        f"(+xdel ~{dlq_name(topic)})",
+    ]
+
+
+@contextlib.asynccontextmanager
+async def granted_client(broker, rules: list[str]) -> AsyncGenerator[Redis]:
+    """A client whose user holds exactly ``rules``, dropped afterwards.
+
+    The drop is ``denied_client``'s, for its reason: ``ACL SETUSER`` survives the
+    ``broker`` fixture's ``FLUSHALL``.
+    """
+    user = f"granted-{uuid.uuid4().hex[:8]}"
+    password = uuid.uuid4().hex
+    await broker.client.execute_command("ACL", "SETUSER", user, "on", f">{password}", *rules)
+    url = broker.client.connection_pool.connection_kwargs
+    client = Redis(host=url["host"], port=url["port"], username=user, password=password)
+    try:
+        yield client
+    finally:
+        await client.aclose()
+        await broker.client.execute_command("ACL", "DELUSER", user)
+
+
+async def failing_everything(command: ContentFetchCommand) -> None:
+    """A handler bug: the one failure the delivery ceiling exists for."""
+    raise RuntimeError("the handler regressed")
+
+
+async def test_the_delivery_ceiling_fires_under_the_production_grant(
+    broker, topic, blobs_topic, oom_settings, caplog
+):
+    """#103: an unclassified failure reaches fact + DLQ on the grant the broker holds.
+
+    The whole loop runs as the scoped user — read, dedupe check, reclaim, the
+    ceiling's ``XPENDING``, the fact, and the dead-letter's ``XADD`` + ``XACK`` —
+    so every command the path issues has to be in the production list. Only the
+    issuer's ``XADD`` and the assertions use the owning client.
+    """
+    settings = oom_settings.model_copy(update={"max_delivery_attempts": 2})
+    await broker.client.xadd(topic, make_command(command_id="cmd-handler-bug"))
+    async with granted_client(broker, production_grant(topic, blobs_topic)) as client:
+        consumer = AsyncBusConsumer(client, topic=topic, group=GROUP, consumer=CONSUMER)
+        await consumer.ensure_group(start_id="0")
+        stop = asyncio.Event()
+        with caplog.at_level("WARNING", logger="src.worker.loop"):
+            loop = asyncio.create_task(
+                run_loop(
+                    client=client,
+                    consumer=consumer,
+                    group=GROUP,
+                    settings=settings,
+                    handler=failing_everything,
+                    reporter=build_failure_reporter(client=client, blobs_topic=blobs_topic),
+                    spec=FETCH_SPEC,
+                    stop=stop,
+                )
+            )
+            try:
+                await wait_for(
+                    exists(broker.client, dlq_name(topic)),
+                    what="the command reached the dead-letter queue",
+                )
+            finally:
+                stop.set()
+                await asyncio.wait_for(loop, timeout=5)
+
+    (entry,) = await broker.client.xrange(dlq_name(topic))
+    assert entry[1][b"dlq_reason"] == b"unclassified failure hit the delivery ceiling"
+    (fact,) = await decoded_facts(broker.client, blobs_topic)
+    assert isinstance(fact, FetchFailedEvent)
+    assert fact.reason == FailureReason.HANDLER_ERROR
+    assert fact.attempts == 2
+    assert await pending_count(broker.client, topic) == 0
+    assert not [r for r in caplog.records if r.getMessage().startswith("poll cycle")]
+
+
+async def test_without_xpending_an_unclassified_failure_retries_and_never_fails_a_cycle(
+    broker, topic, blobs_topic, oom_settings, caplog
+):
+    """#103's reproduction, fixed: the grant before broker#39, and a handler bug.
+
+    Before the fix this logged ``poll cycle failed`` against the broker once per
+    reclaim and never printed the handler's failure as its own line. Now each
+    attempt is one message-level ERROR naming both errors, the cycle completes, and
+    — the trade #82 accepts — the command stays pending rather than closing.
+    """
+    settings = oom_settings.model_copy(update={"max_delivery_attempts": 2})
+    message_id = await broker.client.xadd(topic, make_command(command_id="cmd-uncountable"))
+    rules = production_grant(topic, blobs_topic, xpending=False)
+    async with granted_client(broker, rules) as client:
+        with pytest.raises(NoPermissionError):
+            await client.xpending_range(topic, GROUP, min="-", max="+", count=1)
+        consumer = AsyncBusConsumer(client, topic=topic, group=GROUP, consumer=CONSUMER)
+        await consumer.ensure_group(start_id="0")
+        stop = asyncio.Event()
+        with caplog.at_level("WARNING", logger="src.worker.loop"):
+            loop = asyncio.create_task(
+                run_loop(
+                    client=client,
+                    consumer=consumer,
+                    group=GROUP,
+                    settings=settings,
+                    handler=failing_everything,
+                    reporter=build_failure_reporter(client=client, blobs_topic=blobs_topic),
+                    spec=FETCH_SPEC,
+                    stop=stop,
+                )
+            )
+            try:
+                await wait_for(
+                    delivered_at_least(
+                        broker.client,
+                        topic,
+                        message_id.decode(),
+                        settings.max_delivery_attempts + 2,
+                    ),
+                    what="the command was redelivered past the ceiling",
+                )
+            finally:
+                stop.set()
+                await asyncio.wait_for(loop, timeout=5)
+
+    assert await pending_count(broker.client, topic) == 1
+    assert await broker.client.exists(dlq_name(topic)) == 0
+    assert await broker.client.exists(blobs_topic) == 0
+    assert not [r for r in caplog.records if r.getMessage().startswith("poll cycle")]
+    counted = [r for r in caplog.records if "delivery count could not be read" in r.getMessage()]
+    assert len(counted) >= settings.max_delivery_attempts
+    assert all(r.count_error.startswith("NoPermissionError") for r in counted)
 
 
 async def test_the_consume_path_still_runs_while_the_cap_bites(broker, topic, consumer):

@@ -668,9 +668,43 @@ async def _handle_unclassified[C: Command, R: Report](
 
     The only path that reports ``attempts``, because it is the only one where the
     number is *why* the command closed rather than incidental.
+
+    **A count that cannot be read retries the message, and never escapes it
+    (#103).** This runs inside ``process_message``'s ``except Exception`` arm, so
+    an error from ``_delivery_count`` is not caught by the sibling transient arm:
+    it left ``process_message`` as a *cycle* failure, which ``run_loop`` logged
+    against the broker and backed off from, while ``claim_stale`` brought the entry
+    back to fail the same way. The ceiling never fired, because the ceiling was
+    the code that was failing — ``_report_or_none``'s hazard reached through the
+    read before it. That ran in production until broker#39 granted ``XPENDING``.
+
+    Retried rather than dead-lettered, and for #82's reason rather than as a
+    default: an unreadable count says nothing about the command, and closing it
+    would turn a denied read, or a broker that dropped the connection between the
+    handler and the count, into a terminal ``handler_error`` for a command whose
+    first failure this may be. The cost is the one #82 accepts — a count that stays
+    unreadable retries forever — so it is logged at ERROR, not WARNING, with the
+    handler's own failure as the traceback: that is the bug, and the count is only
+    why it is not closing.
     """
-    attempts = await _delivery_count(client, message, group=group)
     error = f"{type(exc).__name__}: {exc}"
+    # ``Exception``, never ``BaseException``, for ``_report_or_none``'s reason: a
+    # SIGTERM arriving mid-read must propagate, not be retried.
+    try:
+        attempts = await _delivery_count(client, message, group=group)
+    except Exception as count_exc:
+        logger.error(
+            "unclassified failure, and its delivery count could not be read — "
+            "leaving the message pending; the ceiling cannot fire until it can",
+            extra={
+                "command_id": command.command_id,
+                "message_id": message.message_id,
+                "error": error,
+                "count_error": f"{type(count_exc).__name__}: {count_exc}",
+            },
+            exc_info=exc,
+        )
+        return Outcome.RETRY
     if attempts >= settings.max_delivery_attempts:
         return await _close(
             consumer,
@@ -707,6 +741,12 @@ async def _delivery_count(client: Redis, message: BusMessage, *, group: str) -> 
     XPENDING is the source of truth — no side counter to keep, expire, or
     reconcile. Note it only advances on a claim_stale reclaim (a ``>`` read never
     redelivers), which is what makes the ceiling a bound in time.
+
+    **The broker has to grant it, and until 2026-09-22 did not** (#103,
+    broker#39). The grant was built from ``MONITOR`` captures, and this read runs
+    only after an unclassified failure, so no capture ever saw it. The ACL-scoped
+    run that holds the grant to what this loop needs is
+    ``test_the_delivery_ceiling_fires_under_the_production_grant``.
     """
     entries = await client.xpending_range(
         message.topic, group, min=message.message_id, max=message.message_id, count=1
