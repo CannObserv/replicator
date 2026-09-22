@@ -123,7 +123,15 @@ scoped to its own topics, permanently and by design, so the operator surface spl
 
 | Runnable here | Denied — ask the broker operator |
 |---|---|
-| `XLEN`, `XRANGE`, `XINFO STREAM`, `INFO`, `XDEL` on the two `.dlq` streams | `XPENDING`, `SCAN`, `XINFO GROUPS`, `XINFO CONSUMERS`, `CLIENT LIST`, `ACL LOG`, `SELECT`, `XDEL` anywhere else |
+| `XLEN`, `XRANGE`, `XINFO STREAM`, `XPENDING`, `INFO`, `XDEL` on the two `.dlq` streams | `SCAN`, `XINFO GROUPS`, `XINFO CONSUMERS`, `CLIENT LIST`, `ACL LOG`, `SELECT`, `XDEL` anywhere else |
+
+**`XPENDING` moved columns on 2026-09-22 (broker#39, #103, #107)** — and not as a diagnostic
+courtesy. The loop's delivery ceiling reads it (`_delivery_count`), so until the grant landed
+`REPLICATOR_MAX_DELIVERY_ATTEMPTS` could never fire: an unclassified failure was retried forever
+and never reached `<topic>.dlq`. The grant was built from `MONITOR` captures, and that read runs
+only after a handler fails in a way the loop cannot classify, so no capture saw it.
+`test_the_delivery_ceiling_fires_under_the_production_grant` now drives the ceiling through a copy
+of the production command list.
 
 **Draining a dead-letter queue is this service's job, and since 2026-09-11 it has the grant
 for it (#86, broker#12).** It briefly did not: `XADD <topic>.dlq` was granted and the deletion
@@ -152,13 +160,15 @@ which leaves no evidence file at all. Read the frame, close its command, then de
 
 The denied column is marked `# NOPERM` at each use below rather than removed, because the
 command is still the right one to ask for — and two of them answer questions nothing else can.
+`XPENDING` carries no mark any more; it is granted (above).
 See [Redis](#redis) for what to know before asking.
 
 ```bash
 # Pending entries: id, holder, idle ms, and delivery count — the last field is
 # the times_delivered the DLQ ceiling reads. Add `IDLE <ms>` before the range to
 # filter to entries idle at least that long (what claim_stale would reclaim).
-rcli XPENDING content.fetch replicator.fetch - + 10      # NOPERM as replicator
+rcli XPENDING content.fetch replicator.fetch - + 10
+rcli XPENDING content.replicate replicator.replicate - + 10
 
 # Dead-lettered frames. Reading, triaging and deleting are all granted here.
 rcli XLEN content.fetch.dlq
