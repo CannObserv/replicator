@@ -201,17 +201,30 @@ def test_the_refusal_is_terminal():
     assert error.reason == "destination_refused"
 
 
-async def test_an_ipv4_mapped_address_is_the_address_it_maps():
+@pytest.mark.parametrize(
+    ("label", "url", "mapping"),
+    [
+        ("resolved", "http://mapped.invalid/", {"mapped.invalid": ["::ffff:127.0.0.1"]}),
+        ("literal", "http://[::ffff:127.0.0.1]:9999/", {}),
+    ],
+)
+async def test_an_ipv4_mapped_address_is_the_address_it_maps(label, url, mapping):
     """``::ffff:127.0.0.1`` is loopback spelled as IPv6.
 
     It is not inside ``127.0.0.0/8`` — that network is IPv4 and this address is
     not — so a guard comparing versions naively lets the most obvious bypass in
     the file straight through.
+
+    **Both paths, because since #100 each unmaps on its own** (CR 1). ``_address``
+    runs on the URL's literal and on every resolved answer, where ``_containing``
+    once did it for both; restoring the literal path's pre-#100 spelling,
+    ``ipaddress.ip_address(host)``, reopens the literal case alone. The empty
+    mapping makes resolving the literal a ``KeyError`` rather than a pass.
     """
-    transport = _guard({"mapped.invalid": ["::ffff:127.0.0.1"]})
+    transport = _guard(mapping)
 
     with pytest.raises(PermanentFetchError, match="127.0.0.1"):
-        await transport.handle_async_request(httpx.Request("GET", "http://mapped.invalid/"))
+        await transport.handle_async_request(httpx.Request("GET", url))
 
 
 async def test_the_default_resolver_is_the_one_the_worker_runs_with():
