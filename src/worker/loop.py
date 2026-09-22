@@ -1019,8 +1019,10 @@ class PollCadence:
     denial, an operator.
 
     So a reclaim owes the stream a turn: the next poll looks there first. At most
-    one reclaim ever runs between two looks at the stream, which bounds how long an
-    undelivered entry can wait at one handler's duration, whatever that duration is.
+    one reclaim runs between two looks at the stream, so recovery can hold the head
+    of the stream back by one handler, however slow. Its whole wait is the handler
+    already in flight when it arrived plus, at most, that one reclaim — two handler
+    durations, which is the figure an undelivered-age threshold has to clear.
 
     Chosen over the two alternatives #98 weighed. Raising ``claim_min_idle_ms``
     past the slowest handler lengthens every retry to fix a case only the slow ones
