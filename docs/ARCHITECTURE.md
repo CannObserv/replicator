@@ -34,6 +34,7 @@ src/worker/     — Bus consumer; the primary process
 src/worker/main.py   — Entry point: client lifetime, consumer group, signals, backend selection
 src/worker/loop.py   — The consume path: poll → dispatch → ack, DLQ, dedupe, recovery; one loop per command stream, parameterized by CommandSpec
 src/worker/handler.py — The byte path behind the Handler seam: fetch → fingerprint → store → publish
+src/worker/egress.py — The destination guard: a transport refusing loopback, private and tailnet addresses per redirect hop (#95); an answer it cannot check retries, never passes (#100)
 src/worker/reporter.py — The failure fact behind the FailureReporter seam: fetch_failed on content.blobs
 src/worker/retention.py — The sweep task: cadence, usage accounting, ceiling reporting
 src/worker/pacing.py — Per-host request spacing; the mechanism half of politeness (#12, escalating on 429 since #25)
