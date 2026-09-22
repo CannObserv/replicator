@@ -1003,7 +1003,7 @@ async def claim_once(
     return []
 
 
-@dataclass
+@dataclass(slots=True)
 class PollCadence:
     """Whose turn the next poll starts with, carried across one loop's cycles (#98).
 
