@@ -29,7 +29,7 @@ from src.core.config import Settings, get_settings
 from src.core.logging import configure_logging
 from src.storage.local import LocalBlobStore
 from src.storage.sweeper import SweepResult
-from src.worker.egress import GuardedTransport
+from src.worker.egress import RESOLVE_TIMEOUT_SECONDS, GuardedTransport
 from src.worker.main import (
     build_consumer,
     build_fetch_client,
@@ -1393,7 +1393,7 @@ def test_the_worker_builds_its_fetch_client_behind_the_destination_guard(monkeyp
 
     client = build_fetch_client(Settings())
 
-    # ``_transport`` is private, and deliberately reached for anyway (CR 8):
+    # ``_transport`` is private, and deliberately reached for anyway (#95 CR 8):
     # httpx exposes no public accessor, and the alternative — asserting through
     # a request — is what ``test_egress.py`` covers end to end. An httpx upgrade
     # that renames it fails here loudly, which is the right failure: it means
@@ -1412,6 +1412,21 @@ def test_the_operators_ranges_reach_the_worker_guard(monkeypatch):
     client = build_fetch_client(Settings())
 
     assert [str(net) for net in client._transport._blocked] == ["10.0.0.0/8"]
+
+
+def test_the_worker_guard_resolves_under_the_budgeted_cap(monkeypatch):
+    """The resolve cap the stop budget sums is the one the worker runs with (#100 CR 9).
+
+    ``tests/test_deploy.py`` adds ``RESOLVE_TIMEOUT_SECONDS`` to the
+    ``TimeoutStopSec`` sum. A ``resolve_timeout=`` passed in ``build_fetch_client``
+    would change the real cap with that test still green, summing a number the
+    worker does not use.
+    """
+    monkeypatch.delenv("REPLICATOR_BLOCKED_DESTINATIONS", raising=False)
+
+    client = build_fetch_client(Settings())
+
+    assert client._transport._resolve_timeout == RESOLVE_TIMEOUT_SECONDS
 
 
 def test_a_malformed_range_stops_the_worker_at_boot(monkeypatch):
