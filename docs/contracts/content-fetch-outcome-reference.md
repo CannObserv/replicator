@@ -252,8 +252,6 @@ is stated here rather than left to be discovered.
 
 ---
 
----
-
 ## Why a duplicate failure fact is not identical
 
 Expands [MUST-4](content-fetch-issuer-contract.md#4-make-correlation-idempotent--one-command-can-yield-more-than-one-fact).
