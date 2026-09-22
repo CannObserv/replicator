@@ -389,7 +389,13 @@ async def test_run_exits_cleanly_on_sigterm(monkeypatch, fake_redis, tmp_path):
 
 
 async def test_worker_ready_reports_the_outage_window(monkeypatch, fake_redis, tmp_path, capsys):
-    """CR #22: the number the unit is sized against belongs in the journal."""
+    """CR #22: the numbers the unit is sized against belong in the journal.
+
+    Two of them now (CR 7): the outage window the unit's ``StartLimitIntervalSec``
+    is sized against, and the whole-fetch ceiling its ``TimeoutStopSec`` sums
+    (#104). Both are settings a deployment can widen, and neither is visible
+    anywhere else at boot.
+    """
     monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
     monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
     stop = _ended_by_the_loop(monkeypatch)
@@ -405,6 +411,7 @@ async def test_worker_ready_reports_the_outage_window(monkeypatch, fake_redis, t
         root.handlers, root.level = saved_handlers, saved_level
 
     assert record["worst_case_outage_seconds"] == get_settings().worst_case_outage_seconds
+    assert record["max_fetch_seconds"] == get_settings().max_fetch_seconds
 
 
 async def test_worker_ready_names_both_consumers(monkeypatch, fake_redis, tmp_path, capsys):

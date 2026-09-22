@@ -733,6 +733,12 @@ async def run(
                     # StartLimitIntervalSec is sized against it, and a config change
                     # that widens it would otherwise be invisible.
                     "worst_case_outage_seconds": settings.worst_case_outage_seconds,
+                    # The other number a unit directive is sized against, and the
+                    # one #104 made real: TimeoutStopSec sums this, so a
+                    # deployment that widens it without widening the unit gets
+                    # fetches SIGKILLed on every deploy that lands during one.
+                    # Nothing else says it at boot (CR 7).
+                    "max_fetch_seconds": settings.max_fetch_seconds,
                     # What this host will accept a replicate command for. Empty is
                     # the expected value today and says so plainly, rather than
                     # leaving an operator to infer it from a stream of refusals.
