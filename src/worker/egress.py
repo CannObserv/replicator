@@ -114,7 +114,9 @@ async def _getaddrinfo(host: str, port: int) -> Sequence[str]:
     """
     loop = asyncio.get_running_loop()
     infos = await loop.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
-    return [info[4][0] for info in infos]
+    # typeshed types a sockaddr's first element ``str | int`` to cover every
+    # family; for IPv4 and IPv6 it is the address string (CR 6).
+    return [str(info[4][0]) for info in infos]
 
 
 class GuardedTransport(httpx.AsyncBaseTransport):
