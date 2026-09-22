@@ -610,39 +610,85 @@ async def test_the_refusal_reaches_the_handler_through_the_real_driver():
     assert raised.value.reason is FailureReason.TOO_LARGE
 
 
-async def test_an_endless_body_from_a_real_origin_is_refused_and_its_connection_dropped():
+@pytest.fixture
+async def endless_origin():
+    """A local origin that answers with a body that never ends.
+
+    ``Connection: close`` and no ``Content-Length``, so only the count can stop
+    it. Yields the URL and an event the handler sets when its socket dies, which
+    is what shows the read stopped rather than the whole body arriving first.
+    """
+
+    def serve(status_line: bytes):
+        stopped = asyncio.Event()
+
+        async def endless(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            try:
+                await reader.readuntil(b"\r\n\r\n")
+                writer.write(status_line + b"\r\nConnection: close\r\n\r\n")
+                while True:
+                    writer.write(b"x" * 1024)
+                    await writer.drain()
+            except (ConnectionError, asyncio.CancelledError):
+                pass
+            finally:
+                stopped.set()
+                writer.close()
+
+        return endless, stopped
+
+    servers = []
+
+    async def start(status_line: bytes):
+        handler, stopped = serve(status_line)
+        server = await asyncio.start_server(handler, "127.0.0.1", 0)
+        servers.append(server)
+        port = server.sockets[0].getsockname()[1]
+        return f"http://127.0.0.1:{port}/endless", stopped
+
+    try:
+        yield start
+    finally:
+        for server in servers:
+            server.close()
+            await server.wait_closed()
+
+
+async def test_an_endless_body_from_a_real_origin_is_refused_and_its_connection_dropped(
+    endless_origin,
+):
     """Over real httpcore, where a stream closed part-way is a connection dropped.
 
-    No ``Content-Length`` and no end: only the count can stop this, and the origin
-    seeing its socket close is what shows the read stopped rather than the
-    refusal being raised over a body read whole. Loopback, so the bare transport
-    rather than the guard, which would refuse it first.
+    Loopback, so the bare transport rather than the guard, which would refuse it
+    first.
     """
-    stopped = asyncio.Event()
-
-    async def endless(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        try:
-            await reader.readuntil(b"\r\n\r\n")
-            writer.write(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
-            while True:
-                writer.write(b"x" * 1024)
-                await writer.drain()
-        except (ConnectionError, asyncio.CancelledError):
-            pass
-        finally:
-            stopped.set()
-            writer.close()
-
-    server = await asyncio.start_server(endless, "127.0.0.1", 0)
-    port = server.sockets[0].getsockname()[1]
+    url, stopped = await endless_origin(b"HTTP/1.1 200 OK")
     transport = BodyCeilingTransport(httpx.AsyncHTTPTransport(), max_bytes=64 * 1024)
-    try:
-        async with httpx.AsyncClient(transport=transport) as client:
-            with pytest.raises(PermanentFetchError) as raised:
-                await client.get(f"http://127.0.0.1:{port}/endless")
-        await asyncio.wait_for(stopped.wait(), timeout=5)
-    finally:
-        server.close()
-        await server.wait_closed()
+
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(PermanentFetchError) as raised:
+            await client.get(url)
+    await asyncio.wait_for(stopped.wait(), timeout=5)
 
     assert raised.value.reason is FailureReason.TOO_LARGE
+
+
+async def test_an_endless_non_2xx_body_from_a_real_origin_is_cut_short(endless_origin):
+    """CR 2: the other half of the ceiling, against a response that really exists.
+
+    Truncation abandons a live body rather than raising through it, and what
+    makes that safe is httpcore dropping a part-read connection instead of
+    pooling it — which a mock stream has no way to show. The status still
+    reaches ``_raise_for_status``, which is the whole reason this path is not a
+    refusal.
+    """
+    url, stopped = await endless_origin(b"HTTP/1.1 503 Service Unavailable")
+    ceiling = 64 * 1024
+    transport = BodyCeilingTransport(httpx.AsyncHTTPTransport(), max_bytes=ceiling)
+
+    async with httpx.AsyncClient(transport=transport) as client:
+        response = await client.get(url)
+    await asyncio.wait_for(stopped.wait(), timeout=5)
+
+    assert response.status_code == 503
+    assert len(response.content) == ceiling
