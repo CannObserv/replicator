@@ -126,7 +126,9 @@ scoped to its own topics, permanently and by design, so the operator surface spl
 | `XLEN`, `XRANGE`, `XINFO STREAM`, `XPENDING`, `INFO`, `XDEL` on the two `.dlq` streams | `SCAN`, `XINFO GROUPS`, `XINFO CONSUMERS`, `CLIENT LIST`, `ACL LOG`, `SELECT`, `XDEL` anywhere else |
 
 **`XPENDING` moved columns on 2026-09-22 (broker#39, #103, #107)** — and not as a diagnostic
-courtesy. The loop's delivery ceiling reads it (`_delivery_count`), so until the grant landed
+courtesy. Probed from this host after the grant landed, which is how every other row here was
+settled: `XPENDING content.fetch replicator.fetch` and the replicate pair both answer, each
+reporting 0 pending (2026-09-22, replacing the `NOPERM` the same command returned at 12:55Z). The loop's delivery ceiling reads it (`_delivery_count`), so until the grant landed
 `REPLICATOR_MAX_DELIVERY_ATTEMPTS` could never fire: an unclassified failure was retried forever
 and never reached `<topic>.dlq`. The grant was built from `MONITOR` captures, and that read runs
 only after a handler fails in a way the loop cannot classify, so no capture saw it.
