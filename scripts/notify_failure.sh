@@ -168,7 +168,9 @@ case "${MODE}" in
     # test carried a pasted `<id from step 1>`. The value itself is NOT echoed,
     # only its length (CR 1): the likeliest mis-paste into these lines is the
     # neighbouring API key, and this check would then write it to the journal.
-    ULID='^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$'
+    # Spelled out, not ranged (CR 2): bash hands bracket ranges to libc, which
+    # collates them by locale — under en_US.UTF-8 `[A-Za-z]` matched `é` here.
+    ULID='^[0123456789ABCDEFGHJKMNPQRSTVWXYZabcdefghjkmnpqrstvwxyz]{26}$'
     TEMPLATE_ID="${REPLICATOR_NOTIFY_TEMPLATE_ID:-}"
     if [ -n "${TEMPLATE_ID}" ] && ! [[ "${TEMPLATE_ID}" =~ ${ULID} ]]; then
       echo "notify_failure: REPLICATOR_NOTIFY_TEMPLATE_ID (${#TEMPLATE_ID} chars) is not a 26-char ULID — recorded locally only" >&2
