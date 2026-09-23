@@ -165,12 +165,13 @@ case "${MODE}" in
   notifier)
     # Notifier's own ULID pattern (either case). Checked here so a malformed id
     # costs a named journal line rather than a 422 — run 2 of the #108 smoke
-    # test carried a pasted `<id from step 1>`. The values are identifiers, not
-    # credentials, so naming them in the journal is safe.
+    # test carried a pasted `<id from step 1>`. The value itself is NOT echoed,
+    # only its length (CR 1): the likeliest mis-paste into these lines is the
+    # neighbouring API key, and this check would then write it to the journal.
     ULID='^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$'
     TEMPLATE_ID="${REPLICATOR_NOTIFY_TEMPLATE_ID:-}"
     if [ -n "${TEMPLATE_ID}" ] && ! [[ "${TEMPLATE_ID}" =~ ${ULID} ]]; then
-      echo "notify_failure: REPLICATOR_NOTIFY_TEMPLATE_ID=${TEMPLATE_ID} is not a ULID — recorded locally only" >&2
+      echo "notify_failure: REPLICATOR_NOTIFY_TEMPLATE_ID (${#TEMPLATE_ID} chars) is not a 26-char ULID — recorded locally only" >&2
       exit 0
     fi
     CHANNELS=""
@@ -179,7 +180,7 @@ case "${MODE}" in
       _c="${_c//[[:space:]]/}"
       [ -z "${_c}" ] && continue
       if ! [[ "${_c}" =~ ${ULID} ]]; then
-        echo "notify_failure: REPLICATOR_NOTIFY_CHANNEL_IDS entry ${_c} is not a ULID — recorded locally only" >&2
+        echo "notify_failure: a REPLICATOR_NOTIFY_CHANNEL_IDS entry (${#_c} chars) is not a 26-char ULID — recorded locally only" >&2
         exit 0
       fi
       CHANNELS="${CHANNELS:+${CHANNELS},}\"${_c}\""
