@@ -203,9 +203,15 @@ case "${MODE}" in
     # replays instead of paging twice. Null without one: notifier answers a
     # replayed key with the prior record and makes NO new delivery attempt, so a
     # key that could repeat across failures would silently swallow an alert.
+    #
+    # Notifier caps the key at 200 characters and a unit name may run to 255, so
+    # an over-long `<unit>:<id>` falls back to the id alone (CR 3) — still unique
+    # per failure, since an InvocationID is a random 128-bit value.
     IDEMPOTENCY="null"
     if [ -n "${MONITOR_INVOCATION_ID:-}" ]; then
-      IDEMPOTENCY="\"$(_json "${UNIT}:${MONITOR_INVOCATION_ID}")\""
+      _key="${UNIT}:${MONITOR_INVOCATION_ID}"
+      [ "${#_key}" -gt 200 ] && _key="${MONITOR_INVOCATION_ID}"
+      IDEMPOTENCY="\"$(_json "${_key}")\""
     fi
     PAYLOAD="$(
       printf '{"template_id":"%s","channel_ids":[%s],"variables":%s,"idempotency_key":%s,"metadata":{"event":"unit_failed"}}' \
