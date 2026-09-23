@@ -775,3 +775,28 @@ def test_the_workers_failure_still_carries_its_build():
     record = next(r for r in _records(result) if r.get("event") == "unit_failed")
     assert record["build"] == "deadbee", record
     assert "(build deadbee)" in record["message"], record
+
+
+def test_a_malformed_id_never_echoes_its_value(notifier):
+    """CR 1: the likeliest mis-paste into a template-id line is the API key itself."""
+    server, stub = notifier
+    key_shaped = "nk_" + "k" * 43
+
+    result = _run(UNIT_NAME, env=_notifier_env(server, REPLICATOR_NOTIFY_TEMPLATE_ID=key_shaped))
+
+    assert stub.received == [], stub.received
+    assert "REPLICATOR_NOTIFY_TEMPLATE_ID" in result.stderr, result.stderr
+    assert key_shaped not in result.stdout + result.stderr, result.stderr
+
+
+def test_a_malformed_channel_entry_never_echoes_its_value(notifier):
+    server, stub = notifier
+    key_shaped = "nk_" + "c" * 43
+
+    result = _run(
+        UNIT_NAME,
+        env=_notifier_env(server, REPLICATOR_NOTIFY_CHANNEL_IDS=f"{CHANNEL_A},{key_shaped}"),
+    )
+
+    assert stub.received == [], stub.received
+    assert key_shaped not in result.stdout + result.stderr, result.stderr
