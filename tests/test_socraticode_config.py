@@ -336,3 +336,85 @@ class TestLinkedProjectsHaveOneSource:
             "linkedProjects in .socraticode.json is the one source (skills#287) — "
             "delete this key and keep the rest of the env block"
         )
+
+
+# A package spec this repo is willing to launch. `@latest` and any range let
+# npx resolve a version nobody chose, at session start, on this VM.
+PINNED_SPEC = re.compile(r"^socraticode@\d+\.\d+\.\d+$")
+
+# The SessionStart entry that runs the daily health check, matched on the
+# script name rather than the whole command so the cap may be re-spelled.
+HEALTH_HOOK = "socraticode-health"
+
+
+def _session_start_commands() -> list[str]:
+    """Every SessionStart hook command in the tracked settings file."""
+    hooks = json.loads(SETTINGS.read_text()).get("hooks", {}).get("SessionStart", [])
+    return [entry.get("command", "") for group in hooks for entry in group.get("hooks", [])]
+
+
+class TestServerLaunchCost:
+    """What this repo is willing to spend to start a SocratiCode server (#99).
+
+    Two launch paths exist here and they resolve the server differently: the
+    plugin's MCP manifest spawns `npx -y --prefer-online <spec>`, and the
+    SessionStart health hook runs `mcp-driver.mjs`. Both start a server on the
+    VM that also runs `replicator.service`, and the expensive case is not the
+    server — it is the *install* it does first. Measured on `CannObserv/broker`:
+    75 MB pinned, 129 MB from a warm npx cache, 1.2 G for a cold install, where
+    all 126 `MemoryHigh` throttle events landed.
+
+    Neither cost is visible from a green health check, and the failure they
+    produce is not an OOM kill. On 2026-09-16 broker's kernel failed *atomic*
+    allocations in `tailscaled` and `ksoftirqd`, nothing was killed, and the bus
+    was down 57m48s. Agent sessions inherit `oom_score_adj` -1000 from
+    `exe-init`, so the killer cannot choose one and takes the service instead.
+
+    So both paths are pinned here rather than left to resolve at launch.
+    """
+
+    def test_the_plugin_spec_is_a_literal_version(self, settings_env: dict) -> None:
+        """`SOCRATICODE_SPEC` is the only lever over the plugin's own launch.
+
+        The plugin's manifest spawns `${SOCRATICODE_SPEC:-socraticode@latest}`,
+        and Claude Code cannot override a plugin's MCP *command* — so this
+        variable is the whole of the control this repo has over it. Unset, the
+        plugin resolves `@latest` against the registry at every session start,
+        and `--prefer-online` means a warm cache is not a warm path on any day
+        the package moved.
+        """
+        spec = settings_env.get("SOCRATICODE_SPEC")
+        assert spec is not None, (
+            "SOCRATICODE_SPEC is unset — the plugin will resolve socraticode@latest "
+            "at every session start, installing on any day the package moved"
+        )
+        assert PINNED_SPEC.match(spec), (
+            f"SOCRATICODE_SPEC is {spec!r} — pin a literal version, since only an "
+            "exact version is already in the npx cache and resolves without an install"
+        )
+
+    def test_the_health_hook_launch_is_capped(self) -> None:
+        """The one launch that happens unattended is the one that must be bounded.
+
+        `docs/COMMANDS.md` caps the *manual* driver invocations, but this hook
+        runs from SessionStart once per UTC day with nobody watching, which is
+        exactly the shape of #94 — an uncapped launch cost this cluster 58
+        minutes of bus. The hook bounds its own *time* (HEALTH_TIMEOUT_MS) and
+        nothing bounds its memory.
+
+        `choom` is part of the contract, not decoration: a session process sits
+        at `oom_score_adj` -1000, where a cgroup cap *stalls* the process rather
+        than killing it. Raising the score is unprivileged, so the cap can
+        actually be enforced by a kill.
+        """
+        health = [c for c in _session_start_commands() if HEALTH_HOOK in c]
+        assert health, f"no SessionStart hook runs {HEALTH_HOOK}"
+        for command in health:
+            assert "MemoryMax=" in command, (
+                f"{HEALTH_HOOK} launches a SocratiCode server uncapped: {command!r} — "
+                "wrap it as docs/COMMANDS.md does for the manual invocations"
+            )
+            assert "choom" in command, (
+                f"{HEALTH_HOOK} is capped but not re-scored: {command!r} — at "
+                "oom_score_adj -1000 a cgroup cap stalls the process instead of killing it"
+            )

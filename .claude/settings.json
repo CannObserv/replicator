@@ -15,7 +15,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/socraticode-health.sh\" # socraticode-health"
+            "command": "H=\"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/socraticode-health.sh\"; if systemd-run --user --scope -q true 2>/dev/null; then systemd-run --user --scope -q -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% choom -n 500 -- bash \"$H\"; else bash \"$H\"; fi # socraticode-health",
+            "timeout": 120
           }
         ]
       },
@@ -49,6 +50,7 @@
     ]
   },
   "env": {
+    "SOCRATICODE_SPEC": "socraticode@1.14.0",
     "SOCRATICODE_DRIVER": "skills-vendor/gregoryfoster-skills/skills/init-socraticode/scripts/mcp-driver.mjs",
     "SOCRATICODE_PROBE_FILE": "src/worker/main.py",
     "CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT": "3600000",
