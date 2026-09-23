@@ -418,3 +418,34 @@ class TestServerLaunchCost:
                 f"{HEALTH_HOOK} is capped but not re-scored: {command!r} — at "
                 "oom_score_adj -1000 a cgroup cap stalls the process instead of killing it"
             )
+
+    def test_the_fallback_probe_tests_the_properties_it_gates(self) -> None:
+        """A guard that probes less than it gates fails closed on the difference.
+
+        The wrapper runs the hook uncapped when `systemd-run --user` is
+        unusable, because a SessionStart hook that fails closed takes the
+        session with it — the vendored hook traps ERR and exits 0 on every path
+        for that reason, and the wrapper must not undo it.
+
+        A bare `systemd-run --user --scope -q true` probe does not test the
+        `-p` properties the real call passes, so where the controllers are not
+        delegated the probe succeeds, the real call exits non-zero, and the
+        `else` branch is already unreachable: measured exit 1, nothing
+        measured, and a silent-when-clean hook reads that as a healthy day.
+
+        Pinned as one `$CAP` shared by both invocations rather than as two
+        matching literals, which is the form that cannot drift. The fallback is
+        deliberately *not* `capped || bash "$H"`: that spelling also fires when
+        the cap does its job and kills the payload, re-running it uncapped.
+        """
+        for command in (c for c in _session_start_commands() if HEALTH_HOOK in c):
+            probe, _, rest = command.partition("true")
+            assert "MemoryMax=" in probe, (
+                f"the fallback probe does not carry the cap it gates: {command!r} — "
+                "where the properties are unsupported the probe passes, the real call "
+                "exits non-zero, and the uncapped fallback is unreachable"
+            )
+            assert "$CAP" in probe and "$CAP" in rest, (
+                f"probe and real call must share one property definition: {command!r} — "
+                "two matching literals drift the moment one is edited"
+            )
