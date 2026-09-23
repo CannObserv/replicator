@@ -71,6 +71,11 @@
       "description": "VM topology and ports, the systemd unit's lifecycle and its ExecStartPre guards, the checkout guard, and the co-core pin. The environment variables themselves are in docs/ENVIRONMENT.md. Also OOMScoreAdjust=-900 on both units (#92): on exe.dev everything descended from a session inherits oom_score_adj=-1000 and is exempt from the OOM killer, so an unprotected worker at ~670 was what the kernel would pick under pressure the dev tooling created."
     },
     {
+      "name": "failure-notification-reference",
+      "path": "./docs/FAILURE-NOTIFICATION.md",
+      "description": "What replicator.service reports when it fails, split out of docs/DEPLOYMENT.md (#99). The OnFailure=replicator-failure-notify@%n.service handler: the CRITICAL journal record it always writes, and the POST it makes only when REPLICATOR_NOTIFY_URL is set — unset is the shipped posture and a working one. The six REPLICATOR_NOTIFY_* variables, read by the handler and never by the worker, which is why they are not in docs/ENVIRONMENT.md. Notifier mode vs webhook mode, the idempotency key built from MONITOR_INVOCATION_ID and why a key is never reused, and delivery scored on the 202 body's status rather than the 202 itself. Read the journal with `journalctl -t replicator-failure`, never `-u`, because %n doubles the unit suffix."
+    },
+    {
       "name": "environment-variables",
       "path": "./docs/ENVIRONMENT.md",
       "description": "Every environment variable Replicator reads, indexed in one place, with the reasoning behind each default — except the blob and temp-store settings, whose reasoning sits beside the behaviour it argues about in docs/STORAGE.md (#92). Also the hard boundary between /etc/replicator/.env (the only file the service reads) and the repo .env (dev/agent secrets). Split out of docs/DEPLOYMENT.md. Since #92 a third carrier is documented alongside them: .claude/settings.json holds the six non-secret values addressing the shared SocratiCode store and .claude/settings.local.json holds QDRANT_API_KEY, both read by the agent harness and by nothing the service starts."

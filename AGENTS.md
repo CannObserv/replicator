@@ -52,7 +52,7 @@ Full tool table, prefetch query, per-tool guidance, cross-repo search:
 
 ## Code Exploration Notes (repo-specific)
 
-**The manifest is a source, not the artifact.** Nothing re-embeds it — run `codebase_update` in the same change as a `description` edit, or the stalest answer carries the most authority (#19 CR #17). Not `codebase_context_index` (skills#317).
+**The manifest is a source, not the artifact.** Nothing re-embeds it — run `codebase_update` in the same change as a `description` edit, or the stalest answer carries the most authority (#19 CR #17).
 
 **`mcp-driver.mjs` lies twice** — silently through the `skills/` symlink (skills#177), falsely from a worktree (skills#180). Use `"$SOCRATICODE_DRIVER"`; disbelieve health findings outside the main checkout ([docs/SKILLS.md](docs/SKILLS.md)).
 
@@ -60,11 +60,9 @@ Full tool table, prefetch query, per-tool guidance, cross-repo search:
 
 ## Project Layout
 
-`src/worker/` is the primary process — the bus consumer. `src/storage/` is the
-content-addressed temp store; `src/api/` is the dev-only `/health` app;
-`src/core/` holds config, logging, and the consume path's failure vocabulary;
-`tests/` mirrors `src/`. The seams each module sits behind, and every module with
-the job it owns: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+`src/worker/` is the primary process — the bus consumer; `tests/` mirrors `src/`.
+Every module with the job it owns, the seams each sits behind, and the file-level
+map: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Infrastructure
 
@@ -87,12 +85,11 @@ Three that bite, each symptomless until it matters:
 - **The service refuses to start off `main`, or off unpushed commits** (#37, #48).
   `REPLICATOR_ALLOW_ANY_CHECKOUT=1` overrides; a dev worker asks the same question
   at the writer (#52).
-- **Both installed units are copies, not symlinks** — `cp` after every edit to
-  `deploy/`, because `daemon-reload` alone re-reads the old file.
-  `/etc/systemd/system/replicator.service`, and since #94 the `OnFailure=` handler
-  `replicator-failure-notify@.service`, whose missed `cp` stays invisible until the
-  first failure. Read what it reported with `journalctl -t replicator-failure`;
-  `journalctl -u` finds nothing, because `%n` doubles the suffix.
+- **Everything installed from `deploy/` is a copy** — `cp` after every edit;
+  `daemon-reload` re-reads the old file, and the sysctl drop-in needs
+  `sysctl --system`. The `OnFailure=` handler's missed `cp` is invisible until the
+  first failure; read what it recorded with `journalctl -t replicator-failure`,
+  never `-u`.
 - **The daily skills-refresh hook commits without pushing**, which is one of the
   states the checkout guard refuses. Check `git status -sb` before a restart.
 
@@ -108,8 +105,8 @@ convention:
 2. **`.env`** (repo root, git-ignored) — dev/agent secrets, chiefly org-wide GitHub PATs. Never commit.
 
 **The service must never load the repo `.env`.** Those PATs carry write access the
-worker has no use for, and a process whose job is fetching public URLs must not
-widen their blast radius. Anything the service needs goes in `/etc/replicator/.env`.
+worker has no use for, and a fetcher of public URLs must not widen their blast
+radius. Anything the service needs goes in `/etc/replicator/.env`.
 
 New settings take the `REPLICATOR_` prefix (cohort convention). `BUILD_ID` is the
 one deliberate exception, stamped generically by the unit.
@@ -238,7 +235,8 @@ source — each with its rationale and ruff gate in [docs/STYLE.md](docs/STYLE.m
 - [STREAMS.md](docs/STREAMS.md) — what each stream carries, one bullet per rule `AGENTS.md` states in a line
 - [CONVENTIONS.md](docs/CONVENTIONS.md) — the rules common to every stream: idempotency, validation, DLQ, `claim_stale`, and the `replicator:cmd:*` keys (#80)
 - [STORAGE.md](docs/STORAGE.md) — blob paths and modes, the populations under `REPLICATOR_BLOB_DIR`, TTL and ceilings
-- [DEPLOYMENT.md](docs/DEPLOYMENT.md) — the unit's lifecycle, its start guards, what it reports when it fails, the co-core pin
+- [DEPLOYMENT.md](docs/DEPLOYMENT.md) — the unit's lifecycle, its start guards, the co-core pin, the host's memory tunables
+- [FAILURE-NOTIFICATION.md](docs/FAILURE-NOTIFICATION.md) — the `OnFailure=` handler: `REPLICATOR_NOTIFY_*`, notifier mode, delivery scoring
 - [INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) — VM topology, ports, the broker, and the buckets either side of the test/production line
 - [tailscale.md](docs/reference/tailscale.md) — this node: tailnet, ACL, DNS, broker latency
 - [ENVIRONMENT.md](docs/ENVIRONMENT.md) — every variable either env file carries, and the boundary between them

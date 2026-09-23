@@ -380,3 +380,22 @@ AGENTS.md :: tighten :: - [docs/contracts/content-fetch-issuer-contract.md](docs
 AGENTS.md :: retarget :: - [docs/contracts/content-fetch-issuer-reference.md](docs/contracts/content-fetch-issuer-reference.md) — its lookup half: refusal list, failure taxonomy, silent conditions, trust posture
 AGENTS.md :: tighten :: - [docs/contracts/replicator-boundaries.md](docs/contracts/replicator-boundaries.md) — what Replicator may become; run its three tests against any proposed capability
 AGENTS.md :: tighten :: - [docs/contracts/content-replicate-issuer-contract.md](docs/contracts/content-replicate-issuer-contract.md) — the replicate trust model and issuer obligations (#34)
+
+# --- #99 curation: DEPLOYMENT.md split + AGENTS.md headroom -------------
+# duplicate: docs/ARCHITECTURE.md ## Project Layout already carries these,
+#   `tests/` mirrors `src/`. verbatim; AGENTS.md keeps an orienting line + pointer.
+# tighten:   rewritten in place, atoms carried across and checked by --claims.
+tighten :: **The manifest is a source, not the artifact.** Nothing re-embeds it — run `codebase_update` in the same change as a `description` edit, or the stalest answer carries the most authority (#19 CR #17). Not `codebase_context_index` (skills#317).
+duplicate :: `src/worker/` is the primary process — the bus consumer. `src/storage/` is the
+duplicate :: content-addressed temp store; `src/api/` is the dev-only `/health` app;
+duplicate :: `src/core/` holds config, logging, and the consume path's failure vocabulary;
+duplicate :: `tests/` mirrors `src/`. The seams each module sits behind, and every module with
+tighten :: the job it owns: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+tighten :: - **Both installed units are copies, not symlinks** — `cp` after every edit to
+tighten ::   `deploy/`, because `daemon-reload` alone re-reads the old file.
+tighten ::   `/etc/systemd/system/replicator.service`, and since #94 the `OnFailure=` handler
+tighten ::   `replicator-failure-notify@.service`, whose missed `cp` stays invisible until the
+tighten ::   first failure. Read what it reported with `journalctl -t replicator-failure`;
+tighten ::   `journalctl -u` finds nothing, because `%n` doubles the suffix.
+tighten :: worker has no use for, and a process whose job is fetching public URLs must not
+tighten :: widen their blast radius. Anything the service needs goes in `/etc/replicator/.env`.

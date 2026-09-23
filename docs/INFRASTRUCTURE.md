@@ -2,8 +2,9 @@
 
 Where this service runs and what it talks to: the dedicated VM, the broker it
 consumes, and the GCS buckets on both sides of the test/production boundary.
-The unit's own lifecycle — how it starts, what guards it, what it reports when
-it fails — is in [DEPLOYMENT.md](DEPLOYMENT.md).
+The unit's own lifecycle — how it starts and what guards it — is in
+[DEPLOYMENT.md](DEPLOYMENT.md); what it reports when it fails is in
+[FAILURE-NOTIFICATION.md](FAILURE-NOTIFICATION.md).
 
 Own exe.dev VM, **`co-replicator`** (`pdx`), tailnet **`replicator`** — off the shared
 `watcher` VM since 2026-09-11 (#88), and also the dev workspace. The node:

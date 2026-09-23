@@ -226,3 +226,39 @@ docs/contracts/content-replicate-issuer-contract.md :: [Provenance and trust](co
 docs/contracts/replicator-boundaries.md :: - [`content-fetch-issuer-reference.md`](content-fetch-issuer-reference.md) — its lookup half, request side
 .socraticodecontextartifacts.json :: "path": "./docs/contracts/content-fetch-issuer-reference.md",
 .socraticodecontextartifacts.json :: "description": "Outcome half of the content.fetch issuer reference
+
+# --- #99 curation: DEPLOYMENT.md split -----------------------------------
+# Both back-references still point at live AGENTS.md content — verified, not assumed.
+# FAILURE-NOTIFICATION.md: the env boundary is still called a security boundary
+#   (AGENTS.md:101); this run tightened that paragraph's prose, not its claim.
+# SOCRATICODE.md: a historical note about what AGENTS.md said before #99 CR 5,
+#   true by construction and the reason the sentence exists.
+docs/FAILURE-NOTIFICATION.md :: sent as `Authorization: Bearer` in webhook mode and as `X-API-Key` in notifier mode
+docs/SOCRATICODE.md :: daily health hook names the right call in its own output; AGENTS.md said the
+
+# --- #99 curation: per-doc sweep of the DEPLOYMENT.md split -------------
+# Judged one by one. Each points at content that STAYED in DEPLOYMENT.md —
+# the co-core pin, the checkout guard, memory protection, the units, the
+# buckets — none of which this split moved. The three that did lie were
+# fixed, not acked: docs/INFRASTRUCTURE.md:6, AGENTS.md's index line, and
+# the new manifest artifact. The manifest hits name DEPLOYMENT.md as
+# provenance ("split out of"), which is true by construction.
+docs/COMMANDS.md :: place ([DEPLOYMENT.md](DEPLOYMENT.md)) — it does not remove the need for the cap,
+docs/CONVENTIONS.md :: - **A consumer *group's* name is co-core's to define, and both defaults derive it (#77, cannobserv#384).** `<service>.<s
+docs/ENVIRONMENT.md :: and the unit itself are in [DEPLOYMENT.md](DEPLOYMENT.md).
+docs/INFRASTRUCTURE.md :: [DEPLOYMENT.md](DEPLOYMENT.md); what it reports when it fails is in
+.github/workflows/ci.yml :: echo "::error::WIF auth produced no credentials file for co-gcs-test-replicator. The gcs tests would skip, not fail. Che
+.socraticodecontextartifacts.json :: "description": "Top-level README. What Replicator is within the Cannabis Observer cluster: the command -> fetch -> finge
+.socraticodecontextartifacts.json :: "description": "Where this service runs and what it talks to, as opposed to how its unit starts (docs/DEPLOYMENT.md): th
+.socraticodecontextartifacts.json :: "path": "./docs/DEPLOYMENT.md",
+.socraticodecontextartifacts.json :: "description": "What replicator.service reports when it fails, split out of docs/DEPLOYMENT.md (#99). The OnFailure=repl
+.socraticodecontextartifacts.json :: "description": "Every environment variable Replicator reads, indexed in one place, with the reasoning behind each defaul
+pyproject.toml :: # floor names the feature depended on, per the rule in docs/DEPLOYMENT.md.
+src/storage/gcs.py :: (docs/DEPLOYMENT.md); it is the honest limit of this check, and the price
+src/worker/main.py :: The grant is verified where it is made (docs/DEPLOYMENT.md), not at this
+tests/conftest.py :: production one (docs/DEPLOYMENT.md names both). That is deliberate rather than
+tests/core/test_logging.py :: "docs/DEPLOYMENT.md",
+tests/test_deploy.py :: Two things that rank does not buy, both recorded in docs/DEPLOYMENT.md so
+tests/test_deploy.py :: one, so a reservation on either unit is inert (docs/DEPLOYMENT.md).
+tests/test_destinations.py :: production bucket legitimately, here and in `docs/DEPLOYMENT.md`, and a test
+tests/test_destinations.py :: # `co-gcs-replication` — the bucket. Named in `docs/DEPLOYMENT.md` and in

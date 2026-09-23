@@ -14,3 +14,6 @@ disproven :: watcher
 # was cited as "load-bearing today".
 disproven :: src/core/rate_limiter.py::acquire_for_domain
 disproven :: src/core/rate_limiter.py
+# #99 curation: survives as `deploy/replicator-failure-notify@.service` in
+#   docs/DEPLOYMENT.md (cp table + line 53) and docs/COMMANDS.md.
+duplicate :: replicator-failure-notify@.service
