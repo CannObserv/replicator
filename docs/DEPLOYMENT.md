@@ -1,7 +1,9 @@
 # Replicator Deployment
 
-The systemd unit's lifecycle, the guards it starts behind, what it reports when
-it fails, and the co-core pin. `AGENTS.md` keeps the two-env-file boundary and
+The systemd unit's lifecycle, the guards it starts behind, the host's memory
+tunables, and the co-core pin. What it reports when it *fails* is in
+[FAILURE-NOTIFICATION.md](FAILURE-NOTIFICATION.md).
+`AGENTS.md` keeps the two-env-file boundary and
 the restart command; the reasoning behind each of them is here. The variables
 themselves are in [ENVIRONMENT.md](ENVIRONMENT.md), which indexes every one and
 sends the blob and temp-store settings on to [STORAGE.md](STORAGE.md); the VM,
