@@ -7,7 +7,28 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
-    # Floor is 0.13.1, for `group_name` — the group-naming convention became
+    # Floor is 0.19.0, for `AsyncBusConsumer.claim_stale_page` (cannobserv#465,
+    # #109): XAUTOCLAIM's cursor, poison frames returned rather than raised, and
+    # the trimmed-while-pending ids. `claim_once` walks the pending list on that
+    # cursor, so on an older wheel the worker fails at its first reclaim with an
+    # AttributeError — loud, but at runtime, which is why the floor carries it.
+    #
+    # **Six minors (0.13 -> 0.19), taken on the same evidence as the 0.10 -> 0.13
+    # jump below.** Diffing every imported module between the 0.13.2 and 0.19.0
+    # wheels: `pure/models/changes.py` moved docstrings only, so no payload field
+    # moved under `extra="ignore"`; `pure/adapters/bus/*`, `effects/fetch.py` and
+    # `pure/util/hashing.py` are byte-identical. The gcs modules are additive
+    # (`GcsCreateIfAbsent.data` also takes a `PurePath`; the md5 moved to a shared
+    # `md5_hash` with the same base64 spelling). `co_core_aio.fetch`'s #391 retry
+    # policy and #392 deadline apply only to a client the driver builds, and the
+    # worker injects its own behind the destination guard (`build_fetch_client`),
+    # so neither reaches this service. `claim_stale` is now a wrapper over
+    # `claim_stale_page` with unchanged behaviour. The CHANGELOG's Breaking entries
+    # across the range are co/v1 WordPress and transcript models, none imported.
+    #
+    # Previously:
+    #
+    # Floor was 0.13.1, for `group_name` — the group-naming convention became
     # co-core's to define (cannobserv#384), so `src/core/config.py` derives both
     # command-group defaults rather than spelling them. A *pure no-op at runtime*:
     # both calls evaluate to `replicator.fetch` and `replicator.replicate`, the
@@ -59,8 +80,8 @@ dependencies = [
     # at module load, so a skew cannot reach a running worker at all. Additive over
     # 0.8.0 for everything the fetch path uses — no field on ContentFetchCommand,
     # BlobAvailableEvent or FetchFailedEvent moved between the two.
-    "co-core[extract]>=0.13.1,<0.14",
-    "co-core-aio[bus,gcs]>=0.13.1,<0.14",
+    "co-core[extract]>=0.19.0,<0.20",
+    "co-core-aio[bus,gcs]>=0.19.0,<0.20",
     "fastapi>=0.126.0,<1",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.5.0,<3",
