@@ -41,6 +41,13 @@ NOTIFY_VARS = (
     "REPLICATOR_NOTIFY_URL",
     "REPLICATOR_NOTIFY_TOKEN",
     "REPLICATOR_NOTIFY_TIMEOUT_SECONDS",
+    "REPLICATOR_NOTIFY_MODE",
+    "REPLICATOR_NOTIFY_TEMPLATE_ID",
+    "REPLICATOR_NOTIFY_CHANNEL_IDS",
+    # systemd ≥251 sets these on an OnFailure= handler; a test run from inside
+    # one must not inherit them.
+    "MONITOR_INVOCATION_ID",
+    "MONITOR_UNIT",
 )
 
 
@@ -81,6 +88,7 @@ class _Stub(BaseHTTPRequestHandler):
     """Records one POST body, answers with whatever status the test asked for."""
 
     status = 202
+    reply = b"{}"
     received: list[dict] = []
 
     def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler's spelling
@@ -91,11 +99,15 @@ class _Stub(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             parsed = {"_raw": body}
         type(self).received.append(
-            {"body": parsed, "auth": self.headers.get("Authorization")},
+            {
+                "body": parsed,
+                "auth": self.headers.get("Authorization"),
+                "api_key": self.headers.get("X-API-Key"),
+            },
         )
         self.send_response(type(self).status)
         self.end_headers()
-        self.wfile.write(b"{}")
+        self.wfile.write(type(self).reply)
 
     def log_message(self, *args):
         """Silence the default stderr access log — pytest captures it as noise."""
@@ -111,6 +123,7 @@ def notifier():
     """
     _Stub.received = []
     _Stub.status = 202
+    _Stub.reply = b"{}"
     server = HTTPServer(("127.0.0.1", 0), _Stub)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -359,8 +372,12 @@ def test_both_dispatch_records_name_the_host_and_build(notifier):
         assert record.get("build") == "deadbee", record
 
 
-def test_the_token_never_reaches_the_curl_command_line(notifier):
+@pytest.mark.parametrize("mode", ["webhook", "notifier"])
+def test_the_token_never_reaches_the_curl_command_line(notifier, mode):
     """CR 5's security property, proven once by hand and by nothing repeatable (CR 13).
+
+    Parametrized over both modes (#108): notifier mode sends the same token as
+    `X-API-Key`, and a second header path is a second place for it to leak.
 
     Reads the argv of every process on the box while the dispatch is in flight.
     The stub stalls so there is a window to look in; without one the check races
@@ -378,6 +395,7 @@ def test_the_token_never_reaches_the_curl_command_line(notifier):
                 "REPLICATOR_NOTIFY_URL": _url(server),
                 "REPLICATOR_NOTIFY_TOKEN": secret,
                 "REPLICATOR_NOTIFY_TIMEOUT_SECONDS": "5",
+                **(NOTIFIER_MODE if mode == "notifier" else {}),
             }
         )
         proc = subprocess.Popen(
@@ -466,3 +484,202 @@ def test_the_script_never_reads_an_env_file_itself():
     assert ".env" not in text, "no env file belongs in this script — the unit chooses it"
     for loader in (". ", "source ", "set -a"):
         assert loader not in code, f"the handler loads an env file itself via {loader!r}"
+
+
+# Notifier mode (#108): the cohort notifier's /dispatch shape, agreed on
+# CannObserv/notifier#70 and pinned against its live openapi.json
+# (DispatchRequest / DispatchOut).
+
+TEMPLATE_ID = "01M37PFEYQFJ5GP82BRM370X1A"
+CHANNEL_A = "01M37PFEYQFJ5GP82BRM370X1R"
+CHANNEL_B = "01M37PFEYRHRNK3ZDK242F657N"
+INVOCATION = "6029eb88c19c47dabe713c9fbe2e5c78"
+
+NOTIFIER_MODE = {
+    "REPLICATOR_NOTIFY_MODE": "notifier",
+    "REPLICATOR_NOTIFY_TEMPLATE_ID": TEMPLATE_ID,
+    "REPLICATOR_NOTIFY_CHANNEL_IDS": f"{CHANNEL_A}, {CHANNEL_B}",
+}
+
+# The seven incident fields — the template's variables_schema requires exactly
+# these, so the script and deploy/notifier-template.json must agree on them.
+INCIDENT_FIELDS = {"level", "event", "unit", "host", "build", "message", "timestamp"}
+
+
+def _dispatch_out(status: str) -> bytes:
+    """A DispatchOut body, attempts included — their own `status` must not be read."""
+    return json.dumps(
+        {
+            "id": "01M37Q0000000000000000000A",
+            "tenant_id": "01M37NQ4YP99CWYHB8M06C4STD",
+            "template_id": TEMPLATE_ID,
+            "idempotency_key": None,
+            "rendered_title": "t",
+            "rendered_body": "b",
+            "status": status,
+            "metadata": {},
+            "created_at": "2026-09-23T18:00:00Z",
+            "attempts": [{"channel_id": CHANNEL_A, "status": "succeeded"}],
+        }
+    ).encode()
+
+
+def _notifier_env(server: HTTPServer, **extra: str) -> dict[str, str]:
+    return {"REPLICATOR_NOTIFY_URL": _url(server), **NOTIFIER_MODE, **extra}
+
+
+def test_notifier_mode_sends_the_dispatch_shape(notifier):
+    server, stub = notifier
+    stub.reply = _dispatch_out("succeeded")
+
+    result = _run(UNIT_NAME, env=_notifier_env(server))
+
+    assert result.returncode == 0, result.stderr
+    body = stub.received[0]["body"]
+    assert body["template_id"] == TEMPLATE_ID, body
+    assert body["channel_ids"] == [CHANNEL_A, CHANNEL_B], body
+    assert set(body["variables"]) == INCIDENT_FIELDS, body
+    assert body["variables"]["unit"] == UNIT_NAME, body
+    assert body["metadata"] == {"event": "unit_failed"}, body
+
+
+def test_notifier_mode_sends_the_token_as_an_api_key_not_a_bearer(notifier):
+    server, stub = notifier
+    stub.reply = _dispatch_out("succeeded")
+
+    _run(UNIT_NAME, env=_notifier_env(server, REPLICATOR_NOTIFY_TOKEN="nk_s3cret"))
+
+    assert stub.received[0]["api_key"] == "nk_s3cret", stub.received[0]
+    assert stub.received[0]["auth"] is None, stub.received[0]
+
+
+def test_the_idempotency_key_is_the_failed_invocation(notifier):
+    """systemd ≥251 hands an OnFailure= handler the failed run's InvocationID."""
+    server, stub = notifier
+    stub.reply = _dispatch_out("succeeded")
+
+    _run(UNIT_NAME, env=_notifier_env(server, MONITOR_INVOCATION_ID=INVOCATION))
+
+    assert stub.received[0]["body"]["idempotency_key"] == f"{UNIT_NAME}:{INVOCATION}"
+
+
+def test_no_invocation_id_means_no_idempotency_key(notifier):
+    """A fabricated key could collide across failures and swallow a real alert.
+
+    Notifier returns the prior record for a replayed key and makes no new
+    delivery attempt, so null is the only safe value when systemd gave us none.
+    """
+    server, stub = notifier
+    stub.reply = _dispatch_out("succeeded")
+
+    _run(UNIT_NAME, env=_notifier_env(server))
+
+    assert stub.received[0]["body"].get("idempotency_key") is None, stub.received[0]
+
+
+@pytest.mark.parametrize(
+    ("status", "level"),
+    [("succeeded", "INFO"), ("partial", "WARNING"), ("failed", "ERROR")],
+)
+def test_delivery_is_scored_on_the_body_not_the_202(notifier, status, level):
+    """Notifier answers 202 for all three; only the body says whether anyone was told."""
+    server, stub = notifier
+    stub.reply = _dispatch_out(status)
+
+    result = _run(UNIT_NAME, env=_notifier_env(server))
+
+    assert result.returncode == 0, result.stderr
+    scored = [r for r in _records(result) if "delivery_status" in r]
+    assert scored, _records(result)
+    assert scored[0]["delivery_status"] == status, scored
+    assert scored[0]["level"] == level, scored
+
+
+def test_an_unreadable_202_body_is_not_scored_as_delivered(notifier):
+    server, stub = notifier
+    stub.reply = b"not json"
+
+    result = _run(UNIT_NAME, env=_notifier_env(server))
+
+    assert result.returncode == 0, result.stderr
+    scored = [r for r in _records(result) if "delivery_status" in r]
+    assert scored and scored[0]["delivery_status"] == "unknown", _records(result)
+    assert scored[0]["level"] != "INFO", scored
+
+
+@pytest.mark.parametrize(
+    "missing", ["REPLICATOR_NOTIFY_TEMPLATE_ID", "REPLICATOR_NOTIFY_CHANNEL_IDS"]
+)
+def test_incomplete_notifier_config_records_and_does_not_dispatch(notifier, missing):
+    """A request notifier would 422 is not worth sending; the reason is worth logging."""
+    server, stub = notifier
+    env = _notifier_env(server)
+    del env[missing]
+
+    result = _run(UNIT_NAME, env=env)
+
+    assert result.returncode == 0, result.stderr
+    assert stub.received == [], stub.received
+    assert missing in result.stderr, result.stderr
+    assert any(r.get("unit") == UNIT_NAME for r in _records(result)), _records(result)
+
+
+def test_an_unknown_mode_is_named_and_does_not_dispatch(notifier):
+    """A typo'd mode must not send the flat payload to a /dispatch endpoint."""
+    server, stub = notifier
+
+    result = _run(UNIT_NAME, env=_notifier_env(server, REPLICATOR_NOTIFY_MODE="notifer"))
+
+    assert result.returncode == 0, result.stderr
+    assert stub.received == [], stub.received
+    assert "notifer" in result.stderr, result.stderr
+
+
+def test_webhook_mode_is_still_the_default(notifier):
+    server, stub = notifier
+
+    _run(UNIT_NAME, env={"REPLICATOR_NOTIFY_URL": _url(server)})
+
+    assert set(stub.received[0]["body"]) == INCIDENT_FIELDS, stub.received[0]
+
+
+# The template notifier stores (deploy/notifier-template.json). The operator
+# POSTs it once; its variables_schema has to accept what the script sends.
+
+TEMPLATE = REPO_ROOT / "deploy" / "notifier-template.json"
+
+
+def test_the_template_requires_exactly_the_incident_fields():
+    schema = json.loads(TEMPLATE.read_text())["variables_schema"]
+
+    assert set(schema["required"]) == INCIDENT_FIELDS, schema
+    assert all(schema["properties"][f] == {"type": "string"} for f in INCIDENT_FIELDS), schema
+
+
+def test_the_template_schema_cannot_reject_a_future_field_or_level():
+    """On an alert path a 422 loses the alert (notifier#70): no enums, extras allowed."""
+    schema = json.loads(TEMPLATE.read_text())["variables_schema"]
+
+    assert schema.get("additionalProperties", True) is not False, schema
+    assert "enum" not in json.dumps(schema), schema
+
+
+def test_the_templates_sample_is_what_the_script_emits():
+    """sample_variables must be a record the script really produces, not a hand-written one."""
+    template = json.loads(TEMPLATE.read_text())
+    record = next(r for r in _records(_run(UNIT_NAME)) if r.get("event") == "unit_failed")
+
+    assert set(template["sample_variables"]) == set(record) == INCIDENT_FIELDS
+
+
+def test_the_template_carries_only_template_create_fields():
+    """Notifier's TemplateCreate; an extra key is silently ignored, so a typo would vanish."""
+    template = json.loads(TEMPLATE.read_text())
+
+    assert set(template) == {
+        "name",
+        "title_template",
+        "body_template",
+        "variables_schema",
+        "sample_variables",
+    }, template

@@ -1,0 +1,27 @@
+{
+  "name": "replicator-unit-failed",
+  "title_template": "[{{ level }}] {{ unit }} failed on {{ host }}",
+  "body_template": "{{ message }}\nbuild: {{ build }}\nat: {{ timestamp }}",
+  "variables_schema": {
+    "type": "object",
+    "required": ["level", "event", "unit", "host", "build", "message", "timestamp"],
+    "properties": {
+      "level": {"type": "string"},
+      "event": {"type": "string"},
+      "unit": {"type": "string"},
+      "host": {"type": "string"},
+      "build": {"type": "string"},
+      "message": {"type": "string"},
+      "timestamp": {"type": "string"}
+    }
+  },
+  "sample_variables": {
+    "level": "CRITICAL",
+    "event": "unit_failed",
+    "unit": "replicator.service",
+    "host": "co-replicator",
+    "build": "00b0521",
+    "message": "replicator.service entered a failed state on co-replicator (build 00b0521)",
+    "timestamp": "2026-09-16T16:38:32.237796Z"
+  }
+}

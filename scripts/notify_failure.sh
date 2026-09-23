@@ -34,17 +34,22 @@
 #   REPLICATOR_NOTIFY_URL              endpoint to POST the incident to. Unset
 #                                      (the compiled-in default) means record
 #                                      only — no outbound call at all.
-#   REPLICATOR_NOTIFY_TOKEN            sent as `Authorization: Bearer`. Omitted
-#                                      entirely when unset: an empty bearer reads
-#                                      as a configured credential and is worse
-#                                      than no header.
+#   REPLICATOR_NOTIFY_TOKEN            the credential. `Authorization: Bearer` in
+#                                      webhook mode, `X-API-Key` in notifier mode.
+#                                      Omitted entirely when unset: an empty one
+#                                      reads as a configured credential and is
+#                                      worse than no header.
 #   REPLICATOR_NOTIFY_TIMEOUT_SECONDS  dispatch ceiling (default below).
+#   REPLICATOR_NOTIFY_MODE             `webhook` (default) or `notifier` (#108).
+#   REPLICATOR_NOTIFY_TEMPLATE_ID      notifier mode: the stored template's ULID.
+#   REPLICATOR_NOTIFY_CHANNEL_IDS      notifier mode: comma-separated channel ULIDs.
 #
-# The payload is a self-describing incident object, deliberately NOT the
-# cohort notifier's request schema. Pointing this at `http://notifier:9000`
-# means giving the endpoint something that maps the payload onto that service's
-# {template_id, variables, channel_ids} shape — that mapping is the operator's,
-# and keeping it out of here is what lets the same handler serve a plain webhook.
+# Webhook mode POSTs the self-describing incident object as-is, which is what
+# lets the handler serve a plain webhook. Notifier mode wraps the same seven
+# fields in the cohort notifier's /dispatch request (agreed on
+# CannObserv/notifier#70): they become `variables`, rendered by the template in
+# deploy/notifier-template.json, and delivery is scored on the 202 body's
+# `status` rather than on the 202.
 #
 # Exit codes:
 #   0  always — recorded, whether or not anything was dispatched.
@@ -136,10 +141,59 @@ if ! command -v curl >/dev/null 2>&1; then
   exit 0
 fi
 
-PAYLOAD="$(
+INCIDENT="$(
   printf '{"level":"CRITICAL","event":"unit_failed","unit":"%s","host":"%s","build":"%s","message":"%s","timestamp":"%s"}' \
     "$(_json "${UNIT}")" "$(_json "${HOST}")" "$(_json "${BUILD}")" "${MESSAGE}" "${NOW}"
 )"
+
+# An unknown mode dispatches nothing rather than falling back to webhook: the
+# likeliest unknown value is a misspelt `notifier`, and the flat payload sent to a
+# /dispatch URL is a 422 that reads as notifier's fault.
+MODE="${REPLICATOR_NOTIFY_MODE:-webhook}"
+case "${MODE}" in
+  webhook)
+    PAYLOAD="${INCIDENT}"
+    ;;
+  notifier)
+    TEMPLATE_ID="${REPLICATOR_NOTIFY_TEMPLATE_ID:-}"
+    CHANNELS=""
+    IFS=',' read -ra _RAW_CHANNELS <<< "${REPLICATOR_NOTIFY_CHANNEL_IDS:-}"
+    for _c in "${_RAW_CHANNELS[@]}"; do
+      _c="${_c//[[:space:]]/}"
+      [ -n "${_c}" ] && CHANNELS="${CHANNELS:+${CHANNELS},}\"$(_json "${_c}")\""
+    done
+    # Both are required by the request notifier accepts (channel_ids has
+    # minItems 1 even with a template), so a request missing either is a 422
+    # this handler already knows it would get.
+    if [ -z "${TEMPLATE_ID}" ]; then
+      echo "notify_failure: notifier mode needs REPLICATOR_NOTIFY_TEMPLATE_ID — recorded locally only" >&2
+      exit 0
+    fi
+    if [ -z "${CHANNELS}" ]; then
+      echo "notify_failure: notifier mode needs REPLICATOR_NOTIFY_CHANNEL_IDS — recorded locally only" >&2
+      exit 0
+    fi
+    # The failed run's InvocationID, which systemd ≥251 hands an OnFailure=
+    # handler. One key per failure, so a POST that timed out after landing
+    # replays instead of paging twice. Null without one: notifier answers a
+    # replayed key with the prior record and makes NO new delivery attempt, so a
+    # key that could repeat across failures would silently swallow an alert.
+    IDEMPOTENCY="null"
+    if [ -n "${MONITOR_INVOCATION_ID:-}" ]; then
+      IDEMPOTENCY="\"$(_json "${UNIT}:${MONITOR_INVOCATION_ID}")\""
+    fi
+    PAYLOAD="$(
+      printf '{"template_id":"%s","channel_ids":[%s],"variables":%s,"idempotency_key":%s,"metadata":{"event":"unit_failed"}}' \
+        "$(_json "${TEMPLATE_ID}")" "${CHANNELS}" "${INCIDENT}" "${IDEMPOTENCY}"
+    )"
+    ;;
+  *)
+    echo "notify_failure: REPLICATOR_NOTIFY_MODE=${MODE} is neither webhook nor notifier — recorded locally only" >&2
+    exit 0
+    ;;
+esac
+AUTH_HEADER="Authorization: Bearer"
+[ "${MODE}" = notifier ] && AUTH_HEADER="X-API-Key:"
 
 # No --show-error: curl's stderr is discarded below, so the flag was dead config
 # and the sentence it prints was being dropped (CR 2). What replaces it is the
@@ -153,8 +207,7 @@ CURL_ARGS=(
   --request POST
   --header 'Content-Type: application/json'
   --max-time "${TIMEOUT}"
-  --output /dev/null
-  --write-out '%{http_code}'
+  --write-out '\n%{http_code}'
   --data "${PAYLOAD}"
 )
 # The token goes in on STDIN, never in argv (CR 5). A curl invocation carrying
@@ -167,15 +220,19 @@ _dispatch() {
   if [ -n "${TOKEN}" ]; then
     local escaped="${TOKEN//\\/\\\\}"
     escaped="${escaped//\"/\\\"}"
-    printf 'header = "Authorization: Bearer %s"\n' "${escaped}" \
+    printf 'header = "%s %s"\n' "${AUTH_HEADER}" "${escaped}" \
       | curl "${CURL_ARGS[@]}" --config - "${URL}"
   else
     curl "${CURL_ARGS[@]}" "${URL}"
   fi
 }
 
-STATUS="$(_dispatch 2>/dev/null)"
+# The body comes back on stdout with the status code on its own last line.
+RESPONSE="$(_dispatch 2>/dev/null)"
 RC=$?
+STATUS="${RESPONSE##*$'\n'}"
+BODY="${RESPONSE%$'\n'*}"
+[ "${BODY}" = "${RESPONSE}" ] && BODY=""
 
 # A 2xx is delivery; everything else — transport failure, malformed URL, 4xx, 5xx
 # — is a failed dispatch, reported and dropped. There is no retry: systemd is not
@@ -184,8 +241,25 @@ if [ "${RC}" -eq 0 ] && [ "${STATUS#2}" != "${STATUS}" ] && [ ${#STATUS} -eq 3 ]
   # http_status is quoted in BOTH branches (CR 3). It was a JSON number here and
   # a string below, and one field name with two types breaks the consumer this
   # payload exists to feed.
-  printf '{"level":"INFO","event":"unit_failed_notified","unit":"%s","host":"%s","build":"%s","notify_dispatched":true,"http_status":"%s"}\n' \
-    "$(_json "${UNIT}")" "$(_json "${HOST}")" "$(_json "${BUILD}")" "$(_json "${STATUS}")" >&2
+  if [ "${MODE}" = webhook ]; then
+    printf '{"level":"INFO","event":"unit_failed_notified","unit":"%s","host":"%s","build":"%s","notify_dispatched":true,"http_status":"%s"}\n' \
+      "$(_json "${UNIT}")" "$(_json "${HOST}")" "$(_json "${BUILD}")" "$(_json "${STATUS}")" >&2
+    exit 0
+  fi
+  # Notifier answers 202 whether or not anyone was told; the body's top-level
+  # `status` is the delivery verdict. jq rather than a pattern, because every
+  # entry in `attempts` carries a `status` of its own. No jq, or a body that is
+  # not a DispatchOut, is `unknown` — never scored as delivered.
+  DELIVERY="$(printf '%s' "${BODY}" | jq -r '.status | select(type == "string")' 2>/dev/null)"
+  case "${DELIVERY}" in
+    succeeded) LEVEL=INFO    EVENT=unit_failed_notified ;;
+    partial)   LEVEL=WARNING EVENT=unit_failed_notify_degraded ;;
+    failed)    LEVEL=ERROR   EVENT=unit_failed_notify_undelivered ;;
+    *)         LEVEL=WARNING EVENT=unit_failed_notify_unconfirmed DELIVERY=unknown ;;
+  esac
+  printf '{"level":"%s","event":"%s","unit":"%s","host":"%s","build":"%s","notify_dispatched":true,"http_status":"%s","delivery_status":"%s"}\n' \
+    "${LEVEL}" "${EVENT}" "$(_json "${UNIT}")" "$(_json "${HOST}")" "$(_json "${BUILD}")" \
+    "$(_json "${STATUS}")" "$(_json "${DELIVERY}")" >&2
   exit 0
 fi
 
