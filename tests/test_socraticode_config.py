@@ -399,8 +399,8 @@ class TestServerLaunchCost:
         `docs/COMMANDS.md` caps the *manual* driver invocations, but this hook
         runs from SessionStart once per UTC day with nobody watching, which is
         exactly the shape of #94 — an uncapped launch cost this cluster 58
-        minutes of bus. The hook bounds its own *time* (HEALTH_TIMEOUT_MS) and
-        nothing bounds its memory.
+        minutes of bus. The hook bounds its own *time* (HEALTH_TIMEOUT_MS);
+        nothing bounded its memory until the wrapper this pins.
 
         `choom` is part of the contract, not decoration: a session process sits
         at `oom_score_adj` -1000, where a cgroup cap *stalls* the process rather
