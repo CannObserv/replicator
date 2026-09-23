@@ -815,3 +815,16 @@ def test_a_non_ascii_id_is_refused_whatever_the_locale(notifier, locale):
 
     assert stub.received == [], stub.received
     assert "not a 26-char ULID" in result.stderr, result.stderr
+
+
+def test_a_long_unit_name_still_gets_an_idempotency_key_notifier_accepts(notifier):
+    """CR 3: notifier caps the key at 200; a unit name may run to 255."""
+    server, stub = notifier
+    stub.reply = _dispatch_out("succeeded")
+    long_unit = "x" * 240 + ".service"
+
+    _run(long_unit, env=_notifier_env(server, MONITOR_INVOCATION_ID=INVOCATION))
+
+    key = stub.received[0]["body"]["idempotency_key"]
+    assert key is not None and len(key) <= 200, key
+    assert INVOCATION in key, key
