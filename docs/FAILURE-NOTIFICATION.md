@@ -1,5 +1,12 @@
 # When the worker fails, who is told
 
+What `replicator.service` reports when it fails: the `OnFailure=` handler, the
+six `REPLICATOR_NOTIFY_*` variables only it reads, notifier mode and how
+delivery is scored. Split out of [DEPLOYMENT.md](DEPLOYMENT.md) (#99), which
+keeps the unit's lifecycle, its start guards and the `cp` that installs this
+handler; every variable the *worker* reads is in
+[ENVIRONMENT.md](ENVIRONMENT.md).
+
 The unit bounds its restart loops and then stays `failed` on purpose — that is the design, and it stays. What was missing was the other half. `deploy/replicator.service` claimed in its own comments that a failure was visible "in `systemctl status` + `OnFailure=`" while the ini file carried **no `OnFailure=` directive at all**. On 2026-09-16 the unit sat `failed` for 56 minutes and what noticed was a *sibling repo* reading the broker from another VM, not this host.
 
 `OnFailure=replicator-failure-notify@%n.service` closes it. The handler writes a `CRITICAL` journal record naming the unit, the host and the build, then POSTs the same incident to `REPLICATOR_NOTIFY_URL` when one is configured. With that variable unset — how it ships — the record is the whole behaviour, which is deliberate: the wiring did not have to wait on a notifier channel, and enabling delivery later is a line in `/etc/replicator/.env`, not a code change.
