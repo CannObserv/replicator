@@ -399,3 +399,9 @@ tighten ::   first failure. Read what it reported with `journalctl -t replicator
 tighten ::   `journalctl -u` finds nothing, because `%n` doubles the suffix.
 tighten :: worker has no use for, and a process whose job is fetching public URLs must not
 tighten :: widen their blast radius. Anything the service needs goes in `/etc/replicator/.env`.
+# #99 CR 12-15: the DEPLOYMENT.md index line was edited in place when the
+#   FAILURE-NOTIFICATION.md entry was added beside it. NOT `index`: that warrant
+#   is for a line EXTENDED in place, and this one dropped a clause. The clause
+#   'what it reports when it fails' described content this same change moved to
+#   docs/FAILURE-NOTIFICATION.md, which the line immediately below now links.
+retarget :: - [DEPLOYMENT.md](docs/DEPLOYMENT.md) — the unit's lifecycle, its start guards, what it reports when it fails, the co-core pin
