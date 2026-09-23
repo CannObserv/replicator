@@ -40,6 +40,40 @@ prints this each session; run it verbatim if it did not fire.
 
 `select:mcp__plugin_socraticode_socraticode__codebase_search,mcp__plugin_socraticode_socraticode__codebase_symbol,mcp__plugin_socraticode_socraticode__codebase_symbols,mcp__plugin_socraticode_socraticode__codebase_flow,mcp__plugin_socraticode_socraticode__codebase_impact,mcp__plugin_socraticode_socraticode__codebase_graph_query,mcp__plugin_socraticode_socraticode__codebase_graph_circular,mcp__plugin_socraticode_socraticode__codebase_graph_stats,mcp__plugin_socraticode_socraticode__codebase_graph_visualize,mcp__plugin_socraticode_socraticode__codebase_status,mcp__plugin_socraticode_socraticode__codebase_context,mcp__plugin_socraticode_socraticode__codebase_context_search`
 
+## Two launch paths, pinned separately
+
+A server reaches this repo two ways, and **each needs its own pin** — setting
+one does nothing for the other. Keep them at the same version.
+
+| Path | Resolves via | Pinned by |
+|---|---|---|
+| The plugin (what serves `codebase_*` in a session) | `npx -y --prefer-online ${SOCRATICODE_SPEC:-socraticode@latest}` | `SOCRATICODE_SPEC` in `.claude/settings.json` |
+| `mcp-driver.mjs` (the health hook, manual commands) | `~/.socraticode/pin`, else the npx cache | `npm install --prefix ~/.socraticode/pin socraticode@<version>` |
+
+**`SOCRATICODE_SPEC` is the whole of the control over the plugin's launch.**
+Claude Code cannot override a plugin's MCP *command*, which is what #99's "Known
+limitation" says — but this plugin parameterises the *spec*, so the variable
+reaches it. Confirm by reading the spawned args, never by reading the manifest:
+`claude mcp list` prints the resolved command, and the repo-root `mcp.json` is an
+unreferenced duplicate that hardcodes `@latest` (`plugin.json` selects
+`.claude-plugin/mcp.json`).
+
+Pin a **literal version**. Only an exact version is already in the npx cache and
+resolves without an install, and the install — not the server — is the expensive
+half: 1.2 G cold against 75 MB pinned, where all 126 `MemoryHigh` throttle events
+landed on broker. `--prefer-online` revalidates every launch, so a warm cache is
+not a warm path on any day the package moved.
+
+`tests/test_socraticode_config.py::TestServerLaunchCost` pins the spec's shape
+and the hook's cap.
+
+## Stale context artifacts
+
+The remedy is **`codebase_update`** — incremental — and **not**
+`codebase_context_index`, which re-embeds all 26 artifacts (skills#317). The
+daily health hook names the right call in its own output; AGENTS.md said the
+wrong one until #99 CR 5.
+
 ## Per-tool notes
 
 - **`codebase_search`** takes a natural-language query, not a regex. It ranks by
