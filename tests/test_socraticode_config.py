@@ -339,11 +339,19 @@ class TestLinkedProjectsHaveOneSource:
 
 
 # A package spec this repo is willing to launch. `@latest` and any range let
-# npx resolve a version nobody chose, at session start, on this VM.
-PINNED_SPEC = re.compile(r"^socraticode@\d+\.\d+\.\d+$")
+# npx resolve a version nobody chose, at session start, on this VM. A
+# prerelease is admitted — `1.15.0-rc.1` is still exact, so it resolves from
+# cache without an install, which is the property being pinned. A range is not.
+PINNED_SPEC = re.compile(r"^socraticode@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
 
 # The SessionStart entry that runs the daily health check, matched on the
 # script name rather than the whole command so the cap may be re-spelled.
+#
+# The cap assertions below are substring checks over that command, which cannot
+# distinguish the capped branch from the uncapped fallback in the same string —
+# a rewrite that capped only the probe would still pass. Parsing shell to close
+# that is worse than the gap: the probe assertion covers the failure that
+# actually occurred, and the fallback is required, not incidental.
 HEALTH_HOOK = "socraticode-health"
 
 
