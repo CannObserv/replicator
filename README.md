@@ -174,14 +174,24 @@ The systemd unit lives at [`deploy/replicator.service`](deploy/replicator.servic
 **worker**, not the API. To install on a fresh host:
 
 ```bash
-# Copy into systemd's path
+# Copy into systemd's path — all three, they are copies and not symlinks
 sudo cp deploy/replicator.service /etc/systemd/system/replicator.service
+sudo cp 'deploy/replicator-failure-notify@.service' /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now replicator
+
+# The host's memory tunables, which sysctl reads — not systemd
+sudo cp deploy/99-co-replicator-memory.conf /etc/sysctl.d/
+sudo sysctl --system
 
 # Tail logs
 sudo journalctl -u replicator -f
 ```
+
+The `OnFailure=` handler is easy to skip and silent when missing: nothing runs it
+until something fails, which is the one moment it was supposed to help. What it
+reported is read with `journalctl -t replicator-failure`, never `-u`
+([docs/FAILURE-NOTIFICATION.md](docs/FAILURE-NOTIFICATION.md)).
 
 Production secrets live in `/etc/replicator/.env` (managed manually on the VM, not in the repo).
 The unit's `ExecStartPre` writes the current git SHA to `/run/replicator/build-id` and exposes it
