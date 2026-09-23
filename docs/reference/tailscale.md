@@ -22,12 +22,13 @@ tailnet name stays bare, so every broker URL and ACL rule reads naturally.
 
 ## What the ACL allows
 
-Replicator is a pure broker client plus internet egress. **No rule lists
+Replicator is a broker client and a notifier client, plus internet egress. **No rule lists
 `tag:replicator` as a `dst` for any service port** — the worker binds nothing.
 
 | Rule | Why |
 |---|---|
-| `tag:replicator → tag:broker:6379` | The bus. The only `src` rule this node has |
+| `tag:replicator → tag:broker:6379` | The bus |
+| `tag:replicator → tag:notifier:9000` | The `OnFailure=` handler's alerts, and nothing else (#108, notifier#70). `:9000` only: replicator has no dev process to point at notifier's `:9001` |
 | The tailnet's `autogroup:member → *:*`, plus an `ssh` block admitting `autogroup:member` as `exedev` or `root` | Admin reach, from your own devices only (watcher#296 D3). No tagged node reaches this one |
 
 Tailscale SSH needs **both** halves. Peer visibility follows `acls` rules, not
@@ -44,7 +45,9 @@ Tailscale SSH, while `tailscale status` looked no different.
 
 Verified 2026-09-11 in both directions: from here, `broker:6379` answers
 `-NOAUTH`, while `watcher:22/8000/8001/5432` and `broker:22/9000` are filtered;
-from `broker`, `replicator:22/8000/8001` are filtered.
+from `broker`, `replicator:22/8000/8001` are filtered. Verified 2026-09-23 for the
+notifier rule: `notifier:9000/health` answers `"environment":"production"` and
+`notifier:9001` times out, which is a filtered port, not a refusal.
 
 ## The path to the broker, measured
 
@@ -181,6 +184,7 @@ build that followed moved every key and env file over stdin for this reason.
 | Tailscale **auth key** (`tskey-auth-…`) | this VM → joins the tailnet | spent at join, never copied here; its copy in the old host's repo `.env` (`TAILSCALE_KEY_REPLICATOR`) went with that checkout at #88's decommission |
 | exe.dev **API token** (`exe1.…`) | agent → `POST https://exe.dev/exec` | repo `.env` as `EXE_API_TOKEN`; scope `new`/`ls`/`whoami`, no `rm` |
 | Redis password (inside `REPLICATOR_REDIS_URL`) | worker → broker, as the `replicator` ACL user | `/etc/replicator/.env`, unit-scoped |
+| Notifier tenant key (`nk_…`) | `OnFailure=` handler → `notifier:9000/api/v1/dispatch`, as `X-API-Key` for tenant `replicator` | `/etc/replicator/.env` as `REPLICATOR_NOTIFY_TOKEN`. Minted by notifier's operator, never handled by an agent (#108) |
 | GCS service-account keys | worker, wheelhouse step, `gcs`-marked tests | `/etc/replicator/*.json`, `root:exedev 0640` |
 
 Independent secrets for independent hops: a tailnet key never authenticates a
