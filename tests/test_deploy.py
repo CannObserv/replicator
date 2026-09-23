@@ -442,3 +442,66 @@ def test_the_production_units_outrank_dev_tooling_for_the_oom_killer(unit: Path)
         f"{unit.name} sets OOMScoreAdjust={adjust} — exempt from the OOM killer entirely, "
         "so a leak here would be unreclaimable"
     )
+
+
+SYSCTL = REPO_ROOT / "deploy" / "99-co-replicator-memory.conf"
+
+# Low enough that swap stays a safety net rather than a routine paging path for
+# the worker's hot pages, but never 0: at 0 the kernel declines to swap
+# anonymous pages under pressure, which reinstates the failure this file exists
+# to prevent.
+SWAPPINESS_BOUNDS = (1, 30)
+
+# The kernel's reserve for *atomic* (non-sleeping) allocations. The default
+# rescaled to only ~11 MB after the 4 -> 8 GiB resize, and an exhausted reserve
+# is precisely how broker's outage presented: failed atomic allocations in
+# tailscaled and ksoftirqd, with nothing OOM-killed.
+MIN_FREE_KBYTES_FLOOR = 32768
+
+
+def _sysctl(name: str) -> str:
+    """The last value assigned to ``name``, matching sysctl's own last-wins rule."""
+    values = re.findall(
+        rf"^\s*{re.escape(name)}\s*=\s*(\S+)", SYSCTL.read_text(), flags=re.MULTILINE
+    )
+    assert values, f"{SYSCTL.name} does not set {name}"
+    return values[-1]
+
+
+class TestHostMemoryTunables:
+    """The host's memory posture is config, so it belongs in the repo.
+
+    `deploy/` is where this repo keeps host configuration of record — both
+    units, and since #108 `notifier-template.json` — because a VM rebuild
+    restores from here. `vm.swappiness` and `vm.min_free_kbytes` were set on
+    co-replicator on 2026-09-23 (#99) and existed only on the host until this
+    file, which a rebuild would have lost silently: the host would come back
+    with a ~11 MB atomic reserve and nothing naming that as wrong.
+
+    These are the levers that work *here*. `MemoryLow=` is not one of them —
+    cgroup2 is mounted without `memory_recursiveprot` and no slice above grants
+    one, so a reservation on either unit is inert (docs/DEPLOYMENT.md).
+    """
+
+    def test_the_drop_in_is_tracked(self) -> None:
+        assert SYSCTL.exists(), (
+            f"{SYSCTL.name} is missing — the host's swappiness and atomic reserve "
+            "would exist only on the VM, and a rebuild would lose them silently"
+        )
+
+    def test_swappiness_keeps_swap_a_net_not_a_path(self) -> None:
+        low, high = SWAPPINESS_BOUNDS
+        value = int(_sysctl("vm.swappiness"))
+        assert low <= value <= high, (
+            f"vm.swappiness={value} is outside {low}-{high}: 0 declines to swap "
+            "anonymous pages under pressure, and a high value pages the worker's "
+            "hot pages routinely"
+        )
+
+    def test_the_atomic_reserve_is_raised_above_the_rescaled_default(self) -> None:
+        value = int(_sysctl("vm.min_free_kbytes"))
+        assert value >= MIN_FREE_KBYTES_FLOOR, (
+            f"vm.min_free_kbytes={value} is below {MIN_FREE_KBYTES_FLOOR} — the "
+            "default rescaled to only ~11 MB after the resize, and an exhausted "
+            "atomic reserve is how broker's 57m48s outage presented"
+        )

@@ -20,6 +20,7 @@ broker and bucket topology this unit runs on is in
 | Debugging the live service | `sudo journalctl -u replicator -f` |
 | After editing `deploy/replicator.service` | `sudo cp deploy/replicator.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart replicator` |
 | After editing `deploy/replicator-failure-notify@.service` | `sudo cp 'deploy/replicator-failure-notify@.service' /etc/systemd/system/ && sudo systemctl daemon-reload` — **no restart**, it is a template nothing runs until a unit fails |
+| After editing `deploy/99-co-replicator-memory.conf` | `sudo cp deploy/99-co-replicator-memory.conf /etc/sysctl.d/ && sudo sysctl --system` — **`sysctl --system`, not `daemon-reload`**, which does not read this file |
 | Reading what the failure handler reported | `journalctl -t replicator-failure` — **not** `journalctl -u`, see below |
 | After a co-core version bump | re-run `sync_wheelhouse.py`, then `uv sync` |
 | `Start request repeated too quickly` | `sudo systemctl reset-failed replicator && sudo systemctl start replicator` — the rate limit, not a broken build |
