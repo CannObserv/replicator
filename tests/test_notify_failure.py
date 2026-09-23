@@ -800,3 +800,18 @@ def test_a_malformed_channel_entry_never_echoes_its_value(notifier):
 
     assert stub.received == [], stub.received
     assert key_shaped not in result.stdout + result.stderr, result.stderr
+
+
+@pytest.mark.parametrize("locale", ["C.UTF-8", "en_US.UTF-8"])
+def test_a_non_ascii_id_is_refused_whatever_the_locale(notifier, locale):
+    """CR 2: bracket ranges follow the locale's collation; `[A-Za-z]` matched `é` here."""
+    server, stub = notifier
+    accented = "é" + TEMPLATE_ID[1:]
+
+    result = _run(
+        UNIT_NAME,
+        env=_notifier_env(server, REPLICATOR_NOTIFY_TEMPLATE_ID=accented, LC_ALL=locale),
+    )
+
+    assert stub.received == [], stub.received
+    assert "not a 26-char ULID" in result.stderr, result.stderr
