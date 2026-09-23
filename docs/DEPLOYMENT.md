@@ -103,8 +103,15 @@ process entirely. 28 processes here hold it. So the directive was never going to
 win a comparison against them; what it changes is the worker's rank among the
 processes that *can* be chosen, and there it is decisive: 670 put the worker
 second from the top of that list, and 72 puts it at the bottom. co-replicator is
-3.9 GB with **no swap** and is also the dev workspace, so this is not a remote
-condition.
+also the dev workspace, so this is not a remote condition.
+
+**Resized 2026-09-23 (#99): 8 GiB + 4 G swap, where the scores above were
+measured at 3.9 GB with none.** The scores stand — `oom_score_adj` is a rank,
+not a threshold — and the margin widened rather than closed: broker was already
+8 GiB when it lost the bus for 57m48s. Swap is what makes a ceiling a
+survivable reclaim instead of failed atomic allocations; it and
+`vm.min_free_kbytes`, which had rescaled to only ~11 MB, are pinned in
+[`deploy/99-co-replicator-memory.conf`](../deploy/99-co-replicator-memory.conf).
 
 **What now sits at the top of the eligible list is `tailscaled`, at 675.** Read
 that against CannObserv/broker#17, where the failure *was* the tailnet: killing
@@ -127,6 +134,11 @@ Three things this is not:
   SocratiCode server is in [COMMANDS.md](COMMANDS.md).
 - **Not reachable with `earlyoom`.** It floors a `--prefer` match at 300, while
   a service at adj 0 reads ~670 on this kernel — it would choose the worker too.
+- **Not `MemoryLow=`.** The obvious next reach, and it is inert on this host:
+  cgroup2 is mounted without `memory_recursiveprot` and no slice above grants
+  one, so a reservation on either unit would be silently ineffective. #99 step 3
+  prescribes it generically; `init-socraticode`'s `preflight.sh --check` reports
+  the mount state and is the fastest way to re-confirm it.
 - **Not `-1000`.** That is the exemption above, and an exempt worker that leaks
   is unreclaimable — the kernel would work through everything else on the box
   first. `-900` is the cohort's value (CannObserv/broker#25): last of the
