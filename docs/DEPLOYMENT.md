@@ -23,7 +23,7 @@ broker and bucket topology this unit runs on is in
 | After editing `deploy/replicator.service` | `sudo cp deploy/replicator.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart replicator` |
 | After editing `deploy/replicator-failure-notify@.service` | `sudo cp 'deploy/replicator-failure-notify@.service' /etc/systemd/system/ && sudo systemctl daemon-reload` — **no restart**, it is a template nothing runs until a unit fails |
 | After editing `deploy/99-co-replicator-memory.conf` | `sudo cp deploy/99-co-replicator-memory.conf /etc/sysctl.d/ && sudo sysctl --system` — **`sysctl --system`, not `daemon-reload`**, which does not read this file |
-| Reading what the failure handler reported | `journalctl -t replicator-failure` — **not** `journalctl -u`, see below |
+| Reading what the failure handler reported | `journalctl -t replicator-failure` — **not** `journalctl -u`; why, in [FAILURE-NOTIFICATION.md](FAILURE-NOTIFICATION.md) |
 | After a co-core version bump | re-run `sync_wheelhouse.py`, then `uv sync` |
 | `Start request repeated too quickly` | `sudo systemctl reset-failed replicator && sudo systemctl start replicator` — the rate limit, not a broken build |
 
@@ -60,10 +60,9 @@ The `OnFailure=` handler, the six `REPLICATOR_NOTIFY_*` variables it reads,
 notifier mode and its delivery scoring:
 [FAILURE-NOTIFICATION.md](FAILURE-NOTIFICATION.md).
 
-Two things that belong here rather than there: the handler unit is a copy under
-`/etc/systemd/system/` like the worker's (the `cp` table above), and what it
-recorded is read with `journalctl -t replicator-failure` — `journalctl -u` finds
-nothing, because `%n` doubles the suffix.
+What belongs here rather than there: the handler unit is a copy under
+`/etc/systemd/system/` like the worker's, so it needs the `cp` from the table
+above and has no restart to pair with it.
 
 ### Memory protection — the worker outranks the dev session that shares this VM
 
