@@ -683,3 +683,95 @@ def test_the_template_carries_only_template_create_fields():
         "variables_schema",
         "sample_variables",
     }, template
+
+
+# #108 follow-ups, from the 2026-09-23 smoke tests: run 2's 422 was diagnosed from
+# config because the body never reached the journal, the template id it carried
+# was a pasted `<id from step 1>`, and every alert named the worker's build.
+
+
+def test_a_rejected_dispatch_logs_an_excerpt_of_the_reply(notifier):
+    """Notifier's 422 detail names the field; without it the journal only says 422."""
+    server, stub = notifier
+    stub.status = 422
+    stub.reply = json.dumps(
+        {"detail": [{"loc": ["body", "channel_ids"], "msg": "List should have at least 1 item"}]}
+    ).encode()
+
+    result = _run(UNIT_NAME, env={"REPLICATOR_NOTIFY_URL": _url(server)})
+
+    failed = [r for r in _records(result) if r.get("notify_dispatched") is False]
+    assert failed, _records(result)
+    assert "channel_ids" in failed[0].get("response", ""), failed
+
+
+def test_the_excerpt_is_bounded_and_keeps_the_record_parseable(notifier):
+    """An arbitrary webhook body: long, multi-line, quoted, non-ASCII."""
+    server, stub = notifier
+    stub.status = 500
+    stub.reply = ('<html>\n"quoted" \\ back\x01 é ' + "x" * 5000).encode()
+
+    result = _run(UNIT_NAME, env={"REPLICATOR_NOTIFY_URL": _url(server)})
+
+    failed = [r for r in _records(result) if r.get("notify_dispatched") is False]
+    assert failed, f"the record did not parse as JSON; stderr={result.stderr!r}"
+    excerpt = failed[0]["response"]
+    assert 0 < len(excerpt) <= 512, len(excerpt)
+    assert excerpt.isascii() and excerpt.isprintable(), repr(excerpt[:80])
+
+
+def test_an_unconfirmed_delivery_logs_the_reply_it_could_not_read(notifier):
+    server, stub = notifier
+    stub.reply = b"not json"
+
+    result = _run(UNIT_NAME, env=_notifier_env(server))
+
+    scored = [r for r in _records(result) if r.get("delivery_status") == "unknown"]
+    assert scored and scored[0].get("response") == "not json", _records(result)
+
+
+@pytest.mark.parametrize(
+    ("var", "value"),
+    [
+        ("REPLICATOR_NOTIFY_TEMPLATE_ID", "<id from step 1>"),
+        ("REPLICATOR_NOTIFY_CHANNEL_IDS", f"{CHANNEL_A},not-a-ulid"),
+    ],
+)
+def test_a_malformed_id_is_refused_locally_and_named(notifier, var, value):
+    """Refused before the request, so a typo costs a journal line, not an alert."""
+    server, stub = notifier
+
+    result = _run(UNIT_NAME, env=_notifier_env(server, **{var: value}))
+
+    assert result.returncode == 0, result.stderr
+    assert stub.received == [], stub.received
+    assert var in result.stderr, result.stderr
+    assert "ULID" in result.stderr, result.stderr
+
+
+def test_a_lowercase_ulid_is_accepted(notifier):
+    """Notifier's own pattern accepts either case; this check must not be stricter."""
+    server, stub = notifier
+    stub.reply = _dispatch_out("succeeded")
+
+    _run(UNIT_NAME, env=_notifier_env(server, REPLICATOR_NOTIFY_TEMPLATE_ID=TEMPLATE_ID.lower()))
+
+    assert len(stub.received) == 1, stub.received
+
+
+def test_another_units_failure_does_not_carry_the_workers_build():
+    """/run/replicator/build-id is the worker's; a smoke test once alerted as `build a85fe5a`."""
+    result = _run("notify-smoke-test.service", env={"BUILD_ID": "deadbee"})
+
+    record = next(r for r in _records(result) if r.get("event") == "unit_failed")
+    assert record["build"] == "<n/a>", record
+    assert "deadbee" not in record["message"], record
+    assert "build" not in record["message"], record
+
+
+def test_the_workers_failure_still_carries_its_build():
+    result = _run(UNIT_NAME, env={"BUILD_ID": "deadbee"})
+
+    record = next(r for r in _records(result) if r.get("event") == "unit_failed")
+    assert record["build"] == "deadbee", record
+    assert "(build deadbee)" in record["message"], record

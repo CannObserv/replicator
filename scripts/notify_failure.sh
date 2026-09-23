@@ -104,6 +104,11 @@ fi
 # that persistence is the point here, since the build that failed is exactly what
 # an incident record needs to name.
 BUILD="${BUILD_ID:-<unknown>}"
+# That file is the worker's, whichever unit failed. Attributing it to any other
+# unit is a false statement — a smoke-test alert once read `build a85fe5a` (#108).
+if [ "${UNIT}" != "replicator.service" ]; then
+  BUILD="<n/a>"
+fi
 # `||` alone catches a non-zero exit but not empty output (CR 8), and an empty
 # `host` in an incident record is ambiguous where `<unknown>` is merely unknown.
 HOST="$(hostname 2>/dev/null)"
@@ -124,7 +129,10 @@ _json() {
   printf '%s' "$s"
 }
 
-MESSAGE="$(_json "${UNIT}") entered a failed state on $(_json "${HOST}") (build $(_json "${BUILD}"))"
+MESSAGE="$(_json "${UNIT}") entered a failed state on $(_json "${HOST}")"
+if [ "${BUILD}" != "<n/a>" ]; then
+  MESSAGE="${MESSAGE} (build $(_json "${BUILD}"))"
+fi
 
 # The floor. Written first and unconditionally: if everything below this line
 # fails, is killed, or never runs, the incident is still in the journal.
@@ -155,12 +163,26 @@ case "${MODE}" in
     PAYLOAD="${INCIDENT}"
     ;;
   notifier)
+    # Notifier's own ULID pattern (either case). Checked here so a malformed id
+    # costs a named journal line rather than a 422 — run 2 of the #108 smoke
+    # test carried a pasted `<id from step 1>`. The values are identifiers, not
+    # credentials, so naming them in the journal is safe.
+    ULID='^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$'
     TEMPLATE_ID="${REPLICATOR_NOTIFY_TEMPLATE_ID:-}"
+    if [ -n "${TEMPLATE_ID}" ] && ! [[ "${TEMPLATE_ID}" =~ ${ULID} ]]; then
+      echo "notify_failure: REPLICATOR_NOTIFY_TEMPLATE_ID=${TEMPLATE_ID} is not a ULID — recorded locally only" >&2
+      exit 0
+    fi
     CHANNELS=""
     IFS=',' read -ra _RAW_CHANNELS <<< "${REPLICATOR_NOTIFY_CHANNEL_IDS:-}"
     for _c in "${_RAW_CHANNELS[@]}"; do
       _c="${_c//[[:space:]]/}"
-      [ -n "${_c}" ] && CHANNELS="${CHANNELS:+${CHANNELS},}\"$(_json "${_c}")\""
+      [ -z "${_c}" ] && continue
+      if ! [[ "${_c}" =~ ${ULID} ]]; then
+        echo "notify_failure: REPLICATOR_NOTIFY_CHANNEL_IDS entry ${_c} is not a ULID — recorded locally only" >&2
+        exit 0
+      fi
+      CHANNELS="${CHANNELS:+${CHANNELS},}\"${_c}\""
     done
     # Both are required by the request notifier accepts (channel_ids has
     # minItems 1 even with a template), so a request missing either is a 422
@@ -233,6 +255,11 @@ RC=$?
 STATUS="${RESPONSE##*$'\n'}"
 BODY="${RESPONSE%$'\n'*}"
 [ "${BODY}" = "${RESPONSE}" ] && BODY=""
+# What the far end said, for every record that is not a clean delivery: a 422's
+# detail names the offending field, which the status code alone does not (#108).
+# Bounded, and reduced to printable ASCII so any body — HTML, binary, multi-byte
+# — leaves a record that is still one parseable JSON line.
+EXCERPT="$(printf '%s' "${BODY}" | LC_ALL=C tr -c '\040-\176' ' ' | head -c 512)"
 
 # A 2xx is delivery; everything else — transport failure, malformed URL, 4xx, 5xx
 # — is a failed dispatch, reported and dropped. There is no retry: systemd is not
@@ -257,9 +284,13 @@ if [ "${RC}" -eq 0 ] && [ "${STATUS#2}" != "${STATUS}" ] && [ ${#STATUS} -eq 3 ]
     failed)    LEVEL=ERROR   EVENT=unit_failed_notify_undelivered ;;
     *)         LEVEL=WARNING EVENT=unit_failed_notify_unconfirmed DELIVERY=unknown ;;
   esac
-  printf '{"level":"%s","event":"%s","unit":"%s","host":"%s","build":"%s","notify_dispatched":true,"http_status":"%s","delivery_status":"%s"}\n' \
+  RESPONSE_FIELD=""
+  if [ "${DELIVERY}" = unknown ]; then
+    RESPONSE_FIELD=",\"response\":\"$(_json "${EXCERPT}")\""
+  fi
+  printf '{"level":"%s","event":"%s","unit":"%s","host":"%s","build":"%s","notify_dispatched":true,"http_status":"%s","delivery_status":"%s"%s}\n' \
     "${LEVEL}" "${EVENT}" "$(_json "${UNIT}")" "$(_json "${HOST}")" "$(_json "${BUILD}")" \
-    "$(_json "${STATUS}")" "$(_json "${DELIVERY}")" >&2
+    "$(_json "${STATUS}")" "$(_json "${DELIVERY}")" "${RESPONSE_FIELD}" >&2
   exit 0
 fi
 
@@ -285,8 +316,8 @@ esac
 # unit, host and build are repeated rather than left to the record above (CR 9):
 # a consumer that ingests only the dispatch-outcome line can attribute it without
 # having to correlate two records.
-printf '{"level":"ERROR","event":"unit_failed_notify_failed","unit":"%s","host":"%s","build":"%s","notify_dispatched":false,"curl_exit":%s,"http_status":"%s","reason":"%s"}\n' \
+printf '{"level":"ERROR","event":"unit_failed_notify_failed","unit":"%s","host":"%s","build":"%s","notify_dispatched":false,"curl_exit":%s,"http_status":"%s","reason":"%s","response":"%s"}\n' \
   "$(_json "${UNIT}")" "$(_json "${HOST}")" "$(_json "${BUILD}")" "${RC}" \
-  "$(_json "${STATUS:-<none>}")" "$(_json "${REASON}")" >&2
+  "$(_json "${STATUS:-<none>}")" "$(_json "${REASON}")" "$(_json "${EXCERPT}")" >&2
 echo "notify_failure: dispatch failed (${REASON}) — the incident is recorded above, not delivered" >&2
 exit 0

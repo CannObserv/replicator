@@ -71,7 +71,7 @@ All of them live in `/etc/replicator/.env` and are read by the `OnFailure=` hand
 
 - **`REPLICATOR_NOTIFY_MODE`** — `webhook` (default) or `notifier` (#108). Any other value is **named in the journal and dispatches nothing**. The likeliest unknown value is a misspelt `notifier`, and sending the flat payload to `/dispatch` would come back as a 422 that looks like notifier's fault.
 - **`REPLICATOR_NOTIFY_TEMPLATE_ID`** — notifier mode: the ULID notifier assigned when the operator POSTed [`deploy/notifier-template.json`](../deploy/notifier-template.json) to `/api/v1/templates`. Not stable across re-creation.
-- **`REPLICATOR_NOTIFY_CHANNEL_IDS`** — notifier mode: comma-separated channel ULIDs; whitespace is trimmed. Notifier requires at least one even with a template, so notifier mode without this, or without the template id, **records locally and dispatches nothing**.
+- **`REPLICATOR_NOTIFY_CHANNEL_IDS`** — notifier mode: comma-separated channel ULIDs; whitespace is trimmed. Notifier requires at least one even with a template, so notifier mode without this, or without the template id, **records locally and dispatches nothing**. The same goes for a template id or channel entry that is not a ULID. It is named in the journal before any request is sent, so a typo, or a pasted `<placeholder>` (which cost a 422 in the #108 smoke test), costs a log line and not an alert.
 
 **Notifier mode** (agreed on CannObserv/notifier#70, pinned against `DispatchRequest`/`DispatchOut` in notifier's unauthenticated `http://notifier:9000/openapi.json`) sends `{template_id, channel_ids, variables, idempotency_key, metadata: {event}}`, where `variables` is the same seven-field incident. Three things differ from webhook mode:
 
@@ -81,7 +81,9 @@ All of them live in `/etc/replicator/.env` and are read by the `OnFailure=` hand
 
 Smoke-test with a throwaway oneshot that exits 1 and carries `OnFailure=replicator-failure-notify@%n.service`, never by failing `replicator.service`. The handler takes the unit name from `%i`, so nothing in it is specific to the worker.
 
-A failed dispatch records `reason` alongside `curl_exit`, mapped from curl's exit code (`6` unresolvable, `7` refused, `28` timed out, `35`/`60` TLS, …), because curl's own error sentence is discarded with its stderr.
+**`build` is the worker's build, so only `replicator.service` carries it.** The handler reads `/run/replicator/build-id` whichever unit failed. Any other unit sent through this handler (the `notify-smoke-test.service` smoke test, for one) records `build: "<n/a>"`, and its message leaves the build out. Otherwise the alert would claim a build that unit never had.
+
+A failed dispatch records `reason` alongside `curl_exit`, mapped from curl's exit code (`6` unresolvable, `7` refused, `28` timed out, `35`/`60` TLS, …), because curl's own error sentence is discarded with its stderr. It also records **`response`, the first 512 bytes of whatever the far end answered**, reduced to printable ASCII so any body leaves one parseable JSON line. Notifier's 422 detail names the offending field, and without the excerpt the journal said only `422`. The unconfirmed-delivery record carries the same excerpt. The token travels in a header, and notifier's 422 echoes only the request body, so it cannot surface there. A custom webhook that echoes headers back into its error page would be a reason to leave this handler in record-only mode.
 
 ### Memory protection — the worker outranks the dev session that shares this VM
 
