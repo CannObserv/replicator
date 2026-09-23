@@ -52,7 +52,7 @@ Full tool table, prefetch query, per-tool guidance, cross-repo search:
 
 ## Code Exploration Notes (repo-specific)
 
-**The manifest is a source, not the artifact.** Nothing re-embeds it — re-run `codebase_context_index` in the same change as a `description` edit, or the stalest answer carries the most authority (#19 CR #17).
+**The manifest is a source, not the artifact.** Nothing re-embeds it — run `codebase_update` in the same change as a `description` edit, or the stalest answer carries the most authority (#19 CR #17). Not `codebase_context_index` (skills#317).
 
 **`mcp-driver.mjs` lies twice** — silently through the `skills/` symlink (skills#177), falsely from a worktree (skills#180). Use `"$SOCRATICODE_DRIVER"`; disbelieve health findings outside the main checkout ([docs/SKILLS.md](docs/SKILLS.md)).
 
