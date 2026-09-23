@@ -10,7 +10,7 @@ on 2026-09-11; the move's design is
 
 | | |
 |---|---|
-| exe.dev VM | `co-replicator` / `co-replicator.exe.xyz`, region `pdx`, 2 vCPU / 4 GiB / 20 GiB, proxy `private` (port 8000) |
+| exe.dev VM | `co-replicator` / `co-replicator.exe.xyz`, region `pdx`, 2 vCPU / 8 GiB / 20 GiB, proxy `private` (port 8000) |
 | Tailnet | `cannobserv.org.github`, hostname **`replicator`** |
 | Addresses | `100.114.136.20`, `fd7a:115c:a1e0::d430:8815` |
 | Node ID | `ndzdyptvG421CNTRL` |
