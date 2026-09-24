@@ -102,7 +102,9 @@ Measured 2026-09-24 at 8 GiB (#112); the 675 recorded on 2026-09-18 was at
 as killing this worker. So
 [`deploy/tailscaled.service.d/memory.conf`](../deploy/tailscaled.service.d/memory.conf)
 gives it the worker's own -900, as CannObserv/broker#21 does, and the network
-path and its only consumer now rank together at the bottom.
+path and its only consumer now rank together at the bottom: 69 and 68 after the
+restart. The same pass found a session `dbus-daemon` above the user manager
+(adj +200, 800), started under `user@1000` at 04:04.
 CannObserv/watcher#309 chose -400 because its dashboard does not use the
 tailnet; this worker does.
 
