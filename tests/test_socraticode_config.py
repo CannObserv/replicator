@@ -344,21 +344,23 @@ class TestLinkedProjectsHaveOneSource:
 # cache without an install, which is the property being pinned. A range is not.
 PINNED_SPEC = re.compile(r"^socraticode@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
 
-# The SessionStart entry that runs the daily health check, matched on the
-# script name rather than the whole command so the cap may be re-spelled.
-#
-# The cap assertions below are substring checks over that command, which cannot
-# distinguish the capped branch from the uncapped fallback in the same string —
-# a rewrite that capped only the probe would still pass. Parsing shell to close
-# that is worse than the gap: the probe assertion covers the failure that
-# actually occurred, and the fallback is required, not incidental.
+# The SessionStart entry that runs the daily health check, found by its marker.
 HEALTH_HOOK = "socraticode-health"
+HEALTH_SCRIPT = REPO_ROOT / ".claude" / "hooks" / f"{HEALTH_HOOK}.sh"
+
+# What `install-hook.sh` writes for this hook, argument for argument from the
+# vendored `socraticode-health.install`. The cap is deliberately not one of its
+# arguments (skills#330): the installer rebuilds the command on every run and
+# keeps only the timeout (skills#259), so a cap spelled here would not survive
+# the next `init-socraticode` Step C.
+HEALTH_COMMAND = f'bash "${{CLAUDE_PROJECT_DIR:-.}}/.claude/hooks/{HEALTH_HOOK}.sh" # {HEALTH_HOOK}'
+HEALTH_TIMEOUT_S = 120
 
 
-def _session_start_commands() -> list[str]:
-    """Every SessionStart hook command in the tracked settings file."""
+def _session_start_hooks() -> list[dict]:
+    """Every SessionStart hook entry in the tracked settings file."""
     hooks = json.loads(SETTINGS.read_text()).get("hooks", {}).get("SessionStart", [])
-    return [entry.get("command", "") for group in hooks for entry in group.get("hooks", [])]
+    return [entry for group in hooks for entry in group.get("hooks", [])]
 
 
 class TestServerLaunchCost:
@@ -401,59 +403,63 @@ class TestServerLaunchCost:
             "exact version is already in the npx cache and resolves without an install"
         )
 
-    def test_the_health_hook_launch_is_capped(self) -> None:
+    def test_the_health_hook_caps_its_own_launch(self) -> None:
         """The one launch that happens unattended is the one that must be bounded.
 
         `docs/COMMANDS.md` caps the *manual* driver invocations, but this hook
         runs from SessionStart once per UTC day with nobody watching, which is
         exactly the shape of #94 — an uncapped launch cost this cluster 58
-        minutes of bus. The hook bounds its own *time* (HEALTH_TIMEOUT_MS);
-        nothing bounded its memory until the wrapper this pins.
+        minutes of bus. From #99 a wrapper in `settings.json` bounded it; since
+        skills#330 the vendored hook opens that scope itself, so the cap is
+        read here from the script `.claude/hooks/` resolves to.
 
         `choom` is part of the contract, not decoration: a session process sits
         at `oom_score_adj` -1000, where a cgroup cap *stalls* the process rather
-        than killing it. Raising the score is unprivileged, so the cap can
-        actually be enforced by a kill.
+        than killing it. How the hook probes and falls back is upstream's to
+        pin (`tests/structural/test_health_hook_cap.py`); this asserts only that
+        the build vendored here has a cap at all.
         """
-        health = [c for c in _session_start_commands() if HEALTH_HOOK in c]
-        assert health, f"no SessionStart hook runs {HEALTH_HOOK}"
-        for command in health:
-            assert "MemoryMax=" in command, (
-                f"{HEALTH_HOOK} launches a SocratiCode server uncapped: {command!r} — "
-                "wrap it as docs/COMMANDS.md does for the manual invocations"
-            )
-            assert "choom" in command, (
-                f"{HEALTH_HOOK} is capped but not re-scored: {command!r} — at "
-                "oom_score_adj -1000 a cgroup cap stalls the process instead of killing it"
-            )
+        assert HEALTH_SCRIPT.exists(), (
+            "skills-vendor/ is not checked out: run .skills/doctor.sh locally, "
+            "or add `submodules: true` to the CI job's actions/checkout (#27)"
+        )
+        script = HEALTH_SCRIPT.read_text()
+        assert "MemoryMax=" in script, (
+            f"the vendored {HEALTH_HOOK}.sh launches a SocratiCode server uncapped — "
+            "bump skills-vendor/gregoryfoster-skills to gregoryfoster/skills@32128c9 "
+            "or later (skills#330)"
+        )
+        assert "choom -n 500" in script, (
+            f"the vendored {HEALTH_HOOK}.sh is capped but not re-scored — at "
+            "oom_score_adj -1000 a cgroup cap stalls the process instead of killing it"
+        )
 
-    def test_the_fallback_probe_tests_the_properties_it_gates(self) -> None:
-        """A guard that probes less than it gates fails closed on the difference.
+    def test_the_health_hook_is_registered_as_the_installer_writes_it(self) -> None:
+        """No wrapper: the hook's own scope is the cap, and a wrapper is not one.
 
-        The wrapper runs the hook uncapped when `systemd-run --user` is
-        unusable, because a SessionStart hook that fails closed takes the
-        session with it — the vendored hook traps ERR and exits 0 on every path
-        for that reason, and the wrapper must not undo it.
-
-        A bare `systemd-run --user --scope -q true` probe does not test the
-        `-p` properties the real call passes, so where the controllers are not
-        delegated the probe succeeds, the real call exits non-zero, and the
-        `else` branch is already unreachable: measured exit 1, nothing
-        measured, and a silent-when-clean hook reads that as a healthy day.
-
-        Pinned as one `$CAP` shared by both invocations rather than as two
-        matching literals, which is the form that cannot drift. The fallback is
-        deliberately *not* `capped || bash "$H"`: that spelling also fires when
-        the cap does its job and kills the payload, re-running it uncapped.
+        `systemd-run --scope` starts its own unit rather than nesting in the
+        caller's, so a wrapper's scope ends up holding only the hook's shell
+        while the driver runs under the hook's cap. Kept, it reads as a second
+        ceiling that bounds nothing — and the installer erases it on its next
+        run regardless (skills#259). A ceiling this host needs goes in
+        `SOCRATICODE_HEALTH_CAP`; see the test below for where.
         """
-        for command in (c for c in _session_start_commands() if HEALTH_HOOK in c):
-            probe, _, rest = command.partition("true")
-            assert "MemoryMax=" in probe, (
-                f"the fallback probe does not carry the cap it gates: {command!r} — "
-                "where the properties are unsupported the probe passes, the real call "
-                "exits non-zero, and the uncapped fallback is unreachable"
-            )
-            assert "$CAP" in probe and "$CAP" in rest, (
-                f"probe and real call must share one property definition: {command!r} — "
-                "two matching literals drift the moment one is edited"
-            )
+        health = [h for h in _session_start_hooks() if HEALTH_HOOK in h.get("command", "")]
+        assert len(health) == 1, f"expected one SessionStart entry for {HEALTH_HOOK}: {health}"
+        assert health[0].get("command") == HEALTH_COMMAND, (
+            f"{HEALTH_HOOK} is not registered as install-hook.sh writes it: "
+            f"{health[0].get('command')!r} — the vendored hook caps itself (skills#330)"
+        )
+        assert health[0].get("timeout") == HEALTH_TIMEOUT_S
+
+    def test_the_cap_ceiling_is_left_to_the_host(self, settings_env: dict) -> None:
+        """`SOCRATICODE_HEALTH_CAP` belongs in `settings.local.json`, not here.
+
+        A ceiling is a property of one machine's memory, and `off` in the
+        tracked file would uncap every checkout — this VM included — while the
+        hook logs the reason only to a file nobody reads when the day is clean.
+        """
+        assert "SOCRATICODE_HEALTH_CAP" not in settings_env, (
+            "SOCRATICODE_HEALTH_CAP is set in the tracked .claude/settings.json — "
+            "move it to .claude/settings.local.json's env block (skills#330)"
+        )

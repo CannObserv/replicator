@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "H=\"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/socraticode-health.sh\"; CAP=\"-p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100%\"; if systemd-run --user --scope -q $CAP true 2>/dev/null; then systemd-run --user --scope -q $CAP choom -n 500 -- bash \"$H\"; else bash \"$H\"; fi # socraticode-health",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/socraticode-health.sh\" # socraticode-health",
             "timeout": 120
           }
         ]
