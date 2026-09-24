@@ -415,3 +415,29 @@ docs/contracts/replicator-boundaries.md :: retarget :: rides the worker's stop e
 docs/contracts/replicator-boundaries.md :: retarget :: document asks the producer to `MAXLEN`, and Replicator cannot enforce it.
 docs/contracts/replicator-boundaries.md :: retarget :: **Resolved by splitting the wait by duration**, and shipped with the interim default below:
 docs/contracts/replicator-boundaries.md :: retarget :: absorbed rather than fatal: [STREAMS.md](../STREAMS.md).
+# #111: the replicate contract's reasoning split into
+#   content-replicate-issuer-reference.md. Positional references whose target
+#   stayed in the contract were rewritten in transit (retarget); the T3a line
+#   claiming nothing in src/ consumes a blob_uri was refuted by
+#   src/worker/replicate.py::locate_blob (disproven); the invalid_source
+#   "docstring needs a matching entry" was refuted by cannobserv#330 (closed
+#   2026-08-13) and co-core 0.19.0's ReplicationFailedEvent docstring, which
+#   registers the token (disproven). "Why the issuer renders" was a pointer
+#   section: T3 and "Where the rest of the contract lives" both link the same
+#   settled plan, so its claims survive (tighten, --claims).
+docs/contracts/content-replicate-issuer-contract.md :: retarget :: Every archive.org claim below is read from that
+docs/contracts/content-replicate-issuer-contract.md :: retarget :: The paragraph above stated the read side has no such surface.
+docs/contracts/content-replicate-issuer-contract.md :: disproven :: local bytes. Nothing in `src/` consumes one today — it is produced only, and
+docs/contracts/content-replicate-issuer-contract.md :: disproven :: fingerprint). The resolver is new code, and its obvious implementation
+docs/contracts/content-replicate-issuer-contract.md :: retarget :: rule above applies to `ia` as much as to the others.
+docs/contracts/content-replicate-issuer-contract.md :: retarget :: deduped by its own window parameter. Every row of this table would differ.
+docs/contracts/content-replicate-issuer-contract.md :: tighten :: ## Why the issuer renders
+docs/contracts/content-replicate-issuer-contract.md :: tighten :: The decision in T3, its alternatives, and what it costs — the two rejected shapes, what the chosen
+docs/contracts/content-replicate-issuer-contract.md :: tighten :: one gives up, and the consequences for cannobserv#303 and the shared renderer — are recorded in
+docs/contracts/content-replicate-issuer-contract.md :: tighten :: [`docs/plans/2026-08-14-why-the-issuer-renders-settled.md`](../plans/2026-08-14-why-the-issuer-renders-settled.md).
+docs/contracts/content-replicate-issuer-contract.md :: tighten :: Settled; not re-litigated here.
+docs/contracts/content-replicate-issuer-contract.md :: disproven :: plumbing, not a bad RepSpec). It is a sixth token where co-core 0.9.4's `ReplicationFailedEvent`
+docs/contracts/content-replicate-issuer-contract.md :: disproven :: docstring registers five, so that docstring needs a matching entry —
+docs/contracts/content-replicate-issuer-contract.md :: disproven :: `reason` is a plain `str`, so nothing on the wire breaks meanwhile; the cost is a
+docs/contracts/content-replicate-issuer-contract.md :: disproven :: consumer-facing registry one row short, the drift that docstring asks to be kept in step.
+docs/contracts/content-replicate-issuer-contract.md :: retarget :: above originally read "no new vocabulary invariant, **and no exemption**".

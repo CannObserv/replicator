@@ -17,3 +17,7 @@ disproven :: src/core/rate_limiter.py
 # #99 curation: survives as `deploy/replicator-failure-notify@.service` in
 #   docs/DEPLOYMENT.md (cp table + line 53) and docs/COMMANDS.md.
 duplicate :: replicator-failure-notify@.service
+# #111: the backticked label of the removed "Why the issuer renders" pointer
+#   section. The same plan file is still linked twice in the contract — T3's
+#   rationale link and "Where the rest of the contract lives".
+docs/contracts/content-replicate-issuer-contract.md :: duplicate :: docs/plans/2026-08-14-why-the-issuer-renders-settled.md

@@ -40,31 +40,11 @@ RepSpec's *resolution* half never reaches this service.
 
 ## Why this is not the fetch capability widened
 
-[Provenance and trust](content-fetch-issuer-reference.md#provenance-and-trust) settles `content.fetch`
-as an unauthenticated capability whose integrity rests entirely on bus access control, and settles it
-well. Its load-bearing sentence is that the damage is bounded by what a **read** can do. Replication
-removes that bound, so the conclusion is reached again rather than inherited:
-
-| | `content.fetch` | `content.replicate` |
-|---|---|---|
-| Direction | **read** an arbitrary origin | **write** our own permanent stores |
-| Credentials | none, or issuer-supplied `headers` | **the operator's**, selected by an alias the message names |
-| Blast radius | one request from our VM; bytes in temp storage | objects in our GCS bucket / Drive / archive.org item |
-| Self-healing | yes — the TTL sweep reclaims it | **no** — a durable artifact is the point |
-| Reversible | yes | gcs/gdrive yes; **`ia` items cannot be deleted at all** ([IAS3](https://archive.org/developers/ias3.html): "DELETE bucket is not allowed") |
-
-Every archive.org claim below is read from that [IAS3 API documentation](https://archive.org/developers/ias3.html) — cited because T4 and T5 rest on it, and because it corrects the intuition rather than confirming it.
-
-The conclusion is the same — bus access control is proportionate to this capability — but
-the **escalation trigger is not**, and that is the whole reason this section exists rather than a
-cross-reference.
-
-**The premise it originally rested on is gone, and the conclusion survives it anyway (#89).** That
-premise was "one localhost broker on one trusted VM". The broker has run on its own node since
-CannObserv/broker#1 and Replicator on another since #88, so what bounds the writers is now
-per-service Redis ACL users (CannObserv/broker#2) and the Tailscale ACL admitting only bus
-participants. Restated rather than quietly left standing, because a trust argument whose stated
-premise is false is worse than no argument: the next reader cannot tell which half to re-derive.
+A write removes the bound the fetch trust argument rests on — that the damage is what a **read**
+can do — so the conclusion is reached again rather than inherited: bus access control is still
+proportionate to this capability, but the **escalation trigger is not** (see
+[the triggers](#escalation-triggers--this-capabilitys-own)). The read/write comparison, the IAS3
+evidence behind T4 and T5, and the premise #89 retired: [the reference](content-replicate-issuer-reference.md#why-this-is-not-the-fetch-capability-widened).
 
 ---
 
@@ -150,16 +130,9 @@ reached a path. Replication is the first time one does.
 
 ### T3a — the *source* is a path too, and it is the sharper half (#29)
 
-The paragraph above stated the read side has no such surface. That is half the picture: replication
-is the first time a message value reaches a path **in both directions**, because
-`ContentReplicateCommand.blob_uri` is issuer-supplied and serving the command means resolving it to
-local bytes. Nothing in `src/` consumes one today — it is produced only, and
-[`BlobStore`](../../src/storage/base.py) has no URI-resolving method (`open()` / `exists()` take a
-fingerprint). The resolver is new code, and its obvious implementation — parse the URI, read the path
-— is a read-side traversal on a service whose destinations include a **public, undeletable**
-archive.org item: `file:///etc/replicator/co-pypi-reader.json` would publish this VM's GCS reader key
-permanently. Bus access control answers it as everywhere else, and T5's reasoning applies on top —
-one guard against an unretractable failure.
+The source is issuer-supplied too, so this is where a message value reaches a path in the *read*
+direction — onto destinations that include a public, undeletable archive.org item. Why that makes
+it the sharper half: [the reference](content-replicate-issuer-reference.md#why-t3a-exists-the-source-is-a-path-too).
 
 ⚙ **The rule: never resolve `blob_uri` as a path.** Extract the fingerprint, validate it as 64
 lowercase hex, rebuild through the store's content-addressed mapping. Traversal-proof by
@@ -187,23 +160,16 @@ the content fingerprint — so a redelivery targets the same key with the same b
 two. This is a property of *path design*, available because the issuer renders (T3): Archiver knows
 the revision timestamp; Replicator does not.
 
-**Per-provider mechanics, and one correction worth recording.** The intuition that `ia` is inherently
-append-only describes the **Wayback Machine** — captures keyed URL+timestamp, unoverwritable, and
-worth wanting. It is not what `ia` means here: the RepSpec's `collection`/`mediatype`/`license` are
-archive.org **item** fields, and per IAS3 a PUT to an existing key **overwrites by default**. So the
-rule above applies to `ia` as much as to the others.
+**Per-provider mechanics.** The rule above applies to `ia` as much as to the others: per IAS3 a
+PUT to an existing key **overwrites by default**. Why `ia` is not the append-only store it is
+intuited to be, and why Wayback semantics would be a fourth provider rather than a mode of `ia`:
+[the reference](content-replicate-issuer-reference.md#t4-ia-overwrites-and-wayback-would-be-a-fourth-provider).
 
 | Provider | Create-if-absent primitive |
 |---|---|
 | `gcs` | `ifGenerationMatch=0` — atomic. On 412, compare md5 to choose row two or row three |
 | `gdrive` | `get_files_by_name(name, parent_id)` then compare `md5Checksum` — the method already exists on cannobserv's `GoogleDriveAdapter` |
 | `ia` | `upload(..., checksum=True)` skips when the remote md5 matches. Unreliable while tasks are pending on the item ([jjjake/internetarchive#289](https://github.com/jjjake/internetarchive/issues/289)), so pair it with `x-archive-keep-old-version:1` as the recoverable-overwrite backstop |
-
-**If Wayback semantics are wanted, that is a fourth provider, not a mode of `ia`.** Save Page Now
-takes a URL and fetches the origin itself — it consumes no blob, needs no `blob_uri`, and its
-`public_url` is timestamped per capture, so a redelivery yields a *different* citable URL unless
-deduped by its own window parameter. Every row of this table would differ. Out of scope here; named
-so the `ia` sub-schema is not stretched to cover it later.
 
 ### T5 — `ia` is public and permanent
 
@@ -223,14 +189,8 @@ Archiver writes `public_url` onto `info_item_rep_specs` from `replication_comple
 unauthenticated bus fact chooses a **user-visible, citable URL** in the registry. The answer is bus
 access control, same as everything else — a new consequence, not a new mechanism.
 
-**The original wording does not survive contact with `gcs`, and the corrected one is narrower and
-true (#36).** It read: *"`public_url` is derived from the provider's response, never echoed from the
-command."* The second half holds everywhere. The first half does not: `Blob.public_url` is a
-client-side f-string over `api_endpoint + bucket + quoted_name` and never round-trips — it returns a
-well-formed URL for an object that was never written. The verdict is not even uniform across the
-three providers: `gdrive`'s `webViewLink` *is* response-minted (Drive mints the file id), while
-`ia`'s is formatted from the identifier the command named. A promise written at the
-provider-response level would be false for two of the three.
+The clause first promised a `public_url` *derived from the provider's response*; that was false for
+two providers of three and was narrowed in #36 — [what it got wrong](content-replicate-issuer-reference.md#t6-why-the-first-wording-was-narrowed).
 
 ⚙ **What is promised instead, and it is the part that was load-bearing all along:**
 
@@ -277,15 +237,6 @@ legitimate grant is compromised, and not before.
 **The fetch document's destination guard (#95) does not extend here.** A replicate destination is
 host-bound by the alias (T3) rather than named by the issuer, so there is no address for a guard to
 refuse; the containment check is the alias's root, and it already runs.
-
----
-
-## Why the issuer renders
-
-The decision in T3, its alternatives, and what it costs — the two rejected shapes, what the chosen
-one gives up, and the consequences for cannobserv#303 and the shared renderer — are recorded in
-[`docs/plans/2026-08-14-why-the-issuer-renders-settled.md`](../plans/2026-08-14-why-the-issuer-renders-settled.md).
-Settled; not re-litigated here.
 
 ---
 
@@ -379,10 +330,8 @@ come.
 
 `invalid_source` stays separate by the same test: not `blob_expired` (the bytes were never named, so
 re-fetching fixes nothing) and not `invalid_destination` (the remedy is a bug in the issuer's
-plumbing, not a bad RepSpec). It is a sixth token where co-core 0.9.4's `ReplicationFailedEvent`
-docstring registers five, so that docstring needs a matching entry —
-[cannobserv#330](https://github.com/CannObserv/cannobserv/issues/330). `reason` is a plain `str`, so nothing on the wire breaks meanwhile; the cost is a
-consumer-facing registry one row short, the drift that docstring asks to be kept in step.
+plumbing, not a bad RepSpec). It is a sixth token, registered in co-core's `ReplicationFailedEvent`
+docstring since [cannobserv#330](https://github.com/CannObserv/cannobserv/issues/330).
 
 ---
 
@@ -395,14 +344,8 @@ literals. Under T3 that collision does not arise: the dotted keys never reach th
 as a **consequence of the render decision** — adopting the rejected alternative reopens it, and would
 require the render path to treat every key as opaque with no prefix ever special-cased.
 
-⚙ **A second exemption is needed anyway, and this document predicted otherwise (#29).** The sentence
-above originally read "no new vocabulary invariant, **and no exemption**". The first half holds; the
-second does not. co-core 0.9.4 makes `info_item_rep_spec_id` required on `ContentReplicateCommand`
-and on **both** replicate facts, and it carries the `info_item` token — so the vocabulary scan fails
-the moment the emit path names it, which no implementation style avoids because the model requires
-the field. The prediction was not wrong about what it examined; the field entered the payload after
-#34 was settled, which is the standing hazard of settling a contract ahead of the models it
-describes.
+⚙ **A second exemption is needed anyway (#29).** co-core 0.9.4 requires `info_item_rep_spec_id`, and
+it carries the `info_item` token; why this document once predicted otherwise: [the reference](content-replicate-issuer-reference.md#the-exemption-the-charter-check-did-not-foresee).
 
 Granted on exactly `info_source_id`'s terms and no wider, with the arithmetic and the cross-wiring
 rule pinned by their own tests. The charter is the authoritative record:
