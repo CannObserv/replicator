@@ -83,7 +83,13 @@ from src.worker.loop import (
     run_loop,
 )
 from src.worker.reporter import build_failure_reporter
-from tests.worker.conftest import FakeFetcher, collected_reports, decoded_facts, make_command
+from tests.worker.conftest import (
+    FakeFetcher,
+    collected_reports,
+    decoded_facts,
+    dlq_entries,
+    make_command,
+)
 from tests.worker.test_loop_spec import make_replicate_command
 
 pytestmark = pytest.mark.integration
@@ -710,8 +716,8 @@ async def test_the_delivery_ceiling_fires_under_the_production_grant(
                 stop.set()
                 await asyncio.wait_for(loop, timeout=5)
 
-    (entry,) = await broker.client.xrange(dlq_name(topic))
-    assert entry[1][b"dlq_reason"] == b"unclassified failure hit the delivery ceiling"
+    ((_wire, provenance),) = await dlq_entries(broker.client, topic)
+    assert provenance.reason == "unclassified failure hit the delivery ceiling"
     (fact,) = await decoded_facts(broker.client, blobs_topic)
     assert isinstance(fact, FetchFailedEvent)
     assert fact.reason == FailureReason.HANDLER_ERROR
@@ -1004,8 +1010,8 @@ async def test_a_dead_letter_refused_at_the_cap_strands_nothing(
     )
 
     assert outcome is Outcome.DEAD_LETTERED
-    ((_id, entry),) = await broker.client.xrange(dlq_name(topic))
-    assert entry[b"dlq_reason"] == b"handler reported a permanent failure"
+    ((_wire, provenance),) = await dlq_entries(broker.client, topic)
+    assert provenance.reason == "handler reported a permanent failure"
     assert await pending_count(broker.client, topic) == 0
     facts = await broker.client.xrange(blobs_topic)
     assert len(facts) == 1
@@ -1120,7 +1126,7 @@ async def test_the_dead_letter_write_is_an_xadd_to_the_topic_dlq(
     writes = [line for line in observed if line.startswith(("XADD", "XACK"))]
     assert len(writes) == 2, observed
     assert writes[0].startswith(f"XADD {topic}.dlq * ")
-    assert "dlq_reason handler reported a permanent failure" in writes[0]
+    assert "dlq.reason handler reported a permanent failure" in writes[0]
     assert writes[1] == f"XACK {topic} {GROUP} {message.message_id}"
 
     # What the grant has to name in production, from the same function the
@@ -1177,7 +1183,7 @@ async def test_the_replicate_stream_dead_letters_by_the_same_two_commands(
     writes = [line for line in observed if line.startswith(("XADD", "XACK"))]
     assert len(writes) == 2, observed
     assert writes[0].startswith(f"XADD {topic}.dlq * ")
-    assert "dlq_reason handler reported a permanent failure" in writes[0]
+    assert "dlq.reason handler reported a permanent failure" in writes[0]
     assert writes[1] == f"XACK {topic} {GROUP} {message.message_id}"
 
     # Per stream, and a collision here would be the worst failure shape available:

@@ -13,7 +13,7 @@ The silent rows are not silent for one reason, and the tests say which:
   ``command_id`` (if any) names a different command, usually one that succeeded;
 - **not closed yet** — a transient failure still retrying (#9 §3, deferred).
 
-Every route that reaches the DLQ also pins its ``dlq_reason``: five routes, five
+Every route that reaches the DLQ also pins its ``dlq.reason``: five routes, five
 strings, and it is what an operator greps (CR #11).
 
 Since #17 one announced route reaches the DLQ not at all — a command that
@@ -51,6 +51,7 @@ from tests.worker.conftest import (
     URL,
     collected_reports,
     decoded_facts,
+    dlq_entries,
     make_command,
     now,
     process_one,
@@ -66,14 +67,15 @@ from tests.worker.conftest import (
 _ANNOUNCE_SWALLOW_LINE = "failure reporter raised — closing the command anyway"
 
 
-async def dlq_reasons(client) -> list[str]:
-    """The ``dlq_reason`` on every entry in ``<topic>.dlq``, in order.
+async def dlq_reasons(client) -> list[str | None]:
+    """The ``dlq.reason`` on every entry in ``<topic>.dlq``, in order.
 
     CR #11: five routes reach the DLQ with five different reasons, and the
     string is what an operator triages on — a reword that no test notices is a
-    reword that silently breaks somebody's grep.
+    reword that silently breaks somebody's grep. co-core writes it since 0.19.1
+    (#116); ``dlq_reason`` was Replicator's own key before that.
     """
-    return [fields[b"dlq_reason"].decode() for _, fields in await client.xrange(dlq_name(TOPIC))]
+    return [provenance.reason for _, provenance in await dlq_entries(client)]
 
 
 async def failing_handler(command: ContentFetchCommand) -> None:

@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 import pytest
 from co_core.effects.fetch import FetchContent, FetchResult
 from co_core.pure.adapters.bus import streams
+from co_core.pure.adapters.bus.dead_letter import DeadLetterProvenance, split_dead_letter
 from co_core.pure.adapters.bus.envelope import from_wire, to_wire
 from co_core.pure.adapters.bus.streams import dlq_name
 from co_core.pure.models.changes import BlobAvailableEvent, ContentFetchCommand
@@ -151,6 +152,23 @@ async def decoded_facts(client, topic: str) -> list:
             ).payload
         )
     return payloads
+
+
+async def dlq_entries(
+    client, topic: str = TOPIC
+) -> list[tuple[dict[str, str], DeadLetterProvenance]]:
+    """Every entry in ``<topic>.dlq``, split the way a drainer would (#116).
+
+    co-core's ``split_dead_letter`` and not a hand-rolled key lookup, so the tests
+    read provenance through the same function a triage tool is pointed at: a
+    rename of the ``dlq.*`` fields breaks them rather than leaving them asserting
+    keys nothing writes. The wire half is what ``dead_letter`` was handed, which
+    is what lets a test pin that Replicator added nothing to the frame itself.
+    """
+    return [
+        split_dead_letter({k.decode(): v.decode() for k, v in fields.items()})
+        for _, fields in await client.xrange(dlq_name(topic))
+    ]
 
 
 def command(

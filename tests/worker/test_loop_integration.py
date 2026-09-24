@@ -18,7 +18,7 @@ Redis acts, or about a reply shape the fake never produces:
    rather than in retries precisely because the counter advances only when a
    message is reclaimed.
 4. The DLQ round-trip, including the ``XRANGE``-by-id re-read for a frame that
-   failed to decode and the synthesized-fields fallback when that entry is gone.
+   failed to decode and the provenance-only entry when that entry is gone.
 5. Fact-before-ack on a permanent failure (#9). ``dead_letter`` acks inside
    itself, so "the ``fetch_failed`` is on the stream by the time the PEL is
    empty" is an ordering claim about the broker's own state, not about a
@@ -73,6 +73,7 @@ from tests.worker.conftest import (
     BODY,
     FakeFetcher,
     collected_reports,
+    dlq_entries,
     fetch_result,
     make_command,
 )
@@ -473,17 +474,18 @@ async def test_a_frame_that_will_not_decode_round_trips_to_the_dlq(
 ):
     """``from_wire`` raises from inside ``read``, so the DLQ copy is a re-read.
 
-    The anomaly carries ``topic`` and ``message_id`` only — no field map — and
-    ``XADD`` rejects an empty one, so the frame is fetched back by id. Nothing
-    about that survives a broker that reports ids differently than the fake.
+    The anomaly carries ``topic`` and ``message_id`` only — no field map — so
+    the frame is fetched back by id: an entry holding only provenance would lose
+    the frame itself. Nothing about that survives a broker that reports ids
+    differently than the fake.
     """
     await real_redis.xadd(scratch_topic, {"event_type": "content_fetch", "payload": "not json"})
 
     assert await poll_once(real_redis, itest_consumer, itest_settings, group=GROUP) == []
 
-    ((_id, entry),) = await real_redis.xrange(dlq_name(scratch_topic))
-    assert entry[b"payload"] == b"not json"
-    assert entry[b"dlq_reason"] == b"frame failed to decode"
+    ((wire, provenance),) = await dlq_entries(real_redis, scratch_topic)
+    assert wire["payload"] == "not json"
+    assert provenance.reason == "frame failed to decode"
     assert (await real_redis.xpending(scratch_topic, GROUP))["pending"] == 0
 
 
@@ -505,8 +507,12 @@ async def test_a_poison_entry_whose_frame_is_gone_still_leaves_the_pel(
     outcome = await dead_letter_anomaly(real_redis, itest_consumer, excinfo.value)
 
     assert outcome is Outcome.DEAD_LETTERED
-    ((_id, entry),) = await real_redis.xrange(dlq_name(scratch_topic))
-    assert entry[b"original_message_id"] == excinfo.value.message_id.encode()
+    # An empty field map, which a real XADD refused before co-core 0.19.1 (#116):
+    # the entry is provenance alone, and that is what names the lost frame.
+    ((wire, provenance),) = await dlq_entries(real_redis, scratch_topic)
+    assert wire == {}
+    assert provenance.source_id == excinfo.value.message_id
+    assert provenance.reason == f"frame failed to decode: {excinfo.value}"
     assert (await real_redis.xpending(scratch_topic, GROUP))["pending"] == 0
 
 
