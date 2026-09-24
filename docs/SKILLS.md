@@ -32,7 +32,7 @@ Managed by the [`managing-skills`](../skills/managing-skills/) skill.
 
 | Skill | Overrides | Why |
 |---|---|---|
-| `brainstorming` | `obra-superpowers/brainstorming` | Project conventions: `docs/plans/` path, `#<n> [type]: desc` commit convention, `writing-plans` optional not mandatory, invokes `using-git-worktrees` after design approval, FastAPI stack context |
+| `brainstorming` | `obra-superpowers/brainstorming` | Project conventions: `docs/plans/` path, `#<n> [type]: desc` commit convention, a GitHub issue at design approval and `using-git-worktrees` after it, `writing-plans` optional not mandatory, FastAPI stack context. Omits upstream's visual companion, dot graph, spec self-review and user review gate — the architectural gate ends at in-chat design approval and the doc is reviewed in its commit. `override-reason:` is the full list |
 
 Every override's `SKILL.md` must declare `overrides:` and `override-reason:` in its frontmatter
 `metadata` block. A local directory is a **complete replacement**, not a partial merge.
