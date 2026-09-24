@@ -57,8 +57,8 @@ A reply approves the stage actually presented. Approval of an idea or feature
 scope does not approve a design that has not been presented. Resume at the
 earliest incomplete stage; do not turn one approval into permission to skip the
 rest of the selected path. Read-only project exploration is allowed while those
-prerequisites remain incomplete. The design doc itself is the one file you may
-write before implementation begins.
+prerequisites remain incomplete. The design doc — and a plan, if `writing-plans` is
+invoked — are the only files you may write before implementation begins.
 </HARD-GATE>
 
 ## Three Paths
