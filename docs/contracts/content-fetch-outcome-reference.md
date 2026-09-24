@@ -110,7 +110,7 @@ are the whole value of the six:
 > none of that discharges the obligation for *your* consumer, which
 > [MUST-8](content-fetch-issuer-contract.md#8-do-not-send-a-validator-until-you-handle-not_modified)
 > states with its reasoning. Record the two fields unconditionally, and replay them — verbatim — only
-> once that branch exists.
+> once your consumer has the `not_modified` branch MUST-8 requires.
 
 ---
 
