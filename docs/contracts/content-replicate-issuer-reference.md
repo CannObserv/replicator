@@ -90,7 +90,7 @@ provider-response level would be false for two of the three.
 
 Expands the contract's [Charter check](content-replicate-issuer-contract.md#charter-check).
 
-⚙ **A second exemption is needed anyway, and the contract predicted otherwise (#29).** The sentence
+**A second exemption is needed anyway, and the contract predicted otherwise (#29).** The sentence
 in the Charter check originally read "no new vocabulary invariant, **and no exemption**". The first half holds; the
 second does not. co-core 0.9.4 makes `info_item_rep_spec_id` required on `ContentReplicateCommand`
 and on **both** replicate facts, and it carries the `info_item` token — so the vocabulary scan fails
