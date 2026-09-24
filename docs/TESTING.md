@@ -160,6 +160,21 @@ never in `/etc/replicator/.env`, which is the file the service reads. Contrast
 the broker has no db 15, and `real_redis` refuses db 0 outright. No bucket name
 has that property.
 
+## Rehearsing reconnection
+
+Two halves, because neither mechanism can test the other:
+
+```bash
+uv run pytest --no-cov -m integration tests/worker/test_reconnect_integration.py
+sudo bash scripts/rehearse_reconnect.sh
+```
+
+The pytest half stops and restarts a real `redis-server` it spawns and asserts the in-process property: the loop rides out a survivable outage, gives up on a sustained one, and a worker started fresh against a recovered broker picks up what was stranded. It runs with the AOF on, because the incident being modelled had the group survive; `--appendonly no` would model `NOGROUP` instead.
+
+The script half drives what a pytest cannot — systemd's restart semantics — against a scratch unit under `/run/systemd/system` and a broker it owns. It asserts the worker exits, that systemd restarts it, **that the start budget survives the outage**, and that consumption resumes with no human step. That third assertion is the one #94 turns on: on 2026-09-16 the unit was `failed` sixteen minutes before the broker came back. Set `StartLimitBurst=1` in `deploy/` and the script reproduces that failure by name.
+
+Neither touches `co-broker` or `replicator.service`: the script checks the spawned broker's own reported pid before driving it, and refuses a port answered by anything else.
+
 ## Testing against a broker at its cap (#79)
 
 `tests/worker/test_oom_integration.py` needs a Redis that will refuse writes, and
