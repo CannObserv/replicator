@@ -362,8 +362,9 @@ The store, its endpoints and the one-host-per-`projectId` rule are in
 [INFRASTRUCTURE.md](INFRASTRUCTURE.md); the client contract is pinned by
 `tests/test_socraticode_config.py`.
 
-**Cap anything that launches a server.** co-replicator is 3.9 GB with no swap and
-runs the worker beside these sessions. On CannObserv/broker's VM an uncapped
+**Cap anything that launches a server.** co-replicator is 8 GiB with 4 G of swap
+since #99 — headroom, not immunity, as broker was 8 GiB too — and runs the
+worker beside these sessions. On CannObserv/broker's VM an uncapped
 launch degraded the tailnet for 57m48s with nothing OOM-killed (broker#17, our
 #94). `OOMScoreAdjust=-900` on the units is the other half and is already in
 place ([DEPLOYMENT.md](DEPLOYMENT.md)) — it does not remove the need for the cap,
