@@ -107,7 +107,7 @@ bus out for **57m48s with nothing OOM-killed at all**. The kernel failed
 degraded while every process stayed alive — and this worker did not reconnect on
 its own, which is #94.
 
-Four things this is not:
+What this is not:
 
 - **Not a substitute for capping the launch.** A cgroup cap on a process at adj
   -1000 *stalls* it rather than killing it, so the two halves are separate: this
@@ -123,8 +123,8 @@ Four things this is not:
   under `choom -n 500`, and the capped launch already bounds that. broker runs
   it on a "300 floor" reading of the same dry run — the score printed *before*
   the skip (CannObserv/broker#58) — and watcher on its sessions' `node` sitting
-  at adj 0, which on that -1000 host it does not (CannObserv/watcher#323). Two
-  things would change the answer: sessions leaving -1000, notifier's shape
+  at adj 0, which on that -1000 host it does not (CannObserv/watcher#323). What
+  would change the answer: sessions leaving -1000, notifier's shape
   (CannObserv/notifier#74), which `tests/test_deploy.py` pins live; and, if it
   is ever installed here, `-s 100` — with 4 G of swap its default waits for
   swap to fall to 10% free.
