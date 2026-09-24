@@ -399,3 +399,9 @@ tests/worker/test_reporter.py :: """The failure fact path: what a closed-without
 .socraticodecontextartifacts.json :: "path": "./docs/contracts/content-fetch-outcome-reference.md",
 .socraticodecontextartifacts.json :: "path": "./docs/contracts/content-replicate-issuer-contract.md",
 .socraticodecontextartifacts.json :: "path": "./docs/contracts/replicator-boundaries.md",
+# --- #111 CR round: links the review's fixes retargeted (CR 7, 16, 18, 19),
+#   each checked to land where its content now lives.
+docs/contracts/content-fetch-issuer-reference.md :: Expands [MUST-2](content-fetch-issuer-contract.md#2-persist-command_id--domain-durably-before-publishing).
+docs/contracts/content-fetch-issuer-reference.md :: | `payload` | the model, JSON-serialized — where every field actually lives: the [command]
+docs/contracts/content-replicate-issuer-contract.md :: [how the blob TTL clock runs](content-fetch-outcome-reference.md#how-the-blob-ttl-clock-runs), which expands
+docs/contracts/content-fetch-outcome-reference.md :: collapse it. That is by design (see [the envelope, key by key](content-fetch-issuer-reference.md#the-envelope-key-by-key)); it is also
