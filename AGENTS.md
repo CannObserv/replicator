@@ -176,7 +176,7 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
 # Mirror the private index first — command under Environment & Tooling
 uv sync
 
-# Load environment (required before running the worker or gh)
+# Load environment — dev only (required before running the worker or gh)
 set -a; . /etc/replicator/.env 2>/dev/null; . .env 2>/dev/null; set +a
 
 # Run tests

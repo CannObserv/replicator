@@ -587,3 +587,6 @@ docs/contracts/content-fetch-outcome-reference.md :: tighten :: ([MUST-2](conten
 docs/contracts/content-fetch-issuer-contract.md :: retarget :: **Why this is now a commitment rather than a number to ask about.** It used to be
 docs/contracts/content-fetch-issuer-contract.md :: tighten :: horizon; the extra day absorbs lifecycle's one-day granularity so the bucket can never reap inside
 docs/contracts/content-fetch-issuer-contract.md :: tighten :: the window this contract promises.
+# #111 CR 25: the Common Commands load comment absorbs the "(dev only)" that
+#   the deleted Environment Variables pointer carried; nothing else changed.
+AGENTS.md :: tighten :: # Load environment (required before running the worker or gh)
