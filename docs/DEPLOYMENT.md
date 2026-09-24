@@ -31,40 +31,30 @@ broker and bucket topology this unit runs on is in
 
 `ExecStart` uses `--frozen --no-sync`, so dependency sync is a deploy step, not a service-start side effect.
 
-**Six starts in two hours, and an iterative session will spend them.** `StartLimitIntervalSec=7200` with `StartLimitBurst=6` is sized against `worst_case_outage_seconds` so a permanently unreachable Redis surfaces as a *stopped unit* rather than a hot restart loop. The cost is that a fourth `systemctl restart` inside an hour — ordinary when shipping several commits in one sitting — fails with `Start request repeated too quickly` and `Result: start-limit-hit`, which reads as a broken deploy and is not one: the previous instance stops cleanly and logs `worker stopped` on its way out. `sudo systemctl reset-failed replicator` clears the counter; then `start` as normal. Check `systemctl status` for `start-limit-hit` before debugging the build — #77 hit this twice in one session.
-
-**Why six and not three (#94).** Three starts absorbed 30 minutes of broker outage. On 2026-09-16 the broker was away for 58, and the only reason this unit was not asked to survive the whole of it is that the network degraded from ~14:28 while the worker's cycles did not fail *continuously* until ~15:00. Six starts absorb an hour, and `tests/test_deploy.py` pins that against `WORST_OBSERVED_CLUSTER_OUTAGE_SECONDS` — the worst outage this cluster has actually had — rather than against internal consistency alone. Raise that constant when a worse one happens and the test will tell you whether the unit still covers it. Widening the fuse is safer than it was, because the other half finally exists: before #94 a unit that gave up was discovered by whoever next looked, and a longer fuse on a silent failure would be the wrong trade.
-
-### Rehearsing reconnection (#94)
-
-Two halves, because neither mechanism can test the other:
-
-```bash
-uv run pytest --no-cov -m integration tests/worker/test_reconnect_integration.py
-sudo bash scripts/rehearse_reconnect.sh
-```
-
-The pytest half stops and restarts a real `redis-server` it spawns and asserts the in-process property: the loop rides out a survivable outage, gives up on a sustained one, and a worker started fresh against a recovered broker picks up what was stranded. It runs with the AOF on, because the incident being modelled had the group survive; `--appendonly no` would model `NOGROUP` instead.
-
-The script half drives what a pytest cannot — systemd's restart semantics — against a scratch unit under `/run/systemd/system` and a broker it owns. It asserts the worker exits, that systemd restarts it, **that the start budget survives the outage**, and that consumption resumes with no human step. That third assertion is the one #94 turns on: on 2026-09-16 the unit was `failed` sixteen minutes before the broker came back. Set `StartLimitBurst=1` in `deploy/` and the script reproduces that failure by name.
-
-Neither touches `co-broker` or `replicator.service`: the script checks the spawned broker's own reported pid before driving it, and refuses a port answered by anything else.
-
 **`/etc/systemd/system/replicator.service` is a *copy*, not a symlink to `deploy/`.** So the `cp` above is load-bearing and `daemon-reload` alone silently does nothing — systemd re-reads the installed file, which is still the old one. The failure has no symptom at restart: the worker comes up on the new code under the *old* unit, and the mismatch only surfaces the first time a directive actually matters. Little guards it, either — `tests/test_deploy.py` reads the repo file, which is exactly the copy that is still correct; only its live checks of `OOMScoreAdjust=` and `MemoryLow=` (#113) read what the host holds. Diff the two when a restart follows a unit edit (#11 deploy).
 
 The copy is deliberate, for the same reason `/etc/replicator/.env` is not read from the repo: the live unit must survive a repo reset, a worktree switch, or a branch checkout that happens to be mid-edit.
 
 **Two unit files now, and the second one is easy to forget.** `deploy/replicator-failure-notify@.service` is the `OnFailure=` handler, and it is a copy under `/etc/systemd/system/` exactly like the worker's unit — with one difference that makes its absence quieter: nothing runs it until something fails, so a missed `cp` is invisible until the first incident, which is the one moment it was supposed to help. `systemctl status replicator-failure-notify@replicator.service.service` answering `Unit ... not found` is how that looks. There is no restart to pair with the copy.
 
+**Six starts in two hours, and an iterative session will spend them.** `StartLimitIntervalSec=7200` with `StartLimitBurst=6` is sized against `worst_case_outage_seconds` so a permanently unreachable Redis surfaces as a *stopped unit* rather than a hot restart loop. The cost is that a fourth `systemctl restart` inside an hour — ordinary when shipping several commits in one sitting — fails with `Start request repeated too quickly` and `Result: start-limit-hit`, which reads as a broken deploy and is not one: the previous instance stops cleanly and logs `worker stopped` on its way out. `sudo systemctl reset-failed replicator` clears the counter; then `start` as normal. Check `systemctl status` for `start-limit-hit` before debugging the build — #77 hit this twice in one session.
+
+**Why six and not three (#94).** Three starts absorbed 30 minutes of broker outage. On 2026-09-16 the broker was away for 58, and the only reason this unit was not asked to survive the whole of it is that the network degraded from ~14:28 while the worker's cycles did not fail *continuously* until ~15:00. Six starts absorb an hour, and `tests/test_deploy.py` pins that against `WORST_OBSERVED_CLUSTER_OUTAGE_SECONDS` — the worst outage this cluster has actually had — rather than against internal consistency alone. Raise that constant when a worse one happens and the test will tell you whether the unit still covers it. Widening the fuse is safer than it was, because the other half finally exists: before #94 a unit that gave up was discovered by whoever next looked, and a longer fuse on a silent failure would be the wrong trade.
+
+Rehearse reconnection before changing the start budget — the loop's half in pytest, systemd's in `scripts/rehearse_reconnect.sh`: [TESTING.md](TESTING.md#rehearsing-reconnection).
+
+**Dev server workflow** (the `/health` app, port 8001 so a future live service on 8000 stays up):
+
+```bash
+set -a; . /etc/replicator/.env 2>/dev/null; . .env 2>/dev/null; set +a
+uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8001 --reload --log-config src/core/log_config.json
+```
+
 ### When the worker fails, who is told
 
 The `OnFailure=` handler, the six `REPLICATOR_NOTIFY_*` variables it reads,
 notifier mode and its delivery scoring:
 [FAILURE-NOTIFICATION.md](FAILURE-NOTIFICATION.md).
-
-What belongs here rather than there: the handler unit is a copy under
-`/etc/systemd/system/` like the worker's, so it needs the `cp` from the table
-above and has no restart to pair with it.
 
 ### Memory protection — the worker outranks the dev session that shares this VM
 
@@ -156,7 +146,9 @@ What this is not:
   (CannObserv/watcher#323). What would change the answer: sessions leaving
   -1000, notifier's shape (CannObserv/notifier#74), which
   `tests/test_deploy.py` pins live; and, if it is ever installed here,
-  `-s 100` — with 4 G of swap its default waits for swap to fall to 10% free.
+  `-s 100,100` — it acts only with memory *and* swap under their minimums, and
+  a bare `-s 100` leaves SIGKILL's swap minimum at 50%: 2 G in use, which
+  `vm.swappiness = 10` may never reach (gregoryfoster/skills#331).
 - **Not `-1000`.** That is the exemption above, and an exempt worker that leaks
   is unreclaimable — the kernel would work through everything else on the box
   first. `-900` is the cohort's value (CannObserv/broker#25): last of the
@@ -212,43 +204,30 @@ So `build_writers` calls `src/worker/checkout.py`, which runs the same script an
 
 **The guard reaches the live service only after the `cp`.** It ships in `deploy/replicator.service`, and the installed unit is a copy — so until `sudo cp deploy/replicator.service /etc/systemd/system/ && sudo systemctl daemon-reload`, the running service is still ungated. A guard that exists only in the repo's copy of the unit is the same failure mode one level up.
 
-### The co-core 0.8.0 cutover is a two-repo deploy, streams flushed between (#28)
+### Required fields make a co-core bump a two-repo deploy
 
-`schema_version` stays 1, and that is a decision rather than an oversight: bumping to 2 would imply
-a v1 consumers must branch on, when the correct operation is to discard the v1 messages. The wire
-is pre-production, so it is discardable.
+A half-deployed cluster does not degrade, it dead-letters: a Replicator on the
+new wheel fails `from_wire` on any command from an issuer still on the old one,
+and that failure destroys the `command_id` correlator before any fact can name
+it. The two sides may be worked in parallel; they must land together.
 
-**Flushing is a prerequisite step, not cleanup.** `content.fetch`, `content.blobs`, and **both
-`.dlq` streams** — a v1 dead-letter cannot be replayed under 0.8.0, so leaving it is leaving a trap
-for whoever triages next. Add `replicator:cmd:*` if any `command_id` will be reused across the
-flush. **Not** `content.fetch-policy`: it is a groupless state stream, and flushing it leaves every
+0.8.0 did this with `info_source_id` (#28), shipped with
+[CannObserv/watcher#252](https://github.com/CannObserv/watcher/issues/252). The
+wire was pre-production then, so `schema_version` stayed 1 and the v1 messages
+were discarded rather than branched on: `content.fetch`, `content.blobs` and
+**both `.dlq` streams** were flushed first — a v1 dead-letter cannot be replayed
+under 0.8.0 — plus `replicator:cmd:*` where a `command_id` would be reused.
+**Not** `content.fetch-policy`: a groupless state stream, whose flush leaves every
 worker with an empty policy map until the next republish.
 
-**Ship with [CannObserv/watcher#252](https://github.com/CannObserv/watcher/issues/252).** Required
-fields mean a half-deployed cluster does not degrade, it dead-letters: a Replicator on 0.8.0 fails
-`from_wire` on any command from a Watcher still on 0.7.x, and that failure destroys the
-`command_id` correlator before any fact can name it. The two may be worked in parallel; they must
-land together.
+### Dedupe keys carry a stream segment
 
-### The dedupe keys gain a stream segment (#29) — no action, but know why
-
-Keys move from `replicator:cmd:<id>` to `replicator:cmd:fetch:<id>`, so a second command stream can
-never dedupe a command against the other stream's. **Nothing to do at deploy time.** Old-format keys
-are simply never read again and expire on their own `REPLICATOR_DEDUPE_TTL_SECONDS`; a command that
-was already handled and is redelivered across the restart re-runs its handler instead of
-short-circuiting.
-
-That re-run is safe by the same property the key's set-after-success ordering already relies on:
-storage is content-addressed, so re-storing identical bytes is a no-op that republishes the fact,
-and the key is a cheap short-circuit rather than the correctness mechanism. Flush `replicator:cmd:*`
-only if you would rather not pay the handful of re-fetches.
-
-**Dev server workflow** (the `/health` app, port 8001 so a future live service on 8000 stays up):
-
-```bash
-set -a; . /etc/replicator/.env 2>/dev/null; . .env 2>/dev/null; set +a
-uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8001 --reload --log-config src/core/log_config.json
-```
+`replicator:cmd:fetch:<id>` since #29, where they were `replicator:cmd:<id>`, so a
+second command stream can never dedupe a command against the other's. The old
+keys expired on `REPLICATOR_DEDUPE_TTL_SECONDS` and nothing reads them. Why
+losing any `replicator:cmd:*` key costs a re-fetch rather than correctness,
+including an empty namespace after a flush:
+[CONVENTIONS.md](CONVENTIONS.md#the-replicatorcmd-keys).
 
 ## Environment Variables
 

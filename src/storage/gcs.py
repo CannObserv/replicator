@@ -110,7 +110,7 @@ class GcsBlobStore:
 
         Nor does it prove the *consumer* can read what we write. That grant is on
         another service account and is verified where it is made
-        (docs/DEPLOYMENT.md); it is the honest limit of this check, and the price
+        (docs/INFRASTRUCTURE.md); it is the honest limit of this check, and the price
         of trading a filesystem coupling for an IAM one.
         """
         next(

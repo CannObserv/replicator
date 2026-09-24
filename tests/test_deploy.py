@@ -783,5 +783,6 @@ class TestTheEarlyoomDecline:
             "exe.dev no longer exempts sessions here, so earlyoom's --prefer now "
             "reaches the dev tooling and #112's decline no longer holds — "
             "reopen it (notifier's deploy/earlyoom.default is the working shape, "
-            "plus -s 100: with swap, earlyoom otherwise waits for swap to drain)"
+            "plus -s 100,100: with swap, earlyoom otherwise waits for swap to drain, "
+            "and a bare -s 100 still gates SIGKILL on half of it)"
         )

@@ -198,7 +198,7 @@ def _no_production_destination(request, monkeypatch):
     ``GOOGLE_APPLICATION_CREDENTIALS`` there is no identity to resolve. Marked,
     it has one, and the thing standing between it and production is **IAM**: the
     test SA holds ``objectAdmin`` on the test bucket and no write at all on the
-    production one (docs/DEPLOYMENT.md names both). That is deliberate rather than
+    production one (docs/INFRASTRUCTURE.md names both). That is deliberate rather than
     residual — a fixture is a promise this repo makes to itself, and the grant is
     the one a mistake cannot talk its way past. ``test_replicate_writer_gcs.py``
     uses the raw client for exactly this reason: its assertions must not run

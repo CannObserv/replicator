@@ -262,6 +262,11 @@ tests/test_deploy.py :: Two things that rank does not buy, both recorded in docs
 tests/test_deploy.py :: one, so a reservation on either unit is inert (docs/DEPLOYMENT.md).
 tests/test_destinations.py :: production bucket legitimately, here and in `docs/DEPLOYMENT.md`, and a test
 tests/test_destinations.py :: # `co-gcs-replication` — the bucket. Named in `docs/DEPLOYMENT.md` and in
+# #118: the #99 sweep above acked five source pointers as pointing at "the buckets",
+# which it took to have stayed in DEPLOYMENT.md. They had left in #94 (0ae6c0c)
+# for INFRASTRUCTURE.md, so all five lied; #118 retargeted them rather than
+# re-acking. Their entries above now match nothing: src/storage/gcs.py,
+# src/worker/main.py, tests/conftest.py, and both in tests/test_destinations.py.
 # #99 CR 15: provenance in the new doc's preamble — naming the doc it was
 #   split from is true by construction, and is what orients a cold reader.
 docs/FAILURE-NOTIFICATION.md :: delivery is scored. Split out of [DEPLOYMENT.md](DEPLOYMENT.md) (#99), which

@@ -609,3 +609,47 @@ docs/CONVENTIONS.md :: retarget :: a re-fetch of the origin (`HostPacer` is in-m
 docs/contracts/replicator-boundaries.md :: retarget :: ceiling — the constant this indirection exists to avoid importing. What is enforceable is the
 AGENTS.md :: retarget :: - [content-fetch-issuer-reference.md](docs/contracts/content-fetch-issuer-reference.md) — its lookup half, request side: refusal list, trust posture
 AGENTS.md :: retarget :: - [content-fetch-outcome-reference.md](docs/contracts/content-fetch-outcome-reference.md) — its result side: failure taxonomy, silent conditions, the DLQ
+# ---- #118 curation of docs/DEPLOYMENT.md (9989 of 10000 after the earlyoom note) ----
+# Class C, every line read against its replacement; --claims drops no atom.
+# The handler-copy rule, stated a third time under "When the worker fails": the
+#   "Two unit files now" paragraph, moved up into Server Lifecycle, carries it.
+docs/DEPLOYMENT.md :: tighten :: What belongs here rather than there: the handler unit is a copy under
+docs/DEPLOYMENT.md :: tighten :: `/etc/systemd/system/` like the worker's, so it needs the `cp` from the table
+docs/DEPLOYMENT.md :: tighten :: above and has no restart to pair with it.
+# The 0.8.0 cutover: the lasting rule (a required field dead-letters a half-
+#   deployed cluster; land together) leads, and the flush is scoped to the
+#   pre-production wire it was run on, so it cannot read as a standing procedure
+#   on today's production one. The heading drops its (#28), now in the body.
+docs/DEPLOYMENT.md :: tighten :: ### The co-core 0.8.0 cutover is a two-repo deploy, streams flushed between (#28)
+docs/DEPLOYMENT.md :: tighten :: `schema_version` stays 1, and that is a decision rather than an oversight: bumping to 2 would imply
+docs/DEPLOYMENT.md :: tighten :: a v1 consumers must branch on, when the correct operation is to discard the v1 messages. The wire
+docs/DEPLOYMENT.md :: tighten :: is pre-production, so it is discardable.
+docs/DEPLOYMENT.md :: tighten :: **Flushing is a prerequisite step, not cleanup.** `content.fetch`, `content.blobs`, and **both
+docs/DEPLOYMENT.md :: tighten :: `.dlq` streams** — a v1 dead-letter cannot be replayed under 0.8.0, so leaving it is leaving a trap
+docs/DEPLOYMENT.md :: tighten :: for whoever triages next. Add `replicator:cmd:*` if any `command_id` will be reused across the
+docs/DEPLOYMENT.md :: tighten :: flush. **Not** `content.fetch-policy`: it is a groupless state stream, and flushing it leaves every
+docs/DEPLOYMENT.md :: tighten :: **Ship with [CannObserv/watcher#252](https://github.com/CannObserv/watcher/issues/252).** Required
+docs/DEPLOYMENT.md :: tighten :: fields mean a half-deployed cluster does not degrade, it dead-letters: a Replicator on 0.8.0 fails
+docs/DEPLOYMENT.md :: tighten :: `from_wire` on any command from a Watcher still on 0.7.x, and that failure destroys the
+docs/DEPLOYMENT.md :: tighten :: `command_id` correlator before any fact can name it. The two may be worked in parallel; they must
+docs/DEPLOYMENT.md :: tighten :: land together.
+# The #29 key migration: completed, and its reasoning is CONVENTIONS.md's
+#   "The `replicator:cmd:*` keys" section (the segment since #29, the old form
+#   gone within a day, a cold start is re-work never loss) — so a pointer that
+#   keeps both key forms and the TTL variable. The heading drops "(#29) — no
+#   action, but know why", which was deploy-time advice for a deploy long past.
+docs/DEPLOYMENT.md :: tighten :: ### The dedupe keys gain a stream segment (#29) — no action, but know why
+docs/DEPLOYMENT.md :: tighten :: Keys move from `replicator:cmd:<id>` to `replicator:cmd:fetch:<id>`, so a second command stream can
+docs/DEPLOYMENT.md :: tighten :: never dedupe a command against the other stream's. **Nothing to do at deploy time.** Old-format keys
+docs/DEPLOYMENT.md :: tighten :: are simply never read again and expire on their own `REPLICATOR_DEDUPE_TTL_SECONDS`; a command that
+docs/DEPLOYMENT.md :: tighten :: was already handled and is redelivered across the restart re-runs its handler instead of
+docs/DEPLOYMENT.md :: tighten :: short-circuiting.
+docs/DEPLOYMENT.md :: tighten :: That re-run is safe by the same property the key's set-after-success ordering already relies on:
+docs/DEPLOYMENT.md :: tighten :: storage is content-addressed, so re-storing identical bytes is a no-op that republishes the fact,
+docs/DEPLOYMENT.md :: tighten :: and the key is a cheap short-circuit rather than the correctness mechanism. Flush `replicator:cmd:*`
+docs/DEPLOYMENT.md :: tighten :: only if you would rather not pay the handful of re-fetches.
+# Rehearsing reconnection demoted to docs/TESTING.md (class B: a test procedure,
+#   needed when the start budget changes), moved verbatim beside "Testing against
+#   a broker at its cap". Its heading drops "(#94)" — provenance stays out of a
+#   moved heading's anchor, and the body already cites #94.
+docs/DEPLOYMENT.md :: rename :: ### Rehearsing reconnection (#94)
