@@ -33,7 +33,7 @@ for a short wait and stay available to other hosts.** Sleeping in the handler bl
 other command in the group — which is why parking exists — and parking cannot express a
 sub-reclaim interval.
 
-**Resolved by splitting the wait by duration**, and shipped with the interim default the [charter](contracts/replicator-boundaries.md) records:
+**Resolved by splitting the wait by duration**, and shipped with what the [charter](contracts/replicator-boundaries.md) now records as the fallback default (then the interim one):
 a wait no longer than one poll window (`REPLICATOR_READ_BLOCK_MS`) is slept through in the
 handler, and anything longer parks. The bound is derived from an existing setting rather than
 given its own, because it is the same quantity — a wait shorter than a poll the loop already
