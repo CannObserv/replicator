@@ -18,10 +18,10 @@ from collections.abc import AsyncGenerator
 import httpx
 import pytest
 from co_core_aio.fetch import AsyncFetchDriver
+from co_core_sync.drivers.blobstore import LocalBlobStore
 
 from src.core.config import get_settings
 from src.core.errors import TransientFetchError
-from src.storage.local import LocalBlobStore
 from src.worker.egress import GuardedTransport, blocked_networks
 from src.worker.handler import build_handler
 from tests.worker.conftest import FakeFetcher, command, published_facts

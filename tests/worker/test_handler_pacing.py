@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from co_core.pure.adapters.bus import streams
+from co_core_sync.drivers.blobstore import LocalBlobStore
 
 from src.core.config import get_settings
 from src.core.errors import (
@@ -24,7 +25,6 @@ from src.core.errors import (
     PermanentFetchError,
     TransientFetchError,
 )
-from src.storage.local import LocalBlobStore
 from src.worker.handler import _retry_after_seconds, build_handler
 from src.worker.pacing import BACKOFF_MAX_HEADROOM, HostPacer
 from tests.worker.conftest import URL, Clock, FakeFetcher, command, fetch_result, published_facts

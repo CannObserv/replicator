@@ -59,6 +59,7 @@ from co_core.pure.models.changes import (
     FetchFailedEvent,
 )
 from co_core_aio.bus import AsyncBusConsumer
+from co_core_sync.drivers.blobstore import LocalBlobStore
 from redis.asyncio import Redis
 from redis.exceptions import NoPermissionError, OutOfMemoryError, ResponseError
 
@@ -69,7 +70,6 @@ from src.core.errors import (
     PermanentReplicateError,
     ReplicateReason,
 )
-from src.storage.local import LocalBlobStore
 from src.worker.handler import build_handler
 from src.worker.loop import (
     _TRANSIENT_ERRORS,

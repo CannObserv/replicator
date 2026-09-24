@@ -28,10 +28,9 @@ than only in our code.
 import uuid
 
 import pytest
+from co_core_sync.drivers.blobstore import GcsBlobStore
 from google.api_core.exceptions import NotFound
 from google.cloud import storage
-
-from src.storage.gcs import GcsBlobStore
 
 pytestmark = pytest.mark.gcs
 
@@ -55,7 +54,7 @@ def fingerprint() -> str:
 @pytest.fixture
 def store(gcs_blob_bucket, fingerprint):
     """A store over the provisioned test bucket, cleaned up after itself."""
-    store = GcsBlobStore(gcs_blob_bucket, prefix=TEST_PREFIX)
+    store = GcsBlobStore(gcs_blob_bucket, prefix=TEST_PREFIX, touch_on_rereference=True)
     yield store
     bucket = storage.Client().bucket(gcs_blob_bucket)
     try:

@@ -50,7 +50,7 @@ T3's last paragraph states the read side has no such surface. That is half the p
 is the first time a message value reaches a path **in both directions**, because
 `ContentReplicateCommand.blob_uri` is issuer-supplied and serving the command means resolving it to
 local bytes. [`locate_blob`](../../src/worker/replicate.py) is the one consumer, and
-[`BlobStore`](../../src/storage/base.py) has no URI-resolving method (`open()` / `exists()` take a
+`BlobStore` (`co_core.pure.util.blobstore`, since #114) has no URI-resolving method (`open()` / `exists()` take a
 fingerprint), by design. The obvious implementation — parse the URI, read the path
 — is a read-side traversal on a service whose destinations include a **public, undeletable**
 archive.org item: `file:///etc/replicator/co-pypi-reader.json` would publish this VM's GCS reader key

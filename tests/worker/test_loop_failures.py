@@ -12,11 +12,11 @@ import asyncio
 import pytest
 from co_core.pure.adapters.bus.streams import dlq_name
 from co_core.pure.models.changes import ContentFetchCommand
+from co_core_sync.drivers.blobstore import LocalBlobStore
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import NoPermissionError, OutOfMemoryError, ResponseError
 
 from src.core.errors import FailureReason, PermanentFetchError, TransientFetchError
-from src.storage.local import LocalBlobStore
 from src.storage.sweeper import BlobUsage
 from src.worker.handler import build_handler
 from src.worker.loop import FETCH_SPEC, Outcome, _delivery_count, poll_once

@@ -32,10 +32,10 @@ import uuid
 import pytest
 from co_core.pure.models.changes import ReplicationCompleteEvent
 from co_core_aio.gcs import AsyncGcsDriver
+from co_core_sync.drivers.blobstore import LocalBlobStore
 from google.cloud import storage
 
 from src.core.errors import PermanentReplicateError, ReplicateReason
-from src.storage.local import LocalBlobStore
 from src.worker.aliases import AliasBinding, AliasTable
 from src.worker.replicate import build_replicate_handler
 from tests.worker.conftest import now

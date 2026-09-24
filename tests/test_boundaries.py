@@ -29,12 +29,11 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from co_core_sync.drivers.blobstore import GcsBlobStore, LocalBlobStore
 from starlette.routing import Route, WebSocketRoute
 
 from src.api.main import app
 from src.core.config import Settings
-from src.storage.gcs import GcsBlobStore
-from src.storage.local import LocalBlobStore
 from tests.storage.conftest import FakeBucket, FakeClient
 
 REPO = Path(__file__).resolve().parents[1]

@@ -52,11 +52,11 @@ from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
 from co_core.pure.adapters.bus.streams import dlq_name
 from co_core.pure.models.changes import FetchFailedEvent
 from co_core.pure.util.hashing import sha256
+from co_core_sync.drivers.blobstore import LocalBlobStore
 
 from scripts.seed_fetch import last_id, publish, resolve_blobs_topic, watch_for_facts
 from src.core.config import get_settings
 from src.core.errors import TransientError
-from src.storage.local import LocalBlobStore
 from src.worker.handler import build_handler
 from src.worker.loop import (
     DEDUPE_KEY_PREFIX,

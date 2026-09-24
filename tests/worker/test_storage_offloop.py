@@ -23,9 +23,9 @@ import threading
 
 import pytest
 from co_core.pure.util.gcs import GcsCreateOutcome
+from co_core_sync.drivers.blobstore import LocalBlobStore
 
 from src.core.config import get_settings
-from src.storage.local import LocalBlobStore
 from src.worker.handler import build_handler
 from tests.worker.conftest import FakeFetcher, command
 from tests.worker.test_replicate_writer import (

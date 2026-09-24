@@ -5,9 +5,9 @@ import time
 from pathlib import Path
 
 import pytest
+from co_core_sync.drivers.blobstore import LocalBlobStore
 
-from src.storage.local import LocalBlobStore
-from src.storage.sweeper import BlobUsage, sweep
+from src.storage.sweeper import BLOB_GLOB, TEMP_GLOB, BlobUsage, sweep
 
 TTL = 600.0
 TEMP_GRACE = 3600.0
@@ -20,8 +20,8 @@ AGED = "1b3d5f70" + "0" * 56
 
 @pytest.fixture
 def store(tmp_path):
-    """A store rooted at a fresh temp directory."""
-    return LocalBlobStore(tmp_path)
+    """A store rooted at a fresh temp directory, in the temp tier's shape (touch on)."""
+    return LocalBlobStore(tmp_path, touch_on_rereference=True)
 
 
 def blob_path(root: Path, fingerprint: str) -> Path:
@@ -112,6 +112,31 @@ def test_an_in_flight_temporary_is_never_matched_as_a_blob(store, tmp_path):
 
     assert temp.exists()
     assert result.blobs_reaped == 0
+
+
+def test_the_shared_store_writes_temporaries_the_sweep_recognises(tmp_path, monkeypatch):
+    """The temp-naming convention is another repo's now, and this is its tripwire.
+
+    `TEMP_GLOB` and `BLOB_GLOB` were written against a store in this repo; since
+    #114 the store is cannobserv's (`co_core_sync.drivers.blobstore.local`), and
+    a renamed temporary there would be reaped here as an aged *blob* — mid-write,
+    with no test in either repo to say so. Provoked by making the publishing
+    rename a no-op, which is what a SIGKILL between the write and the
+    `os.replace` leaves behind.
+    """
+    import co_core_sync.drivers.blobstore.local as shared_local
+
+    monkeypatch.setattr(shared_local.os, "replace", lambda src, dst: None)
+    shared_local.LocalBlobStore(tmp_path, touch_on_rereference=True).store(
+        b"partial", FRESH, "text/plain"
+    )
+
+    temps = list(tmp_path.glob(TEMP_GLOB))
+    assert len(temps) == 1
+    assert list(tmp_path.glob(BLOB_GLOB)) == []
+    result = run(tmp_path)
+    assert temps[0].exists()
+    assert (result.temps_remaining, result.temp_bytes_remaining) == (1, len(b"partial"))
 
 
 def test_a_temporary_older_than_the_grace_is_debris_and_is_removed(store, tmp_path):

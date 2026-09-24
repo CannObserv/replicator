@@ -126,7 +126,7 @@ the other two did not, and the asymmetry is invisible until something writes.
 a drive qualifier, backslashes, NUL or control characters, empty segments, and any form that is not
 already normalized — checked after percent-decoding, and checked on the rendered string rather than
 on a template. For `content.fetch` this surface did not exist: blob paths are content-addressed off
-the fingerprint ([`src/storage/local.py`](../../src/storage/local.py)), so no message value ever
+the fingerprint (`co_core.pure.util.blobstore.local_blob_path`, since #114), so no message value ever
 reached a path. Replication is the first time one does.
 
 ### T3a — the *source* is a path too, and it is the sharper half (#29)

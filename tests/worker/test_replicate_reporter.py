@@ -13,10 +13,10 @@ import pytest
 from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.envelope import from_wire
 from co_core.pure.models.changes import ReplicationCompleteEvent, ReplicationFailedEvent
+from co_core_sync.drivers.blobstore import LocalBlobStore
 from redis.exceptions import OutOfMemoryError, ResponseError
 
 from src.core.errors import ReplicateReason
-from src.storage.local import LocalBlobStore
 from src.worker.aliases import AliasBinding, AliasTable
 from src.worker.loop import REPLICATE_SPEC, Outcome, ReplicateFailureReport, poll_once
 from src.worker.replicate import build_replicate_handler

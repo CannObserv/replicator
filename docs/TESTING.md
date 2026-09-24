@@ -55,7 +55,8 @@ makes production untestable (#38).
   two documented procedures had contradicted each other. `PRODUCTION_ENV` in
   `tests/conftest.py` is the list; `test_the_scrub_covers_the_whole_snippet_agents_are_told_to_source`
   pins the blob pair's membership. Alongside the scrub, `AsyncGcsDriver.__init__` **and
-  `GcsBlobStore.__init__`** are patched to refuse any bucket. The refusal
+  `GcsBlobStore.__init__`** are patched to refuse any bucket (co-core's class since #114;
+  the patch is on the class object, so it holds wherever it is imported from). The refusal
   precedes the call through, because both constructors resolve ADC in their own
   body; checking afterwards would authenticate first and object second.
 

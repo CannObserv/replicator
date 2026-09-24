@@ -1,11 +1,10 @@
 """Fakes for the object-store backend, shared by every module that needs one (#7).
 
-Hoisted here from `test_gcs.py` (CR #10). Three test modules now build a
-`GcsBlobStore` — this package's unit tests, the replicate source guard, and the
-boundaries charter's characterization pair — and cross-importing a fake from
-whichever module happened to define it first meant a change made for one of them
-could break the other two. The project's convention already says shared wiring
-belongs in the package `conftest.py`.
+Hoisted here from `test_gcs.py` (CR #10) when three modules built a
+`GcsBlobStore`; since #114 the store itself is cannobserv's
+(`co_core_sync.drivers.blobstore.gcs`, cannobserv#475) and what builds one
+here is the adoption's own pins (`test_shared_store.py`), the replicate source
+guard, and the boundaries charter's characterization pair.
 
 **These fakes owe their fidelity to the SDK, not to the tests.** CR #1 and #2
 were one bug in two places: `preflight` could not detect a missing bucket because
@@ -13,12 +12,16 @@ were one bug in two places: `preflight` could not detect a missing bucket becaus
 the fake raised where the real client returns `False`. So each method here
 mirrors what `google-cloud-storage` actually does, and where the real behaviour
 is surprising it is commented rather than smoothed over.
+
+The lifted store passes two things ours did not, and the fakes take both
+rather than tolerate them silently: `checksum=` on every create (recorded, so a
+test can assert the corruption guard is on) and `timeout=` on `exists` and
+`patch`.
 """
 
 import pytest
+from co_core_sync.drivers.blobstore.gcs import GcsBlobStore
 from google.api_core.exceptions import NotFound, PreconditionFailed
-
-from src.storage.gcs import GcsBlobStore
 
 FINGERPRINT = "9f2a7c1e" + "0" * 56
 
@@ -31,9 +34,10 @@ class FakeBlob:
         self.name = name
         self.custom_time = None
         self.content_type = None
+        self.chunk_size = None
         self.patched = 0
 
-    def exists(self):
+    def exists(self, timeout=None):
         """Mirrors the SDK: **`False` for anything absent, never a raise.**
 
         The real `Blob.exists()` catches `NotFound` and returns `False` — which
@@ -43,7 +47,9 @@ class FakeBlob:
         """
         return self.name in self._bucket.objects
 
-    def upload_from_string(self, data, content_type=None, if_generation_match=None, timeout=None):
+    def upload_from_string(
+        self, data, content_type=None, if_generation_match=None, timeout=None, checksum=None
+    ):
         if if_generation_match == 0 and self.name in self._bucket.objects:
             raise PreconditionFailed("object already exists")
         self._bucket.objects[self.name] = data
@@ -53,11 +59,13 @@ class FakeBlob:
         # carried on the upload, not a second call.
         self._bucket.custom_times[self.name] = self.custom_time
         self._bucket.timeouts.append(timeout)
+        self._bucket.checksums.append(checksum)
 
-    def patch(self):
+    def patch(self, timeout=None):
         if self.name not in self._bucket.objects:
             raise NotFound("no such object")
         self.patched += 1
+        self._bucket.patches += 1
         self._bucket.custom_times[self.name] = self.custom_time
 
     def download_as_bytes(self, timeout=None):
@@ -76,6 +84,10 @@ class FakeBucket:
         self.content_types: dict[str, str | None] = {}
         self.custom_times: dict[str, object] = {}
         self.timeouts: list[float | None] = []
+        self.checksums: list[str | None] = []
+        # Bucket-wide rather than per `FakeBlob`: the store takes a fresh handle
+        # per call on purpose, so a per-handle count could never see a second one.
+        self.patches = 0
 
     def blob(self, name):
         return FakeBlob(self, name)
@@ -120,4 +132,5 @@ def client(bucket):
 
 @pytest.fixture
 def store(bucket, client):
-    return GcsBlobStore("a-temp-bucket", prefix="blobs", client=client)
+    """The temp tier's shape: touch on, so a re-store moves the retention clock."""
+    return GcsBlobStore("a-temp-bucket", prefix="blobs", client=client, touch_on_rereference=True)

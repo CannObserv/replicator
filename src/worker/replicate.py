@@ -35,6 +35,7 @@ from urllib.parse import urlsplit
 
 from co_core.effects.gcs import GcsCreateIfAbsent, GcsCreateResult
 from co_core.pure.models.changes import ContentReplicateCommand
+from co_core.pure.util.blobstore import BlobStore
 from co_core.pure.util.gcs import GcsCreateOutcome
 
 from src.core.config import DEFAULT_WRITE_TIMEOUT_SECONDS
@@ -45,13 +46,13 @@ from src.core.errors import (
     is_terminal_provider_status,
 )
 from src.core.logging import get_logger
-from src.storage.base import BlobStore
 from src.worker.aliases import AliasBinding, AliasTable
 
 logger = get_logger(__name__)
 
 # The schemes a ``blob_uri`` may carry, one per ``BlobStore`` backend:
-# ``file://`` from ``LocalBlobStore``, ``gs://`` from ``GcsBlobStore`` (#7). A
+# ``file://`` from ``LocalBlobStore``, ``gs://`` from ``GcsBlobStore`` (#7; both
+# co-core's since #114). A
 # tuple rather than a check against the configured backend on purpose — this
 # worker can be redeployed onto the other backend while commands naming the
 # previous one are still in the PEL. Those have to parse far enough to be

@@ -22,17 +22,16 @@ from typing import Any
 
 import httpx
 from co_core.pure.adapters.bus import streams
+from co_core.pure.util.blobstore import BlobStore
 from co_core_aio.bus import AsyncBusConsumer
 from co_core_aio.fetch import AsyncFetchDriver
 from co_core_aio.gcs import AsyncGcsDriver
+from co_core_sync.drivers.blobstore import GcsBlobStore, LocalBlobStore, ensure_directory
 from redis.asyncio import Redis
 
 from src.core.bus_client import build_bus_client
 from src.core.config import Settings, get_settings
 from src.core.logging import configure_logging, get_logger
-from src.storage.base import BlobStore
-from src.storage.gcs import GcsBlobStore
-from src.storage.local import LocalBlobStore, ensure_directory
 from src.storage.sweeper import BlobUsage
 from src.worker.aliases import AliasTable, load_alias_table
 from src.worker.checkout import checkout_refusal
@@ -490,6 +489,13 @@ def _prepare_storage(settings: Settings) -> tuple[BlobStore, Path | None]:
             settings.blob_bucket,
             prefix=settings.blob_prefix,
             timeout_seconds=settings.blob_timeout_seconds,
+            # The temp tier's shape, and **not the shared store's default**
+            # (#114, cannobserv#475): the lifted store serves an append-only
+            # permanent tier too, whose writer holds no `update`, so touching
+            # is opt-in. Off, it stamps no `customTime` at create either — the
+            # bucket's `daysSinceCustomTime` rule then never matches and every
+            # store still succeeds. `tests/worker/test_main.py` pins this.
+            touch_on_rereference=True,
         )
         preflight_object_store(store, settings)
         logger.info(
@@ -557,7 +563,10 @@ def _prepare_storage(settings: Settings) -> tuple[BlobStore, Path | None]:
         )
         raise
     warn_if_unreachable(blob_dir)
-    return LocalBlobStore(blob_dir), blob_dir
+    # Touch on, for the same reason as the object store above: the sweep reaps
+    # on "since last referenced", and the shared store's default would leave the
+    # mtime at the *first* store's.
+    return LocalBlobStore(blob_dir, touch_on_rereference=True), blob_dir
 
 
 async def run(

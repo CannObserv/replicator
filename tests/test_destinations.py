@@ -45,8 +45,8 @@ from pathlib import Path
 
 import pytest
 from co_core_aio.gcs import AsyncGcsDriver
+from co_core_sync.drivers.blobstore import GcsBlobStore
 
-from src.storage.gcs import GcsBlobStore
 from tests.conftest import (
     PRODUCTION_ENV,
     TEST_BLOB_BUCKET_ENV,

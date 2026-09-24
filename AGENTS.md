@@ -18,13 +18,13 @@ TDD required: no production code without a failing test first.
 
 Python ≥3.12, uv, pytest, ruff. `ty` is a **non-gating** type checker (`uv run ty check`) — advisory, no pre-commit or CI gate.
 
-**co-core comes from the wheelhouse, not PyPI.** `co-core` / `co-core-aio` resolve from `./.wheelhouse`, mirrored from the private GCS index `gs://co-gcs-pypi` by `scripts/sync_wheelhouse.py` via `[tool.uv] find-links`. Run the sync **before** `uv sync` on a fresh clone or after a version bump:
+**co-core comes from the wheelhouse, not PyPI.** `co-core` / `co-core-aio` / `co-core-sync` resolve from `./.wheelhouse`, mirrored from the private GCS index `gs://co-gcs-pypi` by `scripts/sync_wheelhouse.py` via `[tool.uv] find-links`. Run the sync **before** `uv sync` on a fresh clone or after a version bump:
 
 ```bash
 uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
 ```
 
-Auth is ADC. Pin the current minor — `>=0.19.1,<0.20` — and raise the **patch** floor with every co-core feature the code starts depending on; the ways a skew has already failed are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+Auth is ADC. Pin the current minor — `>=0.19.3,<0.20` — and raise the **patch** floor with every co-core feature the code starts depending on; the ways a skew has already failed are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 <!-- BEGIN socraticode-policy -->
 ## Code Exploration Policy
