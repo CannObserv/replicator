@@ -571,3 +571,6 @@ docs/STREAMS.md :: tighten :: - **`content.fetch-policy` is the third stream kin
 #   cross-reference. It names the contract instead.
 docs/contracts/content-replicate-issuer-contract.md :: retarget :: the **escalation trigger is not**, and that is the whole reason this section exists rather than a
 docs/contracts/content-replicate-issuer-contract.md :: retarget :: cross-reference.
+# #111 CR 7: the per-occurrence key derivation this sentence relies on moved
+#   from the contract's frame section to the request reference.
+docs/contracts/content-fetch-outcome-reference.md :: retarget :: collapse it. That is by design (see [The frame](content-fetch-issuer-contract.md#the-frame-envelope)); it is also not something Replicator can

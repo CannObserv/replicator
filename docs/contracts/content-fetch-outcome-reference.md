@@ -286,7 +286,7 @@ fact is published *before* the dead-letter (`dead_letter` acks inside itself, so
 after it is lost outright on a crash in between). A crash in that window redelivers the command,
 re-runs the failure, and publishes a **second `fetch_failed` with the same `command_id` and a
 fresh `occurred_at`** — so its envelope key differs and consumer-side dedup-on-key will not
-collapse it. That is by design (see [The frame](content-fetch-issuer-contract.md#the-frame-envelope)); it is also not something Replicator can
+collapse it. That is by design (see [the envelope, key by key](content-fetch-issuer-reference.md#the-envelope-key-by-key)); it is also not something Replicator can
 engineer away, since a deterministic `occurred_at` would need a durable store Replicator does not
 have and must not grow.
 
