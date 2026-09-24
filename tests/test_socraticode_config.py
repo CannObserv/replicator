@@ -356,6 +356,17 @@ HEALTH_SCRIPT = REPO_ROOT / ".claude" / "hooks" / f"{HEALTH_HOOK}.sh"
 HEALTH_COMMAND = f'bash "${{CLAUDE_PROJECT_DIR:-.}}/.claude/hooks/{HEALTH_HOOK}.sh" # {HEALTH_HOOK}'
 HEALTH_TIMEOUT_S = 120
 
+# The hook's default cap as its one assignment spells it, and the capped call
+# itself — the only place `choom` is handed `--` and a command. The --help text
+# and a log line name the same properties, so a bare substring check stays
+# green after the cap is gone.
+CAP_DEFAULT = re.compile(r'^CAP_DEFAULT="([^"]*)"', re.MULTILINE)
+CHOOM_CALL = "choom -n 500 -- "
+
+# The manual invocations' ceiling, one `-p` property per flag.
+COMMANDS = REPO_ROOT / "docs" / "COMMANDS.md"
+MANUAL_CAP = re.compile(r"systemd-run --user --scope((?: -p \S+)+)")
+
 
 def _session_start_hooks() -> list[dict]:
     """Every SessionStart hook entry in the tracked settings file."""
@@ -424,14 +435,33 @@ class TestServerLaunchCost:
             "or add `submodules: true` to the CI job's actions/checkout (#27)"
         )
         script = HEALTH_SCRIPT.read_text()
-        assert "MemoryMax=" in script, (
+        default = CAP_DEFAULT.search(script)
+        assert default and "MemoryMax=" in default.group(1), (
             f"the vendored {HEALTH_HOOK}.sh launches a SocratiCode server uncapped — "
             "bump skills-vendor/gregoryfoster-skills to gregoryfoster/skills@32128c9 "
             "or later (skills#330)"
         )
-        assert "choom -n 500" in script, (
+        assert CHOOM_CALL in script, (
             f"the vendored {HEALTH_HOOK}.sh is capped but not re-scored — at "
             "oom_score_adj -1000 a cgroup cap stalls the process instead of killing it"
+        )
+
+    def test_the_hook_cap_is_the_manual_ceiling(self) -> None:
+        """One ceiling for every SocratiCode launch on this host.
+
+        `docs/SKILLS.md` says the hook runs at `docs/COMMANDS.md`'s ceiling, and
+        the manual invocations were sized on this VM (#99). An upstream change to
+        the hook's default would otherwise leave the two quietly different.
+        """
+        default = CAP_DEFAULT.search(HEALTH_SCRIPT.read_text())
+        assert default, f"the vendored {HEALTH_HOOK}.sh no longer assigns CAP_DEFAULT"
+        hook = frozenset(default.group(1).split())
+        calls = MANUAL_CAP.finditer(COMMANDS.read_text())
+        manual = {frozenset(m.group(1).split()[1::2]) for m in calls}
+        assert manual == {hook}, (
+            f"docs/COMMANDS.md caps at {sorted(map(sorted, manual))}, the hook at "
+            f"{sorted(hook)} — re-size one, or set SOCRATICODE_HEALTH_CAP in "
+            ".claude/settings.local.json"
         )
 
     def test_the_health_hook_is_registered_as_the_installer_writes_it(self) -> None:
