@@ -40,7 +40,8 @@ entirely the issuer's job, on `command_id`. Most ways of getting either wrong fa
 
 **Issuing `content.replicate`?** That loop runs, and it writes for `gcs` (#29) — read
 [`docs/contracts/content-replicate-issuer-contract.md`](docs/contracts/content-replicate-issuer-contract.md)
-first. It settled the trust model and the issuer obligations *ahead* of the code, because a write to
+first; [its reference](docs/contracts/content-replicate-issuer-reference.md) carries the reasoning behind
+the clauses. It settled the trust model and the issuer obligations *ahead* of the code, because a write to
 a permanent store is bounded by nothing a read is (#34), and the code has since been built to it.
 Two things bite issuers hardest: the destination is **refused, never repaired** — you render it, and
 a redelivery must render the same string, because under T4 that string is the idempotency key — and
