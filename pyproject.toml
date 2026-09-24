@@ -14,11 +14,12 @@ dependencies = [
     # accepts an empty field map, which lets `dead_letter_anomaly` park a trimmed
     # entry without inventing fields for it. On 0.19.0 the first dead-letter raises
     # TypeError on the keyword — at runtime, on the error path, which is why the
-    # floor carries it; the tests fail at collection instead, importing
-    # `co_core.pure.adapters.bus.dead_letter`, which 0.19.0 does not ship.
-    # Diffing the wheels: `dead_letter` is the only change to anything imported
-    # here (0.19.1 otherwise touches co/v1 engagement options and `AddressModel`),
-    # and 0.19.2 is 0.19.1 bar its `__version__` strings. The lock takes 0.19.2.
+    # floor carries it; `tests/worker/` fails at collection instead, its conftest
+    # importing `co_core.pure.adapters.bus.dead_letter`, which 0.19.0 does not
+    # ship. Diffing the wheels: `dead_letter` is the only behavioural change to
+    # anything imported here — `PoisonFrame`'s docstring moved too — and 0.19.1
+    # otherwise touches co/v1 engagement options and `AddressModel`. 0.19.2 is
+    # 0.19.1 bar its `__version__` strings. The lock takes 0.19.2.
     #
     # Previously:
     #
