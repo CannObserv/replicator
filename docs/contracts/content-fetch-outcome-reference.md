@@ -274,9 +274,9 @@ is dead-lettered with **no frame fields**, so no `key` to match on — `dlq.sour
 entry and `dlq.reason` carries the decode error.
 
 **Before co-core 0.19.1 (#116)** the keys were `dlq_reason` / `dlq_original_id`, and that trimmed
-case a synthesized record. Both queues stood at `XLEN 0` at the switch (2026-09-24), so only
-broker's `dlq-evidence/` copies carry the old names: read `dlq.reason`, falling back to
-`dlq_reason`. co-core's `split_dead_letter` separates frame from provenance — a re-publish takes
+case a synthesized record. Both queues were at `XLEN 0` when checked on 2026-09-24, before the
+change deployed, so the old names survive in broker's `dlq-evidence/` copies and in anything parked
+in between: read `dlq.reason`, falling back to `dlq_reason`. co-core's `split_dead_letter` separates frame from provenance — a re-publish takes
 only the frame — and `(dlq.group, dlq.source_id)` identifies the duplicate a lost ack leaves.
 
 Inspection commands live in [`docs/COMMANDS.md`](../COMMANDS.md). Monitoring the DLQ on
