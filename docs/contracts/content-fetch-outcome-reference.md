@@ -296,13 +296,12 @@ have and must not grow.
 
 Expands [MUST-7](content-fetch-issuer-contract.md#7-copy-the-bytes-before-the-blob-expires).
 
-**Why this is now a commitment rather than a number to ask about.** It used to be
+**Why the seven-day window is a commitment rather than a number to ask about.** It used to be
 `REPLICATOR_BLOB_TTL_SECONDS` on Replicator's host — a setting, visible to nobody else, changeable
 by an operator with no consumer the wiser. Under the object-store backend the reap is a **bucket
 lifecycle rule**, which is a stated, auditable window rather than an mtime clock that moves for
 reasons no consumer can see. The rule is `daysSinceCustomTime: 8` against a published 7-day
-horizon; the extra day absorbs lifecycle's one-day granularity so the bucket can never reap inside
-the window this contract promises.
+horizon — the extra day for the reason the table below gives.
 
 The clock runs from **last reference by a fetch**, not last read by a consumer, and **both backends
 implement that same rule by different means**. A consumer reading the blob extends nothing, on

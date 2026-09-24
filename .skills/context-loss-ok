@@ -581,3 +581,9 @@ docs/contracts/content-fetch-issuer-reference.md :: retarget :: what an issuer *
 #   it takes the "Expands [MUST-n]" form of its sibling sections.
 docs/contracts/content-fetch-outcome-reference.md :: tighten :: **Losing the `command_id` -> domain map**
 docs/contracts/content-fetch-outcome-reference.md :: tighten :: ([MUST-2](content-fetch-issuer-contract.md#2-persist-command_id--domain-durably-before-publishing)):
+# #111 CR 21: MUST-7's moved "why a commitment" paragraph. Its "this" had no
+#   antecedent in the TTL section, and its extra-day clause repeated the
+#   table paragraph below it ("the rule is set a day beyond the promise").
+docs/contracts/content-fetch-issuer-contract.md :: retarget :: **Why this is now a commitment rather than a number to ask about.** It used to be
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: horizon; the extra day absorbs lifecycle's one-day granularity so the bucket can never reap inside
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: the window this contract promises.
