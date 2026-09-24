@@ -174,10 +174,14 @@ The systemd unit lives at [`deploy/replicator.service`](deploy/replicator.servic
 **worker**, not the API. To install on a fresh host:
 
 ```bash
-# Copy into systemd's path — all three, they are copies and not symlinks
+# Copy into systemd's path — all four, they are copies and not symlinks
 sudo cp deploy/replicator.service /etc/systemd/system/replicator.service
 sudo cp 'deploy/replicator-failure-notify@.service' /etc/systemd/system/
+# tailscaled's -900, and the slice grant without which MemoryLow= is inert (#113)
+sudo install -D -m 644 deploy/tailscaled.service.d/memory.conf /etc/systemd/system/tailscaled.service.d/memory.conf
+sudo install -D -m 644 deploy/system.slice.d/replicator-memory.conf /etc/systemd/system/system.slice.d/replicator-memory.conf
 sudo systemctl daemon-reload
+sudo systemctl restart tailscaled   # OOMScoreAdjust= applies at exec only
 sudo systemctl enable --now replicator
 
 # The host's memory tunables, which sysctl reads — not systemd
