@@ -116,8 +116,9 @@ degraded while every process stayed alive — and this worker did not reconnect 
 its own, which is #94.
 
 **`MemoryLow=` — adopted, and real only through the slice grant (#113).** The
-worker and `tailscaled` each reserve 128M (measured 2026-09-24: 66 MiB anonymous
-with a 67 MiB peak, and 61–82 MiB resident with a 123 MiB peak), and
+worker and `tailscaled` each reserve 128M, against what each cgroup is charged
+(measured 2026-09-24: the worker 67 MiB at peak; tailscaled 81 MiB, 60 MiB of it
+RSS, with a 123 MiB peak), and
 [`deploy/system.slice.d/replicator-memory.conf`](../deploy/system.slice.d/replicator-memory.conf)
 grants `system.slice` their sum, 256M. The grant is the load-bearing file:
 cgroup2 here is mounted without `memory_recursiveprot`, so a unit keeps no more
