@@ -302,13 +302,14 @@ consume `content.blobs`, branch on the payload type, and on a `fetch_failed` wit
 close the pending entry **with a reason** — off one consumer group, since both outcomes share the
 stream.
 
-**Silence has not gone away — it has narrowed.** Four conditions still produce nothing. Three are
-permanently silent, having no payload or no `command_id` *safe* to key a fact on; the fourth, a
-command still retrying, is silent *for now* (#9 §3) with **no latency bound** — transient failures
+**Silence has not gone away — it has narrowed.** Five conditions still produce nothing. Four are
+permanently silent, having no payload or no `command_id` *safe* to key a fact on — one of them a
+command trimmed from `content.fetch` while still pending (#109); the fifth, a command still
+retrying, is silent *for now* (#9 §3) with **no latency bound** — transient failures
 retry at the `REPLICATOR_CLAIM_MIN_IDLE_MS` cadence indefinitely, and a tree over
-`REPLICATOR_BLOB_MAX_TOTAL_BYTES` parks in the PEL until a sweep frees space. All four, and why
+`REPLICATOR_BLOB_MAX_TOTAL_BYTES` parks in the PEL until a sweep frees space. All five, and why
 reporting one would be worse than silence, are in
-[the reference](content-fetch-outcome-reference.md#the-four-silent-conditions).
+[the reference](content-fetch-outcome-reference.md#the-five-silent-conditions).
 
 Which is why the **reaper stays**, demoted from primary mechanism to backstop. A timeout is grounds
 to **re-issue** (fresh `command_id`), not to conclude failure; derive it generously from the reclaim
@@ -316,8 +317,9 @@ cadence rather than hardcoding a number, since the cadence is an operator settin
 host and an issuer that pins 60 s starts re-issuing under a live retry the day it is tuned. Expect
 duplicate work rather than assuming loss.
 
-**The DLQ is still worth reading** — the only place the silent rows appear at all, and it preserves
-the offending frame, which no fact does. How to read it, and which outcomes are visible, are in the
+**The DLQ is still worth reading** — the only place the silent rows appear at all, bar a trimmed
+command, which has no frame left to copy there; and it preserves the offending frame, which no fact
+does. How to read it, and which outcomes are visible, are in the
 reference's [DLQ](content-fetch-outcome-reference.md#reading-the-dlq) and
 [failure taxonomy](content-fetch-outcome-reference.md#failure-taxonomy-what-happens-and-what-the-issuer-sees).
 

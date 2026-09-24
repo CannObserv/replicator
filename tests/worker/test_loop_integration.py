@@ -31,6 +31,10 @@ Redis acts, or about a reply shape the fake never produces:
 7. Several slow failing entries (#102). The same restarted idle clock, on the
    PEL's side of the turn: from ``0-0`` the oldest reclaimable entry wins every
    recovery turn, so recovery walks the list instead. Run at #98's ratio.
+8. ``XAUTOCLAIM``'s attempt budget (#109). One call inspects ``count * 10``
+   pending entries, a limit fakeredis does not have of its own, so a reclaimable
+   entry behind more young ones than that is reached only by following the
+   cursor across pages.
 
 Everything runs on ``replicator.itest.*`` scratch streams. The ``real_redis``
 fixture refuses db 0 outright — the database that carries the live
@@ -266,6 +270,28 @@ async def test_a_message_left_pending_is_reclaimed(
     reclaimed = await claim_once(real_redis, itest_consumer, itest_settings, group=GROUP)
 
     assert [message.message_id for message in reclaimed] == [delivered.message_id]
+
+
+async def test_a_reclaimable_entry_past_one_calls_attempt_budget_is_reached(
+    real_redis, scratch_topic, itest_consumer, itest_settings
+):
+    """#109: an empty page with a live cursor is scanned on from, not taken as the end."""
+    for n in range(12):
+        await real_redis.xadd(scratch_topic, make_command(f"cmd-young-{n}"))
+    await real_redis.xadd(scratch_topic, make_command("cmd-stale"))
+    delivered = await real_redis.xreadgroup(
+        GROUP, "replicator@dead-worker", {scratch_topic: ">"}, count=13
+    )
+    stale_id = delivered[0][1][-1][0]
+    # Age the last entry past the window by the server's own clock, and leave the
+    # twelve ahead of it young — more than the ten one ``count=1`` call inspects.
+    await real_redis.xclaim(
+        scratch_topic, GROUP, "replicator@dead-worker", 0, [stale_id], idle=10 * CLAIM_MIN_IDLE_MS
+    )
+
+    reclaimed = await claim_once(real_redis, itest_consumer, itest_settings, group=GROUP)
+
+    assert [message.message_id for message in reclaimed] == [stale_id.decode()]
 
 
 async def test_a_message_younger_than_the_idle_window_is_left_alone(

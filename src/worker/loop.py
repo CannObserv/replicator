@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 
-from co_core.effects.bus import BusMessage
+from co_core.effects.bus import BusMessage, PoisonFrame
 from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
 from co_core.pure.models.changes import ContentFetchCommand, ContentReplicateCommand
@@ -133,6 +133,17 @@ _TRANSIENT_ERRORS: tuple[type[Exception], ...] = (
 # is cheap enough per frame to hide that an unbounded run of them is a hot loop
 # against the broker — so it is one constant rather than two that drift apart.
 MAX_POISON_SKIPS = 10
+
+# How many ``XAUTOCLAIM`` pages one recovery turn may scan (#109). A page that
+# claims nothing can still have spent its attempt budget — ``count * 10`` pending
+# entries inspected, one at ``count=1`` — so the end of the list is the cursor's
+# ``0-0``, not an empty page, and walking to it is a loop of round trips as long
+# as the pending list is. The bound caps one turn's share of that; the cursor is
+# kept, so the next turn resumes where this one stopped rather than rescanning.
+# Ten pages is a hundred entries inspected a turn, against a pending list that is
+# a handful on this service: one entry per consumer in flight, plus whatever is
+# waiting out a transient failure.
+MAX_CLAIM_PAGES = 10
 
 # The consume-path handler seam. Raising signals failure; the loop — not the
 # handler — decides whether that means retry or dead-letter.
@@ -977,8 +988,8 @@ async def dead_letter_anomaly(
 ) -> Outcome:
     """Route a frame that failed to decode at all.
 
-    ``from_wire`` raises from inside ``read``/``claim_stale``, so there is no
-    ``BusMessage`` and no field map — the anomaly carries only ``topic`` and
+    ``from_wire`` raises from inside ``read``, so there is no ``BusMessage`` and
+    no field map — the anomaly carries only ``topic`` and
     ``message_id``. ``dead_letter`` XADDs the fields it is given and ``XADD``
     rejects an empty map, so the raw frame is re-read by id; a trimmed or
     ``XDEL``-ed entry (still pending, no longer in the stream) falls back to a
@@ -1006,39 +1017,45 @@ async def dead_letter_anomaly(
     )
 
 
+async def dead_letter_poison(consumer: AsyncBusConsumer, frame: PoisonFrame) -> Outcome:
+    """Route a frame ``claim_stale_page`` could not decode (#109).
+
+    The claim path's counterpart to ``dead_letter_anomaly``, and simpler for the
+    reason it exists: the page carries the raw fields, so there is nothing to
+    re-read and no trimmed-entry fallback. A trimmed entry never reaches here —
+    ``XAUTOCLAIM`` reports it in ``deleted`` instead of returning it.
+    """
+    return await _dead_letter(
+        consumer,
+        frame.message_id,
+        dict(frame.fields),
+        label=frame.anomaly.topic,
+        reason="frame failed to decode",
+        detail={"anomaly": type(frame.anomaly).__name__, "recovered_fields": True},
+    )
+
+
 def _as_str(value: bytes | str) -> str:
     """Decode a raw Redis field (the client is not in decode_responses mode)."""
     return value.decode() if isinstance(value, bytes) else value
 
 
-# The head of the pending entries list, as ``XAUTOCLAIM`` spells it.
+# The head of the pending entries list, as ``XAUTOCLAIM`` spells it — and the
+# cursor it returns once a scan has reached the list's end.
 PEL_HEAD = "0-0"
 
-# A stream id's two halves are unsigned 64-bit integers.
-_U64_MAX = 2**64 - 1
 
+def _past(entry_id: str) -> str:
+    """A start just past ``entry_id``: the exclusive form, ``(<id>``.
 
-def _after(entry_id: str) -> str:
-    """The first stream id past ``entry_id``, or the PEL's head if nothing can follow.
-
-    Computed because co-core's ``claim_stale`` discards the cursor ``XAUTOCLAIM``
-    returns (#102). A sequence at its limit carries into the millisecond half, as
-    ``streamIncrID`` does server-side; the largest id there is has no successor,
-    and wrapping is what the walk does at the end of the list anyway.
-
-    **Takes an id the broker minted, and nothing else** (CR 4). Every caller
-    passes one straight from a reply — a claimed message's, or the anomaly's — so
-    a value that is not ``<ms>-<seq>`` raises here, inside ``claim_once``, where
-    it would turn a poison-frame skip into a poll-cycle failure. Stated rather
-    than guarded: a fallback would hide a broker or client that had started
-    spelling ids differently, which is a thing to hear about immediately.
+    Where the walk resumes after a claim. Not the page's cursor, because a claim
+    of the last pending entry comes back with ``0-0`` — and resuming at the head
+    hands the next turn to the oldest reclaimable entry again, ahead of anything
+    delivered since, which is #102's starvation with extra steps. The server
+    resolves the exclusive start itself, so the successor id this once computed
+    against an id format the broker owns is no longer spelled here (#109).
     """
-    ms, seq = (int(half) for half in entry_id.split("-"))
-    if seq < _U64_MAX:
-        return f"{ms}-{seq + 1}"
-    if ms < _U64_MAX:
-        return f"{ms + 1}-0"
-    return PEL_HEAD
+    return f"({entry_id}"
 
 
 @dataclass(slots=True)
@@ -1100,58 +1117,76 @@ async def claim_once(
 ) -> list[BusMessage]:
     """Reclaim one message abandoned by a crashed (or transiently failing) worker.
 
-    ``count=1`` for the batch-poison reason plus a sharper one: XAUTOCLAIM
-    transfers ownership and resets the idle clock on every entry it returns
-    *before* co-core decodes them, so one poison frame in a batch of ten would
-    strand nine good messages with their timers restarted.
+    ``count=1`` because a reclaim owes the stream a turn (#98): ``PollCadence``
+    bounds what recovery can hold the stream back by at one handler, and a batch
+    would make that one handler per entry claimed — each with its idle clock
+    already restarted by the claim, waiting behind the others. Poison no longer
+    forces it: ``claim_stale_page`` returns undecodable frames rather than raising
+    partway through the batch (cannobserv#465), which is what used to strand the
+    good entries claimed beside a bad one.
 
-    **A walk, not a restart (#102).** With a ``cadence`` the claim starts just past
-    the last entry it returned and wraps to the head once nothing lies past it, so
-    every reclaimable entry takes a turn. Restarting at ``0-0`` gave the turn to
-    the *oldest* reclaimable entry every time — and because ``XAUTOCLAIM`` restarts
-    the idle clock of what it claims, a handler slower than ``claim_min_idle_ms``
-    that fails transiently leaves its entry reclaimable the moment it is released.
-    Two such entries, and the younger was delivered once and never again, for as
-    long as the older one's cause lasted; transient failures are exempt from the
+    **A walk, not a restart (#102).** With a ``cadence`` the claim starts where the
+    last one left off and wraps to the head once nothing lies past it, so every
+    reclaimable entry takes a turn. Restarting at ``0-0`` gave the turn to the
+    *oldest* reclaimable entry every time — and because ``XAUTOCLAIM`` restarts the
+    idle clock of what it claims, a handler slower than ``claim_min_idle_ms`` that
+    fails transiently leaves its entry reclaimable the moment it is released. Two
+    such entries, and the younger was delivered once and never again, for as long
+    as the older one's cause lasted; transient failures are exempt from the
     delivery ceiling, so nothing else ended it. Without a ``cadence`` — a single
     poll with no history — the claim starts at the head, as it always did.
 
-    What the walk does not lift is ``XAUTOCLAIM``'s own scan limit: at ``count=1``
-    it inspects at most ten pending entries a call, and co-core drops the cursor
-    that says whether it stopped there or at the end, so an empty answer wraps
-    either way. An entry more than ten young entries past the cursor waits for
-    them to age, which they do within one ``claim_min_idle_ms``.
+    **The cursor is ``XAUTOCLAIM``'s own (#109).** Each call inspects at most ten
+    pending entries at ``count=1``, so a page can come back empty with more list
+    behind it; only a ``0-0`` cursor says the scan reached the end. An empty page
+    with a live cursor is scanned on from, up to ``MAX_CLAIM_PAGES`` a turn, so a
+    reclaimable entry behind a run of young ones is reached this turn rather than
+    once they have all aged. After a claim the walk resumes just past the entry
+    claimed (``_past``), not at the cursor, which is ``0-0`` when that entry was
+    the last pending one.
 
-    A poison entry is routed to the DLQ and the walk continues past it. Before the
-    walk, the same bad frame was re-claimed from ``0-0`` and re-raised forever
-    unless it was dead-lettered first; it still has to be, since the claim that
-    raised on it returned nothing else.
+    A poison entry is routed to the DLQ from the raw fields the page carries, and
+    the walk continues past it; ``MAX_POISON_SKIPS`` bounds how many one turn
+    routes. A pending entry whose stream entry was trimmed is dropped from the PEL
+    by ``XAUTOCLAIM`` itself and only reported, so it is logged here — the one
+    record that a command was never handled.
     """
     start = cadence.reclaim_from if cadence is not None else PEL_HEAD
     # A pass that began at the head has already looked everywhere a wrap would.
-    # The wrap happens at most once, so only poison frames count toward the bound.
+    # The wrap happens at most once, so it counts toward neither bound.
     wrapped = start == PEL_HEAD
-    skipped = 0
-    while skipped < MAX_POISON_SKIPS:
-        try:
-            claimed = await consumer.claim_stale(
-                min_idle_ms=settings.claim_min_idle_ms, count=1, start_id=start
-            )
-        except BusMessageAnomaly as exc:
-            await dead_letter_anomaly(client, consumer, exc)
+    pages = skipped = 0
+    while pages < MAX_CLAIM_PAGES and skipped < MAX_POISON_SKIPS:
+        page = await consumer.claim_stale_page(
+            min_idle_ms=settings.claim_min_idle_ms, count=1, start_id=start
+        )
+        for frame in page.poison:
+            await dead_letter_poison(consumer, frame)
             skipped += 1
-            start = _after(exc.message_id)
-            continue
-        if claimed or wrapped:
+        if page.deleted:
+            logger.warning(
+                "pending entries were trimmed",
+                extra={"message_ids": list(page.deleted), "group": group},
+            )
+        if page.messages:
             if cadence is not None:
-                cadence.reclaim_from = _after(claimed[-1].message_id) if claimed else PEL_HEAD
-            return claimed
-        start, wrapped = PEL_HEAD, True
+                cadence.reclaim_from = _past(page.messages[-1].message_id)
+            return list(page.messages)
+        if page.exhausted and wrapped:
+            if cadence is not None:
+                cadence.reclaim_from = PEL_HEAD
+            return []
+        if page.exhausted:
+            start, wrapped = PEL_HEAD, True
+            continue
+        start = page.cursor
+        if not page.poison:
+            pages += 1
     if cadence is not None:
         cadence.reclaim_from = start
     logger.warning(
-        "recovery pass hit the poison-skip bound",
-        extra={"skipped": MAX_POISON_SKIPS, "group": group},
+        "recovery pass hit its bound",
+        extra={"pages": pages, "skipped": skipped, "group": group},
     )
     return []
 

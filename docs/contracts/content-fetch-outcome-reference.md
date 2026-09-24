@@ -119,6 +119,7 @@ are the whole value of the six:
 | HTTP 5xx / 408 / 429, a network error, or a fetch still running at `REPLICATOR_MAX_FETCH_SECONDS` (default 120 s, #104) | retry indefinitely, default ~60 s cadence | delayed fact, or **nothing while it retries** |
 | Blob tree over `REPLICATOR_BLOB_MAX_TOTAL_BYTES` | parked in the PEL until a sweep frees space | delayed fact, or **nothing while it waits** |
 | Unclassified handler error | retried to the delivery ceiling (~4 reclaims / ~4 min at default settings), then fact + DLQ — **if the delivery count cannot be read, retried indefinitely instead** (#103) | `fetch_failed` · `handler_error` (+ `attempts`); **nothing while the count is unreadable** |
+| Command trimmed from `content.fetch` while still pending — delivered, not yet handled (#109) | dropped from the PEL by the reclaim that finds it; a WARNING, no DLQ entry — the frame is gone | **nothing** — no payload left to key a fact on |
 | Success | `blob_available` on `content.blobs` | the fact |
 
 Every `fetch_failed` row carries `terminal=True` — the command is closed and no blob will arrive.
@@ -133,9 +134,9 @@ failure signal.** Alert on `fetch_failed where reason != "not_modified"`.
 
 The "nothing" rows are not one problem, and the reaper is not the answer to all of them:
 
-- **Three rows have no usable `command_id`** — a non-`content_fetch` payload, a blank
-  `command_id`, and a frame that failed to decode. Permanently silent, and the reaper is the
-  only recourse. This is what MUST-6 keeps it for.
+- **Four rows have no usable `command_id`** — a non-`content_fetch` payload, a blank
+  `command_id`, a frame that failed to decode, and a command trimmed while pending. Permanently
+  silent, and the reaper is the only recourse. This is what MUST-6 keeps it for.
 - **Two rows are silent only while the command is in flight** — a retrying transient failure and
   a blob tree over its ceiling. Silent **for now** (#9 §3); an issuer that would use an
   in-flight signal should say so on its tracker rather than lengthening its timeout to
@@ -176,12 +177,12 @@ its tracker rather than inferring one from silence.
 
 ---
 
-## The four silent conditions
+## The five silent conditions
 
 Named in [MUST-6](content-fetch-issuer-contract.md#6-handle-fetch_failed-and-keep-a-reaper-anyway);
 this is each one and why it is silent.
 
-**Silence has not gone away — it has narrowed.** Three conditions still produce nothing, and one
+**Silence has not gone away — it has narrowed.** Four conditions still produce nothing, and one
 produces nothing *yet*:
 
 - **A frame that fails `from_wire` entirely.** It has no payload, therefore no `command_id`,
@@ -199,6 +200,12 @@ produces nothing *yet*:
   fact — there is no correlator to key one on. Silent to the issuer, but *not* silently
   processed: an empty id is not a valid `command_id` (MUST-1), and accepting it would take the
   dedupe key `replicator:cmd:` under which every later blank-id command becomes a no-op.
+- **A command trimmed from the stream while pending.** Delivered and not yet acked — in flight,
+  or waiting out a transient failure — when something trimmed `content.fetch` past it. The
+  reclaim that next reaches it finds no frame, so there is nothing to fetch, nothing to dead-letter
+  and no `command_id` to key a fact on. Replicator logs the entry ids (#109); the issuer learns
+  of it only through its reaper. Replicator never trims `content.fetch`, so this is a condition of
+  whoever does.
 - **A command still retrying.** Replicator emits no non-terminal fact today (#9 §3), so a 5xx,
   a 429, a network error, or a blob tree over its ceiling is invisible for as long as it retries —
   and there is no latency bound on that: transient failures retry indefinitely at the
@@ -223,7 +230,7 @@ is not evidence of a lost dead-letter.
 ordinary stream on the same broker, and every entry carries the original **command** envelope — so
 `key` is the failed `command_id` — plus `dlq_reason` and `dlq_original_id`. Its value is now the
 complement of the fact rather than a substitute for it: it is the only place the silent rows
-above show up at all, and it preserves the offending frame itself, which no fact does. Read it with
+above show up at all (bar a command trimmed while pending, which has no frame left to copy), and it preserves the offending frame itself, which no fact does. Read it with
 a plain `XREAD` and no consumer group: a group left behind by a non-owner accumulates a PEL nothing
 drains.
 

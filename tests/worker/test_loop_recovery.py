@@ -10,9 +10,15 @@ only. A reclaim owes the stream a turn, so a handler slower than
 
 And its sequel on the PEL's side (#102): recovery walks the pending list rather
 than restarting at ``0-0``, so the oldest slow failure cannot take every turn.
+
+And the walk's cursor is ``XAUTOCLAIM``'s own (#109), so a page that spent its
+attempt budget reads as "keep scanning" rather than "the list ended". These run on
+``fake_redis``, whose ``XAUTOCLAIM`` is rebuilt to the server's cursor semantics
+(``tests/conftest.py``) and held to them by ``test_fake_xautoclaim_integration.py``.
 """
 
 import asyncio
+import logging
 
 import pytest
 from co_core.pure.adapters.bus.streams import dlq_name
@@ -21,10 +27,10 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 
 from src.core.errors import TransientError
 from src.worker.loop import (
+    MAX_CLAIM_PAGES,
     MAX_POISON_SKIPS,
     Outcome,
     PollCadence,
-    _after,
     claim_once,
     poll_once,
 )
@@ -34,6 +40,15 @@ from tests.worker.conftest import GROUP, TOPIC, drive_loop, make_command, proces
 # the run off. Far past the one reclaim a fixed loop spends before its read, so
 # reaching it is the bug and not a tight bound.
 SLOW_ATTEMPTS_BEFORE_GIVING_UP = 6
+
+# XAUTOCLAIM inspects ``count * 10`` pending entries a call, and claim_once asks
+# for one. A reclaimable entry this many entries past the cursor is out of reach
+# of a single call.
+ENTRIES_PER_PAGE = 10
+
+# Idle times either side of a patient window: an entry backdated past it is
+# reclaimable, one just delivered is not.
+PATIENT_IDLE_MS = 60_000
 
 
 async def test_a_message_from_a_dead_consumer_is_reclaimed_and_processed(
@@ -222,6 +237,18 @@ def command_ids(messages) -> list[str]:
     return [message.payload.command_id for message in messages]
 
 
+def past(entry_id: str) -> str:
+    """An id beyond ``entry_id``'s millisecond: a start with nothing pending after it."""
+    return f"{int(entry_id.split('-')[0]) + 1}-0"
+
+
+async def backdate(fake_redis, entry_id: str) -> None:
+    """Age one pending entry past ``PATIENT_IDLE_MS`` without sleeping for it."""
+    await fake_redis.xclaim(
+        TOPIC, GROUP, "replicator@dead-worker", 0, [entry_id], idle=2 * PATIENT_IDLE_MS
+    )
+
+
 async def test_recovery_walks_the_pending_list_rather_than_restarting_at_its_head(
     fake_redis, consumer, settings
 ):
@@ -303,7 +330,8 @@ async def test_a_pass_stopped_by_the_poison_bound_resumes_behind_the_last_skippe
 
     assert await claim_once(fake_redis, consumer, eager, group=GROUP, cadence=cadence) == []
 
-    assert cadence.reclaim_from == _after(poison[MAX_POISON_SKIPS - 1])
+    # The next entry XAUTOCLAIM had not inspected: the frame after the last one routed.
+    assert cadence.reclaim_from == poison[MAX_POISON_SKIPS]
 
 
 async def test_a_wrap_does_not_spend_the_poison_bound(fake_redis, consumer, settings):
@@ -320,28 +348,12 @@ async def test_a_wrap_does_not_spend_the_poison_bound(fake_redis, consumer, sett
     await fake_redis.xreadgroup(GROUP, "replicator@dead-worker", {TOPIC: ">"}, count=100)
     (behind,) = await pend(fake_redis, "cmd-behind-poison")
     eager = settings.model_copy(update={"claim_min_idle_ms": 0})
-    cadence = PollCadence(reclaim_from=_after(behind))
+    cadence = PollCadence(reclaim_from=past(behind))
 
     claimed = await claim_once(fake_redis, consumer, eager, group=GROUP, cadence=cadence)
 
     assert command_ids(claimed) == ["cmd-behind-poison"]
     assert await fake_redis.xlen(dlq_name(TOPIC)) == len(poison)
-
-
-@pytest.mark.parametrize(
-    ("entry_id", "after"),
-    [
-        ("1700000000000-0", "1700000000000-1"),
-        ("1700000000000-41", "1700000000000-42"),
-        # The sequence is a u64; its successor is the next millisecond's first.
-        (f"1700000000000-{2**64 - 1}", "1700000000001-0"),
-        # The largest id a stream can hold has no successor, so the walk wraps.
-        (f"{2**64 - 1}-{2**64 - 1}", "0-0"),
-    ],
-)
-def test_the_cursor_starts_just_past_the_entry_claimed(entry_id, after):
-    """co-core discards ``XAUTOCLAIM``'s own cursor, so the next start is computed."""
-    assert _after(entry_id) == after
 
 
 async def test_among_slow_failing_entries_a_younger_one_is_still_retried(
@@ -371,3 +383,72 @@ async def test_among_slow_failing_entries_a_younger_one_is_still_retried(
     await drive_loop(fake_redis, consumer, eager, handler, stop, deadline=1.0)
 
     assert seen == ["cmd-a", "cmd-a", "cmd-b", "cmd-b"]
+
+
+async def test_a_reclaimable_entry_past_the_scan_budget_is_still_reached(
+    fake_redis, consumer, settings
+):
+    """#109: an empty page is not the end of the list.
+
+    Ahead of the reclaimable entry sit more young ones than one ``XAUTOCLAIM``
+    inspects. With co-core's cursor discarded that empty page read as "nothing
+    here", so the entry waited for every one of them to age.
+    """
+    ids = await pend(fake_redis, *(f"cmd-young-{n}" for n in range(ENTRIES_PER_PAGE + 2)))
+    (stale,) = await pend(fake_redis, "cmd-stale")
+    await backdate(fake_redis, stale)
+    patient = settings.model_copy(update={"claim_min_idle_ms": PATIENT_IDLE_MS})
+    cadence = PollCadence()
+
+    claimed = await claim_once(fake_redis, consumer, patient, group=GROUP, cadence=cadence)
+
+    assert command_ids(claimed) == ["cmd-stale"]
+    assert len(ids) > ENTRIES_PER_PAGE
+    assert cadence.reclaim_from == f"({stale}"
+
+
+async def test_a_trimmed_pending_entry_is_reported_and_the_walk_continues(
+    fake_redis, consumer, settings, caplog
+):
+    """#109: pending work lost to trimming is said out loud, and costs the walk nothing.
+
+    ``XAUTOCLAIM`` drops the entry from the PEL as it finds it, so the warning is
+    the only record there will be that a command was never handled.
+    """
+    lost, _ = await pend(fake_redis, "cmd-lost", "cmd-kept")
+    await fake_redis.xdel(TOPIC, lost)
+    eager = settings.model_copy(update={"claim_min_idle_ms": 0})
+
+    with caplog.at_level(logging.WARNING, logger="src.worker.loop"):
+        claimed = await claim_once(fake_redis, consumer, eager, group=GROUP)
+
+    assert command_ids(claimed) == ["cmd-kept"]
+    (record,) = [r for r in caplog.records if r.getMessage() == "pending entries were trimmed"]
+    assert record.message_ids == [lost]
+    assert record.group == GROUP
+    pending = await fake_redis.xpending_range(TOPIC, GROUP, min="-", max="+", count=10)
+    assert [entry["message_id"].decode() for entry in pending] == [claimed[0].message_id]
+
+
+async def test_a_pass_stopped_by_the_page_bound_resumes_where_it_stopped(
+    fake_redis, consumer, settings
+):
+    """The walk's own bound (#109): a long run of young entries pauses the scan.
+
+    Each call inspects ``ENTRIES_PER_PAGE`` entries, so a pending list longer than
+    the bound allows is left to the next turn — from where this one stopped, not
+    from the head, or the entries past the bound would never be reached.
+    """
+    ids = await pend(
+        fake_redis, *(f"cmd-young-{n}" for n in range(MAX_CLAIM_PAGES * ENTRIES_PER_PAGE + 1))
+    )
+    (stale,) = await pend(fake_redis, "cmd-stale")
+    await backdate(fake_redis, stale)
+    patient = settings.model_copy(update={"claim_min_idle_ms": PATIENT_IDLE_MS})
+    cadence = PollCadence()
+
+    assert await claim_once(fake_redis, consumer, patient, group=GROUP, cadence=cadence) == []
+    assert cadence.reclaim_from == ids[MAX_CLAIM_PAGES * ENTRIES_PER_PAGE]
+
+    claimed = await claim_once(fake_redis, consumer, patient, group=GROUP, cadence=cadence)
+    assert command_ids(claimed) == ["cmd-stale"]

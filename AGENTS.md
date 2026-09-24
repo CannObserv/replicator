@@ -133,8 +133,10 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
   unrepairable by the consumer; stored bytes with no fact repair themselves on the
   reclaim.
 - **Read `count=1`.** `AsyncBusConsumer.read(count>1)` raises on a malformed frame
-  *before* returning the well-formed ones, and `claim_stale` at `count>1` lets a
-  poison entry jam recovery permanently.
+  *before* returning the well-formed ones. Recovery claims through
+  `claim_stale_page` (#109), which returns poison instead of raising, and stays at
+  `count=1` for the #98 turn bound; `claim_stale` at `count>1` still strands a
+  batch behind a poison entry.
 - **`from_wire` is fail-loud and its dispatch table is global** — `isinstance`-check
   every decoded payload before destructuring. Use the canonical `extra="ignore"`
   models on the consume path, never the strict `*Emit` classes, and branch on

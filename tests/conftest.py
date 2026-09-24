@@ -317,10 +317,69 @@ async def fake_redis() -> AsyncGenerator:
     from fakeredis.aioredis import FakeRedis
 
     client = FakeRedis(decode_responses=False)
+    client.xautoclaim = _faithful_xautoclaim(client)
     try:
         yield client
     finally:
         await client.aclose()
+
+
+# XAUTOCLAIM's per-call attempt budget: ``count * 10`` pending entries inspected,
+# claimed or not (Redis 7.0 ``xautoclaimCommand``).
+XAUTOCLAIM_ATTEMPTS_PER_COUNT = 10
+
+
+def _faithful_xautoclaim(client):
+    """``XAUTOCLAIM`` as Redis 7 implements it, built from primitives fakeredis gets right (#109).
+
+    fakeredis 2.37.0's own returns the highest *claimed* id as the cursor (or the
+    ``start`` it was given), never the next id to scan and never ``0-0``, and has
+    no attempt budget. ``claim_once`` follows the cursor, and ``start`` is
+    inclusive, so on the fake's cursor every walk re-claims the entry it just
+    claimed and never learns the list ended. ``XPENDING`` and ``XCLAIM`` are
+    sound there — including ``XCLAIM`` dropping a trimmed entry from the PEL and
+    returning nothing, as the real server does — so the command is rebuilt from
+    them. ``tests/worker/test_fake_xautoclaim_integration.py`` holds this to the real server.
+    The primitives are bound here, at fixture creation, so a test that patches
+    the client's ``xpending_range`` to simulate a refusal refuses the worker's own
+    call and not the broker's internals.
+
+    Per inspected entry, in PEL order from ``start_id`` inclusive, the server's
+    order of checks: an entry whose stream entry is gone is removed and reported
+    in ``deleted`` whatever its idle time; one younger than ``min_idle_time`` is
+    passed over; the rest are claimed. A deleted entry spends ``count`` as a claim
+    does — so at ``count=1`` a page reports one or the other, never both. The scan
+    stops when ``count`` is spent or the attempt budget is, and the cursor is the
+    next PEL id after the last one inspected, or ``0-0`` when there is none. An
+    exclusive ``(<id>`` start passes through to ``XPENDING``, which reads it the
+    same way.
+    """
+
+    xpending_range, xrange, xclaim = client.xpending_range, client.xrange, client.xclaim
+
+    async def xautoclaim(
+        name, groupname, consumername, min_idle_time, start_id="0-0", count=None, justid=False
+    ):
+        assert not justid, "the emulation covers the reply co-core reads"
+        count = 100 if count is None else count
+        budget = count * XAUTOCLAIM_ATTEMPTS_PER_COUNT
+        pel = await xpending_range(name, groupname, min=start_id, max="+", count=budget + 1)
+        claimed, deleted = [], []
+        inspected = 0
+        for entry in pel[:budget]:
+            if len(claimed) + len(deleted) == count:
+                break
+            inspected += 1
+            entry_id = entry["message_id"]
+            if not await xrange(name, min=entry_id, max=entry_id):
+                await xclaim(name, groupname, consumername, 0, [entry_id])
+                deleted.append(entry_id)
+            elif entry["time_since_delivered"] >= min_idle_time:
+                claimed += await xclaim(name, groupname, consumername, 0, [entry_id])
+        cursor = pel[inspected]["message_id"] if inspected < len(pel) else b"0-0"
+        return [cursor, claimed, deleted]
+
+    return xautoclaim
 
 
 @pytest.fixture(scope="session")
