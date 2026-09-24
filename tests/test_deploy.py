@@ -549,11 +549,12 @@ class TestTheEarlyoomDecline:
 
     Sessions here inherit ``oom_score_adj`` -1000, and earlyoom 1.7 skips a
     -1000 process exactly as the kernel does (``kill.c:250``), ``--prefer`` or
-    not — so it cannot reach the dev tooling that caused broker#17, and would
-    shed small daemons and ``tailscaled`` instead. The premise is not universal:
-    notifier's sessions sit at 0 (notifier#74, gregoryfoster/skills#303), and
-    what decides it was never determined. So it is pinned live rather than
-    assumed; if it flips, the decline no longer holds and #112 reopens.
+    not — so it cannot reach the dev tooling that caused CannObserv/broker#17,
+    and would shed small daemons and ``tailscaled`` instead. The premise is not
+    universal: notifier's sessions sit at 0 (CannObserv/notifier#74,
+    gregoryfoster/skills#303), and what decides it was never determined. So it
+    is pinned live rather than assumed; if it flips, the decline no longer
+    holds and #112 reopens.
     """
 
     def test_a_session_under_exe_init_reports_its_root(self, tmp_path: Path) -> None:

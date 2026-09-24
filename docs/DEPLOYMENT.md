@@ -97,8 +97,8 @@ survivable reclaim instead of failed atomic allocations; it and
 at 8 GiB (#112); the 675 recorded on 2026-09-18 was at 3.9 GB. Read tailscaled's
 place against CannObserv/broker#17, where the failure *was* the tailnet: killing
 tailscaled takes the bus away exactly as effectively as killing this worker.
-broker (#21) and watcher (#309) each give it an `OOMScoreAdjust=` drop-in; this
-repo does not yet.
+CannObserv/broker#21 and CannObserv/watcher#309 each give it an
+`OOMScoreAdjust=` drop-in; this repo does not yet.
 
 CannObserv/broker#17 is what it costs when it fires, and it fires in a shape
 worth recognising: launching a SocratiCode server on the broker's VM took the
@@ -123,7 +123,7 @@ Four things this is not:
   under `choom -n 500`, and the capped launch already bounds that. broker and
   watcher run it on a "300 floor" reading of the same dry run — the score
   printed *before* the skip. Two things would change the answer: sessions
-  leaving -1000, notifier's shape (notifier#74), which `tests/test_deploy.py`
+  leaving -1000, notifier's shape (CannObserv/notifier#74), which `tests/test_deploy.py`
   pins live; and, if it is ever installed here, `-s 100` — with 4 G of swap its
   default waits for swap to fall to 10% free.
 - **Not `MemoryLow=`.** The obvious next reach, and it is inert on this host:
