@@ -559,3 +559,6 @@ docs/SKILLS.md :: disproven :: develops in worktrees by default, so that is the 
 docs/SKILLS.md :: disproven :: findings from the main checkout; disregard them anywhere else.
 docs/SKILLS.md :: disproven :: ### After an `init-socraticode` re-run, re-apply four things
 docs/SKILLS.md :: disproven :: | `node "$SOCRATICODE_DRIVER"` in the Graph health block | `node skills/init-socraticode/scripts/mcp-driver.mjs` |
+# #111 CR 2: the moved exemption lead named "this document" — the reference it
+#   now sits in — as the one that predicted no exemption; the contract did.
+docs/contracts/content-replicate-issuer-contract.md :: retarget :: ⚙ **A second exemption is needed anyway, and this document predicted otherwise (#29).** The sentence
