@@ -188,6 +188,10 @@ sudo systemctl enable --now replicator
 sudo cp deploy/99-co-replicator-memory.conf /etc/sysctl.d/
 sudo sysctl --system
 
+# Proof it took: the live checks read /proc and /sys/fs/cgroup, where
+# `systemctl show` would report values the running processes may not have
+uv run pytest --no-cov tests/test_deploy.py
+
 # Tail logs
 sudo journalctl -u replicator -f
 ```
