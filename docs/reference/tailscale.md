@@ -50,7 +50,7 @@ from `broker`, `replicator:22/8000/8001` are filtered. Verified 2026-09-23 for t
 notifier rule: `notifier:9000/health` answers `"environment":"production"` and
 `notifier:9001` times out, which is a filtered port, not a refusal. Verified
 2026-09-24 for the index rule: `index:6333` and `index:11434` accept a TCP
-connection, and `index:22` is filtered — #57 D13's edge is gone.
+connection, and `index:22` is filtered — notifier#57 D13's edge is gone.
 
 ## The path to the broker, measured
 

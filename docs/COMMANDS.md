@@ -400,7 +400,7 @@ both hold here (`loginctl show-user exedev -p Linger`,
 `/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/cgroup.controllers`).
 
 **Installing the Qdrant API key.** Not runnable from this VM: exe.dev VMs are
-isolated from each other, and #57 D13's `tag:index:22` edge was retired after the
+isolated from each other, and notifier#57 D13's `tag:index:22` edge was retired after the
 soak. It runs from an operator machine, the only host that reaches both ends.
 
 ```bash
