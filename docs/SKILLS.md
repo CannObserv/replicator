@@ -272,13 +272,13 @@ query names twelve, so three graph tools went unloaded every session and nothing
 the gap. Calling one of them unloaded does fail — `InputValidationError` — so what was silent
 was the drift, not its consequence.
 
-Two consequences worth knowing before reading either file. `docs/SOCRATICODE.md` prints the same
-query, but it is **generated** — a re-run of `init-socraticode` overwrites it wholesale — so the
-hook, not the doc, is the copy that tracks upstream; when the two disagree the doc is the stale one.
-And the artifact-count check the #72 bump brought catches a manifest entry that is declared and
-never indexed, **not** an edited `description` on one already indexed. Nothing catches that second
-case, which is why the rule in `AGENTS.md` → `## Code Exploration Notes (repo-specific)` is to
-re-run `codebase_context_index` in the same change as the edit.
+Two consequences worth knowing before reading either file. The hook is the **only** copy of the
+query: `docs/SOCRATICODE.md` printed it too until #117, and now points at the hook instead
+([skills#234](https://github.com/gregoryfoster/skills/issues/234)), so there is no second copy to
+drift. And the artifact-count check the #72 bump brought catches a manifest entry that is declared
+and never indexed, **not** an edited `description` on one already indexed. Nothing catches that
+second case, which is why the rule in `AGENTS.md` → `## Code Exploration Notes (repo-specific)` is
+to run `codebase_update` in the same change as the edit.
 
 **Two artifacts, and the second is the one that fails.** The symlink alone never runs — Claude Code
 runs what `.claude/settings.json` names. This repo carried the link, tracked and resolving, for nine
@@ -317,20 +317,23 @@ And since [skills#226](https://github.com/gregoryfoster/skills/issues/226) the d
 relative path (`.` included) from a worktree to the main checkout, and says so on stderr — only an
 absolute worktree path measures the worktree.
 
-### After an `init-socraticode` re-run, re-apply three things
+### After an `init-socraticode` re-run
 
-The skill regenerates `docs/SOCRATICODE.md` **wholesale** and re-copies the health hook, so a re-run
-reverts local corrections without saying so. Check these before committing its output:
+The skill replaces `docs/SOCRATICODE.md` between its `socraticode-doc` markers and the `AGENTS.md`
+policy block between its own, and keeps what follows each `END`. The doc had no markers until #117,
+so a re-run used to overwrite it wholesale and this list was three things to re-apply by hand. Check
+these before committing its output:
 
-| Re-apply | Reverts to | Why it matters |
-|---|---|---|
-| `.claude/hooks/socraticode-health.sh` as a symlink | a copy (step C) | skills#179; `tests/test_skills_hook.py` fails, so this one is caught |
-| `codebase_context_index` | — | `AGENTS.md` and every doc here are registered artifacts; nothing re-embeds them |
-| The **The store is external and shared** paragraph under the do-not-hand-edit notice, and the Cross-repo search section's three silent-skip modes with its pointer into `docs/INFRASTRUCTURE.md` | whatever the template writes for a fresh install and for `linkedProjects` | #92. A linked repo contributes nothing when its path does not resolve, when its collection was never indexed, or when it resolves to a path hash instead of `codebase_<sibling>` — and the tool result says so in none of the three. The per-sibling state is in `docs/INFRASTRUCTURE.md` precisely so a re-run cannot take it; the *pointer* still has to survive |
+| Check | Why it matters |
+|---|---|
+| `.claude/hooks/socraticode-health.sh` is still a symlink | skills#179; `install-hook.sh` copies only where there is no `skills-vendor/`, and `tests/test_skills_hook.py` fails on a copy |
+| The doc's tool table names this repo's artifacts in its context and schema rows | the template's rows are generic, and the schema row's is a database; here it is `outcome-reference` / `issuer-reference`, because an unfiltered context search ranks the dated design plans with them (skills#315) |
+| `codebase_update` | `AGENTS.md` and every doc here are registered artifacts; nothing re-embeds them |
 
-Repo-specific *prose* needs no re-applying — it lives in `AGENTS.md` under
-`## Code Exploration Notes (repo-specific)`, outside the marker pair, which is why it goes there and
-not into the generated file.
+Repo-specific *prose* needs no re-applying. The doc's lives under `## Repo-specific notes` below its
+`END` marker — the external store, both launch pins, and the Cross-repo search section's three
+silent-skip modes with its pointer into `docs/INFRASTRUCTURE.md` (#92) — and `AGENTS.md`'s under
+`## Code Exploration Notes (repo-specific)`, outside the policy markers.
 
 ## Every hook dangles on a submodule-less checkout
 

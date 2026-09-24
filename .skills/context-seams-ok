@@ -405,3 +405,20 @@ docs/contracts/content-fetch-issuer-reference.md :: Expands [MUST-2](content-fet
 docs/contracts/content-fetch-issuer-reference.md :: | `payload` | the model, JSON-serialized — where every field actually lives: the [command]
 docs/contracts/content-replicate-issuer-contract.md :: [how the blob TTL clock runs](content-fetch-outcome-reference.md#how-the-blob-ttl-clock-runs), which expands
 docs/contracts/content-fetch-outcome-reference.md :: collapse it. That is by design (see [the envelope, key by key](content-fetch-issuer-reference.md#the-envelope-key-by-key)); it is also
+
+# --- #117: docs/SOCRATICODE.md regenerated from the skills#323-#330 template ----
+# Not a curation: the doc gained socraticode-doc markers, the policy block took
+# the template's wording, and docs/SKILLS.md's re-run checklist was rewritten to
+# match. Every hit below points at an AGENTS.md section that is still there —
+# ## Code Exploration Policy (and its degraded variant, which the template names),
+# ## Code Exploration Notes (repo-specific) — or names AGENTS.md as a registered
+# artifact. The entries above for the old SOCRATICODE.md lines no longer match
+# anything; left in place like every earlier run's.
+docs/SOCRATICODE.md :: Detail doc for the `## Code Exploration Policy` block in `AGENTS.md`: that
+docs/SOCRATICODE.md :: after it, not in `AGENTS.md`.
+docs/SOCRATICODE.md :: the `AGENTS.md` block is on its degraded variant |
+docs/SOCRATICODE.md :: **What the manifest registers.** `AGENTS.md`, the README, `docs/plans/`, every
+docs/SOCRATICODE.md :: not the artifact: see `AGENTS.md` → `## Code Exploration Notes (repo-specific)`.
+docs/SKILLS.md :: second case, which is why the rule in `AGENTS.md` → `## Code Exploration Notes (repo-specific)` is
+docs/SKILLS.md :: The skill replaces `docs/SOCRATICODE.md` between its `socraticode-doc` markers and the `AGENTS.md`
+docs/SKILLS.md :: silent-skip modes with its pointer into `docs/INFRASTRUCTURE.md` (#92) — and `AGENTS.md`'s under
