@@ -6,8 +6,8 @@ metadata:
   author: gregoryfoster
   triggers: brainstorm, design this, let's design
   overrides: obra-superpowers/brainstorming
-  synced-from: "obra-superpowers v6.3.0 (b36e082)"
-  override-reason: "Project-specific conventions: docs/plans/ path, #<n> [type]: desc commit convention, writing-plans is optional not mandatory; invokes using-git-worktrees after design approval for any multi-step implementation; opens a GitHub issue at design approval; FastAPI stack context. Upstream's visual companion, dot-graph process flow, spec self-review and user review gate are deliberately omitted — this project reviews the design in chat and the doc in the commit."
+  synced-from: "obra-superpowers v6.4.1 (5bf4e78)"
+  override-reason: "Project-specific conventions: docs/plans/ path, #<n> [type]: desc commit convention, writing-plans is optional not mandatory; invokes using-git-worktrees after design approval for any multi-step implementation; opens a GitHub issue at design approval; FastAPI stack context. Upstream's visual companion, dot-graph process flow and its path-bound terminal states, spec self-review and user review gate are deliberately omitted — this project reviews the design in chat and the doc in the commit, so the architectural gate ends at design approval rather than at v6.4.1's written-spec and plan reviews. Upstream's 'Design for isolation and clarity' and 'Working in existing codebases' subsections are omitted too, as they have been since #1."
 ---
 
 # Brainstorming Ideas Into Designs — replicator
@@ -18,12 +18,47 @@ Start by classifying how much process the request needs, then work through your
 path: understand the context, refine the idea, present a design, and get the
 user's approval.
 
+## Establish Shared Understanding
+
+The outcome of brainstorming is an understanding the user can recognize and
+correct, grounded in what they want to accomplish.
+
+1. **Discover intent.** Use the request and available context to identify the
+   intended outcome, who it is for, and what success looks like. When that
+   information is missing, ask one focused question about purpose or intended
+   use before proposing features or an approach. Knowing the kind of service
+   does not tell you why the user wants the change. Gathering missing
+   requirements does not ask them to authorize the task again.
+2. **Write back your understanding.** Summarize the intended outcome, relevant
+   constraints, and success criteria in a short note the user can assess.
+   Separate what they said from assumptions. Invite correction and incorporate
+   their answer before treating this as the design brief.
+3. **Carry intent into the design.** Preserve the agreed understanding in the
+   selected path's design artifact: the design doc for architectural work, or
+   the in-chat design/probe for bounded work and spikes. Check proposed
+   features and technical choices against that understanding.
+
+When the request already supplies the purpose and constraints, reflect that
+understanding instead of asking the same questions again. Keep the note
+concise; its accuracy and the opportunity to correct it matter.
+
 <HARD-GATE>
-Do NOT invoke any implementation skill, write any code, scaffold any project, or
-take any implementation action until you have told the user what you intend and
-they have approved it. This applies to EVERY task on EVERY path below — the
-ceremony scales with the task; the approval gate never does. The design doc
-itself is the one file you may write before implementation begins.
+Before taking any implementation action, including invoking an implementation
+skill, writing product code, scaffolding, installing product dependencies, or
+creating an external project, complete the selected path's prerequisites:
+
+- Spike: the user approves the question and probe.
+- Bounded: the user approves the short in-chat design.
+- Architectural: the user approves the design in chat, section by section.
+  That approval permits writing the design doc and opening its issue; the doc
+  is then reviewed in its commit, not at a separate gate.
+
+A reply approves the stage actually presented. Approval of an idea or feature
+scope does not approve a design that has not been presented. Resume at the
+earliest incomplete stage; do not turn one approval into permission to skip the
+rest of the selected path. Read-only project exploration is allowed while those
+prerequisites remain incomplete. The design doc itself is the one file you may
+write before implementation begins.
 </HARD-GATE>
 
 ## Three Paths
@@ -73,17 +108,17 @@ Brainstorming is **not** required for:
 
 ## Anti-Pattern: "Too Simple To Need Approval"
 
-Every path ends with the user approving your intent before implementation. A
-config change, a single-function utility, one new setting — the design may be two
-sentences in chat, but you MUST present it and get approval. "Simple" tasks are
-where unexamined assumptions cause the most wasted work. What scales with
-simplicity is the artifact, never the approval.
+Every path ends with the user approving the required design before
+implementation. A bounded change — a config change, one new setting — may need
+only two sentences in chat. A new consumer group, however small, is
+architectural and requires the design doc and its issue. Scale the artifact to
+the selected path; complete that path's approvals before implementation.
 
 ## Red Flags
 
 | Thought | Reality |
 |---------|---------|
-| "This is too simple to need a design" | Simple means a short design, not no design. Two sentences in chat, then approval. |
+| "This is too simple to need a design" | Follow the selected path: a bounded change gets a short chat design; an architectural change gets the design doc and its issue. |
 | "I'll call it bounded and skip the doc" | Reaching for a label to skip work IS the doubt — take the heavier path. |
 | "It's bounded and the design is obvious — I'll start while they read it" | The gate is the approval, not the design's length. Present, then stop until you hear yes. |
 | "I understand this kind of service, so it's bounded" | Bounded measures the repo, not your familiarity. A new subsystem has no existing flow — it is architectural. |
