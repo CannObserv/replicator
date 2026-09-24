@@ -481,9 +481,11 @@ class TestHostMemoryTunables:
     file, which a rebuild would have lost silently: the host would come back
     with a ~11 MB atomic reserve and nothing naming that as wrong.
 
-    These are the levers that work *here*. `MemoryLow=` is not one of them —
-    cgroup2 is mounted without `memory_recursiveprot` and no slice above grants
-    one, so a reservation on either unit is inert (docs/DEPLOYMENT.md).
+    These are the levers that work *here*. `MemoryLow=` is not one of them as
+    configured — cgroup2 is mounted without `memory_recursiveprot` and no slice
+    above grants one, so a reservation on either unit is inert
+    (docs/DEPLOYMENT.md). A `system.slice.d` grant would change that; #113
+    decides whether to add one.
     """
 
     def test_the_drop_in_is_tracked(self) -> None:

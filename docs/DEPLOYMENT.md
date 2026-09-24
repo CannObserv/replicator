@@ -98,7 +98,7 @@ at 8 GiB (#112); the 675 recorded on 2026-09-18 was at 3.9 GB. Read tailscaled's
 place against CannObserv/broker#17, where the failure *was* the tailnet: killing
 tailscaled takes the bus away exactly as effectively as killing this worker.
 CannObserv/broker#21 and CannObserv/watcher#309 each give it an
-`OOMScoreAdjust=` drop-in; this repo does not yet.
+`OOMScoreAdjust=` drop-in; this repo does not yet — that is #113.
 
 CannObserv/broker#17 is what it costs when it fires, and it fires in a shape
 worth recognising: launching a SocratiCode server on the broker's VM took the
@@ -128,11 +128,13 @@ What this is not:
   (CannObserv/notifier#74), which `tests/test_deploy.py` pins live; and, if it
   is ever installed here, `-s 100` — with 4 G of swap its default waits for
   swap to fall to 10% free.
-- **Not `MemoryLow=`.** The obvious next reach, and it is inert on this host:
-  cgroup2 is mounted without `memory_recursiveprot` and no slice above grants
-  one, so a reservation on either unit would be silently ineffective. #99 step 3
-  prescribes it generically; `init-socraticode`'s `preflight.sh --check` reports
-  the mount state and is the fastest way to re-confirm it.
+- **Not `MemoryLow=`, as configured.** The obvious next reach, and it is inert
+  on this host: cgroup2 is mounted without `memory_recursiveprot` and no slice
+  above grants one, so a reservation on either unit would be silently
+  ineffective. #99 step 3 prescribes it generically; `init-socraticode`'s
+  `preflight.sh --check` reports the mount state and is the fastest way to
+  re-confirm it. broker and watcher made it real with a `system.slice.d` grant
+  covering their units' sum; whether to do the same here is #113's to decide.
 - **Not `-1000`.** That is the exemption above, and an exempt worker that leaks
   is unreclaimable — the kernel would work through everything else on the box
   first. `-900` is the cohort's value (CannObserv/broker#25): last of the
