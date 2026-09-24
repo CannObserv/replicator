@@ -313,8 +313,9 @@ realpaths. And the hook measured `.`, so every worktree session reported `graph 
 against a healthy index ([gregoryfoster/skills#180](https://github.com/gregoryfoster/skills/issues/180));
 it now measures the main checkout. `SOCRATICODE_DRIVER` in `.claude/settings.json` stays — candidate
 1 in the hook's resolution order, and the name every invocation in [COMMANDS.md](COMMANDS.md) uses.
-The residual is manual: a `health-check .` run from a worktree still names a path nothing indexed,
-so run those from the main checkout.
+And since [skills#226](https://github.com/gregoryfoster/skills/issues/226) the driver itself resolves a
+relative path (`.` included) from a worktree to the main checkout, and says so on stderr — only an
+absolute worktree path measures the worktree.
 
 ### After an `init-socraticode` re-run, re-apply three things
 
