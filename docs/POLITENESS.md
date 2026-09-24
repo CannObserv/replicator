@@ -57,7 +57,7 @@ Four consumer-side rules that came out of building it, each one a way to be wron
   `policy.get(host) or default` turns an explicit operator decision into a missing one.
 - **The default's strictness cannot be asserted at startup.** A published interval has no upper
   bound, so there is no value to validate against short of importing the issuer's own backoff
-  ceiling — the constant this indirection exists to avoid importing. What is enforceable is the
+  ceiling — the constant a bus-delivered policy exists to keep out of this service. What is enforceable is the
   moment a real policy turns out to be *stricter* than the fallback that would replace it on
   revocation or staleness, which is logged per host at apply time and is the number an operator
   raises.

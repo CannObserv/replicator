@@ -606,3 +606,4 @@ docs/contracts/content-fetch-outcome-reference.md :: disproven :: dedupe key `re
 docs/contracts/content-fetch-issuer-contract.md :: disproven :: Replicator dedupes on `command_id` — `replicator:cmd:<command_id>`, TTL
 docs/contracts/content-fetch-issuer-contract.md :: disproven :: rather than treating `replicator:cmd:` as a dedupe key — under which the second blank-id command
 docs/CONVENTIONS.md :: retarget :: a re-fetch of the origin (`HostPacer` is in-memory, so its escalations are cold
+docs/contracts/replicator-boundaries.md :: retarget :: ceiling — the constant this indirection exists to avoid importing. What is enforceable is the
