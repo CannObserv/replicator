@@ -31,8 +31,7 @@ adopters had built.
 below says which of the eight fetch obligations apply verbatim — read the deep document for any row
 that does not say *no analogue*, because a thin delta doc whose reader never opens the deep one is
 the failure mode this shape trades against.
-Its own [reference](content-replicate-issuer-reference.md), equally normative, carries the reasoning
-several clauses below rest on.
+Its own [reference](content-replicate-issuer-reference.md) carries the reasoning under several clauses.
 
 **Sibling.** [`replicator-boundaries.md`](replicator-boundaries.md) settles what Replicator may
 become. Its three tests decide the destination-authority question below, and it is the reason the
@@ -256,7 +255,7 @@ document, not summarized here.
 | **5** — do not dedupe facts on `content_fingerprint` | **no analogue** |
 | **6** — handle the failure fact, keep a reaper anyway | **verbatim.** Non-terminal failures are still silent; a command can still close without a fact |
 | **7** — copy the bytes before the blob expires | **inverts.** For fetch this is the consumer's obligation; for replicate it is the issuer's *scheduling* obligation. Issue while the blob lives — the clock runs from last **fetch** reference, not last read — and handle `blob_expired` as terminal. `blob_expires_at` on the `blob_available` fact is the value to schedule against. The window it is drawn from is stated below |
-| **8** — do not send a validator until you handle `not_modified` | **no analogue.** `ContentReplicateCommand` carries no request headers, so there is no validator to send and no `not_modified` to handle |
+| **8** — do not send a validator until you handle `not_modified` | **no analogue** — a replicate command carries no request headers |
 
 ⚙ **The window you are scheduling against: at least seven days from last fetch reference.**
 Stated here as well as in the fetch contract because a replicate issuer is the party this number
@@ -387,8 +386,7 @@ Settled in a cannobserv `docs/plans/` design doc alongside #303, not here:
 ## Where the rest of the contract lives
 
 - [`content-replicate-issuer-reference.md`](content-replicate-issuer-reference.md) — **equally
-  normative**: the read/write comparison and the IAS3 evidence, why T3a is the sharper half, T4's
-  `ia`/Wayback correction, T6's #36 history, and the exemption the Charter check did not foresee.
+  normative**: the reasoning under the trust section, T3a, T4, T6 and the Charter check.
 - [`content-fetch-issuer-contract.md`](content-fetch-issuer-contract.md) and its
   [request](content-fetch-issuer-reference.md) and
   [outcome](content-fetch-outcome-reference.md) references — **all normative here.** The frame, the
