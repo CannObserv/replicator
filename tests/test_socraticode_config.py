@@ -427,8 +427,8 @@ class TestServerLaunchCost:
         `choom` is part of the contract, not decoration: a session process sits
         at `oom_score_adj` -1000, where a cgroup cap *stalls* the process rather
         than killing it. How the hook probes and falls back is upstream's to
-        pin (`tests/structural/test_health_hook_cap.py`); this asserts only that
-        the build vendored here has a cap at all.
+        pin (`skills-vendor/gregoryfoster-skills/tests/structural/test_health_hook_cap.py`);
+        this asserts only that the build vendored here has a cap at all.
         """
         assert HEALTH_SCRIPT.exists(), (
             "skills-vendor/ is not checked out: run .skills/doctor.sh locally, "
@@ -480,7 +480,11 @@ class TestServerLaunchCost:
             f"{HEALTH_HOOK} is not registered as install-hook.sh writes it: "
             f"{health[0].get('command')!r} — the vendored hook caps itself (skills#330)"
         )
-        assert health[0].get("timeout") == HEALTH_TIMEOUT_S
+        assert health[0].get("timeout") == HEALTH_TIMEOUT_S, (
+            f"{HEALTH_HOOK}'s SessionStart timeout is {health[0].get('timeout')!r} — "
+            f"socraticode-health.install sets {HEALTH_TIMEOUT_S}, above the hook's own "
+            "60 s driver ceiling so the inner bound is the one that fires (skills#259)"
+        )
 
     def test_the_cap_ceiling_is_left_to_the_host(self, settings_env: dict) -> None:
         """`SOCRATICODE_HEALTH_CAP` belongs in `settings.local.json`, not here.
