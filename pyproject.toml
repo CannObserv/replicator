@@ -7,7 +7,22 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
-    # Floor is 0.19.0, for `AsyncBusConsumer.claim_stale_page` (cannobserv#465,
+    # Floor is 0.19.1, for `AsyncBusConsumer.dead_letter`'s `reason=` keyword and
+    # the provenance it writes onto every DLQ entry (`dlq.source_id`, `dlq.group`,
+    # `dlq.consumer`, `dlq.reason` — cannobserv#474, #116), which retired the
+    # `dlq_reason` / `dlq_original_id` keys `_dead_letter` added by hand. It also
+    # accepts an empty field map, which lets `dead_letter_anomaly` park a trimmed
+    # entry without inventing fields for it. On 0.19.0 the first dead-letter raises
+    # TypeError on the keyword — at runtime, on the error path, which is why the
+    # floor carries it; the tests fail at collection instead, importing
+    # `co_core.pure.adapters.bus.dead_letter`, which 0.19.0 does not ship.
+    # Diffing the wheels: `dead_letter` is the only change to anything imported
+    # here (0.19.1 otherwise touches co/v1 engagement options and `AddressModel`),
+    # and 0.19.2 is 0.19.1 bar its `__version__` strings. The lock takes 0.19.2.
+    #
+    # Previously:
+    #
+    # Floor was 0.19.0, for `AsyncBusConsumer.claim_stale_page` (cannobserv#465,
     # #109): XAUTOCLAIM's cursor, poison frames returned rather than raised, and
     # the trimmed-while-pending ids. `claim_once` walks the pending list on that
     # cursor, so on an older wheel the worker fails at its first reclaim with an
@@ -80,8 +95,8 @@ dependencies = [
     # at module load, so a skew cannot reach a running worker at all. Additive over
     # 0.8.0 for everything the fetch path uses — no field on ContentFetchCommand,
     # BlobAvailableEvent or FetchFailedEvent moved between the two.
-    "co-core[extract]>=0.19.0,<0.20",
-    "co-core-aio[bus,gcs]>=0.19.0,<0.20",
+    "co-core[extract]>=0.19.1,<0.20",
+    "co-core-aio[bus,gcs]>=0.19.1,<0.20",
     "fastapi>=0.126.0,<1",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.5.0,<3",
