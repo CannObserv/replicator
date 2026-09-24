@@ -29,7 +29,7 @@ Replicator is a broker client, a notifier client and an index client, plus inter
 |---|---|
 | `tag:replicator → tag:broker:6379` | The bus |
 | `tag:replicator → tag:notifier:9000` | The `OnFailure=` handler's alerts, and nothing else (#108, notifier#70). `:9000` only: replicator has no dev process to point at notifier's `:9001` |
-| `tag:replicator → tag:index:6333,11434` | SocratiCode's store — Qdrant and Ollama on `co-index` (notifier#57, [INFRASTRUCTURE.md](../INFRASTRUCTURE.md#the-semantic-index-is-co-index--a-store-this-repo-is-a-client-of)). Sessions only; the worker never reaches it |
+| `tag:replicator → tag:index:6333,11434` | SocratiCode's store — Qdrant and Ollama on `co-index` (notifier#57, [INFRASTRUCTURE.md](../INFRASTRUCTURE.md#the-semantic-index-is-co-index--a-store-this-repo-is-a-client-of)). The grant is node-wide, and Ollama unauthenticated; what keeps a command from aiming the worker at either port is the fetch destination guard, which refuses the tailnet's `100.64.0.0/10` on every hop (#95) |
 | The tailnet's `autogroup:member → *:*`, plus an `ssh` block admitting `autogroup:member` as `exedev` or `root` | Admin reach, from your own devices only (watcher#296 D3). No tagged node reaches this one |
 
 Tailscale SSH needs **both** halves. Peer visibility follows `acls` rules, not
