@@ -94,9 +94,10 @@ WorkingDirectory=/home/exedev/replicator
 # would work through everything else on the box before touching it.
 # tests/test_deploy.py pins both bounds.
 #
-# earlyoom does not substitute for this: it floors a --prefer match at 300,
-# while a service at the default adj 0 reads ~670 on this kernel, so it too
-# would choose the worker.
+# earlyoom does not substitute for this (#112): 1.7 skips -1000 exactly as the
+# kernel does, --prefer or not, so it cannot reach the session tooling either
+# and would take the same eligible list in the same order, only sooner.
+# tests/test_deploy.py::TestTheEarlyoomDecline pins that premise live.
 OOMScoreAdjust=-900
 # Creates /var/lib/replicator (REPLICATOR_BLOB_DIR's parent) owned by User=.
 StateDirectory=replicator
