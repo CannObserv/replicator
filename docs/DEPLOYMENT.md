@@ -119,15 +119,15 @@ What this is not:
   300 and is passed over. So its order is the kernel's: `systemd --user` 733,
   `tailscaled` 670, the adj-0 daemons 666, journald 501, the worker 71. It
   would shed small daemons and tailscaled, freeing little, while the ~1.7 GiB
-  held at -1000 stays out of reach. The one thing it *can* take is a process
-  under `choom -n 500`, and the capped launch already bounds that. broker runs
-  it on a "300 floor" reading of the same dry run — the score printed *before*
-  the skip (CannObserv/broker#58) — and watcher on its sessions' `node` sitting
-  at adj 0, which on that -1000 host it does not (CannObserv/watcher#323). What
-  would change the answer: sessions leaving -1000, notifier's shape
-  (CannObserv/notifier#74), which `tests/test_deploy.py` pins live; and, if it
-  is ever installed here, `-s 100` — with 4 G of swap its default waits for
-  swap to fall to 10% free.
+  held at -1000 stays out of reach. The one session process it *can* take is
+  one under `choom -n 500`, and the capped launch already bounds that. broker
+  runs it on a "300 floor" reading of the same dry run — the score printed
+  *before* the skip (CannObserv/broker#58) — and watcher on its sessions'
+  `node` sitting at adj 0, which on that -1000 host it does not
+  (CannObserv/watcher#323). What would change the answer: sessions leaving
+  -1000, notifier's shape (CannObserv/notifier#74), which
+  `tests/test_deploy.py` pins live; and, if it is ever installed here,
+  `-s 100` — with 4 G of swap its default waits for swap to fall to 10% free.
 - **Not `MemoryLow=`, as configured.** The obvious next reach, and it is inert
   on this host: cgroup2 is mounted without `memory_recursiveprot` and no slice
   above grants one, so a reservation on either unit would be silently
