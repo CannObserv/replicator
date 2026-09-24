@@ -231,7 +231,7 @@ What `to_wire` puts on the stream; the rule that governs it is
 | Key | Value |
 |---|---|
 | `key` | the envelope's idempotency key, derived by `to_wire` — see the table below |
-| `payload` | the model, JSON-serialized — where everything in the contract's payload tables actually lives |
+| `payload` | the model, JSON-serialized — where every field actually lives: the [command](content-fetch-issuer-contract.md#the-command)'s, and the [facts'](content-fetch-outcome-reference.md#the-success-fact) |
 | `event_type` | `content_fetch` / `blob_available` / `fetch_failed` — how `from_wire` picks a model |
 | `schema_version` | stringified |
 | `occurred_at` | ISO 8601 UTC, **tz-aware** — see [the command](content-fetch-issuer-contract.md#the-command) |
