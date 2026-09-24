@@ -141,14 +141,14 @@ and complete them in order.
 
 **Bounded:**
 1. **Explore project context** — read AGENTS.md, check recent commits, review the files you will touch
-2. **Ask clarifying questions** — one at a time, the ones that matter
+2. **Ask clarifying questions** — one at a time, the ones that matter; then write back your understanding, what they said apart from what you assume, and fold in their corrections
 3. **Present short design in chat** — approach, files touched, testing
 4. **Get approval** — STOP and wait for an explicit yes; presenting the design and starting in the same breath is skipping the gate
 5. **Implement** — the normal workflow, TDD included; no design doc, no issue
 
 **Architectural:**
 1. **Explore project context** — read AGENTS.md and the relevant detail docs, check recent commits
-2. **Ask clarifying questions** — one at a time; purpose, constraints, success criteria
+2. **Ask clarifying questions** — one at a time; purpose, constraints, success criteria; then write back your understanding, what they said apart from what you assume, and fold in their corrections
 3. **Propose 2–3 approaches** — with trade-offs and a recommendation
 4. **Present design** — in sections scaled to complexity; get approval after each section
 5. **Write design doc** — save to `docs/plans/YYYY-MM-DD-<topic>-design.md` and commit
@@ -190,7 +190,7 @@ short in-chat design is the whole process.
 
 **Write the design doc:**
 - Path: `docs/plans/YYYY-MM-DD-<topic>-design.md`
-- Include: goal, approved approach, key decisions and their rationale, out-of-scope items
+- Include: goal and success criteria (the agreed understanding), constraints, approved approach, key decisions and their rationale, out-of-scope items
 
 **Open a GitHub issue:**
 
