@@ -68,7 +68,7 @@
     {
       "name": "temp-storage",
       "path": "./docs/STORAGE.md",
-      "description": "The blob tree: file://<blob_dir>/<ab>/<cd>/<sha256>.bin with a constant .bin extension, temp-file + os.replace so presence means complete, and creation-only 0644/0755 modes with the startup reachability warning. Retention: the TTL runs from last reference (os.utime on the store short-circuit), the three populations under REPLICATOR_BLOB_DIR and why in-flight .tmp files are not garbage, the byte ceiling as backpressure rather than a faster clock, the single BlobUsage with two writers, orphan recording, and why the sweep runs in the worker rather than a systemd timer. Carries the REPLICATOR_BLOB_* variables and REPLICATOR_MAX_BLOB_BYTES themselves since #92, under ## Variables; docs/ENVIRONMENT.md indexes them by name."
+      "description": "The temp tier over the cluster's shared content-addressed store (co_core_sync.drivers.blobstore since #114, cannobserv#475): both backends are co-core's, and the worker builds each with touch_on_rereference=True, which is not the shared store's default. The blob tree: file://<blob_dir>/<ab>/<cd>/<sha256>.bin with a constant .bin extension, temp-file + os.replace so presence means complete, and creation-only 0644/0755 modes with the startup reachability warning. Retention: the TTL runs from last reference (os.utime on the store short-circuit), the three populations under REPLICATOR_BLOB_DIR and why in-flight .tmp files are not garbage, the byte ceiling as backpressure rather than a faster clock, the single BlobUsage with two writers, orphan recording, and why the sweep runs in the worker rather than a systemd timer. Carries the REPLICATOR_BLOB_* variables and REPLICATOR_MAX_BLOB_BYTES themselves since #92, under ## Variables; docs/ENVIRONMENT.md indexes them by name."
     },
     {
       "name": "infrastructure-topology",
@@ -128,7 +128,7 @@
     {
       "name": "wheelhouse-sync",
       "path": "./scripts/sync_wheelhouse.py",
-      "description": "Mirrors the private cannobserv package index (gs://co-gcs-pypi/wheels/) into ./.wheelhouse, from which uv resolves co-core and co-core-aio via find-links. Must run before uv sync and must not import the project, since the project's deps are what it provides — hence the isolated `uv run --no-project --with google-cloud-storage` invocation. ADC auth: the SA key on the VM, keyless WIF in CI."
+      "description": "Mirrors the private cannobserv package index (gs://co-gcs-pypi/wheels/) into ./.wheelhouse, from which uv resolves co-core, co-core-aio and co-core-sync via find-links. Must run before uv sync and must not import the project, since the project's deps are what it provides — hence the isolated `uv run --no-project --with google-cloud-storage` invocation. ADC auth: the SA key on the VM, keyless WIF in CI."
     },
     {
       "name": "redis-floor-guard",
@@ -143,7 +143,7 @@
     {
       "name": "dependency-contract",
       "path": "./pyproject.toml",
-      "description": "Project and tooling contract. The co-core / co-core-aio pins (>=0.19.1,<0.20, for dead_letter's reason= since #116) with their [extract] and [bus,gcs] extras, the floor history that explains each raise, the [tool.uv] find-links wheelhouse resolution, the ruff rule set and its skills-vendor exclusion, the ty exclusion, the replicator-worker console script, pytest configuration (asyncio auto mode, the integration and gcs markers both deselected by default, timeout) and the 80% coverage gate."
+      "description": "Project and tooling contract. The co-core / co-core-aio / co-core-sync pins (>=0.19.3,<0.20, for the shared content-addressed BlobStore since #114 — cannobserv#475) with their [extract], [bus,gcs] and [gcs] extras, the floor history that explains each raise, the [tool.uv] find-links wheelhouse resolution, the ruff rule set and its skills-vendor exclusion, the ty exclusion, the replicator-worker console script, pytest configuration (asyncio auto mode, the integration and gcs markers both deselected by default, timeout) and the 80% coverage gate."
     },
     {
       "name": "main-checkout-guard",
