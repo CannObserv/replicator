@@ -157,7 +157,7 @@ What this is not:
   -1000, notifier's shape (CannObserv/notifier#74), which
   `tests/test_deploy.py` pins live; and, if it is ever installed here,
   `-s 100,100` — it acts only with memory *and* swap under their minimums, and
-  a bare `-s 100` leaves SIGKILL's at half: 2 G of swap in use, which
+  a bare `-s 100` leaves SIGKILL's swap minimum at 50%: 2 G in use, which
   `vm.swappiness = 10` may never reach (gregoryfoster/skills#331).
 - **Not `-1000`.** That is the exemption above, and an exempt worker that leaks
   is unreclaimable — the kernel would work through everything else on the box
