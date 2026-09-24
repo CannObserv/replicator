@@ -460,8 +460,10 @@ class TestServerLaunchCost:
         manual = {frozenset(m.group(1).split()[1::2]) for m in calls}
         assert manual == {hook}, (
             f"docs/COMMANDS.md caps at {sorted(map(sorted, manual))}, the hook at "
-            f"{sorted(hook)} — re-size one, or set SOCRATICODE_HEALTH_CAP in "
-            ".claude/settings.local.json"
+            f"{sorted(hook)} — bring COMMANDS.md's invocations to the hook's default, "
+            "checking first that this VM has the room (#99 sized the current one). "
+            "SOCRATICODE_HEALTH_CAP in .claude/settings.local.json caps this host's "
+            "hook but cannot satisfy this check, which reads the default"
         )
 
     def test_the_health_hook_is_registered_as_the_installer_writes_it(self) -> None:
