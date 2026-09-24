@@ -134,7 +134,7 @@ and complete them in order.
 
 **Spike:**
 1. **Explore project context** — enough to frame the probe
-2. **Present question + probe plan** — 2-3 sentences
+2. **Present question + probe plan** — 2-3 sentences, saying what the answer is for, so the user can correct the question before you spend on it
 3. **Get approval** — a nod is enough
 4. **Investigate** — as cheaply as correctness allows
 5. **Report findings** — a recommendation; label anything built as throwaway
