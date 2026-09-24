@@ -35,7 +35,7 @@ from urllib.parse import urlsplit
 
 from co_core.effects.gcs import GcsCreateIfAbsent, GcsCreateResult
 from co_core.pure.models.changes import ContentReplicateCommand
-from co_core.pure.util.blobstore import BlobStore
+from co_core.pure.util.blobstore import FINGERPRINT_RE, BlobStore
 from co_core.pure.util.gcs import GcsCreateOutcome
 
 from src.core.config import DEFAULT_WRITE_TIMEOUT_SECONDS
@@ -61,11 +61,6 @@ logger = get_logger(__name__)
 # here on the scheme would collapse that distinction and tell the issuer to
 # stop trying.
 _BLOB_URI_SCHEMES = ("file", "gs")
-
-# A sha256 as the blob tree spells it. Lower-case only: the store derives paths
-# from this exact string, so accepting upper-case would make two spellings of one
-# fingerprint address two different files on a case-sensitive filesystem.
-_FINGERPRINT = re.compile(r"^[0-9a-f]{64}$")
 
 # What a rendered destination segment may contain. Printable ASCII minus the
 # separators and qualifiers the guard rejects outright — deliberately narrower
@@ -104,7 +99,7 @@ def locate_blob(blob_uri: str, *, store: BlobStore) -> str:
     """The fingerprint ``blob_uri`` names, or a terminal refusal (contract T3a).
 
     **The message's path is never used.** The fingerprint is extracted, validated
-    against ``_FINGERPRINT``, and the URI is then compared against one derived
+    against co-core's ``FINGERPRINT_RE``, and the URI is then compared against one derived
     from the store — so the only string that reaches the filesystem is one the
     store itself built. An implementation that parsed the URI into a path would
     be a read-side traversal on a service whose destinations include public,
@@ -186,6 +181,13 @@ def _fingerprint_in(blob_uri: str) -> str | None:
     shaped like a fingerprint — the store decides whether that fingerprint is
     one it minted.
 
+    The pattern is co-core's ``FINGERPRINT_RE`` rather than a second spelling of
+    it (#114): the store validates every call against that same rule, so this
+    guard and the store cannot disagree about what a fingerprint is. Lower-case
+    only, because the store derives paths from the exact string — accepting
+    upper-case would make two spellings of one fingerprint address two different
+    files on a case-sensitive filesystem.
+
     The extraction is deliberately identical for both. A bucket key has no
     directory semantics, so ``..`` in one means nothing and is refused by the
     comparison rather than by a normalization step that would have to be correct
@@ -198,7 +200,7 @@ def _fingerprint_in(blob_uri: str) -> str | None:
     if parts.scheme not in _BLOB_URI_SCHEMES or not parts.path:
         return None
     stem = parts.path.rsplit("/", 1)[-1].removesuffix(".bin")
-    return stem if _FINGERPRINT.match(stem) else None
+    return stem if FINGERPRINT_RE.match(stem) else None
 
 
 def validate_destination(destination: str, *, binding: AliasBinding) -> str:
