@@ -577,3 +577,7 @@ docs/contracts/content-fetch-outcome-reference.md :: retarget :: collapse it. Th
 # #111 CR 17: the request reference now also carries pacing turnaround and the
 #   lost-map cost, both post-publish, so the division is "mostly" by direction.
 docs/contracts/content-fetch-issuer-reference.md :: retarget :: what an issuer *looks up*, and they divide on the direction of the traffic. **This file is the
+# #111 CR 19: the moved lead-in restated the section heading it now sits under;
+#   it takes the "Expands [MUST-n]" form of its sibling sections.
+docs/contracts/content-fetch-outcome-reference.md :: tighten :: **Losing the `command_id` -> domain map**
+docs/contracts/content-fetch-outcome-reference.md :: tighten :: ([MUST-2](content-fetch-issuer-contract.md#2-persist-command_id--domain-durably-before-publishing)):

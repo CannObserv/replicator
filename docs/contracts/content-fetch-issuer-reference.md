@@ -200,8 +200,7 @@ is stated here rather than left to be discovered.
 
 ## Losing the `command_id` map
 
-**Losing the `command_id` -> domain map**
-([MUST-2](content-fetch-issuer-contract.md#2-persist-command_id--domain-durably-before-publishing)):
+Expands [MUST-2](content-fetch-issuer-contract.md#2-persist-command_id--domain-durably-before-publishing).
 
 Losing the map is recoverable but not free: the intent can be re-issued under a fresh
 `command_id`, at the cost of another origin request. What is *not* recoverable is the in-flight
