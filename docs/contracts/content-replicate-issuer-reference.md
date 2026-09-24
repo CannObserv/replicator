@@ -32,8 +32,8 @@ removes that bound, so the conclusion is reached again rather than inherited:
 Every archive.org claim in the contract is read from that [IAS3 API documentation](https://archive.org/developers/ias3.html) — cited because T4 and T5 rest on it, and because it corrects the intuition rather than confirming it.
 
 The conclusion is the same — bus access control is proportionate to this capability — but
-the **escalation trigger is not**, and that is the whole reason this section exists rather than a
-cross-reference.
+the **escalation trigger is not**, which is why the contract reaches the conclusion again rather than
+cross-referencing the fetch reference.
 
 **The premise it originally rested on is gone, and the conclusion survives it anyway (#89).** That
 premise was "one localhost broker on one trusted VM". The broker has run on its own node since

@@ -566,3 +566,8 @@ docs/contracts/content-replicate-issuer-contract.md :: retarget :: ⚙ **A secon
 #   it — a different four-item list and a second replay() warning. Both now
 #   point at that section; --claims shows every atom still present.
 docs/STREAMS.md :: tighten :: - **`content.fetch-policy` is the third stream kind, and it is read groupless.**
+# #111 CR 6: moved into the reference, "this section exists rather than a
+#   cross-reference" described the contract's section — which is now the
+#   cross-reference. It names the contract instead.
+docs/contracts/content-replicate-issuer-contract.md :: retarget :: the **escalation trigger is not**, and that is the whole reason this section exists rather than a
+docs/contracts/content-replicate-issuer-contract.md :: retarget :: cross-reference.
