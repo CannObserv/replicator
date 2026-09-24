@@ -153,7 +153,8 @@ Four properties that must hold or the design fails quietly:
 
 The consumer-side rules — four ways to apply a policy wrongly and silently, the two frame
 hazards, bounded recovery from a poison frame — and how a wait is spent are mechanism, and live
-with the pacer in [POLITENESS.md](../POLITENESS.md#applying-a-policy).
+with the pacer in POLITENESS.md: [applying a policy](../POLITENESS.md#applying-a-policy),
+[spending a wait](../POLITENESS.md#spending-a-wait).
 
 **Why a stream and not a Redis hash.** Broker state is explicitly permitted by test 1, so
 `HGETALL` on a per-host hash is a reasonable reach and will be proposed. It is rejected
