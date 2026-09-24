@@ -149,49 +149,11 @@ Four properties that must hold or the design fails quietly:
   non-terminal facts in #9 §3 — and here it costs boot time too, since replay length would
   grow with policy history rather than with host count;
 - an **unknown host resolves to a conservative default**, never to unlimited;
-- **enforcement has a rate floor of `REPLICATOR_CLAIM_MIN_IDLE_MS`** (default 60 s). See below.
+- **enforcement has a rate floor of `REPLICATOR_CLAIM_MIN_IDLE_MS`** (default 60 s). How it is met: [POLITENESS.md](../POLITENESS.md#why-the-wait-splits-by-duration).
 
-Four consumer-side rules that came out of building it, each one a way to be wrong silently:
-
-- **`revoked` means "no explicit policy", not "no limit".** It is the tombstone LWW has no
-  delete for, and the host falls back to the same conservative default an unknown host gets.
-  `min_interval_seconds` is `None` on a tombstone by design, so **branch on `revoked` first** —
-  a consumer that reaches for the interval stores a `None` and hands it on as a number.
-- **`0.0` is a legal interval** meaning "this host needs no spacing", and it is falsy.
-  `policy.get(host) or default` turns an explicit operator decision into a missing one.
-- **The default's strictness cannot be asserted at startup.** A published interval has no upper
-  bound, so there is no value to validate against short of importing the issuer's own backoff
-  ceiling — the constant this indirection exists to avoid importing. What is enforceable is the
-  moment a real policy turns out to be *stricter* than the fallback that would replace it on
-  revocation or staleness, which is logged per host at apply time and is the number an operator
-  raises.
-- **Arrival order is not publication order.** The producer republishes its whole set
-  periodically; a republish assembled from a snapshot taken before a change that already
-  shipped would revert it, silently and in the loosening direction. The map holds the last
-  applied `occurred_at` per host and applies on `>=` — `>=` rather than `>` so a full set
-  stamped with one instant does not lose every host after the first.
-
-And two that are about the frame rather than the policy:
-
-- **`from_wire`'s dispatch table is global**, so a `blob_available` XADDed here decodes *cleanly*
-  into the wrong model rather than raising. There is no anomaly to recover from, no group, and
-  nothing to dead-letter — the only defence is an `isinstance` check before destructuring,
-  exactly as the command path does.
-- **`AsyncBusTailReader.replay()` cannot be used to do the replay.** It accumulates across many
-  `read` calls and returns its list only on a clean finish, so any raise part-way through
-  discards everything it read while the cursor has already advanced — a poison frame at position
-  *k* silently loses the *k−1* policies ahead of it, permanently, and on a last-write-wins stream
-  a lost policy is indistinguishable from one never published. Drive `read` and apply each batch
-  as it arrives. Recorded here and not only in the code because the next consumer of this stream —
-  or of any future config/state stream — will reach for the method whose name says what they
-  want. Worth fixing upstream (cannobserv#285) so the driver's own docstring carries it.
-
-Recovery from a frame that will never decode is **bounded and interruptible**: an anomaly is
-evidence the broker is answering, so it must not count toward the outage backoff — which leaves
-a run of them with nothing slowing it down, hence a `MAX_POISON_SKIPS` bound past which the boot
-replay gives up (the tail resumes from the same cursor) and the tail parks. The replay also
-rides the worker's stop event, because how long it runs is the producer's business: this
-document asks the producer to `MAXLEN`, and Replicator cannot enforce it.
+The consumer-side rules — four ways to apply a policy wrongly and silently, the two frame
+hazards, bounded recovery from a poison frame — and how a wait is spent are mechanism, and live
+with the pacer in [POLITENESS.md](../POLITENESS.md#applying-a-policy).
 
 **Why a stream and not a Redis hash.** Broker state is explicitly permitted by test 1, so
 `HGETALL` on a per-host hash is a reasonable reach and will be proposed. It is rejected
@@ -203,34 +165,6 @@ posture as every other wire input.
 is bus-delivered, the producer can later move to Archiver — the natural home if a second
 issuer ever exists — with no Replicator change at all. That portability is the reason for the
 indirection.
-
-**Enforcement mechanism:** when a host's bucket is dry, leave the message in the PEL and let
-the reclaim bring it back. That is already the idiom for the disk ceiling — a policy check in
-the handler, not new machinery — and it inherits the ceiling's safety property: the raise is a
-`TransientFetchError`, which is exempt from the delivery ceiling, so a paced command cannot
-DLQ for being paced.
-
-**It also inherits the ceiling's granularity, and parking alone is therefore not a sufficient
-mechanism.** A parked message returns via `claim_stale`, so the finest per-host spacing it can
-express is `REPLICATOR_CLAIM_MIN_IDLE_MS` — **60 s by default**. Watcher's baseline today is
-`DEFAULT_MIN_INTERVAL = 1.0` s (`watcher/src/core/rate_limiter.py` as it stood then; the
-file was deleted with the cutover), backing off to `BACKOFF_MAX_INTERVAL = 60.0` s. So parking matches the *backoff* case almost exactly and
-misses the *normal* case by 60×: implemented naively, every host would be paced at 1/60th of
-the rate the cluster runs at now. The failure is silent and in the safe direction, which is
-what makes it easy to ship.
-
-The constraint, stated so a design has to answer it: **a serial consume path cannot both sleep
-for a short wait and stay available to other hosts.** Sleeping in the handler blocks every
-other command in the group — which is why parking exists — and parking cannot express a
-sub-reclaim interval.
-
-**Resolved by splitting the wait by duration**, and shipped with the interim default below:
-a wait no longer than one poll window (`REPLICATOR_READ_BLOCK_MS`) is slept through in the
-handler, and anything longer parks. The bound is derived from an existing setting rather than
-given its own, because it is the same quantity — a wait shorter than a poll the loop already
-performs adds nothing to the shutdown latency `TimeoutStopSec` is sized for. The stop event
-cuts the sleep short, and an interrupted wait is not an elapsed one: the command parks rather
-than fetching unpaced on the way out. `src/worker/pacing.py`, `handler.py::_pace`.
 
 ### The fallback default (was the interim, #12 → #19)
 
@@ -258,7 +192,7 @@ domain vocabulary: the second of the three permitted state shapes, twice.
 synchronously before the consume loop starts, or the worker's opening commands are paced against
 an empty map — safe only because the fallback is the stricter number, and that is the one
 assumption not worth spending on startup ordering. Mechanism, including why a failed replay is
-absorbed rather than fatal: [STREAMS.md](../STREAMS.md).
+absorbed rather than fatal: [POLITENESS.md](../POLITENESS.md#the-policy-stream).
 
 **Known limitation, still open after #19: the host asked for is not always the host
 reached.** httpx follows redirects inside the driver, so a URL that 301s elsewhere is paced under

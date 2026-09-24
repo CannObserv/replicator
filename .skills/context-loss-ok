@@ -405,3 +405,13 @@ tighten :: widen their blast radius. Anything the service needs goes in `/etc/re
 #   'what it reports when it fails' described content this same change moved to
 #   docs/FAILURE-NOTIFICATION.md, which the line immediately below now links.
 retarget :: - [DEPLOYMENT.md](docs/DEPLOYMENT.md) — the unit's lifecycle, its start guards, what it reports when it fails, the co-core pin
+# #111: per-host politeness split into docs/POLITENESS.md out of STREAMS.md,
+#   CONVENTIONS.md and the charter. Each line below is a pointer or a
+#   self-reference whose target moved in the same change; the moved text
+#   itself arrived verbatim.
+docs/STREAMS.md :: retarget :: - **Politeness is enforced here and decided elsewhere, and since #19 the numbers actually arrive.**
+docs/contracts/replicator-boundaries.md :: retarget :: - **enforcement has a rate floor of `REPLICATOR_CLAIM_MIN_IDLE_MS`** (default 60 s). See below.
+docs/contracts/replicator-boundaries.md :: retarget :: rides the worker's stop event, because how long it runs is the producer's business: this
+docs/contracts/replicator-boundaries.md :: retarget :: document asks the producer to `MAXLEN`, and Replicator cannot enforce it.
+docs/contracts/replicator-boundaries.md :: retarget :: **Resolved by splitting the wait by duration**, and shipped with the interim default below:
+docs/contracts/replicator-boundaries.md :: retarget :: absorbed rather than fatal: [STREAMS.md](../STREAMS.md).
