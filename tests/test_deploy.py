@@ -616,6 +616,8 @@ def test_the_running_process_carries_its_units_adjust(unit: str):
 @on_the_host
 @pytest.mark.parametrize("unit", LIVE)
 def test_the_kernel_holds_each_reservation(unit: str):
+    # systemd removes a stopped service's cgroup, so read nothing into a missing one.
+    assert _cgroup(unit).is_dir(), f"{_cgroup(unit)} is missing — is {unit} running?"
     live = _live_memory_low(_cgroup(unit))
     expected = _memory_low(LIVE[unit])
     assert live == expected, (
