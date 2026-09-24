@@ -124,7 +124,7 @@ def build_command(
 
     The ``command_id`` is a ULID — the cluster's identifier convention — minted
     fresh on every call, so it is unique per URL *and* per invocation. The
-    worker's dedupe key is ``replicator:cmd:<command_id>``: an id shared across
+    worker's dedupe key is ``replicator:cmd:fetch:<command_id>``: an id shared across
     the URLs of one run would make every URL after the first a no-op, and an id
     stable across runs would make every run after the first a no-op. Both are
     silent — the worker acks and fetches nothing. See

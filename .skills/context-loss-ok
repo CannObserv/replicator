@@ -602,3 +602,6 @@ docs/contracts/content-fetch-outcome-reference.md :: disproven :: next reclaim, 
 docs/contracts/content-fetch-outcome-reference.md :: disproven :: decision, not a default — but it is the one that changes what a reaper should expect, so it
 docs/contracts/content-fetch-outcome-reference.md :: disproven :: is stated here rather than left to be discovered.
 docs/contracts/content-fetch-issuer-contract.md :: disproven :: paced command is slept through or parked for the next reclaim depends on the deployed interval,
+docs/contracts/content-fetch-outcome-reference.md :: disproven :: dedupe key `replicator:cmd:` under which every later blank-id command becomes a no-op.
+docs/contracts/content-fetch-issuer-contract.md :: disproven :: Replicator dedupes on `command_id` — `replicator:cmd:<command_id>`, TTL
+docs/contracts/content-fetch-issuer-contract.md :: disproven :: rather than treating `replicator:cmd:` as a dedupe key — under which the second blank-id command

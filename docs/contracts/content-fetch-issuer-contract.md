@@ -131,7 +131,7 @@ All three models are `extra="ignore"`, so additive producer fields are tolerated
 
 ### 1. Mint a fresh `command_id` per fetch *occasion*, never per resource
 
-Replicator dedupes on `command_id` — `replicator:cmd:<command_id>`, TTL
+Replicator dedupes on `command_id` — `replicator:cmd:fetch:<command_id>`, TTL
 `REPLICATOR_DEDUPE_TTL_SECONDS` (default 24 h, operator-tunable) — in
 [`src/worker/loop.py::process_message`](../../src/worker/loop.py). A duplicate is **acked and
 dropped**: no fetch, no fact, one `INFO` line here and nothing at all on the issuer's side.
@@ -150,7 +150,7 @@ Uniqueness is required *for correctness* only within the dedupe TTL, but *for co
 be global and permanent — the issuer's own map is keyed on it.
 
 An **empty** `command_id` is not a `command_id`. Replicator dead-letters it before the fetch
-rather than treating `replicator:cmd:` as a dedupe key — under which the second blank-id command
+rather than treating `replicator:cmd:fetch:` as a dedupe key — under which the second blank-id command
 ever published would be a silent no-op, and the first would produce a `blob_available` nothing
 can be matched against.
 

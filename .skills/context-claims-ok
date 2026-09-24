@@ -35,3 +35,6 @@ docs/SKILLS.md :: default :: node "$SOCRATICODE_DRIVER"
 docs/SKILLS.md :: disproven :: node skills/init-socraticode/scripts/mcp-driver.mjs
 docs/SKILLS.md :: default :: settings.local.json
 docs/SKILLS.md :: disproven :: skills/init-socraticode
+docs/contracts/content-fetch-outcome-reference.md :: disproven :: replicator:cmd:
+docs/contracts/content-fetch-issuer-contract.md :: disproven :: replicator:cmd:
+docs/contracts/content-fetch-issuer-contract.md :: disproven :: replicator:cmd:<command_id>

@@ -234,7 +234,7 @@ produces nothing *yet*:
 - **A command whose `command_id` is blank.** Refused before the fetch and dead-lettered, with no
   fact — there is no correlator to key one on. Silent to the issuer, but *not* silently
   processed: an empty id is not a valid `command_id` (MUST-1), and accepting it would take the
-  dedupe key `replicator:cmd:` under which every later blank-id command becomes a no-op.
+  dedupe key `replicator:cmd:fetch:` under which every later blank-id command becomes a no-op.
 - **A command trimmed from the stream while pending.** Delivered and not yet acked — in flight,
   or waiting out a transient failure — when something trimmed `content.fetch` past it. The
   reclaim that next reaches it finds no frame, so there is nothing to fetch, nothing to dead-letter
