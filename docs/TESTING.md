@@ -64,7 +64,7 @@ makes production untestable (#38).
   aimed at is a constructor that resolves credentials itself and reaches a bucket
   by name — a caller supplying the client has already made that impossible, and
   an unmarked test cannot build a real client anyway with the identity scrubbed.
-  Without the carve-out, `tests/storage/test_gcs.py` would have to claim the
+  Without the carve-out, `tests/storage/test_shared_store.py` would have to claim the
   `gcs` mark to test decisions that touch no network, which is how a marker stops
   meaning "writes to a bucket" and starts meaning "constructs this class".
 

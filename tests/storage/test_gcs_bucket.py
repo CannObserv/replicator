@@ -6,10 +6,11 @@ the suffix would double into `test_gcs_gcs.py`. `_integration` was the other
 candidate and is worse — that suffix names the *other* marker, and this file
 carries `gcs`, not `integration`.
 
-`test_gcs.py` owns the *decisions* — which key, which precondition, what a lost
-race means — and answers them against a fake, because none of them need a
-network to be wrong. What a fake cannot answer is whether the SDK accepts these
-arguments at all: `if_generation_match=0` on `upload_from_string`, `custom_time`
+The *decisions* — which key, which precondition, what a lost race means — are
+cannobserv's since #114 (`co_core_sync.drivers.blobstore.gcs`, answered against a
+fake there); `test_shared_store.py` pins only the properties this worker
+consumes. What no fake can answer is whether the SDK accepts these arguments at
+all: `if_generation_match=0` on `upload_from_string`, `custom_time`
 as a settable property, `patch()` as the way to move it, and `NotFound` as what
 comes back for an object that is gone. Every one of those is a real call whose
 signature a fake asserts nothing about.

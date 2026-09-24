@@ -128,7 +128,7 @@ def guarded_init(
             # client offers — and an unmarked test cannot build a real client
             # anyway, because the scrub above leaves no identity to resolve.
             #
-            # Without it, `tests/storage/test_gcs.py` would have to claim the
+            # Without it, `tests/storage/test_shared_store.py` would have to claim the
             # `gcs` mark to test decisions that touch no network, which is the
             # mark losing its meaning.
             #
