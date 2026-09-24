@@ -22,13 +22,14 @@ tailnet name stays bare, so every broker URL and ACL rule reads naturally.
 
 ## What the ACL allows
 
-Replicator is a broker client and a notifier client, plus internet egress. **No rule lists
+Replicator is a broker client, a notifier client and an index client, plus internet egress. **No rule lists
 `tag:replicator` as a `dst` for any service port** — the worker binds nothing.
 
 | Rule | Why |
 |---|---|
 | `tag:replicator → tag:broker:6379` | The bus |
 | `tag:replicator → tag:notifier:9000` | The `OnFailure=` handler's alerts, and nothing else (#108, notifier#70). `:9000` only: replicator has no dev process to point at notifier's `:9001` |
+| `tag:replicator → tag:index:6333,11434` | SocratiCode's store — Qdrant and Ollama on `co-index` (notifier#57, [INFRASTRUCTURE.md](../INFRASTRUCTURE.md#the-semantic-index-is-co-index--a-store-this-repo-is-a-client-of)). The grant is node-wide, and Ollama unauthenticated; what keeps a command from aiming the worker at either port is the fetch destination guard, which refuses the tailnet's `100.64.0.0/10` on every hop (#95) |
 | The tailnet's `autogroup:member → *:*`, plus an `ssh` block admitting `autogroup:member` as `exedev` or `root` | Admin reach, from your own devices only (watcher#296 D3). No tagged node reaches this one |
 
 Tailscale SSH needs **both** halves. Peer visibility follows `acls` rules, not
@@ -47,7 +48,9 @@ Verified 2026-09-11 in both directions: from here, `broker:6379` answers
 `-NOAUTH`, while `watcher:22/8000/8001/5432` and `broker:22/9000` are filtered;
 from `broker`, `replicator:22/8000/8001` are filtered. Verified 2026-09-23 for the
 notifier rule: `notifier:9000/health` answers `"environment":"production"` and
-`notifier:9001` times out, which is a filtered port, not a refusal.
+`notifier:9001` times out, which is a filtered port, not a refusal. Verified
+2026-09-24 for the index rule: `index:6333` and `index:11434` accept a TCP
+connection, and `index:22` is filtered — notifier#57 D13's edge is gone.
 
 ## The path to the broker, measured
 
@@ -172,8 +175,10 @@ build that followed moved every key and env file over stdin for this reason.
 
 - **A broker.** `redis-server` is installed for the integration tests that spawn
   their own, with its service **masked**; the bus is `co-broker`.
-- **SocratiCode.** No Docker, Node or index here until CannObserv/notifier#57's
-  shared Qdrant; `grep`/`rg` in the meantime.
+- **A SocratiCode store.** No Qdrant, Ollama or Docker here — `docker.service`
+  is disabled; the index is `co-index`'s shared Qdrant (notifier#57). What runs
+  here is the client: the plugin's MCP server under a user-installed Node, and
+  the capped driver ([COMMANDS.md](../COMMANDS.md#socraticode--the-shared-index-on-co-index)).
 - **Anything listening on the tailnet.** Loopback carries exe.dev's own
   `shelley.socket` (`127.0.0.1:9999`) — relevant to the fetch trust question in #89.
 

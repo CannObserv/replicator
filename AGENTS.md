@@ -34,10 +34,11 @@ SocratiCode is the preferred semantic-search tool here once indexed (manifest
 load only after the `ToolSearch` prefetch that
 `.claude/hooks/socraticode-reminder.sh` prints each session.
 
-**Negative rule.** Use SocratiCode MCP tools first for semantic questions ("where is
-X", "how does Y work", "what depends on Z"). Reach for `grep`/`rg` only on exact
-strings (error messages, log lines, known symbols). Reserve the Explore subagent for
-path-pattern walks (`*.py` under `src/worker/`), not semantic search.
+**Negative rule.** Use SocratiCode MCP tools first for semantic questions
+("where is X", "how does Y work", "what depends on Z"). Reach for `grep`/`rg`
+only on exact strings (error messages, log lines, known symbols). Reserve the
+Explore subagent for path-pattern walks (`*.py` under `src/worker/`), not
+semantic search.
 
 | Goal | Tool |
 |------|------|
@@ -45,8 +46,7 @@ path-pattern walks (`*.py` under `src/worker/`), not semantic search.
 | Exact string or regex (errors, log lines, known symbols) | `grep` / `rg` |
 | Imports/dependents of a file · blast radius of a change | `codebase_graph_query` / `codebase_impact` |
 
-Full tool table, prefetch query, per-tool guidance, cross-repo search:
-[docs/SOCRATICODE.md](docs/SOCRATICODE.md).
+Full tool table, prefetch hook, per-tool guidance: [`docs/SOCRATICODE.md`](docs/SOCRATICODE.md).
 <!-- END socraticode-policy -->
 
 ## Code Exploration Notes (repo-specific)
@@ -241,7 +241,7 @@ source — each with its rationale and ruff gate in [docs/STYLE.md](docs/STYLE.m
 - [STYLE.md](docs/STYLE.md) — the logging stack: formatter, installers, the non-JSON journald lines
 - [COMMANDS.md](docs/COMMANDS.md) — every runnable command, with flags
 - [SKILLS.md](docs/SKILLS.md) — vendored skill inventory, refresh procedure, doc-check lists
-- [SOCRATICODE.md](docs/SOCRATICODE.md) — full tool table, prefetch query, per-tool gotchas, cross-repo search
+- [SOCRATICODE.md](docs/SOCRATICODE.md) — full tool table, prefetch hook, per-tool gotchas, cross-repo search
 - [content-fetch-issuer-contract.md](docs/contracts/content-fetch-issuer-contract.md) — what a `content.fetch` producer must do; linked from issuer repos
 - [content-fetch-issuer-reference.md](docs/contracts/content-fetch-issuer-reference.md) — its lookup half, request side: refusal list, trust posture, envelope keys
 - [content-fetch-outcome-reference.md](docs/contracts/content-fetch-outcome-reference.md) — its result side: both facts field by field, failure taxonomy, silent conditions, the DLQ

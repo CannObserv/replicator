@@ -338,6 +338,45 @@ class TestLinkedProjectsHaveOneSource:
         )
 
 
+AGENTS = REPO_ROOT / "AGENTS.md"
+MANIFEST = REPO_ROOT / ".socraticodecontextartifacts.json"
+
+# A Detail Docs bullet's link target: `- [NAME](docs/...)`.
+DETAIL_DOC_LINK = re.compile(r"^- \[[^\]]+\]\((docs/[^)#\s]+)\)", re.MULTILINE)
+
+
+def _detail_docs() -> list[str]:
+    """Every path the `## Detail Docs` section of AGENTS.md links, in order."""
+    text = AGENTS.read_text()
+    section = text.split("\n## Detail Docs\n", 1)[1].split("\n## ", 1)[0]
+    return DETAIL_DOC_LINK.findall(section)
+
+
+class TestContextManifestCoversTheDetailDocs:
+    """A doc AGENTS.md sends agents to is one `codebase_context_search` can answer from.
+
+    The manifest is written by hand, one entry per artifact, and nothing reports
+    a doc that was never added: `validate-manifest` checks that the paths it
+    lists resolve, and the daily health check that they are indexed, so both
+    are silent on a path the manifest does not list. `docs/reference/tailscale.md`
+    sat in the index unregistered from #88 until #117 CR 3, while
+    docs/SOCRATICODE.md described the manifest as carrying every Detail Doc.
+    """
+
+    def test_the_section_parses(self) -> None:
+        assert len(_detail_docs()) >= 20, "the Detail Docs parser matched too little"
+
+    def test_every_detail_doc_is_a_registered_artifact(self) -> None:
+        manifest = json.loads(MANIFEST.read_text())
+        artifacts = manifest["artifacts"] if isinstance(manifest, dict) else manifest
+        registered = {a["path"].removeprefix("./") for a in artifacts}
+        missing = [path for path in _detail_docs() if path not in registered]
+        assert not missing, (
+            f"linked from AGENTS.md's Detail Docs but absent from {MANIFEST.name}: "
+            f"{missing} — add an entry with a description, then run codebase_update"
+        )
+
+
 # A package spec this repo is willing to launch. `@latest` and any range let
 # npx resolve a version nobody chose, at session start, on this VM. A
 # prerelease is admitted — `1.15.0-rc.1` is still exact, so it resolves from
