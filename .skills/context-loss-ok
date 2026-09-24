@@ -607,3 +607,5 @@ docs/contracts/content-fetch-issuer-contract.md :: disproven :: Replicator dedup
 docs/contracts/content-fetch-issuer-contract.md :: disproven :: rather than treating `replicator:cmd:` as a dedupe key — under which the second blank-id command
 docs/CONVENTIONS.md :: retarget :: a re-fetch of the origin (`HostPacer` is in-memory, so its escalations are cold
 docs/contracts/replicator-boundaries.md :: retarget :: ceiling — the constant this indirection exists to avoid importing. What is enforceable is the
+AGENTS.md :: retarget :: - [content-fetch-issuer-reference.md](docs/contracts/content-fetch-issuer-reference.md) — its lookup half, request side: refusal list, trust posture
+AGENTS.md :: retarget :: - [content-fetch-outcome-reference.md](docs/contracts/content-fetch-outcome-reference.md) — its result side: failure taxonomy, silent conditions, the DLQ
