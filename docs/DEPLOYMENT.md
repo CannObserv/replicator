@@ -92,11 +92,13 @@ survivable reclaim instead of failed atomic allocations; it and
 `vm.min_free_kbytes`, which had rescaled to only ~11 MB, are pinned in
 [`deploy/99-co-replicator-memory.conf`](../deploy/99-co-replicator-memory.conf).
 
-**What now sits at the top of the eligible list is `tailscaled`, at 675.** Read
-that against CannObserv/broker#17, where the failure *was* the tailnet: killing
-tailscaled takes the bus away exactly as effectively as killing this worker, and
-no directive of ours reaches a system unit. Measured 2026-09-18, filed as an
-observation rather than fixed here.
+**At the top of the eligible list: the user manager, `systemd --user` and
+`(sd-pam)` at 733 (adj +100), then `tailscaled` at 670.** Measured 2026-09-24
+at 8 GiB (#112); the 675 recorded on 2026-09-18 was at 3.9 GB. Read tailscaled's
+place against CannObserv/broker#17, where the failure *was* the tailnet: killing
+tailscaled takes the bus away exactly as effectively as killing this worker.
+broker (#21) and watcher (#309) each give it an `OOMScoreAdjust=` drop-in; this
+repo does not yet.
 
 CannObserv/broker#17 is what it costs when it fires, and it fires in a shape
 worth recognising: launching a SocratiCode server on the broker's VM took the
@@ -105,14 +107,25 @@ bus out for **57m48s with nothing OOM-killed at all**. The kernel failed
 degraded while every process stayed alive — and this worker did not reconnect on
 its own, which is #94.
 
-Three things this is not:
+Four things this is not:
 
 - **Not a substitute for capping the launch.** A cgroup cap on a process at adj
   -1000 *stalls* it rather than killing it, so the two halves are separate: this
   is the unit's half, and the capped invocation for anything that starts a
   SocratiCode server is in [COMMANDS.md](COMMANDS.md).
-- **Not reachable with `earlyoom`.** It floors a `--prefer` match at 300, while
-  a service at adj 0 reads ~670 on this kernel — it would choose the worker too.
+- **Not reachable with `earlyoom` (#112).** Measured 2026-09-24 against the
+  packaged 1.7-2 in `--dryrun`: it skips `oom_score_adj` -1000 exactly as the
+  kernel does (`kill.c`), `--prefer` or not — a preferred `sshd` prints badness
+  300 and is passed over. So its order is the kernel's: `systemd --user` 733,
+  `tailscaled` 670, the adj-0 daemons 666, journald 501, the worker 71. It
+  would shed small daemons and tailscaled, freeing little, while the ~1.7 GiB
+  held at -1000 stays out of reach. The one thing it *can* take is a process
+  under `choom -n 500`, and the capped launch already bounds that. broker and
+  watcher run it on a "300 floor" reading of the same dry run — the score
+  printed *before* the skip. Two things would change the answer: sessions
+  leaving -1000, notifier's shape (notifier#74), which `tests/test_deploy.py`
+  pins live; and, if it is ever installed here, `-s 100` — with 4 G of swap its
+  default waits for swap to fall to 10% free.
 - **Not `MemoryLow=`.** The obvious next reach, and it is inert on this host:
   cgroup2 is mounted without `memory_recursiveprot` and no slice above grants
   one, so a reservation on either unit would be silently ineffective. #99 step 3
