@@ -86,10 +86,10 @@ Three that bite, each symptomless until it matters:
   `REPLICATOR_ALLOW_ANY_CHECKOUT=1` overrides; a dev worker asks the same question
   at the writer (#52).
 - **Everything installed from `deploy/` is a copy** — `cp` after every edit;
-  `daemon-reload` re-reads the old file, and the sysctl drop-in needs
-  `sysctl --system`. The `OnFailure=` handler's missed `cp` is invisible until the
-  first failure; read what it recorded with `journalctl -t replicator-failure`,
-  never `-u`.
+  `daemon-reload` re-reads the old file, the sysctl drop-in needs
+  `sysctl --system`, and tailscaled's a tailscaled restart (#113). The
+  `OnFailure=` handler's missed `cp` is invisible until the first failure; read
+  what it recorded with `journalctl -t replicator-failure`, never `-u`.
 - **The daily skills-refresh hook commits without pushing**, which is one of the
   states the checkout guard refuses. Check `git status -sb` before a restart.
 

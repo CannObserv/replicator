@@ -68,7 +68,7 @@
     {
       "name": "deployment-reference",
       "path": "./docs/DEPLOYMENT.md",
-      "description": "VM topology and ports, the systemd unit's lifecycle and its ExecStartPre guards, the checkout guard, and the co-core pin. The environment variables themselves are in docs/ENVIRONMENT.md. Also OOMScoreAdjust=-900 on both units (#92): on exe.dev everything descended from a session inherits oom_score_adj=-1000 and is exempt from the OOM killer, so an unprotected worker at ~670 was what the kernel would pick under pressure the dev tooling created."
+      "description": "VM topology and ports, the systemd unit's lifecycle and its ExecStartPre guards, the checkout guard, and the co-core pin. The environment variables themselves are in docs/ENVIRONMENT.md. Also OOMScoreAdjust=-900 on both units (#92): on exe.dev everything descended from a session inherits oom_score_adj=-1000 and is exempt from the OOM killer, so an unprotected worker at ~670 was what the kernel would pick under pressure the dev tooling created. tailscaled gets the same -900 by drop-in (#113), and MemoryLow= on the worker and tailscaled is real only through the system.slice.d grant, since cgroup2 here has no memory_recursiveprot."
     },
     {
       "name": "failure-notification-reference",
@@ -108,7 +108,7 @@
     {
       "name": "deployment-topology",
       "path": "./deploy/replicator.service",
-      "description": "systemd unit running the worker (not the API). Ordering After=tailscaled.service only, never Wants=/Requires= (#88; the broker is reached by tailnet name), the BUILD_ID stamp written by ExecStartPre, the deliberate absence of the repo .env from the EnvironmentFile chain (it holds GitHub PATs the worker never needs), the hard Redis >=7.0 floor guard, the main-checkout guard that refuses to start the service off any branch but main, or off a main carrying unpushed commits (#37, #48, scripts/check_main_checkout.sh, overridable with REPLICATOR_ALLOW_ANY_CHECKOUT=1) and sits ahead of the BUILD_ID stamp, the non-fatal wheelhouse sync, StateDirectory, and bounded restarts. OOMScoreAdjust=-900 (#92) makes the worker the last thing this VM's OOM killer chooses rather than the first — not -1000, which is exemption and would make a leaking worker unreclaimable."
+      "description": "systemd unit running the worker (not the API). Ordering After=tailscaled.service only, never Wants=/Requires= (#88; the broker is reached by tailnet name), the BUILD_ID stamp written by ExecStartPre, the deliberate absence of the repo .env from the EnvironmentFile chain (it holds GitHub PATs the worker never needs), the hard Redis >=7.0 floor guard, the main-checkout guard that refuses to start the service off any branch but main, or off a main carrying unpushed commits (#37, #48, scripts/check_main_checkout.sh, overridable with REPLICATOR_ALLOW_ANY_CHECKOUT=1) and sits ahead of the BUILD_ID stamp, the non-fatal wheelhouse sync, StateDirectory, and bounded restarts. OOMScoreAdjust=-900 (#92) makes the worker the last thing this VM's OOM killer chooses rather than the first — not -1000, which is exemption and would make a leaking worker unreclaimable. MemoryLow=128M (#113) is a reservation, never a cap, and inert without deploy/system.slice.d/replicator-memory.conf."
     },
     {
       "name": "wheelhouse-sync",

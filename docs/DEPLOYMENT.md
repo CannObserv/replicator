@@ -23,6 +23,8 @@ broker and bucket topology this unit runs on is in
 | After editing `deploy/replicator.service` | `sudo cp deploy/replicator.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart replicator` |
 | After editing `deploy/replicator-failure-notify@.service` | `sudo cp 'deploy/replicator-failure-notify@.service' /etc/systemd/system/ && sudo systemctl daemon-reload` — **no restart**, it is a template nothing runs until a unit fails |
 | After editing `deploy/99-co-replicator-memory.conf` | `sudo cp deploy/99-co-replicator-memory.conf /etc/sysctl.d/ && sudo sysctl --system` — **`sysctl --system`, not `daemon-reload`**, which does not read this file |
+| After editing `deploy/tailscaled.service.d/memory.conf` | `sudo install -D -m 644 deploy/tailscaled.service.d/memory.conf /etc/systemd/system/tailscaled.service.d/memory.conf && sudo systemctl daemon-reload && sudo systemctl restart tailscaled` — the **restart** is for `OOMScoreAdjust=`, which applies at exec; read `/proc/$(pidof tailscaled)/oom_score_adj`, never `systemctl show`. It drops the tailnet briefly, and every DNS lookup here with it ([tailscale.md](reference/tailscale.md)); the worker rides it out |
+| After editing `deploy/system.slice.d/replicator-memory.conf` | `sudo install -D -m 644 deploy/system.slice.d/replicator-memory.conf /etc/systemd/system/system.slice.d/replicator-memory.conf && sudo systemctl daemon-reload` — **no restart**; read `/sys/fs/cgroup/system.slice/memory.low` |
 | Reading what the failure handler reported | `journalctl -t replicator-failure` — **not** `journalctl -u`; why, in [FAILURE-NOTIFICATION.md](FAILURE-NOTIFICATION.md) |
 | After a co-core version bump | re-run `sync_wheelhouse.py`, then `uv sync` |
 | `Start request repeated too quickly` | `sudo systemctl reset-failed replicator && sudo systemctl start replicator` — the rate limit, not a broken build |
@@ -48,7 +50,7 @@ The script half drives what a pytest cannot — systemd's restart semantics — 
 
 Neither touches `co-broker` or `replicator.service`: the script checks the spawned broker's own reported pid before driving it, and refuses a port answered by anything else.
 
-**`/etc/systemd/system/replicator.service` is a *copy*, not a symlink to `deploy/`.** So the `cp` above is load-bearing and `daemon-reload` alone silently does nothing — systemd re-reads the installed file, which is still the old one. The failure has no symptom at restart: the worker comes up on the new code under the *old* unit, and the mismatch only surfaces the first time a directive actually matters. Nothing guards it, either — `tests/test_deploy.py` reads the repo file, which is exactly the copy that is still correct. Diff the two when a restart follows a unit edit (#11 deploy).
+**`/etc/systemd/system/replicator.service` is a *copy*, not a symlink to `deploy/`.** So the `cp` above is load-bearing and `daemon-reload` alone silently does nothing — systemd re-reads the installed file, which is still the old one. The failure has no symptom at restart: the worker comes up on the new code under the *old* unit, and the mismatch only surfaces the first time a directive actually matters. Little guards it, either — `tests/test_deploy.py` reads the repo file, which is exactly the copy that is still correct; only its live checks of `OOMScoreAdjust=` and `MemoryLow=` (#113) read what the host holds. Diff the two when a restart follows a unit edit (#11 deploy).
 
 The copy is deliberate, for the same reason `/etc/replicator/.env` is not read from the repo: the live unit must survive a repo reset, a worktree switch, or a branch checkout that happens to be mid-edit.
 
@@ -93,12 +95,16 @@ survivable reclaim instead of failed atomic allocations; it and
 [`deploy/99-co-replicator-memory.conf`](../deploy/99-co-replicator-memory.conf).
 
 **At the top of the eligible list: the user manager, `systemd --user` and
-`(sd-pam)` at 733 (adj +100), then `tailscaled` at 670.** Measured 2026-09-24
-at 8 GiB (#112); the 675 recorded on 2026-09-18 was at 3.9 GB. Read tailscaled's
-place against CannObserv/broker#17, where the failure *was* the tailnet: killing
-tailscaled takes the bus away exactly as effectively as killing this worker.
-CannObserv/broker#21 and CannObserv/watcher#309 each give it an
-`OOMScoreAdjust=` drop-in; this repo does not yet — that is #113.
+`(sd-pam)` at 733 (adj +100), then — until #113 — `tailscaled` at 670.**
+Measured 2026-09-24 at 8 GiB (#112); the 675 recorded on 2026-09-18 was at
+3.9 GB. Read tailscaled's place against CannObserv/broker#17, where the failure
+*was* the tailnet: killing tailscaled takes the bus away exactly as effectively
+as killing this worker. So
+[`deploy/tailscaled.service.d/memory.conf`](../deploy/tailscaled.service.d/memory.conf)
+gives it the worker's own -900, as CannObserv/broker#21 does, and the network
+path and its only consumer now rank together at the bottom.
+CannObserv/watcher#309 chose -400 because its dashboard does not use the
+tailnet; this worker does.
 
 CannObserv/broker#17 is what it costs when it fires, and it fires in a shape
 worth recognising: launching a SocratiCode server on the broker's VM took the
@@ -106,6 +112,26 @@ bus out for **57m48s with nothing OOM-killed at all**. The kernel failed
 *atomic* allocations in `tailscaled` and `ksoftirqd`, so the network path
 degraded while every process stayed alive — and this worker did not reconnect on
 its own, which is #94.
+
+**`MemoryLow=` — adopted, and real only through the slice grant (#113).** The
+worker and `tailscaled` each reserve 128M (measured 2026-09-24: 66 MiB anonymous
+with a 67 MiB peak, and 61–82 MiB resident with a 123 MiB peak), and
+[`deploy/system.slice.d/replicator-memory.conf`](../deploy/system.slice.d/replicator-memory.conf)
+grants `system.slice` their sum, 256M. The grant is the load-bearing file:
+cgroup2 here is mounted without `memory_recursiveprot`, so a unit keeps no more
+`memory.low` than its slice grants, and `system.slice` defaults to 0 — without
+it both reservations are reported by `systemctl show` and protect nothing. That
+is what #99 and #112 called inert: inert *as configured*, not structurally.
+
+Under reclaim it keeps both working sets resident and moves the pressure onto
+`init.scope` — the sessions, a root-level sibling holding ~4 GiB — and the
+unreserved daemons. It is a reclaim priority, not a guarantee, and does nothing
+for *atomic* allocations; `vm.min_free_kbytes` covers those. The grant tracks
+the sum and no more, because without `memory_recursiveprot` an unclaimed grant
+is never handed down; the slice is the host's, so a unit that later claims a
+share here needs it added. `tests/test_deploy.py` checks the sum, and on this
+host reads every claim under the slice back from `/sys/fs/cgroup`, as
+`init-socraticode`'s `preflight.sh --check` does.
 
 What this is not:
 
@@ -117,8 +143,8 @@ What this is not:
   packaged 1.7-2 in `--dryrun`: it skips `oom_score_adj` -1000 exactly as the
   kernel does (`kill.c`), `--prefer` or not — a preferred `sshd` prints badness
   300 and is passed over. So its order is the kernel's: `systemd --user` 733,
-  `tailscaled` 670, the adj-0 daemons 666, journald 501, the worker 71. It
-  would shed small daemons and tailscaled, freeing little, while the ~1.7 GiB
+  `tailscaled` 670 until #113, the adj-0 daemons 666, journald 501, the worker
+  71. It would shed small daemons, freeing little, while the ~1.7 GiB
   held at -1000 stays out of reach. The one session process it *can* take is
   one under `choom -n 500`, and the capped launch already bounds that. broker
   runs it on a "300 floor" reading of the same dry run — the score printed
@@ -128,25 +154,19 @@ What this is not:
   -1000, notifier's shape (CannObserv/notifier#74), which
   `tests/test_deploy.py` pins live; and, if it is ever installed here,
   `-s 100` — with 4 G of swap its default waits for swap to fall to 10% free.
-- **Not `MemoryLow=`, as configured.** The obvious next reach, and it is inert
-  on this host: cgroup2 is mounted without `memory_recursiveprot` and no slice
-  above grants one, so a reservation on either unit would be silently
-  ineffective. #99 step 3 prescribes it generically; `init-socraticode`'s
-  `preflight.sh --check` reports the mount state and is the fastest way to
-  re-confirm it. broker and watcher made it real with a `system.slice.d` grant
-  covering their units' sum; whether to do the same here is #113's to decide.
 - **Not `-1000`.** That is the exemption above, and an exempt worker that leaks
   is unreclaimable — the kernel would work through everything else on the box
   first. `-900` is the cohort's value (CannObserv/broker#25): last of the
-  eligible, not exempt. `tests/test_deploy.py` pins both bounds, for both units.
+  eligible, not exempt. `tests/test_deploy.py` pins both bounds, for both units
+  and tailscaled's drop-in.
 
 The handler unit carries it for a sharper reason than the worker does: memory
 exhaustion is one of the conditions that *fires* it, so the moment it is most
 likely to run is the moment an unprotected process is most likely to be killed.
 
-Both files are copies under `/etc/systemd/system/`, so this needs the `cp` pair
-from the table above — and `daemon-reload` alone will silently keep the old
-values.
+All four files are copies under `/etc/systemd/system/`, so each needs its line
+from the table above — `daemon-reload` alone silently keeps the old values, and
+tailscaled keeps its old adj until it restarts.
 
 ### The co-core pin, and why the patch floor is load-bearing
 
