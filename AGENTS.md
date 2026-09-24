@@ -29,11 +29,10 @@ Auth is ADC. Pin the current minor — `>=0.19.0,<0.20` — and raise the **patc
 <!-- BEGIN socraticode-policy -->
 ## Code Exploration Policy
 
-SocratiCode is the preferred semantic-search tool here once indexed (the cohort's
-shared Qdrant on `co-index`, not a local store; manifest
-`.socraticodecontextartifacts.json`). Its MCP tools are **deferred** — schemas load
-only after the `ToolSearch` prefetch that `.claude/hooks/socraticode-reminder.sh`
-prints each session.
+SocratiCode is the preferred semantic-search tool here once indexed (manifest
+`.socraticodecontextartifacts.json`). Its MCP tools are **deferred** — schemas
+load only after the `ToolSearch` prefetch that
+`.claude/hooks/socraticode-reminder.sh` prints each session.
 
 **Negative rule.** Use SocratiCode MCP tools first for semantic questions ("where is
 X", "how does Y work", "what depends on Z"). Reach for `grep`/`rg` only on exact
@@ -51,6 +50,8 @@ Full tool table, prefetch query, per-tool guidance, cross-repo search:
 <!-- END socraticode-policy -->
 
 ## Code Exploration Notes (repo-specific)
+
+**The store is `co-index`'s shared Qdrant, not a local one** — kept here: the policy block names no store (skills#328).
 
 **The manifest is a source, not the artifact.** Nothing re-embeds it — run `codebase_update` in the same change as a `description` edit, or the stalest answer carries the most authority (#19 CR #17).
 
