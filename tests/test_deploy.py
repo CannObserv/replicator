@@ -24,6 +24,7 @@ rule.
 import os
 import re
 import socket
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -47,9 +48,9 @@ def _directive(name: str, unit: Path = UNIT) -> str:
     """The last value assigned to ``name`` in ``unit`` (systemd's own semantics).
 
     ``unit`` defaults to the worker's, which is what every caller but the
-    memory-protection test wants. That test asks the same question of both
-    units, and a second copy of this parsing would be two spellings of one
-    systemd rule, free to drift.
+    memory-protection tests wants. Those ask the same question of the handler
+    unit and of the drop-ins (#113), and a second copy of this parsing would be
+    two spellings of one systemd rule, free to drift.
     """
     matches = re.findall(rf"^{name}=(.*)$", unit.read_text(), flags=re.MULTILINE)
     assert matches, f"{name} is not set in {unit.name}"
@@ -423,11 +424,13 @@ def test_the_production_units_outrank_dev_tooling_for_the_oom_killer(unit: Path)
     Two things that rank does not buy, both recorded in docs/DEPLOYMENT.md so
     the doc and this test say the same thing. It is no substitute for capping
     whatever launches a SocratiCode server, since a cgroup cap on a process at
-    -1000 stalls it rather than killing it. And just below the user manager at
-    the top of the eligible list sits ``tailscaled``, at 670 (#112) — which is
-    what degraded in CannObserv/broker#17, a 57-minute bus outage with nothing
-    OOM-killed at all: the kernel failed *atomic* allocations while every
-    process stayed alive, and this worker did not reconnect on its own (#94).
+    -1000 stalls it rather than killing it. And the worker's rank protects
+    nothing if the kernel reaches ``tailscaled`` first — it read 670 in #112,
+    just below the user manager, until #113 gave it the same -900
+    (``test_tailscaled_ranks_with_the_worker_it_carries``). It is what degraded
+    in CannObserv/broker#17, a 57-minute bus outage with nothing OOM-killed at
+    all: the kernel failed *atomic* allocations while every process stayed
+    alive, and this worker did not reconnect on its own (#94).
 
     ``earlyoom`` does not close it either: it skips -1000 as the kernel does, so
     it takes the same list in the same order, only sooner
@@ -444,6 +447,198 @@ def test_the_production_units_outrank_dev_tooling_for_the_oom_killer(unit: Path)
     assert adjust > OOM_FLOOR, (
         f"{unit.name} sets OOMScoreAdjust={adjust} — exempt from the OOM killer entirely, "
         "so a leak here would be unreclaimable"
+    )
+
+
+# --- The worker's network path (#113) ----------------------------------------
+#
+# The broker is `broker` on the tailnet (#88), so losing tailscaled takes the
+# bus from this worker as completely as killing the worker. At the packaged
+# unit's adj of 0 it read 670 in #112 — second on this VM's eligible list.
+# These are drop-ins on a unit this repo does not ship, installed under
+# /etc/systemd/system/ like everything else in deploy/: copies.
+
+TAILSCALED_DROPIN = REPO_ROOT / "deploy" / "tailscaled.service.d" / "memory.conf"
+SLICE_DROPIN = REPO_ROOT / "deploy" / "system.slice.d" / "replicator-memory.conf"
+
+
+def test_tailscaled_ranks_with_the_worker_it_carries():
+    """The network path and its only consumer, together at the bottom of the list.
+
+    The same bounds as the units above, for a different reason: nothing here
+    competes with the dev tooling, but a tailscaled the kernel reaches first
+    ends the worker's bus exactly as killing the worker would, and a failing
+    tailscaled was a named symptom of CannObserv/broker#17. broker gives it
+    -900 (CannObserv/broker#21); watcher's -400 (CannObserv/watcher#309) is for
+    a dashboard that does not use the tailnet, which this worker does.
+    """
+    assert TAILSCALED_DROPIN.exists(), (
+        f"{TAILSCALED_DROPIN.name} is missing from deploy/tailscaled.service.d/ — "
+        "tailscaled sits at adj 0, second on this VM's OOM list"
+    )
+    adjust = int(_directive("OOMScoreAdjust", TAILSCALED_DROPIN))
+    assert adjust <= COHORT_OOM_SCORE_ADJUST, (
+        f"tailscaled's drop-in sets OOMScoreAdjust={adjust}, above the worker it carries"
+    )
+    assert adjust > OOM_FLOOR, (
+        f"tailscaled's drop-in sets OOMScoreAdjust={adjust} — exempt, so a leak in it "
+        "would be unreclaimable"
+    )
+
+
+# Every file that sets MemoryLow=, with the section its unit type reads it from.
+RESERVATIONS = {UNIT: "Service", TAILSCALED_DROPIN: "Service", SLICE_DROPIN: "Slice"}
+
+# What a reservation must not become. A cap stalls the worker or tailscaled
+# while it still reports `active` — on system.slice, every service at once —
+# and MemoryMin= is a floor the kernel holds even when the alternative is an
+# OOM kill elsewhere.
+NOT_RESERVATIONS = ("MemoryMin", "MemoryHigh", "MemoryMax", "MemorySwapMax")
+
+_SIZE_SUFFIXES = ("", "K", "M", "G", "T")
+
+
+def _size(value: str) -> int:
+    """A systemd byte size in bytes: digits and an optional base-1024 suffix.
+
+    Strict on purpose: systemd does not strip a trailing ``# comment`` from a
+    value, so ``MemoryLow=128M  # margin`` fails to parse and the directive is
+    dropped with a log line nobody reads. This refuses the same input.
+    """
+    match = re.fullmatch(r"(\d+)([KMGT]?)", value)
+    assert match, f"{value!r} is not a byte size systemd would parse"
+    return int(match.group(1)) * 1024 ** _SIZE_SUFFIXES.index(match.group(2))
+
+
+def _memory_low(path: Path) -> int:
+    return _size(_directive("MemoryLow", path))
+
+
+def _section_of(path: Path, name: str) -> str | None:
+    """The ``[Section]`` holding the last assignment of ``name`` in ``path``."""
+    section = found = None
+    for line in path.read_text().splitlines():
+        if header := re.fullmatch(r"\[(\w+)\]", line.strip()):
+            section = header.group(1)
+        elif line.startswith(f"{name}="):
+            found = section
+    return found
+
+
+@pytest.mark.parametrize("path", RESERVATIONS, ids=lambda p: f"{p.parent.name}/{p.name}")
+def test_each_reservation_sits_where_its_unit_type_reads_it(path: Path):
+    """``MemoryLow=`` under the wrong header is ignored, not rejected.
+
+    A slice reads ``[Slice]`` and a service ``[Service]``; anywhere else the
+    file installs, reloads, and reserves nothing.
+    """
+    assert path.exists(), f"{path.relative_to(REPO_ROOT)} is missing"
+    assert _memory_low(path) > 0, f"{path.name} reserves nothing"
+    assert _section_of(path, "MemoryLow") == RESERVATIONS[path], (
+        f"{path.name} sets MemoryLow= outside [{RESERVATIONS[path]}], where systemd ignores it"
+    )
+
+
+@pytest.mark.parametrize("path", RESERVATIONS, ids=lambda p: f"{p.parent.name}/{p.name}")
+def test_each_reservation_is_only_a_reservation(path: Path):
+    text = path.read_text()
+    for directive in NOT_RESERVATIONS:
+        assert not re.search(rf"^{directive}=", text, flags=re.MULTILINE), (
+            f"{path.name} sets {directive}= — MemoryLow= reserves, this caps or pins"
+        )
+
+
+def test_system_slice_grants_what_its_children_claim():
+    """Without the grant, every ``MemoryLow=`` below it protects nothing.
+
+    cgroup2 here is mounted without ``memory_recursiveprot``, so a unit keeps no
+    more ``memory.low`` than its slice grants, and ``system.slice`` defaults to
+    0. The competitor is ``init.scope`` — the agent sessions — a root-level
+    sibling, so the slice's grant is what moves reclaim onto them.
+    """
+    claimed = _memory_low(UNIT) + _memory_low(TAILSCALED_DROPIN)
+    granted = _memory_low(SLICE_DROPIN)
+    assert granted >= claimed, (
+        f"system.slice grants {granted} bytes but the worker and tailscaled claim {claimed}"
+    )
+
+
+# --- The same, read from the kernel -------------------------------------------
+#
+# Every file above is a copy once installed, and neither of these settings shows
+# its effect in `systemctl show`: OOMScoreAdjust= applies at exec, so after a
+# daemon-reload the unit reports the new value while the running process keeps
+# the old one (CannObserv/watcher#309), and a MemoryLow= under an ungranted
+# slice is reported faithfully and protects nothing. So these read /proc and
+# /sys/fs/cgroup, on the host that runs the units.
+
+# The host this repo deploys to. Replicator is developed only there, so a
+# session anywhere else is not the host #112 measured, nor one running the units.
+HOST = "co-replicator"
+
+CGROUP_ROOT = Path("/sys/fs/cgroup")
+LIVE = {
+    "replicator.service": UNIT,
+    "tailscaled.service": TAILSCALED_DROPIN,
+    "system.slice": SLICE_DROPIN,
+}
+on_the_host = pytest.mark.skipif(socket.gethostname() != HOST, reason=f"not {HOST}")
+
+
+def _cgroup(unit: str) -> Path:
+    return CGROUP_ROOT / unit if unit.endswith(".slice") else CGROUP_ROOT / "system.slice" / unit
+
+
+def _live_memory_low(cgroup: Path) -> int:
+    raw = (cgroup / "memory.low").read_text().strip()
+    return 2**63 if raw == "max" else int(raw)
+
+
+@on_the_host
+@pytest.mark.parametrize("unit", ["replicator.service", "tailscaled.service"])
+def test_the_running_process_carries_its_units_adjust(unit: str):
+    """Verify ``/proc``, not ``systemctl show``: a missed restart reads correct there."""
+    pid = subprocess.run(
+        ["systemctl", "show", "-p", "MainPID", "--value", unit],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert pid not in ("", "0"), f"{unit} is not running on {HOST}"
+    live = int(Path(f"/proc/{pid}/oom_score_adj").read_text())
+    expected = int(_directive("OOMScoreAdjust", LIVE[unit]))
+    assert live == expected, (
+        f"{unit} (pid {pid}) reads oom_score_adj {live}, the repo says {expected} — "
+        f"install {LIVE[unit].relative_to(REPO_ROOT)}, daemon-reload, and restart {unit}"
+    )
+
+
+@on_the_host
+@pytest.mark.parametrize("unit", LIVE)
+def test_the_kernel_holds_each_reservation(unit: str):
+    live = _live_memory_low(_cgroup(unit))
+    expected = _memory_low(LIVE[unit])
+    assert live == expected, (
+        f"{unit} holds memory.low {live}, the repo says {expected} — "
+        f"install {LIVE[unit].relative_to(REPO_ROOT)} and daemon-reload"
+    )
+
+
+@on_the_host
+def test_the_live_slice_covers_every_child_on_the_host():
+    """Any unit on the host can claim a share, not only the two this repo reserves.
+
+    Without ``memory_recursiveprot`` an oversubscribed slice divides its grant
+    among the claimants in proportion, so a claim added outside this repo would
+    quietly shrink the worker's and tailscaled's.
+    """
+    slice_dir = _cgroup("system.slice")
+    children = [c for c in slice_dir.iterdir() if (c / "memory.low").exists()]
+    claimed = sum(_live_memory_low(c) for c in children)
+    granted = _live_memory_low(slice_dir)
+    assert granted >= claimed, (
+        f"system.slice grants {granted} bytes but its children claim {claimed}: "
+        + ", ".join(f"{c.name}={_live_memory_low(c)}" for c in children if _live_memory_low(c))
     )
 
 
@@ -481,11 +676,12 @@ class TestHostMemoryTunables:
     file, which a rebuild would have lost silently: the host would come back
     with a ~11 MB atomic reserve and nothing naming that as wrong.
 
-    These are the levers that work *here*. `MemoryLow=` is not one of them as
-    configured — cgroup2 is mounted without `memory_recursiveprot` and no slice
-    above grants one, so a reservation on either unit is inert
-    (docs/DEPLOYMENT.md). A `system.slice.d` grant would change that; #113
-    decides whether to add one.
+    They are the host-wide half. The per-unit half is `MemoryLow=` on the
+    worker and `tailscaled`, which works here only because
+    `deploy/system.slice.d/` grants it (#113): cgroup2 is mounted without
+    `memory_recursiveprot`, so without the grant both reservations would be
+    inert. It shields working sets from reclaim; the atomic reserve below is
+    the one lever for allocations that cannot wait for reclaim at all.
     """
 
     def test_the_drop_in_is_tracked(self) -> None:
@@ -511,10 +707,6 @@ class TestHostMemoryTunables:
             "atomic reserve is how broker's 57m48s outage presented"
         )
 
-
-# The host this repo deploys to. Replicator is developed only there, so a
-# session anywhere else is not the host #112 measured.
-HOST = "co-replicator"
 
 # What exe.dev starts a session from; the -1000 is theirs, inherited or not.
 SESSION_PARENTS = frozenset({"exe-init", "sshd"})
@@ -552,11 +744,11 @@ class TestTheEarlyoomDecline:
     Sessions here inherit ``oom_score_adj`` -1000, and earlyoom 1.7 skips a
     -1000 process exactly as the kernel does (``kill.c:250``), ``--prefer`` or
     not — so it cannot reach the dev tooling that caused CannObserv/broker#17,
-    and would shed small daemons and ``tailscaled`` instead. The premise is not
-    universal: notifier's sessions sit at 0 (CannObserv/notifier#74,
-    gregoryfoster/skills#303), and what decides it was never determined. So it
-    is pinned live rather than assumed; if it flips, the decline no longer
-    holds and #112 reopens.
+    and would shed small daemons instead (and, before #113, ``tailscaled``).
+    The premise is not universal: notifier's sessions sit at 0
+    (CannObserv/notifier#74, gregoryfoster/skills#303), and what decides it was
+    never determined. So it is pinned live rather than assumed; if it flips,
+    the decline no longer holds and #112 reopens.
     """
 
     def test_a_session_under_exe_init_reports_its_root(self, tmp_path: Path) -> None:

@@ -74,11 +74,12 @@ WorkingDirectory=/home/exedev/replicator
 
 # Be the LAST thing this VM's OOM killer chooses, not the first (#92).
 #
-# co-replicator is 3.9 GB with no swap, and it is also the dev workspace. On
-# exe.dev every process descended from a session inherits oom_score_adj=-1000
-# from exe-init and sshd — VSCode Server, Claude Code, and any MCP server they
-# start — which makes them *exempt*. Measured here while adopting the shared
-# SocratiCode index: every session-descended process scored 0, this worker 670.
+# co-replicator was 3.9 GB with no swap then (8 GiB + 4 G since #99), and it is
+# also the dev workspace. On exe.dev every process descended from a session
+# inherits oom_score_adj=-1000 from exe-init and sshd — VSCode Server, Claude
+# Code, and any MCP server they start — which makes them *exempt*. Measured
+# here while adopting the shared SocratiCode index: every session-descended
+# process scored 0, this worker 670.
 # The kernel would therefore have killed the worker to relieve pressure the dev
 # tooling created, and left the tooling running.
 #
@@ -99,6 +100,13 @@ WorkingDirectory=/home/exedev/replicator
 # and would take the same eligible list in the same order, only sooner.
 # tests/test_deploy.py::TestTheEarlyoomDecline pins that premise live.
 OOMScoreAdjust=-900
+# A reservation, never a cap (#113): keeps the worker's working set out of
+# reclaim, so pressure falls on init.scope — the sessions — instead. 66 MiB
+# anonymous and a 67 MiB peak, measured 2026-09-24, so 128M. Inert without the
+# system.slice grant in deploy/system.slice.d/, which must cover this plus
+# tailscaled's; tests/test_deploy.py checks the sum. Nothing for *atomic*
+# allocations — vm.min_free_kbytes covers those.
+MemoryLow=128M
 # Creates /var/lib/replicator (REPLICATOR_BLOB_DIR's parent) owned by User=.
 StateDirectory=replicator
 
