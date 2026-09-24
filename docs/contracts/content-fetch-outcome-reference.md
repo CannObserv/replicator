@@ -193,11 +193,12 @@ Field types are in
 [the failure fact](#the-failure-fact), above. Three behaviours are not
 visible from the table.
 
-co-core's own docstring also lists `wrong_payload_type`. **Replicator never emits it**, and an
-issuer should not expect it: a frame that decoded to a non-`content.fetch` payload carries, at
-most, *somebody else's* `command_id` — `BlobAvailableEvent`'s names a command that **succeeded**,
-which is why a blob exists for it. A terminal failure keyed on that id would tell an issuer its
-good bytes are never coming. That frame dead-letters and stays silent.
+co-core's docstring listed `wrong_payload_type` too, until cannobserv#277 struck it.
+**Replicator never emits it**, and an issuer should not expect it: a frame that decoded to a
+non-`content.fetch` payload carries, at most, *somebody else's* `command_id` —
+`BlobAvailableEvent`'s names a command that **succeeded**, which is why a blob exists for it. A
+terminal failure keyed on that id would tell an issuer its good bytes are never coming. That
+frame dead-letters and stays silent.
 
 `reason` is a plain `str` and **not** a `Literal`, deliberately: a producer adding a token must
 never crash an older `extra="ignore"` consumer. So the token list is additive, and a consumer

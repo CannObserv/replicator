@@ -143,13 +143,14 @@ class FailureReason(StrEnum):
     """Unclassified, and it exhausted the delivery ceiling."""
 
     # Deliberately absent: ``wrong_payload_type``. co-core's FetchFailedEvent
-    # docstring lists it, but Replicator cannot emit it correctly (CR #1). A
-    # frame that decoded to a non-command payload carries, at most, somebody
-    # else's command_id — BlobAvailableEvent's names a command that *succeeded*,
-    # which is why a blob exists for it. Announcing a terminal failure against
-    # that id would tell an issuer its good bytes are never coming: a wrong
-    # correlation, applied silently, which is the one failure shape the contract
-    # spends three MUSTs preventing. The frame dead-letters and stays silent.
+    # docstring listed it until cannobserv#277 struck it, because Replicator
+    # cannot emit it correctly (CR #1). A frame that decoded to a non-command
+    # payload carries, at most, somebody else's command_id — BlobAvailableEvent's
+    # names a command that *succeeded*, which is why a blob exists for it.
+    # Announcing a terminal failure against that id would tell an issuer its good
+    # bytes are never coming: a wrong correlation, applied silently, which is the
+    # one failure shape the contract spends three MUSTs preventing. The frame
+    # dead-letters and stays silent.
 
 
 class ReplicateReason(StrEnum):
