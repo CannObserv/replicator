@@ -2,8 +2,9 @@
 
 Test layout is mirrored from `src/`, and the suite runs against fakeredis by
 default. What follows is the part that is not derivable from reading the tests:
-where the fake diverges from the real broker, and which keys a live-broker run is
-allowed to touch.
+where the fake diverges from the real broker, which keys a live-broker run is
+allowed to touch, why no test can write the production bucket, and the two
+procedures that run a broker of their own — one stopped and restarted, one capped.
 
 ## Test layout
 

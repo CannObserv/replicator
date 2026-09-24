@@ -93,7 +93,7 @@
     {
       "name": "testing-reference",
       "path": "./docs/TESTING.md",
-      "description": "Test layout — the mirror rule, splitting by concern rather than by helper, and the _integration filename exception — plus how the bus is tested: the fake_redis fixture and what it is sound for, the two places fakeredis diverges from the live broker (it registers a consumer on an empty XREADGROUP; it ignores block), the real_redis fixture with its db-0 refusal and auth-failure re-raise, the scratch_topic confinement, and the one namespace outside replicator.itest.* that an end-to-end run creates."
+      "description": "Test layout — the mirror rule, splitting by concern rather than by helper, and the _integration filename exception — plus how the bus is tested: the fake_redis fixture and what it is sound for, the two places fakeredis diverges from the live broker (it registers a consumer on an empty XREADGROUP; it ignores block), the real_redis fixture with its db-0 refusal and auth-failure re-raise, the scratch_topic confinement, and the one namespace outside replicator.itest.* that an end-to-end run creates. The write path: why production co-gcs-replication cannot be a test target (#38). And the two procedures that own their broker: rehearsing reconnection — the loop in tests/worker/test_reconnect_integration.py, systemd's start budget in scripts/rehearse_reconnect.sh (#94) — and testing against a broker at its cap (#79), which spawns its own redis-server rather than lowering co-broker's maxmemory."
     },
     {
       "name": "style-logging",
