@@ -21,7 +21,9 @@ in `tests/test_check_main_checkout.py`, per `docs/TESTING.md`'s split-by-concern
 rule.
 """
 
+import os
 import re
+import socket
 from pathlib import Path
 
 import pytest
@@ -421,14 +423,15 @@ def test_the_production_units_outrank_dev_tooling_for_the_oom_killer(unit: Path)
     Two things that rank does not buy, both recorded in docs/DEPLOYMENT.md so
     the doc and this test say the same thing. It is no substitute for capping
     whatever launches a SocratiCode server, since a cgroup cap on a process at
-    -1000 stalls it rather than killing it. And the process now at the top of
-    the eligible list is ``tailscaled`` at 675 — which is what degraded in
-    CannObserv/broker#17, a 57-minute bus outage with nothing OOM-killed at all:
-    the kernel failed *atomic* allocations while every process stayed alive, and
-    this worker did not reconnect on its own (#94).
+    -1000 stalls it rather than killing it. And just below the user manager at
+    the top of the eligible list sits ``tailscaled``, at 670 (#112) — which is
+    what degraded in CannObserv/broker#17, a 57-minute bus outage with nothing
+    OOM-killed at all: the kernel failed *atomic* allocations while every
+    process stayed alive, and this worker did not reconnect on its own (#94).
 
-    ``earlyoom`` does not close it either: it floors a ``--prefer`` match at 300,
-    and a service at adj 0 reads ~670 here, so it too would choose the worker.
+    ``earlyoom`` does not close it either: it skips -1000 as the kernel does, so
+    it takes the same list in the same order, only sooner
+    (``TestTheEarlyoomDecline``).
     """
     assert re.search(r"^OOMScoreAdjust=", unit.read_text(), flags=re.MULTILINE), (
         f"{unit.name} sets no OOMScoreAdjust, so it sits at the default 0 and reads "
@@ -504,4 +507,82 @@ class TestHostMemoryTunables:
             f"vm.min_free_kbytes={value} is below {MIN_FREE_KBYTES_FLOOR} — the "
             "default rescaled to only ~11 MB after the resize, and an exhausted "
             "atomic reserve is how broker's 57m48s outage presented"
+        )
+
+
+# The host this repo deploys to. Replicator is developed only there, so a
+# session anywhere else is not the host #112 measured.
+HOST = "co-replicator"
+
+# What exe.dev starts a session from; the -1000 is theirs, inherited or not.
+SESSION_PARENTS = frozenset({"exe-init", "sshd"})
+
+
+def _session_root_adj(proc: Path, pid: int) -> int | None:
+    """``oom_score_adj`` of the process exe.dev started ``pid``'s session from.
+
+    Walks the ancestry to the first process whose parent is in
+    ``SESSION_PARENTS`` and reads that one, not ``pid`` itself: a leaf can be
+    ``choom``'d (COMMANDS.md's capped launch is), the session root cannot.
+    ``None`` when no ancestor is a session — CI, a systemd unit, cron.
+    """
+    while pid > 1:
+        status = (proc / str(pid) / "status").read_text()
+        ppid = int(re.search(r"^PPid:\s*(\d+)", status, flags=re.MULTILINE).group(1))
+        if ppid < 1:
+            return None
+        if (proc / str(ppid) / "comm").read_text().strip() in SESSION_PARENTS:
+            return int((proc / str(pid) / "oom_score_adj").read_text())
+        pid = ppid
+    return None
+
+
+def _fake_process(proc: Path, pid: int, ppid: int, comm: str, adj: int) -> None:
+    (proc / str(pid)).mkdir(parents=True)
+    (proc / str(pid) / "status").write_text(f"Name:\t{comm}\nPPid:\t{ppid}\n")
+    (proc / str(pid) / "comm").write_text(f"{comm}\n")
+    (proc / str(pid) / "oom_score_adj").write_text(f"{adj}\n")
+
+
+class TestTheEarlyoomDecline:
+    """#112 declined earlyoom on a premise that belongs to exe.dev, not to us.
+
+    Sessions here inherit ``oom_score_adj`` -1000, and earlyoom 1.7 skips a
+    -1000 process exactly as the kernel does (``kill.c:250``), ``--prefer`` or
+    not — so it cannot reach the dev tooling that caused broker#17, and would
+    shed small daemons and ``tailscaled`` instead. The premise is not universal:
+    notifier's sessions sit at 0 (notifier#74, gregoryfoster/skills#303), and
+    what decides it was never determined. So it is pinned live rather than
+    assumed; if it flips, the decline no longer holds and #112 reopens.
+    """
+
+    def test_a_session_under_exe_init_reports_its_root(self, tmp_path: Path) -> None:
+        _fake_process(tmp_path, 217, 1, "exe-init", -1000)
+        _fake_process(tmp_path, 581, 217, "bash", -1000)
+        _fake_process(tmp_path, 900, 581, "python3", 500)  # a choom'd leaf
+        assert _session_root_adj(tmp_path, 900) == -1000
+
+    def test_a_session_under_sshd_reports_its_root(self, tmp_path: Path) -> None:
+        _fake_process(tmp_path, 216, 1, "sshd", -1000)
+        _fake_process(tmp_path, 700, 216, "bash", 0)  # notifier's shape
+        _fake_process(tmp_path, 701, 700, "python3", 0)
+        assert _session_root_adj(tmp_path, 701) == 0
+
+    def test_no_session_ancestor_is_none(self, tmp_path: Path) -> None:
+        _fake_process(tmp_path, 1, 0, "systemd", 0)
+        _fake_process(tmp_path, 300, 1, "systemd", 100)
+        _fake_process(tmp_path, 301, 300, "python3", 0)
+        assert _session_root_adj(tmp_path, 301) is None
+
+    @pytest.mark.skipif(socket.gethostname() != HOST, reason=f"not {HOST}")
+    def test_sessions_here_are_still_exempt(self) -> None:
+        adj = _session_root_adj(Path("/proc"), os.getpid())
+        if adj is None:
+            pytest.skip("not run from an exe.dev session")
+        assert adj == OOM_FLOOR, (
+            f"this session's root reads oom_score_adj={adj}, not {OOM_FLOOR}: "
+            "exe.dev no longer exempts sessions here, so earlyoom's --prefer now "
+            "reaches the dev tooling and #112's decline no longer holds — "
+            "reopen it (notifier's deploy/earlyoom.default is the working shape, "
+            "plus -s 100: with swap, earlyoom otherwise waits for swap to drain)"
         )
