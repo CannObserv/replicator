@@ -409,7 +409,7 @@ retarget :: - [DEPLOYMENT.md](docs/DEPLOYMENT.md) — the unit's lifecycle, its 
 #   CONVENTIONS.md and the charter. Each line below is a pointer or a
 #   self-reference whose target moved in the same change; the moved text
 #   itself arrived verbatim.
-docs/STREAMS.md :: retarget :: - **Politeness is enforced here and decided elsewhere, and since #19 the numbers actually arrive.**
+docs/STREAMS.md :: tighten :: - **Politeness is enforced here and decided elsewhere, and since #19 the numbers actually arrive.**
 docs/contracts/replicator-boundaries.md :: retarget :: - **enforcement has a rate floor of `REPLICATOR_CLAIM_MIN_IDLE_MS`** (default 60 s). See below.
 docs/contracts/replicator-boundaries.md :: retarget :: rides the worker's stop event, because how long it runs is the producer's business: this
 docs/contracts/replicator-boundaries.md :: retarget :: document asks the producer to `MAXLEN`, and Replicator cannot enforce it.
