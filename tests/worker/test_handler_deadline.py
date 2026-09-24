@@ -70,7 +70,7 @@ def bounded(fake_redis, tmp_path, deadline_settings):
     def build(fetcher):
         return build_handler(
             fetcher=fetcher,
-            store=LocalBlobStore(tmp_path),
+            store=LocalBlobStore(tmp_path, touch_on_rereference=True),
             client=fake_redis,
             settings=deadline_settings,
         )

@@ -50,7 +50,7 @@ class ThreadRecordingStore(LocalBlobStore):
     """
 
     def __init__(self, root):
-        super().__init__(root)
+        super().__init__(root, touch_on_rereference=True)
         self.threads: dict[str, int] = {}
 
     def store(self, data, fingerprint, media_type):

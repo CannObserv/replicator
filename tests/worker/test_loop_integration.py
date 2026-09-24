@@ -213,7 +213,7 @@ async def seed_and_consume(
     await consumer.ensure_group(start_id="0")
     handler = build_handler(
         fetcher=FakeFetcher(),
-        store=LocalBlobStore(tmp_path),
+        store=LocalBlobStore(tmp_path, touch_on_rereference=True),
         client=real_redis,
         settings=settings,
         blobs_topic=blobs_topic,
@@ -580,7 +580,7 @@ async def test_a_permanently_failing_command_publishes_a_fact_and_dead_letters(
     # does not raise on a non-2xx, so this is the shape the real byte path sees.
     handler = build_handler(
         fetcher=FakeFetcher(fetch_result(status_code=404)),
-        store=LocalBlobStore(tmp_path),
+        store=LocalBlobStore(tmp_path, touch_on_rereference=True),
         client=real_redis,
         settings=settings,
         blobs_topic=scratch_blobs_topic,

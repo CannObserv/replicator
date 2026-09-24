@@ -81,7 +81,7 @@ def result(outcome, **kw):
 
 @pytest.fixture
 def store(tmp_path):
-    return LocalBlobStore(tmp_path)
+    return LocalBlobStore(tmp_path, touch_on_rereference=True)
 
 
 @pytest.fixture

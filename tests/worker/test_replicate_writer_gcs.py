@@ -124,7 +124,7 @@ async def driver(gcs_bucket):
 
 @pytest.fixture
 def store(tmp_path) -> LocalBlobStore:
-    return LocalBlobStore(tmp_path)
+    return LocalBlobStore(tmp_path, touch_on_rereference=True)
 
 
 class Completions:

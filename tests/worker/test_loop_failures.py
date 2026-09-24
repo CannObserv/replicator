@@ -385,7 +385,7 @@ async def test_a_command_blocked_by_the_blob_ceiling_stays_pending(fake_redis, c
     good commands during any period of disk pressure.
     """
     await fake_redis.xadd(TOPIC, make_command(command_id="cmd-over-ceiling"))
-    store = LocalBlobStore(settings.blob_dir)
+    store = LocalBlobStore(settings.blob_dir, touch_on_rereference=True)
     usage = BlobUsage()
     usage.observe(settings.blob_max_total_bytes)
     fetcher = FakeFetcher()

@@ -450,7 +450,7 @@ def publishing_handler(broker, blobs_topic, tmp_path, oom_settings):
     """
     return build_handler(
         fetcher=FakeFetcher(),
-        store=LocalBlobStore(tmp_path),
+        store=LocalBlobStore(tmp_path, touch_on_rereference=True),
         client=broker.client,
         settings=oom_settings,
         blobs_topic=blobs_topic,
@@ -578,7 +578,7 @@ async def test_an_acl_denial_is_retried_like_a_cap(
     message = await deliver(broker, consumer, topic, command_id="cmd-denied")
     handler = build_handler(
         fetcher=FakeFetcher(),
-        store=LocalBlobStore(tmp_path),
+        store=LocalBlobStore(tmp_path, touch_on_rereference=True),
         client=denied_client,
         settings=oom_settings,
         blobs_topic=blobs_topic,

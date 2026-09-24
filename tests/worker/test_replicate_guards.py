@@ -31,7 +31,7 @@ GCS_ROOT = AliasBinding(provider="gcs", bucket="co-artifacts", prefix="reps")
 
 @pytest.fixture
 def store(tmp_path):
-    return LocalBlobStore(tmp_path)
+    return LocalBlobStore(tmp_path, touch_on_rereference=True)
 
 
 @pytest.fixture

@@ -193,7 +193,7 @@ async def test_the_loop_closes_a_replicate_command_with_a_real_fact(
     """
     aliases = AliasTable({"primary": AliasBinding(provider="gcs", bucket="b", prefix="reps")})
     handler = build_replicate_handler(
-        store=LocalBlobStore(tmp_path),
+        store=LocalBlobStore(tmp_path, touch_on_rereference=True),
         aliases=aliases,
         writers={"primary": _NeverReached()},
         complete=_unused,
