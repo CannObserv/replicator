@@ -152,10 +152,11 @@ That includes Graph health's `health-check`, which the template prints
 uncapped; COMMANDS.md carries it capped, with `--probe src/worker/main.py`.
 
 **What the manifest registers.** `AGENTS.md`, the README, `docs/plans/`, every
-doc in the Detail Docs index but `docs/reference/tailscale.md`, the systemd unit,
-`pyproject.toml`, the CI workflow and three scripts; `validate-manifest`
-([COMMANDS.md](COMMANDS.md)) checks each path resolves. The manifest is a source,
-not the artifact: see `AGENTS.md` → `## Code Exploration Notes (repo-specific)`.
+doc in the Detail Docs index — `tests/test_socraticode_config.py` holds it to that
+— the systemd unit, `pyproject.toml`, the CI workflow and three scripts;
+`validate-manifest` ([COMMANDS.md](COMMANDS.md)) checks each path resolves. The
+manifest is a source, not the artifact: see
+`AGENTS.md` → `## Code Exploration Notes (repo-specific)`.
 
 ### Two launch paths, pinned separately
 

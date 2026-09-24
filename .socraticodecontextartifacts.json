@@ -76,6 +76,11 @@
       "description": "Where this service runs and what it talks to, as opposed to how its unit starts (docs/DEPLOYMENT.md): the dedicated co-replicator VM and its ports, the broker being co-broker with Replicator a client that never ships one and the Redis >=7.0 floor that follows, the shared SocratiCode store on co-index with its full-MagicDNS Qdrant URL, unauthenticated Ollama, the collection names projectId fixes and the one-host-per-projectId rule (#92), and the temp-blob and test buckets on either side of the test/production line with the grants that distinguish them."
     },
     {
+      "name": "tailnet-node",
+      "path": "./docs/reference/tailscale.md",
+      "description": "The co-replicator tailnet node (#88): its exe.dev VM, tailnet hostname replicator, addresses, node ID and single tag:replicator. What the ACL allows — broker:6379, notifier:9000 for the OnFailure= alerts, admin reach from members' own devices only, and no rule naming this node as a dst — and why Tailscale SSH needs both the network rule and the ssh block, with the netmap SSHPolicy.rules check after any policy edit. The measured direct path to the broker, identity surviving reboots and what the boot taught the Redis floor check, DNS through tailscaled's MagicDNS in direct mode, the setup script as it ran, that Tailscale SSH journals command lines so secrets go on stdin, what this host does not run, and which token authenticates which hop."
+    },
+    {
       "name": "deployment-reference",
       "path": "./docs/DEPLOYMENT.md",
       "description": "VM topology and ports, the systemd unit's lifecycle and its ExecStartPre guards, the checkout guard, and the co-core pin. The environment variables themselves are in docs/ENVIRONMENT.md. Also OOMScoreAdjust=-900 on both units (#92): on exe.dev everything descended from a session inherits oom_score_adj=-1000 and is exempt from the OOM killer, so an unprotected worker at ~670 was what the kernel would pick under pressure the dev tooling created. tailscaled gets the same -900 by drop-in (#113), and MemoryLow= on the worker and tailscaled is real only through the system.slice.d grant, since cgroup2 here has no memory_recursiveprot."
