@@ -27,3 +27,11 @@ docs/contracts/content-fetch-issuer-contract.md :: retarget :: #8-do-not-send-a-
 docs/contracts/content-fetch-issuer-contract.md :: retarget :: content-fetch-outcome-reference.md#pacing-at-the-deployed-defaults
 docs/contracts/content-fetch-outcome-reference.md :: retarget :: content-fetch-issuer-contract.md#the-success-fact
 docs/contracts/content-fetch-outcome-reference.md :: retarget :: content-fetch-issuer-contract.md#the-failure-fact
+# #111: atoms of the refuted hook and driver claims (see context-loss-ok).
+AGENTS.md :: default :: "$SOCRATICODE_DRIVER"
+AGENTS.md :: disproven :: git status -sb
+docs/SKILLS.md :: disproven :: UNKNOWN
+docs/SKILLS.md :: default :: node "$SOCRATICODE_DRIVER"
+docs/SKILLS.md :: disproven :: node skills/init-socraticode/scripts/mcp-driver.mjs
+docs/SKILLS.md :: default :: settings.local.json
+docs/SKILLS.md :: disproven :: skills/init-socraticode

@@ -265,3 +265,137 @@ tests/test_destinations.py :: # `co-gcs-replication` — the bucket. Named in `d
 # #99 CR 15: provenance in the new doc's preamble — naming the doc it was
 #   split from is true by construction, and is what orients a cold reader.
 docs/FAILURE-NOTIFICATION.md :: delivery is scored. Split out of [DEPLOYMENT.md](DEPLOYMENT.md) (#99), which
+
+# --- #111: links inside and between the docs/contracts/ files after the three
+#   splits. Each was checked against where its target lives now: every one lands
+#   on content still at that anchor (the facts' tables at outcome-reference, the
+#   envelope/pacing/map-loss sections at issuer-reference, the MUSTs, the frame
+#   and guarantees in the contract, T-clauses in the replicate contract).
+docs/contracts/content-fetch-issuer-contract.md :: - [`content-fetch-outcome-reference.md`](content-fetch-outcome-referen
+docs/contracts/content-fetch-issuer-contract.md :: [Mechanism](content-fetch-outcome-reference.md#how-the-blob-ttl-clock-
+docs/contracts/content-fetch-issuer-contract.md :: [`content-fetch-outcome-reference.md`](content-fetch-outcome-reference
+docs/contracts/content-fetch-issuer-contract.md :: [failure taxonomy](content-fetch-outcome-reference.md#failure-taxonomy
+docs/contracts/content-fetch-issuer-contract.md :: [the failure fact](content-fetch-outcome-reference.md#the-failure-fact
+docs/contracts/content-fetch-issuer-contract.md :: [the failure-fact notes](content-fetch-outcome-reference.md#reading-th
+docs/contracts/content-fetch-issuer-contract.md :: [the reference](content-fetch-issuer-reference.md#pacing-at-the-deploy
+docs/contracts/content-fetch-issuer-contract.md :: [the reference](content-fetch-outcome-reference.md#the-five-silent-con
+docs/contracts/content-fetch-issuer-contract.md :: [the success fact](content-fetch-outcome-reference.md#the-success-fact
+docs/contracts/content-fetch-issuer-contract.md :: away](content-fetch-outcome-reference.md#why-a-duplicate-failure-fact-
+docs/contracts/content-fetch-issuer-contract.md :: facts' in [the outcome reference](content-fetch-outcome-reference.md#t
+docs/contracts/content-fetch-issuer-contract.md :: reference's [DLQ](content-fetch-outcome-reference.md#reading-the-dlq)
+docs/contracts/content-fetch-issuer-contract.md :: were re-keyed: [the reference](content-fetch-issuer-reference.md#the-e
+docs/contracts/content-fetch-issuer-contract.md :: | `schema_version` | `int` = 1 | Replicator supports **1 only**; anyth
+docs/contracts/content-fetch-issuer-reference.md :: ([MUST-2](content-fetch-issuer-contract.md#2-persist-command_id--domai
+docs/contracts/content-fetch-issuer-reference.md :: Contracts settled in cannobserv#266 (co-core v0.7.0); the failure fact
+docs/contracts/content-fetch-issuer-reference.md :: Set on the command, in [`ContentFetchCommand`](content-fetch-issuer-co
+docs/contracts/content-fetch-issuer-reference.md :: [MUST-6](content-fetch-issuer-contract.md#6-handle-fetch_failed-and-ke
+docs/contracts/content-fetch-issuer-reference.md :: [MUST-8](content-fetch-issuer-contract.md#8-do-not-send-a-validator-un
+docs/contracts/content-fetch-issuer-reference.md :: [The frame](content-fetch-issuer-contract.md#the-frame-envelope).
+docs/contracts/content-fetch-issuer-reference.md :: [`content-fetch-issuer-contract.md`](content-fetch-issuer-contract.md)
+docs/contracts/content-fetch-issuer-reference.md :: [`content-fetch-outcome-reference.md`](content-fetch-outcome-reference
+docs/contracts/content-fetch-issuer-reference.md :: [`content-replicate-issuer-contract.md`](content-replicate-issuer-cont
+docs/contracts/content-fetch-issuer-reference.md :: [the failure taxonomy](content-fetch-outcome-reference.md#failure-taxo
+docs/contracts/content-fetch-issuer-reference.md :: [what Replicator does not guarantee](content-fetch-issuer-contract.md#
+docs/contracts/content-fetch-issuer-reference.md :: edits this file — see [the contract](content-fetch-issuer-contract.md)
+docs/contracts/content-fetch-issuer-reference.md :: one [the `blob_available` passthroughs](content-fetch-outcome-referenc
+docs/contracts/content-fetch-issuer-reference.md :: | `occurred_at` | ISO 8601 UTC, **tz-aware** — see [the command](conte
+docs/contracts/content-fetch-outcome-reference.md :: ([MUST-5](content-fetch-issuer-contract.md#5-do-not-dedupe-facts-on-co
+docs/contracts/content-fetch-outcome-reference.md :: > [MUST-8](content-fetch-issuer-contract.md#8-do-not-send-a-validator-
+docs/contracts/content-fetch-outcome-reference.md :: Also, on the reaper [MUST-6](content-fetch-issuer-contract.md#6-handle
+docs/contracts/content-fetch-outcome-reference.md :: Expands [MUST-4](content-fetch-issuer-contract.md#4-make-correlation-i
+docs/contracts/content-fetch-outcome-reference.md :: Expands [MUST-7](content-fetch-issuer-contract.md#7-copy-the-bytes-bef
+docs/contracts/content-fetch-outcome-reference.md :: Named in [MUST-6](content-fetch-issuer-contract.md#6-handle-fetch_fail
+docs/contracts/content-fetch-outcome-reference.md :: [MUST-7](content-fetch-issuer-contract.md#7-copy-the-bytes-before-the-
+docs/contracts/content-fetch-outcome-reference.md :: [The frame](content-fetch-issuer-contract.md#the-frame-envelope) — and
+docs/contracts/content-fetch-outcome-reference.md :: [`content-fetch-issuer-contract.md`](content-fetch-issuer-contract.md)
+docs/contracts/content-fetch-outcome-reference.md :: [the contract](content-fetch-issuer-contract.md) for how to pick the i
+docs/contracts/content-fetch-outcome-reference.md :: [the failure fact](#the-failure-fact), above. Three behaviours are not
+docs/contracts/content-fetch-outcome-reference.md :: [the success fact](#the-success-fact), above. This is why they are
+docs/contracts/content-fetch-outcome-reference.md :: [what Replicator guarantees](content-fetch-issuer-contract.md#what-rep
+docs/contracts/content-fetch-outcome-reference.md :: collapse it. That is by design (see [The frame](content-fetch-issuer-c
+docs/contracts/content-replicate-issuer-contract.md :: - [`content-fetch-issuer-contract.md`](content-fetch-issuer-contract.m
+docs/contracts/content-replicate-issuer-contract.md :: [`content-fetch-issuer-contract.md`](content-fetch-issuer-contract.md)
+docs/contracts/content-replicate-issuer-contract.md :: [outcome](content-fetch-outcome-reference.md) references — **all norma
+docs/contracts/content-replicate-issuer-contract.md :: [outcome](content-fetch-outcome-reference.md) references. All remain n
+docs/contracts/content-replicate-issuer-contract.md :: [the fetch issuer contract's MUST-7](content-fetch-issuer-contract.md#
+docs/contracts/content-replicate-issuer-contract.md :: this costs: [**Why the issuer renders**](../plans/2026-08-14-why-the-i
+docs/contracts/content-replicate-issuer-reference.md :: Expands T3a in [the contract](content-replicate-issuer-contract.md).
+docs/contracts/content-replicate-issuer-reference.md :: Expands T4 in [the contract](content-replicate-issuer-contract.md).
+docs/contracts/content-replicate-issuer-reference.md :: Expands T6 in [the contract](content-replicate-issuer-contract.md).
+docs/contracts/content-replicate-issuer-reference.md :: Expands the contract's [Charter check](content-replicate-issuer-contra
+docs/contracts/content-replicate-issuer-reference.md :: Expands the contract's [section of the same name](content-replicate-is
+docs/contracts/content-replicate-issuer-reference.md :: [Provenance and trust](content-fetch-issuer-reference.md#provenance-an
+docs/contracts/content-replicate-issuer-reference.md :: [`content-replicate-issuer-contract.md`](content-replicate-issuer-cont
+docs/contracts/replicator-boundaries.md :: - [`content-fetch-issuer-contract.md`](content-fetch-issuer-contract.m
+docs/contracts/replicator-boundaries.md :: - [`content-fetch-outcome-reference.md`](content-fetch-outcome-referen
+docs/contracts/replicator-boundaries.md :: [The replicate contract](content-replicate-issuer-contract.md#charter-
+docs/contracts/replicator-boundaries.md :: [`content-fetch-issuer-contract.md`](content-fetch-issuer-contract.md)
+# --- #111: reference-doc pointers into a split doc whose referenced content
+#   stayed: what each stream carries (STREAMS.md), the rules common to every
+#   stream and the replicator:cmd:* keys (CONVENTIONS.md), the replicate
+#   mechanism (STREAMS.md), and MUST-7's seven-day commitment (the contract).
+docs/ARCHITECTURE.md :: bus stream carries is in [STREAMS.md](STREAMS.md), the rules common to
+docs/ARCHITECTURE.md :: in one line: [STREAMS.md](STREAMS.md).
+docs/CONVENTIONS.md :: [STREAMS.md](STREAMS.md).
+docs/CONVENTIONS.md :: keyed by alias — is [STREAMS.md](STREAMS.md); this bullet is the rule
+docs/STORAGE.md :: - `REPLICATOR_BLOB_TTL_SECONDS` — how long a blob survives after it wa
+# --- #111: tracked source, tests and CI naming a split doc for content that
+#   stayed in it — the charter's mechanism/policy split, the replicate refusals,
+#   the outcome taxonomy, MUST-1, the capped-broker record, the keyspace section,
+#   SKILLS.md's hook registration and doc-check lists.
+.github/workflows/ci.yml :: # fetch. Costs ~2.2s of a ~1m10s job. See docs/SKILLS.md.
+.github/workflows/ci.yml :: echo "::error::redis-server is not on PATH after apt-get install. The
+.socraticodeignore :: # away, and docs/SKILLS.md is registered as a context artifact.
+scripts/seed_fetch.py :: ``docs/contracts/content-fetch-issuer-contract.md`` MUST-1.
+src/core/errors.py :: Normative source: ``docs/contracts/content-replicate-issuer-contract.m
+src/core/errors.py :: taxonomy in ``docs/contracts/content-fetch-outcome-reference.md``; the
+src/worker/main.py :: # The success fact is the handler's to publish, exactly as
+src/worker/pacing.py :: `docs/contracts/replicator-boundaries.md` splits this capability: Repl
+src/worker/policy.py :: `docs/contracts/replicator-boundaries.md` splits politeness into mecha
+src/worker/replicate.py :: # does not only reach the journal: it becomes the failure fact's
+src/worker/replicate.py :: (``docs/contracts/content-replicate-issuer-contract.md``).
+tests/core/test_errors.py :: refusals — settled in ``docs/contracts/content-replicate-issuer-contra
+tests/test_boundaries.py :: # ``docs/contracts/replicator-boundaries.md`` in the same change.
+tests/test_boundaries.py :: [`docs/contracts/replicator-boundaries.md`](../docs/contracts/replicat
+tests/test_broker_keyspace.py :: "to be reachable by this file's scan before docs/CONVENTIONS.md can cl
+tests/test_broker_keyspace.py :: `docs/CONVENTIONS.md` answers broker#1's last open question — what tho
+tests/test_broker_keyspace.py :: f"Update {HEADING!r} in docs/CONVENTIONS.md and tell broker#1 (#80)."
+tests/test_ci.py :: behind the capped-broker record in ``docs/CONVENTIONS.md`` and behind
+tests/test_destinations.py :: and its docstring sends a reader to `docs/contracts/replicator-boundar
+tests/test_doc_sensitive_paths.py :: ".claude/settings.json": "docs/SKILLS.md hook registration",
+tests/test_doc_sensitive_paths.py :: ".gitmodules": "docs/SKILLS.md vendor submodule table",
+tests/test_doc_sensitive_paths.py :: ".skills/doc-sections": "docs/SKILLS.md advice on a hit (#93)",
+tests/test_doc_sensitive_paths.py :: ".skills/doc-sensitive-paths": "docs/SKILLS.md sensitive-path section"
+tests/test_doc_sensitive_paths.py :: # docs/SKILLS.md documents hook registration and suspension as edits
+tests/worker/test_handler.py :: (``docs/contracts/replicator-boundaries.md``). co-core sets no ``min_l
+tests/worker/test_oom_integration.py :: ``docs/CONVENTIONS.md``, so it asserts every command that list names —
+tests/worker/test_reporter.py :: """#28: the failure fact carries the domain key too, for the same reas
+# --- #111: 'the success fact' / 'the failure fact' as ordinary nouns, not a
+#   citation of the headings that moved to the outcome reference.
+docs/ARCHITECTURE.md :: src/worker/reporter.py — The failure fact behind the FailureReporter s
+docs/STREAMS.md :: - **The failure fact is a seam, not a call in the loop.** `FailureRepo
+docs/contracts/content-fetch-issuer-contract.md :: envelope and its keys, pacing at the deployed defaults, and the versio
+docs/contracts/content-fetch-outcome-reference.md :: appears and why every one is `terminal=True`: [Reading the failure fac
+docs/contracts/content-fetch-outcome-reference.md :: | `info_source_id` | `str` | **Required.** Echoed verbatim, exactly as
+docs/contracts/content-fetch-outcome-reference.md :: | `url` | `str` | Echoed. Confirmation and debugging only, exactly as
+docs/contracts/content-replicate-issuer-contract.md :: token on the failure fact. Following the precedent in
+docs/contracts/content-replicate-issuer-contract.md :: | **6** — handle the failure fact, keep a reaper anyway | **verbatim.*
+scripts/seed_fetch.py :: tool timing out on exactly the case the failure fact exists to make vi
+src/core/errors.py :: ``reason`` is required. It is what the failure fact reports, and a def
+src/worker/replicate.py :: ``complete`` publishes the success fact: the handler owns it the way t
+tests/worker/test_handler_metadata.py :: """The fetch metadata the success fact carries beyond the bytes themse
+tests/worker/test_reporter.py :: """The failure fact path: what a closed-without-a-blob command announc
+# --- #111: the artifacts manifest. Paths name docs that still exist; each
+#   description naming moved content was rewritten in this same change.
+.socraticodecontextartifacts.json :: "description": "Founding-design pointers and the module-by-module layo
+.socraticodecontextartifacts.json :: "description": "GitHub Actions CI. Concurrency keyed on github.sha rat
+.socraticodecontextartifacts.json :: "description": "Request half of the content.fetch issuer reference, sp
+.socraticodecontextartifacts.json :: "description": "The co-core / Redis Streams rules that hold for every
+.socraticodecontextartifacts.json :: "description": "The reasoning behind what each individual stream carri
+.socraticodecontextartifacts.json :: "path": "./docs/CONVENTIONS.md",
+.socraticodecontextartifacts.json :: "path": "./docs/SKILLS.md",
+.socraticodecontextartifacts.json :: "path": "./docs/STREAMS.md",
+.socraticodecontextartifacts.json :: "path": "./docs/contracts/content-fetch-issuer-contract.md",
+.socraticodecontextartifacts.json :: "path": "./docs/contracts/content-fetch-outcome-reference.md",
+.socraticodecontextartifacts.json :: "path": "./docs/contracts/content-replicate-issuer-contract.md",
+.socraticodecontextartifacts.json :: "path": "./docs/contracts/replicator-boundaries.md",

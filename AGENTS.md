@@ -54,8 +54,6 @@ Full tool table, prefetch query, per-tool guidance, cross-repo search:
 
 **The manifest is a source, not the artifact.** Nothing re-embeds it — run `codebase_update` in the same change as a `description` edit, or the stalest answer carries the most authority (#19 CR #17).
 
-**`mcp-driver.mjs` lies twice** — silently through the `skills/` symlink (skills#177), falsely from a worktree (skills#180). Use `"$SOCRATICODE_DRIVER"`; disbelieve health findings outside the main checkout ([docs/SKILLS.md](docs/SKILLS.md)).
-
 **Cap anything that launches a SocratiCode server** — uncapped, one cost this cluster 58 min of bus (#94). Invocations in [docs/COMMANDS.md](docs/COMMANDS.md). A green `codebase_search` is also not evidence every linked sibling answered: the silent-skip modes, and which sibling is in one, are in [docs/SOCRATICODE.md](docs/SOCRATICODE.md).
 
 ## Project Layout
@@ -80,7 +78,7 @@ critical — `claim_stale_page` reads `XAUTOCLAIM`'s three-element reply — gua
 && uv sync --frozen && sudo systemctl restart replicator` — `git push` instead of the
 pull when the merge happened here.
 
-Three that bite, each symptomless until it matters:
+Two that bite, each symptomless until it matters:
 
 - **The service refuses to start off `main`, or off unpushed commits** (#37, #48).
   `REPLICATOR_ALLOW_ANY_CHECKOUT=1` overrides; a dev worker asks the same question
@@ -90,8 +88,6 @@ Three that bite, each symptomless until it matters:
   `sysctl --system`, and tailscaled's a tailscaled restart (#113). The
   `OnFailure=` handler's missed `cp` is invisible until the first failure; read
   what it recorded with `journalctl -t replicator-failure`, never `-u`.
-- **The daily skills-refresh hook commits without pushing**, which is one of the
-  states the checkout guard refuses. Check `git status -sb` before a restart.
 
 Every deploy situation, the guard's verdict table, and the dev-server invocation:
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
@@ -111,7 +107,6 @@ radius. Anything the service needs goes in `/etc/replicator/.env`.
 New settings take the `REPLICATOR_` prefix (cohort convention). `BUILD_ID` is the
 one deliberate exception, stamped generically by the unit.
 
-Load both for shell commands (dev only); the snippet is under Common Commands.
 Every variable, which file carries it, and each default's reasoning:
 [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md).
 
@@ -233,6 +228,7 @@ source — each with its rationale and ruff gate in [docs/STYLE.md](docs/STYLE.m
 
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) — founding design, the command → fact flow, module by module; read before changing one
 - [STREAMS.md](docs/STREAMS.md) — what each stream carries, one bullet per rule `AGENTS.md` states in a line
+- [POLITENESS.md](docs/POLITENESS.md) — per-host pacing: the policy stream, sleep vs park, 429/503 escalation
 - [CONVENTIONS.md](docs/CONVENTIONS.md) — the rules common to every stream: idempotency, validation, DLQ, `claim_stale`, and the `replicator:cmd:*` keys (#80)
 - [STORAGE.md](docs/STORAGE.md) — blob paths and modes, the populations under `REPLICATOR_BLOB_DIR`, TTL and ceilings
 - [DEPLOYMENT.md](docs/DEPLOYMENT.md) — the unit's lifecycle, its start guards, the co-core pin, the host's memory tunables
@@ -250,3 +246,4 @@ source — each with its rationale and ruff gate in [docs/STYLE.md](docs/STYLE.m
 - [content-fetch-outcome-reference.md](docs/contracts/content-fetch-outcome-reference.md) — its result side: failure taxonomy, silent conditions, the DLQ
 - [replicator-boundaries.md](docs/contracts/replicator-boundaries.md) — what Replicator may become; run its three tests against any proposed capability
 - [content-replicate-issuer-contract.md](docs/contracts/content-replicate-issuer-contract.md) — the replicate trust model and issuer obligations (#34)
+- [content-replicate-issuer-reference.md](docs/contracts/content-replicate-issuer-reference.md) — its reasoning half: the trust comparison, T3a, T4, T6, the exemption

@@ -236,12 +236,13 @@ changed — never `.skills/` wholesale, which holds operator config), and never 
 also re-installs `.skills/doctor.sh` each session, ahead of both gates, so the doctor self-heals on
 any branch if deleted. Logs to `.git/skills-update.log`.
 
-**It commits and does not push — so check for its commit before you deploy.** That is deliberate:
-an unattended hook that pushes to `main` is a worse trade than one that leaves a commit behind. But
-the commit it leaves interacts with a guard that has no other symptom. `scripts/check_main_checkout.sh`
-**refuses to start `replicator.service`** off a `main` carrying unpushed commits (#48), so a refresh
-nobody pushed blocks the next deploy, and the first sign of it is a service that will not start.
-#72 found the repo in exactly that state — `b29efcf` sat unpushed for a day.
+**It pushes the commit it makes, and rolls it back if the push fails**
+([skills#293](https://github.com/gregoryfoster/skills/issues/293)); a commit it left unpushed is
+retried at the next session start. Until then it committed and stopped, and that commit met a guard
+with no other symptom: `scripts/check_main_checkout.sh` **refuses to start `replicator.service`** off
+a `main` carrying unpushed commits (#48), so the first sign was a service that would not start —
+#72 found `b29efcf` unpushed for a day. The harness can still kill the hook between commit and push,
+so the state is now rare rather than impossible.
 
 Cheap habit, worth having before any restart:
 
@@ -304,30 +305,24 @@ pins it to a literal version; both launch paths and their pins are in
 [COMMANDS.md](COMMANDS.md) is wrapped in a `systemd-run` memory cap, and
 `validate-store`, `validate-manifest` and `resolve` need no server at all.
 
-**The health hook lies in two situations, and both look like a healthy report.**
+**The health hook used to lie in two situations, and both looked like a healthy report.** Both are
+fixed upstream (closed 2026-08-17). `mcp-driver.mjs` dispatched only when `process.argv[1]` was its
+own module path, so through the `skills/` symlink it **exited 0 having printed nothing**
+([gregoryfoster/skills#177](https://github.com/gregoryfoster/skills/issues/177)); it now compares
+realpaths. And the hook measured `.`, so every worktree session reported `graph is not READY`
+against a healthy index ([gregoryfoster/skills#180](https://github.com/gregoryfoster/skills/issues/180));
+it now measures the main checkout. `SOCRATICODE_DRIVER` in `.claude/settings.json` stays — candidate
+1 in the hook's resolution order, and the name every invocation in [COMMANDS.md](COMMANDS.md) uses.
+The residual is manual: a `health-check .` run from a worktree still names a path nothing indexed,
+so run those from the main checkout.
 
-1. *Silently.* `mcp-driver.mjs` only dispatches when `process.argv[1]` resolves to its own module
-   path. `skills/init-socraticode` is a `managing-skills` symlink, so the two disagree and the script
-   **exits 0 having printed nothing** — and the hook's own resolution order tries that symlink
-   *before* the real `skills-vendor/` path, so it takes the broken one every time
-   ([gregoryfoster/skills#177](https://github.com/gregoryfoster/skills/issues/177)). Worked around by
-   `SOCRATICODE_DRIVER` in `.claude/settings.json`, which is candidate 1 in that order. Committed
-   rather than left in `settings.local.json`: the value is a repo-relative path, and a machine-local
-   fix would leave every other checkout reporting clean without measuring anything.
-2. *Falsely.* It measures `.` — the current working directory. Only the main checkout is indexed, so
-   from a worktree it reports `graph is not READY` and yield `UNKNOWN` against a perfectly healthy
-   index ([gregoryfoster/skills#180](https://github.com/gregoryfoster/skills/issues/180)). This repo
-   develops in worktrees by default, so that is the common case, not the edge one. Believe health
-   findings from the main checkout; disregard them anywhere else.
-
-### After an `init-socraticode` re-run, re-apply four things
+### After an `init-socraticode` re-run, re-apply three things
 
 The skill regenerates `docs/SOCRATICODE.md` **wholesale** and re-copies the health hook, so a re-run
 reverts local corrections without saying so. Check these before committing its output:
 
 | Re-apply | Reverts to | Why it matters |
 |---|---|---|
-| `node "$SOCRATICODE_DRIVER"` in the Graph health block | `node skills/init-socraticode/scripts/mcp-driver.mjs` | The template's path is the one that exits 0 printing nothing (skills#177) — the doc would teach the broken invocation |
 | `.claude/hooks/socraticode-health.sh` as a symlink | a copy (step C) | skills#179; `tests/test_skills_hook.py` fails, so this one is caught |
 | `codebase_context_index` | — | `AGENTS.md` and every doc here are registered artifacts; nothing re-embeds them |
 | The **The store is external and shared** paragraph under the do-not-hand-edit notice, and the Cross-repo search section's three silent-skip modes with its pointer into `docs/INFRASTRUCTURE.md` | whatever the template writes for a fresh install and for `linkedProjects` | #92. A linked repo contributes nothing when its path does not resolve, when its collection was never indexed, or when it resolves to a path hash instead of `codebase_<sibling>` — and the tool result says so in none of the three. The per-sibling state is in `docs/INFRASTRUCTURE.md` precisely so a re-run cannot take it; the *pointer* still has to survive |
