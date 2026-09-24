@@ -630,9 +630,11 @@ def test_the_kernel_holds_each_reservation(unit: str):
 def test_the_live_slice_covers_every_child_on_the_host():
     """Any unit on the host can claim a share, not only the two this repo reserves.
 
-    Without ``memory_recursiveprot`` an oversubscribed slice divides its grant
-    among the claimants in proportion, so a claim added outside this repo would
-    quietly shrink the worker's and tailscaled's.
+    An oversubscribed slice divides its grant among the claimants in proportion
+    to what each uses of its claim — with or without ``memory_recursiveprot`` —
+    so a claim added outside this repo would quietly shrink the worker's and
+    tailscaled's. This sums the claims rather than their use, which is stricter
+    than the kernel on purpose: use moves, a claim does not.
     """
     slice_dir = _cgroup("system.slice")
     children = [c for c in slice_dir.iterdir() if (c / "memory.low").exists()]
