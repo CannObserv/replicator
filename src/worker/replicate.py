@@ -50,16 +50,14 @@ from src.worker.aliases import AliasBinding, AliasTable
 
 logger = get_logger(__name__)
 
-# The schemes a ``blob_uri`` may carry, one per ``BlobStore`` backend:
-# ``file://`` from ``LocalBlobStore``, ``gs://`` from ``GcsBlobStore`` (#7; both
-# co-core's since #114). A
-# tuple rather than a check against the configured backend on purpose — this
-# worker can be redeployed onto the other backend while commands naming the
-# previous one are still in the PEL. Those have to parse far enough to be
-# recognized as *a blob reference from the other backend*, which
-# ``locate_blob`` then reports as expired rather than invalid; refusing them
-# here on the scheme would collapse that distinction and tell the issuer to
-# stop trying.
+# The schemes a ``blob_uri`` may carry, one per ``BlobStore`` backend: ``file://``
+# from ``LocalBlobStore``, ``gs://`` from ``GcsBlobStore`` (#7; both co-core's since
+# #114). A tuple rather than a check against the configured backend on purpose — this
+# worker can be redeployed onto the other backend while commands naming the previous
+# one are still in the PEL. Those have to parse far enough to be recognized as *a blob
+# reference from the other backend*, which ``locate_blob`` then reports as expired
+# rather than invalid; refusing them here on the scheme would collapse that
+# distinction and tell the issuer to stop trying.
 _BLOB_URI_SCHEMES = ("file", "gs")
 
 # What a rendered destination segment may contain. Printable ASCII minus the

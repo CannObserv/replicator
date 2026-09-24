@@ -2,7 +2,7 @@
 
 Downloads every object under ``gs://co-gcs-pypi/wheels/`` into ``./.wheelhouse``
 (repo root), skipping any file already present with a matching size. ``uv``
-then resolves ``co-core`` / ``co-core-aio`` from that directory via the
+then resolves ``co-core`` / ``co-core-aio`` / ``co-core-sync`` from that directory via the
 ``[tool.uv] find-links`` entry in ``pyproject.toml``. Mirrored from archiver's
 ``scripts/sync_wheelhouse.py`` (archiver#72 / #75), the cluster precedent.
 

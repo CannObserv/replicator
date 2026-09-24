@@ -85,7 +85,7 @@ seam is synchronous — an async twin would be a wide refactor for no behavioura
 gain, and `AsyncGcsDriver` is itself `to_thread` around a blocking SDK — so the
 rule lives at the call sites and is held by `tests/worker/test_storage_offloop.py`,
 which watches which thread the store actually ran on. It was already needed
-before the object store: `_write_atomically` ends in an `fsync`.
+before the object store: the local backend's temp-then-rename write ends in an `fsync`.
 
 The cost of that is a **fourth term in the unit's shutdown budget**: `to_thread`
 puts a store beyond cancellation, so SIGTERM waits out an upload in flight

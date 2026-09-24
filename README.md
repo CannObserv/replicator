@@ -60,7 +60,7 @@ reads `XAUTOCLAIM`'s three-element reply, added in Redis server 7.0.
 ## Setup
 
 ```bash
-# Mirror the private cannobserv package index into ./.wheelhouse (co-core, co-core-aio).
+# Mirror the private cannobserv package index into ./.wheelhouse (co-core, co-core-aio, co-core-sync).
 # Requires GOOGLE_APPLICATION_CREDENTIALS (see Environment below).
 uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
 
