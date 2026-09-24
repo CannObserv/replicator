@@ -45,8 +45,8 @@ from pathlib import Path
 
 import pytest
 from co_core_aio.gcs import AsyncGcsDriver
+from co_core_sync.drivers.blobstore import GcsBlobStore
 
-from src.storage.gcs import GcsBlobStore
 from tests.conftest import (
     PRODUCTION_ENV,
     TEST_BLOB_BUCKET_ENV,
@@ -309,7 +309,7 @@ def test_an_unmarked_test_cannot_construct_a_real_blob_store():
     `GcsBlobStore.__init__` builds `storage.Client()` in its own body exactly as
     `AsyncGcsDriver.__init__` does, so it is reachable by the same accident and
     has to be refused by the same wrapper. The guard is here rather than in
-    `tests/storage/test_gcs.py` because the property is about the *suite* — no
+    `tests/storage/test_shared_store.py` because the property is about the *suite* — no
     test anywhere constructs one — which no module about the store could assert.
     """
     with pytest.raises(AssertionError, match="not marked"):

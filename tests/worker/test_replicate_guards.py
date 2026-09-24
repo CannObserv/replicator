@@ -18,10 +18,9 @@ the shapes nobody thought of are refused for free.
 import io
 
 import pytest
+from co_core_sync.drivers.blobstore import GcsBlobStore, LocalBlobStore
 
 from src.core.errors import PermanentReplicateError, ReplicateReason
-from src.storage.gcs import GcsBlobStore
-from src.storage.local import LocalBlobStore
 from src.worker.aliases import AliasBinding
 from src.worker.replicate import locate_blob, validate_destination
 from tests.storage.conftest import FakeBucket, FakeClient
@@ -32,7 +31,7 @@ GCS_ROOT = AliasBinding(provider="gcs", bucket="co-artifacts", prefix="reps")
 
 @pytest.fixture
 def store(tmp_path):
-    return LocalBlobStore(tmp_path)
+    return LocalBlobStore(tmp_path, touch_on_rereference=True)
 
 
 @pytest.fixture

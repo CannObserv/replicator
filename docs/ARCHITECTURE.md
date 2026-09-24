@@ -23,9 +23,11 @@ content.replicate (cmd) → guards → create-if-absent ────────
 
 `src/worker/` is the primary process — the bus consumer, with the byte path, the
 failure fact, the retention sweep, the pacer, and the `content.fetch-policy` reader
-each behind their own seam. `src/storage/` is the content-addressed temp store behind
-the `BlobStore` protocol — **two backends** (`local`, `gcs`), selected by
-`REPLICATOR_BLOB_BACKEND`, default `local` (#7). `src/api/` is the dev-only `/health`
+each behind their own seam. The content-addressed temp store is **co-core's** since #114 —
+`co_core_sync.drivers.blobstore` behind the `co_core.pure.util.blobstore.BlobStore`
+protocol (cannobserv#475), **two backends** (`local`, `gcs`) selected by
+`REPLICATOR_BLOB_BACKEND`, default `local` (#7) — and `src/storage/` keeps only the
+retention sweep, which is temp-tier policy. `src/api/` is the dev-only `/health`
 app; `src/core/` holds config, logging, and the consume path's failure vocabulary;
 `tests/` mirrors `src/`.
 
@@ -39,10 +41,7 @@ src/worker/reporter.py — The failure fact behind the FailureReporter seam: fet
 src/worker/retention.py — The sweep task: cadence, usage accounting, ceiling reporting
 src/worker/pacing.py — Per-host request spacing; the mechanism half of politeness (#12, escalating on 429 since #25)
 src/worker/policy.py — The content.fetch-policy consumer: the map, and the groupless tail (#19)
-src/storage/    — Temp storage; BlobStore protocol + its two backends
-src/storage/base.py  — BlobStore protocol (store / exists / uri_for / open / open_stream)
-src/storage/local.py — Content-addressed local backend; file:// URIs, sharded paths
-src/storage/gcs.py   — Content-addressed object-store backend; gs:// URIs, flat keys, customTime retention (#7)
+src/storage/    — Temp-tier policy only. The store itself is co-core's: `co_core_sync.drivers.blobstore` (cannobserv#475, #114)
 src/storage/sweeper.py — Retention: TTL reap, stale temps, empty shards; the measured size
 src/api/        — FastAPI app (/health only; not part of the MVP loop)
 src/api/main.py — App factory, lifespan, router registration

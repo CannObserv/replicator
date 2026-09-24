@@ -298,15 +298,15 @@ wheels = [
 
 [[package]]
 name = "co-core"
-version = "0.19.2"
+version = "0.19.3"
 source = { registry = ".wheelhouse" }
 dependencies = [
     { name = "dateparser" },
     { name = "pydantic" },
 ]
-sdist = { path = "co_core-0.19.2.tar.gz" }
+sdist = { path = "co_core-0.19.3.tar.gz" }
 wheels = [
-    { path = "co_core-0.19.2-py3-none-any.whl" },
+    { path = "co_core-0.19.3-py3-none-any.whl" },
 ]
 
 [package.optional-dependencies]
@@ -320,21 +320,41 @@ extract = [
 
 [[package]]
 name = "co-core-aio"
-version = "0.19.2"
+version = "0.19.3"
 source = { registry = ".wheelhouse" }
 dependencies = [
     { name = "co-core" },
     { name = "httpx" },
 ]
-sdist = { path = "co_core_aio-0.19.2.tar.gz" }
+sdist = { path = "co_core_aio-0.19.3.tar.gz" }
 wheels = [
-    { path = "co_core_aio-0.19.2-py3-none-any.whl" },
+    { path = "co_core_aio-0.19.3-py3-none-any.whl" },
 ]
 
 [package.optional-dependencies]
 bus = [
     { name = "redis" },
 ]
+gcs = [
+    { name = "google-cloud-core" },
+    { name = "google-cloud-storage" },
+]
+
+[[package]]
+name = "co-core-sync"
+version = "0.19.3"
+source = { registry = ".wheelhouse" }
+dependencies = [
+    { name = "co-core" },
+    { name = "requests" },
+    { name = "urllib3" },
+]
+sdist = { path = "co_core_sync-0.19.3.tar.gz" }
+wheels = [
+    { path = "co_core_sync-0.19.3-py3-none-any.whl" },
+]
+
+[package.optional-dependencies]
 gcs = [
     { name = "google-cloud-core" },
     { name = "google-cloud-storage" },
@@ -1347,6 +1367,7 @@ source = { editable = "." }
 dependencies = [
     { name = "co-core", extra = ["extract"] },
     { name = "co-core-aio", extra = ["bus", "gcs"] },
+    { name = "co-core-sync", extra = ["gcs"] },
     { name = "fastapi" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -1371,8 +1392,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "co-core", extras = ["extract"], specifier = ">=0.19.1,<0.20" },
-    { name = "co-core-aio", extras = ["bus", "gcs"], specifier = ">=0.19.1,<0.20" },
+    { name = "co-core", extras = ["extract"], specifier = ">=0.19.3,<0.20" },
+    { name = "co-core-aio", extras = ["bus", "gcs"], specifier = ">=0.19.3,<0.20" },
+    { name = "co-core-sync", extras = ["gcs"], specifier = ">=0.19.3,<0.20" },
     { name = "fastapi", specifier = ">=0.126.0,<1" },
     { name = "pydantic", specifier = ">=2.9,<3" },
     { name = "pydantic-settings", specifier = ">=2.5.0,<3" },

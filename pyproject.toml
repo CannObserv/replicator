@@ -7,7 +7,21 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
-    # Floor is 0.19.1, for `AsyncBusConsumer.dead_letter`'s `reason=` keyword and
+    # Floor is 0.19.3, for the shared content-addressed store (cannobserv#475,
+    # #114): `co_core.pure.util.blobstore` (the key scheme and the `BlobStore`
+    # Protocol), `co_core_sync.drivers.blobstore` (both backends, the `gcs` one
+    # behind `co-core-sync[gcs]`), and `checksum="crc32c"` on every conditional
+    # create — including `AsyncGcsDriver.create_if_absent`, which the replicate
+    # path was already using, so the floor moves on all three packages at once.
+    # Diffing the wheels: 0.19.3 adds `pure/util/blobstore.py`, the checksum
+    # constant in `pure/util/gcs.py` and `sha256_chunks` in `pure/util/hashing.py`;
+    # the aio driver gains the `checksum=` kwarg; `pure/models/changes.py`, the
+    # effects and the bus adapters are byte-identical. On 0.19.2 the worker fails
+    # at import with a ModuleNotFoundError, never reaching a running consumer.
+    #
+    # Previously:
+    #
+    # Floor was 0.19.1, for `AsyncBusConsumer.dead_letter`'s `reason=` keyword and
     # the provenance it writes onto every DLQ entry (`dlq.source_id`, `dlq.group`,
     # `dlq.consumer`, `dlq.reason` — cannobserv#474, #116), which retired the
     # `dlq_reason` / `dlq_original_id` keys `_dead_letter` added by hand. It also
@@ -96,8 +110,9 @@ dependencies = [
     # at module load, so a skew cannot reach a running worker at all. Additive over
     # 0.8.0 for everything the fetch path uses — no field on ContentFetchCommand,
     # BlobAvailableEvent or FetchFailedEvent moved between the two.
-    "co-core[extract]>=0.19.1,<0.20",
-    "co-core-aio[bus,gcs]>=0.19.1,<0.20",
+    "co-core[extract]>=0.19.3,<0.20",
+    "co-core-aio[bus,gcs]>=0.19.3,<0.20",
+    "co-core-sync[gcs]>=0.19.3,<0.20",
     "fastapi>=0.126.0,<1",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.5.0,<3",

@@ -21,6 +21,7 @@ from co_core.effects.fetch import FetchContent, FetchResult
 from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.envelope import to_wire
 from co_core.pure.models.changes import BlobAvailableEvent, ContentFetchCommand
+from co_core.pure.util.blobstore import BlobStore
 from co_core.pure.util.hashing import sha256
 from co_core_aio.bus import AsyncBusPublisher
 from redis.asyncio import Redis
@@ -34,7 +35,6 @@ from src.core.errors import (
     is_terminal_provider_status,
 )
 from src.core.logging import get_logger
-from src.storage.base import BlobStore
 from src.storage.sweeper import BlobUsage
 from src.worker.loop import Handler, park
 from src.worker.pacing import HostPacer, HostPolicy

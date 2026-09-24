@@ -323,7 +323,8 @@ async def test_the_blob_lifetime_is_announced(handler, fake_redis):
     """A consumer cannot observe the TTL clock, so the fact carries the horizon.
 
     Its start point is the *last fetch reference* (``LocalBlobStore.store``
-    ``os.utime``s on the content-addressed short-circuit), which is an event no
+    ``os.utime``s on the content-addressed short-circuit, built with
+    ``touch_on_rereference=True`` as the worker builds it — #114), which is an event no
     consumer sees. Deriving it from the issuer contract's MUST-7 TTL instead
     would hard-code a retention policy the fetcher owns and start the clock in
     the wrong place (cannobserv#301).

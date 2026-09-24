@@ -20,9 +20,9 @@ from co_core.pure.adapters.bus.dead_letter import DeadLetterProvenance, split_de
 from co_core.pure.adapters.bus.envelope import from_wire, to_wire
 from co_core.pure.adapters.bus.streams import dlq_name
 from co_core.pure.models.changes import BlobAvailableEvent, ContentFetchCommand
+from co_core_sync.drivers.blobstore import LocalBlobStore
 
 from src.core.config import get_settings
-from src.storage.local import LocalBlobStore
 from src.storage.sweeper import BlobUsage
 from src.worker.handler import build_handler
 from src.worker.loop import FETCH_SPEC, FailureReport, process_message, run_loop
@@ -232,7 +232,7 @@ def handler(fake_redis, tmp_path):
     ):
         return build_handler(
             fetcher=fetcher or FakeFetcher(),
-            store=LocalBlobStore(tmp_path),
+            store=LocalBlobStore(tmp_path, touch_on_rereference=True),
             client=fake_redis,
             settings=get_settings(),
             usage=usage,

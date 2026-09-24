@@ -12,11 +12,11 @@ import asyncio
 import pytest
 from co_core.pure.adapters.bus.streams import dlq_name
 from co_core.pure.models.changes import ContentFetchCommand
+from co_core_sync.drivers.blobstore import LocalBlobStore
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import NoPermissionError, OutOfMemoryError, ResponseError
 
 from src.core.errors import FailureReason, PermanentFetchError, TransientFetchError
-from src.storage.local import LocalBlobStore
 from src.storage.sweeper import BlobUsage
 from src.worker.handler import build_handler
 from src.worker.loop import FETCH_SPEC, Outcome, _delivery_count, poll_once
@@ -385,7 +385,7 @@ async def test_a_command_blocked_by_the_blob_ceiling_stays_pending(fake_redis, c
     good commands during any period of disk pressure.
     """
     await fake_redis.xadd(TOPIC, make_command(command_id="cmd-over-ceiling"))
-    store = LocalBlobStore(settings.blob_dir)
+    store = LocalBlobStore(settings.blob_dir, touch_on_rereference=True)
     usage = BlobUsage()
     usage.observe(settings.blob_max_total_bytes)
     fetcher = FakeFetcher()

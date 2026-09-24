@@ -14,6 +14,7 @@ from collections.abc import AsyncGenerator, Mapping
 
 import pytest
 from co_core_aio.gcs import AsyncGcsDriver
+from co_core_sync.drivers.blobstore import GcsBlobStore
 from httpx import ASGITransport, AsyncClient
 from redis.asyncio import Redis
 from redis.exceptions import AuthenticationError, AuthorizationError
@@ -21,7 +22,6 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from src.core.config import get_settings
-from src.storage.gcs import GcsBlobStore
 
 # A scratch redis-server on this host, never the broker: that has had one
 # database since broker#5, so db 15 does not exist there and db 0 is the one
@@ -128,7 +128,7 @@ def guarded_init(
             # client offers — and an unmarked test cannot build a real client
             # anyway, because the scrub above leaves no identity to resolve.
             #
-            # Without it, `tests/storage/test_gcs.py` would have to claim the
+            # Without it, `tests/storage/test_shared_store.py` would have to claim the
             # `gcs` mark to test decisions that touch no network, which is the
             # mark losing its meaning.
             #

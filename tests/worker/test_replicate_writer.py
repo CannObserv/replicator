@@ -28,10 +28,10 @@ import pytest
 from co_core.effects.gcs import GcsCreateResult
 from co_core.pure.models.changes import ReplicationCompleteEvent, ReplicationFailedEvent
 from co_core.pure.util.gcs import GcsCreateOutcome
+from co_core_sync.drivers.blobstore import LocalBlobStore
 from google.api_core import exceptions as gexc
 
 from src.core.errors import PermanentReplicateError, ReplicateReason, TransientReplicateError
-from src.storage.local import LocalBlobStore
 from src.worker.aliases import AliasBinding, AliasTable
 from src.worker.replicate import build_replicate_handler
 from tests.worker.conftest import now
@@ -81,7 +81,7 @@ def result(outcome, **kw):
 
 @pytest.fixture
 def store(tmp_path):
-    return LocalBlobStore(tmp_path)
+    return LocalBlobStore(tmp_path, touch_on_rereference=True)
 
 
 @pytest.fixture

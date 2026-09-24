@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from co_core.pure.adapters.bus import streams
+from co_core_sync.drivers.blobstore import LocalBlobStore
 
 from src.core.config import get_settings
 from src.core.errors import (
@@ -24,7 +25,6 @@ from src.core.errors import (
     PermanentFetchError,
     TransientFetchError,
 )
-from src.storage.local import LocalBlobStore
 from src.worker.handler import _retry_after_seconds, build_handler
 from src.worker.pacing import BACKOFF_MAX_HEADROOM, HostPacer
 from tests.worker.conftest import URL, Clock, FakeFetcher, command, fetch_result, published_facts
@@ -43,7 +43,7 @@ def paced(fake_redis, tmp_path):
         fetcher = fetcher if fetcher is not None else FakeFetcher()
         return build_handler(
             fetcher=fetcher,
-            store=LocalBlobStore(tmp_path),
+            store=LocalBlobStore(tmp_path, touch_on_rereference=True),
             client=fake_redis,
             settings=get_settings(),
             pacer=pacer,
@@ -179,7 +179,7 @@ async def test_an_uninjected_pacer_still_paces(fake_redis, tmp_path, monkeypatch
     get_settings.cache_clear()
     handler = build_handler(
         fetcher=(fetcher := FakeFetcher()),
-        store=LocalBlobStore(tmp_path),
+        store=LocalBlobStore(tmp_path, touch_on_rereference=True),
         client=fake_redis,
         settings=get_settings(),
     )
@@ -203,7 +203,7 @@ async def test_the_default_park_bound_is_the_poll_window(fake_redis, tmp_path):
     settings = get_settings()
     handler = build_handler(
         fetcher=FakeFetcher(),
-        store=LocalBlobStore(tmp_path),
+        store=LocalBlobStore(tmp_path, touch_on_rereference=True),
         client=fake_redis,
         settings=settings,
         pacer=HostPacer(settings.read_block_ms / 1000 + 1),
@@ -226,7 +226,7 @@ async def test_a_wait_inside_the_poll_window_sleeps_rather_than_parks(fake_redis
     settings = get_settings()
     handler = build_handler(
         fetcher=(fetcher := FakeFetcher()),
-        store=LocalBlobStore(tmp_path),
+        store=LocalBlobStore(tmp_path, touch_on_rereference=True),
         client=fake_redis,
         settings=settings,
         pacer=HostPacer(0.05),
@@ -474,7 +474,7 @@ async def test_an_unpaced_handler_is_the_pre_12_byte_path(fake_redis, tmp_path):
     fetcher = FakeFetcher()
     handler = build_handler(
         fetcher=fetcher,
-        store=LocalBlobStore(tmp_path),
+        store=LocalBlobStore(tmp_path, touch_on_rereference=True),
         client=fake_redis,
         settings=get_settings(),
         pacer=HostPacer(0.0),

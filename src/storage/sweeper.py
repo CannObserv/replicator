@@ -34,7 +34,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-# Finished blobs. Two levels of two characters mirrors LocalBlobStore's sharding,
+# Finished blobs. Two levels of two characters mirrors the shared store's sharding
+# (``co_core.pure.util.blobstore.local_blob_path``, #114),
 # and the `.bin` suffix is what excludes the dot-prefixed temporaries by
 # construction — the reason the temp naming was chosen.
 BLOB_GLOB = "??/??/*.bin"

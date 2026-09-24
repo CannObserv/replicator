@@ -55,7 +55,8 @@ makes production untestable (#38).
   two documented procedures had contradicted each other. `PRODUCTION_ENV` in
   `tests/conftest.py` is the list; `test_the_scrub_covers_the_whole_snippet_agents_are_told_to_source`
   pins the blob pair's membership. Alongside the scrub, `AsyncGcsDriver.__init__` **and
-  `GcsBlobStore.__init__`** are patched to refuse any bucket. The refusal
+  `GcsBlobStore.__init__`** are patched to refuse any bucket (co-core's class since #114;
+  the patch is on the class object, so it holds wherever it is imported from). The refusal
   precedes the call through, because both constructors resolve ADC in their own
   body; checking afterwards would authenticate first and object second.
 
@@ -63,7 +64,7 @@ makes production untestable (#38).
   aimed at is a constructor that resolves credentials itself and reaches a bucket
   by name — a caller supplying the client has already made that impossible, and
   an unmarked test cannot build a real client anyway with the identity scrubbed.
-  Without the carve-out, `tests/storage/test_gcs.py` would have to claim the
+  Without the carve-out, `tests/storage/test_shared_store.py` would have to claim the
   `gcs` mark to test decisions that touch no network, which is how a marker stops
   meaning "writes to a bucket" and starts meaning "constructs this class".
 

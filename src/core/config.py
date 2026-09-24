@@ -32,10 +32,11 @@ SERVICE_NAME = "replicator"
 # directly-constructed handler gets while the field below is what the worker gets.
 DEFAULT_WRITE_TIMEOUT_SECONDS = 120
 
-# The object store's per-operation timeout, imported by ``src.storage.gcs`` so a
-# directly constructed store and the worker's agree by construction rather than
-# by two literals staying equal (CR #8) — the same arrangement
-# ``DEFAULT_WRITE_TIMEOUT_SECONDS`` has with the replicate handler.
+# The object store's per-operation timeout. Once imported by the in-repo store so
+# a directly constructed one and the worker's agreed by construction (CR #8); the
+# store is co-core's since #114 and carries its own default of the same value,
+# but the worker still passes this one explicitly — it is the number in the
+# unit's shutdown budget, and the setting below is what an operator tunes.
 DEFAULT_BLOB_TIMEOUT_SECONDS = 30.0
 
 

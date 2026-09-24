@@ -317,7 +317,7 @@ either.
 
 | | `local` | `gcs` |
 |---|---|---|
-| What marks a reference | `utime` on the short-circuit ([`src/storage/local.py::_touch`](../../src/storage/local.py)) | `customTime` re-stamped on the same branch ([`src/storage/gcs.py::_touch`](../../src/storage/gcs.py)) |
+| What marks a reference | `utime` on the short-circuit (`co_core_sync.drivers.blobstore.local`, built with `touch_on_rereference=True` — #114) | `customTime` stamped on the create and re-stamped on the same branch (`co_core_sync.drivers.blobstore.gcs`, same knob) |
 | What reaps | the in-worker sweep, every `REPLICATOR_BLOB_SWEEP_INTERVAL_SECONDS` | a bucket lifecycle rule on `daysSinceCustomTime` |
 | Granularity of the reap | seconds | **one day**, enforced asynchronously and often later |
 

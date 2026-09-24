@@ -13,9 +13,9 @@ lives with the rest of the write path in ``test_replicate_writer.py``.
 """
 
 import pytest
+from co_core_sync.drivers.blobstore import LocalBlobStore
 
 from src.core.errors import PermanentReplicateError, ReplicateReason
-from src.storage.local import LocalBlobStore
 from src.worker.aliases import AliasBinding, AliasTable
 from src.worker.replicate import build_replicate_handler
 from tests.worker.test_loop_spec import make_replicate_command_model
@@ -47,7 +47,7 @@ WRITERS = {"primary": _NeverReached()}
 
 @pytest.fixture
 def store(tmp_path):
-    return LocalBlobStore(tmp_path)
+    return LocalBlobStore(tmp_path, touch_on_rereference=True)
 
 
 @pytest.fixture

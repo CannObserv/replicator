@@ -102,7 +102,8 @@ and any host without this env still get the filesystem backend.
 | Consumer key | `/etc/watcher/co-gcs-blob-reader.json`, named by `GCS_BLOB_CREDENTIALS` | — |
 
 **The worker's grant is a custom role, because no predefined one fits.**
-`GcsBlobStore._touch` moves `customTime` on every re-reference, which needs
+`GcsBlobStore`, built with `touch_on_rereference=True` (the shared store's
+default is off, #114), moves `customTime` on every re-reference, which needs
 `storage.objects.update` — and every predefined role carrying `update`
 (`objectUser`, `objectAdmin`) also carries `delete`. The worker must never hold
 `delete`: expiry is the lifecycle rule's job, and "this identity cannot delete

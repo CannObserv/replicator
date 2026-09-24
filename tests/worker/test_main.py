@@ -23,11 +23,11 @@ from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.envelope import to_wire
 from co_core.pure.models.changes import FetchPolicyState
 from co_core.pure.util.hashing import sha256
+from co_core_sync.drivers.blobstore import LocalBlobStore
 
 import src.worker.main
 from src.core.config import Settings, get_settings
 from src.core.logging import configure_logging
-from src.storage.local import LocalBlobStore
 from src.storage.sweeper import SweepResult
 from src.worker.egress import RESOLVE_TIMEOUT_SECONDS, BodyCeilingTransport, GuardedTransport
 from src.worker.main import (
@@ -1130,7 +1130,7 @@ async def test_the_local_backend_is_what_a_bare_environment_gets(monkeypatch, fa
     built = []
     monkeypatch.setattr(
         "src.worker.main.LocalBlobStore",
-        lambda root: built.append(root) or LocalBlobStore(root),
+        lambda root, **options: built.append(root) or LocalBlobStore(root, **options),
     )
 
     await run(_stopped())
@@ -1138,13 +1138,70 @@ async def test_the_local_backend_is_what_a_bare_environment_gets(monkeypatch, fa
     assert built == [(tmp_path / "blobs").resolve()]
 
 
+async def test_the_local_backend_restarts_the_retention_clock_on_a_re_store(
+    monkeypatch, fake_redis, tmp_path
+):
+    """The sweep reaps on "since last referenced", so a re-store must move mtime.
+
+    Behaviour rather than a constructor kwarg, because on this backend it can be:
+    the lifted store's `touch_on_rereference` defaults to **off** (#114), and a
+    worker built without it would announce a fresh `blob_expires_at` for a file
+    whose mtime is the *first* store's — the exact blob the sweep then reaps
+    moments after it was announced.
+    """
+    monkeypatch.delenv("REPLICATOR_BLOB_BACKEND", raising=False)
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    get_settings.cache_clear()
+    built = []
+
+    def as_built(root, **options):
+        store = LocalBlobStore(root, **options)
+        built.append(store)
+        return store
+
+    monkeypatch.setattr("src.worker.main.LocalBlobStore", as_built)
+
+    await run(_stopped())
+
+    (store,) = built
+    fingerprint = "c" * 64
+    path = tmp_path / "blobs" / "cc" / "cc" / f"{fingerprint}.bin"
+    store.store(b"bytes", fingerprint, "text/plain")
+    backdated = time.time() - 3600
+    os.utime(path, (backdated, backdated))
+
+    store.store(b"bytes", fingerprint, "text/plain")
+
+    assert path.stat().st_mtime > backdated + 1800
+
+
+def test_the_worker_builds_the_cluster_shared_store():
+    """One implementation across the cluster (cannobserv#475, #114).
+
+    Identity, not shape: two stores that merely agree today are two stores that
+    can disagree in one commit, and the point of the lift is that Observo's
+    permanent tier and this temp tier derive every key from one module.
+    """
+    import co_core_sync.drivers.blobstore as shared
+    from co_core.pure.util.blobstore import BlobStore
+
+    import src.worker.handler
+    import src.worker.replicate
+
+    assert src.worker.main.LocalBlobStore is shared.LocalBlobStore
+    assert src.worker.main.GcsBlobStore is shared.GcsBlobStore
+    assert src.worker.handler.BlobStore is BlobStore
+    assert src.worker.replicate.BlobStore is BlobStore
+
+
 async def test_the_gcs_backend_builds_an_object_store(monkeypatch, fake_redis, tmp_path):
     _gcs_env(monkeypatch)
     monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
     built = []
 
-    def fake_store(bucket, *, prefix, timeout_seconds=None, client=None):
-        built.append((bucket, prefix, timeout_seconds))
+    def fake_store(bucket, *, prefix, timeout_seconds=None, client=None, **options):
+        built.append((bucket, prefix, timeout_seconds, options))
         return object()
 
     monkeypatch.setattr("src.worker.main.GcsBlobStore", fake_store)
@@ -1155,7 +1212,20 @@ async def test_the_gcs_backend_builds_an_object_store(monkeypatch, fake_redis, t
     # The timeout is threaded from settings rather than left to the store's own
     # default (CR #8): it lands in the unit's shutdown budget, so the number the
     # operator configures has to be the number that runs.
-    assert built == [("a-temp-bucket", "blobs", get_settings().blob_timeout_seconds)]
+    #
+    # `touch_on_rereference=True` is pinned because it is **not the lifted
+    # store's default** (#114, cannobserv#475): off, the store stamps no
+    # `customTime` at create either, so the bucket's `daysSinceCustomTime` rule
+    # never matches and the temp bucket empties only through its cost backstop.
+    # Every store would succeed and nothing would say so.
+    assert built == [
+        (
+            "a-temp-bucket",
+            "blobs",
+            get_settings().blob_timeout_seconds,
+            {"touch_on_rereference": True},
+        )
+    ]
 
 
 async def test_the_gcs_backend_does_not_create_a_blob_directory(monkeypatch, fake_redis, tmp_path):

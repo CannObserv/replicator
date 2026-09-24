@@ -4,7 +4,7 @@
 
 ```bash
 # Mirror the private cannobserv index into ./.wheelhouse. Run BEFORE uv sync on a
-# fresh clone and after any co-core version bump — co-core / co-core-aio resolve
+# fresh clone and after any co-core version bump — co-core / co-core-aio / co-core-sync resolve
 # from that directory via [tool.uv] find-links, not from PyPI.
 uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
 

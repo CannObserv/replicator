@@ -5,6 +5,7 @@ import errno
 import httpx
 import pytest
 from co_core.pure.util.hashing import sha256
+from co_core_sync.drivers.blobstore import LocalBlobStore
 from google.api_core import exceptions as gexc
 from redis.exceptions import ResponseError
 
@@ -15,7 +16,6 @@ from src.core.errors import (
     PermanentFetchError,
     TransientFetchError,
 )
-from src.storage.local import LocalBlobStore
 from src.storage.sweeper import BlobUsage
 from tests.worker.conftest import (
     BODY,
