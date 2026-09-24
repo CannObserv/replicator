@@ -771,7 +771,7 @@ class TestTheEarlyoomDecline:
         _fake_process(tmp_path, 301, 300, "python3", 0)
         assert _session_root_adj(tmp_path, 301) is None
 
-    @pytest.mark.skipif(socket.gethostname() != HOST, reason=f"not {HOST}")
+    @on_the_host
     def test_sessions_here_are_still_exempt(self) -> None:
         adj = _session_root_adj(Path("/proc"), os.getpid())
         if adj is None:
