@@ -994,11 +994,12 @@ async def dead_letter_anomaly(
     A trimmed or ``XDEL``-ed entry (still pending, no longer in the stream) is
     dead-lettered with **no fields**, and the anomaly's text goes in the reason:
     with the frame gone it is the only diagnostic left, and it names no payload
-    content. ``dlq.source_id`` names the lost entry and the DLQ's name its topic,
-    which is everything the ``error`` / ``original_message_id`` /
-    ``original_topic`` record this synthesized before co-core 0.19.1 said —
-    that XADD refused an empty map (#116). Either way the message cannot get
-    stuck in the PEL.
+    content. ``dlq.source_id`` names the lost entry and the DLQ's name its topic.
+
+    Before co-core 0.19.1 that XADD refused an empty map, so this synthesized an
+    ``error`` / ``original_message_id`` / ``original_topic`` record instead; the
+    reason and the provenance now say all three (#116). Either way the message
+    cannot get stuck in the PEL.
     """
     raw = await client.xrange(exc.topic, min=exc.message_id, max=exc.message_id)
     fields = {_as_str(k): _as_str(v) for k, v in raw[0][1].items()} if raw else {}
