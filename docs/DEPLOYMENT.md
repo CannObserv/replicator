@@ -156,7 +156,9 @@ What this is not:
   (CannObserv/watcher#323). What would change the answer: sessions leaving
   -1000, notifier's shape (CannObserv/notifier#74), which
   `tests/test_deploy.py` pins live; and, if it is ever installed here,
-  `-s 100` — with 4 G of swap its default waits for swap to fall to 10% free.
+  `-s 100,100` — it acts only with memory *and* swap under their minimums, and
+  a bare `-s 100` leaves SIGKILL's at half: 2 G of swap in use, which
+  `vm.swappiness = 10` may never reach (gregoryfoster/skills#331).
 - **Not `-1000`.** That is the exemption above, and an exempt worker that leaks
   is unreclaimable — the kernel would work through everything else on the box
   first. `-900` is the cohort's value (CannObserv/broker#25): last of the
