@@ -425,12 +425,17 @@ bash scripts/notify_failure.sh replicator.service       # what OnFailure= runs; 
 
 sudo cp deploy/replicator.service /etc/systemd/system/replicator.service
 sudo cp 'deploy/replicator-failure-notify@.service' /etc/systemd/system/
+sudo install -D -m 644 deploy/tailscaled.service.d/memory.conf /etc/systemd/system/tailscaled.service.d/memory.conf
+sudo install -D -m 644 deploy/system.slice.d/replicator-memory.conf /etc/systemd/system/system.slice.d/replicator-memory.conf
 sudo systemctl daemon-reload
+sudo systemctl restart tailscaled                       # its OOMScoreAdjust= applies at exec only (#113)
 sudo systemctl enable --now replicator
 # BOTH unit files, and the second one has no restart to pair with it — it is a
 # template nothing runs until a unit fails. Which is also why skipping it is
 # silent: the miss surfaces at the first incident, the one moment it was meant
-# to help (#94).
+# to help (#94). The two drop-ins are as quiet: without them tailscaled sits at
+# adj 0 and both MemoryLow= are inert, and only the live checks in
+# tests/test_deploy.py notice.
 
 git pull --ff-only && uv sync --frozen && sudo systemctl restart replicator  # merged on GitHub
 git push && uv sync --frozen && sudo systemctl restart replicator            # merged locally
@@ -443,6 +448,8 @@ git push && uv sync --frozen && sudo systemctl restart replicator            # m
 # worker comes up on new code under the old unit with nothing to show for it.
 diff /etc/systemd/system/replicator.service deploy/replicator.service
 diff '/etc/systemd/system/replicator-failure-notify@.service' 'deploy/replicator-failure-notify@.service'
+diff /etc/systemd/system/tailscaled.service.d/memory.conf deploy/tailscaled.service.d/memory.conf
+diff /etc/systemd/system/system.slice.d/replicator-memory.conf deploy/system.slice.d/replicator-memory.conf
 
 sudo journalctl -u replicator -f
 journalctl -t replicator-failure                        # what the OnFailure= handler reported
