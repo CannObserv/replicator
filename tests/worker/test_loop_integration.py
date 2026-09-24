@@ -7,7 +7,7 @@ it for every outcome ``process_message`` can produce. What it diverges on is
 entirely. So the properties here are the ones whose truth is a claim about *when*
 Redis acts, or about a reply shape the fake never produces:
 
-1. ``claim_stale`` against a real PEL — the reason for the Redis >= 7.0 floor.
+1. ``claim_stale_page`` against a real PEL — the reason for the Redis >= 7.0 floor.
    ``XAUTOCLAIM``'s three-element reply, with the deleted-ids element added in
    7.0, is unpacked inside co-core; below that floor this raises. No test had
    ever run it against a server that implements it.

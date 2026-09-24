@@ -53,7 +53,7 @@ a command with no fact is a command still being retried, not one that failed.
 it is not part of the MVP loop and is dev-only until a status surface is wanted.
 
 The Redis broker is **cluster infrastructure on its own node** (`co-broker`, operated from
-CannObserv/broker) — Replicator is a client over the tailnet and does not ship or manage a broker. The `>=7.0` server floor is Replicator-critical: `AsyncBusConsumer.claim_stale`
+CannObserv/broker) — Replicator is a client over the tailnet and does not ship or manage a broker. The `>=7.0` server floor is Replicator-critical: `AsyncBusConsumer.claim_stale_page`
 reads `XAUTOCLAIM`'s three-element reply, added in Redis server 7.0.
 
 ## Setup

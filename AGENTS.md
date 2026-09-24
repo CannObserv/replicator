@@ -71,7 +71,7 @@ Main is the deployed code.
 
 Worker binds no port; 8001 is dev, 8000 reserved. **The broker is `co-broker`**
 (CannObserv/broker); Replicator is a client, never ships one. Server **≥ 7.0** is
-critical — `claim_stale` reads `XAUTOCLAIM`'s three-element reply — guarded by
+critical — `claim_stale_page` reads `XAUTOCLAIM`'s three-element reply — guarded by
 `scripts/check_redis_floor.sh`. Ports, redis-py pin: [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md).
 
 ## Server Lifecycle

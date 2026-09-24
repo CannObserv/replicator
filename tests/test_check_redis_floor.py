@@ -2,7 +2,7 @@
 
 Run as an `ExecStartPre` on replicator.service. One blocking assertion: the
 server must be >= 7.0, because Replicator is the cluster's first user of
-`AsyncBusConsumer.claim_stale`, which reads `XAUTOCLAIM`'s three-element reply.
+`AsyncBusConsumer.claim_stale_page`, which reads `XAUTOCLAIM`'s three-element reply.
 
 Otherwise soft by design - exit 0 (letting the worker start) when the broker is
 unreachable. These tests drive it with a stub `redis-cli` on PATH so no live

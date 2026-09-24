@@ -4,7 +4,7 @@
 # Run as an `ExecStartPre` on replicator.service. Mirrored from archiver's
 # scripts/check_redis_floor.sh (archiver#109), where the floor is asserted as a
 # courtesy by the bus *operator*. Here it is a direct requirement: Replicator is
-# the cluster's first user of `AsyncBusConsumer.claim_stale` (crash recovery),
+# the cluster's first user of `AsyncBusConsumer.claim_stale_page` (crash recovery),
 # which reads `XAUTOCLAIM`'s three-element reply — the deleted-ids element added
 # in Redis *server* 7.0. Against a < 7.0 server the recovery path raises.
 #
@@ -162,7 +162,7 @@ fi
 major="${version%%.*}"
 if ! [ "${major}" -ge 7 ] 2>/dev/null; then
   echo "check_redis_floor: Redis ${version} is below the >=7.0 change-bus floor" >&2
-  echo "check_redis_floor: claim_stale (XAUTOCLAIM three-element reply) requires server >= 7.0" >&2
+  echo "check_redis_floor: claim_stale_page (XAUTOCLAIM three-element reply) requires server >= 7.0" >&2
   exit 1
 fi
 
