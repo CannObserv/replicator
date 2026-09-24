@@ -176,6 +176,8 @@ rcli XPENDING content.fetch replicator.fetch - + 10
 rcli XPENDING content.replicate replicator.replicate - + 10
 
 # Dead-lettered frames. Reading, triaging and deleting are all granted here.
+# Each entry is the frame plus dlq.reason / dlq.source_id / dlq.group /
+# dlq.consumer (#116); older ones carry dlq_reason / dlq_original_id instead.
 rcli XLEN content.fetch.dlq
 rcli XRANGE content.fetch.dlq - + COUNT 5
 rcli XLEN content.replicate.dlq

@@ -28,6 +28,7 @@ from tests.worker.conftest import (
     GROUP,
     TOPIC,
     collected_reports,
+    dlq_entries,
     drive_loop,
     make_command,
     process_one,
@@ -37,14 +38,17 @@ from tests.worker.conftest import (
 
 async def test_a_malformed_frame_is_dead_lettered_and_acked(fake_redis, consumer, settings):
     """AC: poison goes to content.fetch.dlq, the original is acked, the loop lives."""
-    await fake_redis.xadd(TOPIC, {"event_type": "content_fetch", "payload": "not json"})
+    frame = {"event_type": "content_fetch", "payload": "not json"}
+    await fake_redis.xadd(TOPIC, frame)
 
     messages = await poll_once(fake_redis, consumer, settings, group=GROUP)
 
     assert messages == []
-    dlq = await fake_redis.xrange(dlq_name(TOPIC))
-    assert len(dlq) == 1
-    assert dlq[0][1][b"payload"] == b"not json"
+    ((wire, provenance),) = await dlq_entries(fake_redis)
+    assert wire == frame
+    # The bare token: the re-read frame is on the entry to reproduce the anomaly
+    # from, so only a trimmed one carries its text (#116).
+    assert provenance.reason == "frame failed to decode"
     pending = await fake_redis.xpending(TOPIC, GROUP)
     assert pending["pending"] == 0
 
@@ -57,7 +61,14 @@ async def test_an_unknown_event_type_is_dead_lettered(fake_redis, consumer, sett
 
 
 async def test_a_deleted_poison_entry_still_dead_letters(fake_redis, consumer, settings):
-    """XADD rejects an empty field map, so a trimmed entry needs synthesized fields."""
+    """A trimmed entry has no fields to copy, and gets none invented for it (#116).
+
+    Before co-core 0.19.1 the XADD refused an empty map, so this route
+    synthesized ``error`` / ``original_message_id`` / ``original_topic``. The
+    provenance now names the entry, the DLQ's name names the topic, and the
+    anomaly text — the only diagnostic left once the frame is gone — rides in the
+    reason, still led by the token every undecodable frame shares.
+    """
     message_id = await fake_redis.xadd(TOPIC, {"event_type": "content_fetch", "payload": "{"})
     await fake_redis.xreadgroup(GROUP, settings.consumer_name, {TOPIC: ">"}, count=1)
     await fake_redis.xdel(TOPIC, message_id)  # entry gone; still pending
@@ -68,9 +79,10 @@ async def test_a_deleted_poison_entry_still_dead_letters(fake_redis, consumer, s
         BusMessageAnomaly("boom", topic=TOPIC, message_id=message_id.decode()),
     )
 
-    dlq = await fake_redis.xrange(dlq_name(TOPIC))
-    assert len(dlq) == 1
-    assert dlq[0][1][b"original_message_id"] == message_id
+    ((wire, provenance),) = await dlq_entries(fake_redis)
+    assert wire == {}
+    assert provenance.source_id == message_id.decode()
+    assert provenance.reason == "frame failed to decode: boom"
     pending = await fake_redis.xpending(TOPIC, GROUP)
     assert pending["pending"] == 0
 
@@ -121,7 +133,11 @@ async def test_an_unknown_schema_version_is_dead_lettered(fake_redis, consumer, 
 
 
 async def test_dead_lettered_frames_carry_their_reason(fake_redis, consumer, settings):
-    """CR #4: the DLQ is the triage surface — the reason belongs in the entry."""
+    """CR #4: the DLQ is the triage surface — the reason belongs in the entry.
+
+    Written by co-core since 0.19.1 (cannobserv#474): ``_dead_letter`` passes the
+    reason and ``dead_letter`` records it beside where the frame came from.
+    """
     await fake_redis.xadd(TOPIC, make_command(command_id="cmd-doomed"))
 
     async def handler(command: ContentFetchCommand) -> None:
@@ -141,10 +157,15 @@ async def test_dead_lettered_frames_carry_their_reason(fake_redis, consumer, set
         spec=FETCH_SPEC,
     )
 
-    entry = (await fake_redis.xrange(dlq_name(TOPIC)))[0][1]
-    assert entry[b"dlq_reason"] == b"handler reported a permanent failure"
-    assert entry[b"dlq_original_id"] == message.message_id.encode()
-    assert entry[b"payload"]  # the original frame is preserved alongside
+    ((wire, provenance),) = await dlq_entries(fake_redis)
+    assert provenance.reason == "handler reported a permanent failure"
+    assert provenance.source_id == message.message_id
+    assert provenance.group == GROUP
+    assert provenance.consumer == settings.consumer_name
+    # The frame exactly as it was delivered, and nothing beside it: provenance is
+    # co-core's to write since 0.19.1, so the ``dlq_reason`` / ``dlq_original_id``
+    # this route once added by hand must not ride along as frame data (#116).
+    assert wire == dict(message.fields)
 
 
 async def test_a_command_that_completed_without_a_blob_leaves_the_dlq_empty(

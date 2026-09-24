@@ -34,7 +34,14 @@ from src.worker.loop import (
     claim_once,
     poll_once,
 )
-from tests.worker.conftest import GROUP, TOPIC, drive_loop, make_command, process_one
+from tests.worker.conftest import (
+    GROUP,
+    TOPIC,
+    dlq_entries,
+    drive_loop,
+    make_command,
+    process_one,
+)
 
 # How many times the starvation test lets its slow command fail before calling
 # the run off. Far past the one reclaim a fixed loop spends before its read, so
@@ -85,6 +92,30 @@ async def test_a_poison_pel_entry_does_not_jam_recovery(fake_redis, consumer, se
     assert isinstance(command, ContentFetchCommand)
     assert command.command_id == "cmd-behind-poison"
     assert await fake_redis.xlen(dlq_name(TOPIC)) == 1
+
+
+async def test_a_claimed_poison_entry_is_dead_lettered_as_it_was_delivered(
+    fake_redis, consumer, settings
+):
+    """The claim path's route to the DLQ (#109) writes what the read path's does.
+
+    ``claim_stale_page`` hands back the raw fields, so ``dead_letter_poison`` has
+    the frame and no re-read to make. Its reason is therefore the bare token a
+    recovered frame carries, never the anomaly text only a trimmed entry gets —
+    the one route of the three that nothing pinned once #116 split them.
+    """
+    frame = {"event_type": "content_fetch", "payload": "not json"}
+    message_id = await fake_redis.xadd(TOPIC, frame)
+    await fake_redis.xreadgroup(GROUP, "replicator@dead-worker", {TOPIC: ">"}, count=1)
+    eager = settings.model_copy(update={"claim_min_idle_ms": 0})
+
+    claimed = await claim_once(fake_redis, consumer, eager, group=GROUP, cadence=PollCadence())
+
+    assert claimed == []
+    ((wire, provenance),) = await dlq_entries(fake_redis)
+    assert wire == frame
+    assert provenance.reason == "frame failed to decode"
+    assert provenance.source_id == message_id.decode()
 
 
 async def test_recovery_gives_up_after_the_poison_skip_bound(fake_redis, consumer, settings):

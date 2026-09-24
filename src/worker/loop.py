@@ -954,18 +954,17 @@ async def _dead_letter(
     The reason travels *in the entry*, not only in the log line: the DLQ is the
     operator's triage surface, and correlating a stream entry back to a journal
     timestamp to learn which of the five routes sent it there is avoidable work.
-    Consumers use ``extra="ignore"`` models, so the added envelope keys cannot
-    break a replay tool that re-reads the original ``payload``.
+    co-core writes it as ``dlq.reason``, beside ``dlq.source_id`` / ``dlq.group``
+    / ``dlq.consumer``, and the frame's own fields go through untouched — this
+    added ``dlq_reason`` / ``dlq_original_id`` to them by hand until 0.19.1
+    (#116, cannobserv#474). ``split_dead_letter`` separates the two halves.
 
     ``label`` says which stream, and is a parameter because ``AsyncBusConsumer``
     keeps its topic private — so with two command streams sharing this function,
     a hardcoded name would mislabel half the dead-letters in the journal, and
     the operator's first triage question is exactly which stream jammed.
     """
-    dlq_id = await consumer.dead_letter(
-        message_id,
-        {**fields, "dlq_reason": reason, "dlq_original_id": message_id},
-    )
+    dlq_id = await consumer.dead_letter(message_id, fields, reason=reason)
     safe, dropped = _loggable(detail or {})
     logger.warning(
         "dead-lettered a frame",
@@ -989,21 +988,21 @@ async def dead_letter_anomaly(
     """Route a frame that failed to decode at all.
 
     ``from_wire`` raises from inside ``read``, so there is no ``BusMessage`` and
-    no field map — the anomaly carries only ``topic`` and
-    ``message_id``. ``dead_letter`` XADDs the fields it is given and ``XADD``
-    rejects an empty map, so the raw frame is re-read by id; a trimmed or
-    ``XDEL``-ed entry (still pending, no longer in the stream) falls back to a
-    synthesized record so the message can never get stuck in the PEL.
+    no field map — the anomaly carries only ``topic`` and ``message_id`` — so the
+    raw frame is re-read by id, which is what preserves it on the entry.
+
+    A trimmed or ``XDEL``-ed entry (still pending, no longer in the stream) is
+    dead-lettered with **no fields**, and the anomaly's text goes in the reason:
+    with the frame gone it is the only diagnostic left, and it names no payload
+    content. ``dlq.source_id`` names the lost entry and the DLQ's name its topic.
+
+    Before co-core 0.19.1 that XADD refused an empty map, so this synthesized an
+    ``error`` / ``original_message_id`` / ``original_topic`` record instead; the
+    reason and the provenance now say all three (#116). Either way the message
+    cannot get stuck in the PEL.
     """
     raw = await client.xrange(exc.topic, min=exc.message_id, max=exc.message_id)
-    if raw:
-        fields = {_as_str(k): _as_str(v) for k, v in raw[0][1].items()}
-    else:
-        fields = {
-            "error": str(exc),
-            "original_message_id": exc.message_id,
-            "original_topic": exc.topic,
-        }
+    fields = {_as_str(k): _as_str(v) for k, v in raw[0][1].items()} if raw else {}
     return await _dead_letter(
         consumer,
         exc.message_id,
@@ -1012,7 +1011,7 @@ async def dead_letter_anomaly(
         # it, so this route needs no CommandSpec — which is what lets poll_once
         # and claim_once stay stream-agnostic.
         label=exc.topic,
-        reason="frame failed to decode",
+        reason="frame failed to decode" if raw else f"frame failed to decode: {exc}",
         detail={"anomaly": type(exc).__name__, "recovered_fields": bool(raw)},
     )
 
