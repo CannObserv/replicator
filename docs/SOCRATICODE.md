@@ -23,7 +23,7 @@ after it, not in `AGENTS.md`.
 | Imports/dependents of a file | `codebase_graph_query` |
 | Import cycles | `codebase_graph_circular` |
 | Bus contracts, deploy topology, MVP design rationale, env vars | `codebase_context` / `codebase_context_search` |
-| Fact and command fields, allowed `reason` values | `codebase_search` or the `docs/contracts/` references; `codebase_context_search` only with `artifactName` set to `outcome-reference` or `issuer-reference` |
+| Fact and command fields, allowed `reason` values | `codebase_search` or the `docs/contracts/` references; `codebase_context_search` only with `artifactName` set to `outcome-reference` / `issuer-reference` (fetch) or `replicate-issuer-contract` (replicate) |
 | Path-pattern walks ("all `*.py` under `src/worker/`") | the Explore subagent |
 
 ## Prefetch

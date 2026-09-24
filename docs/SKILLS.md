@@ -327,7 +327,7 @@ these before committing its output:
 | Check | Why it matters |
 |---|---|
 | `.claude/hooks/socraticode-health.sh` is still a symlink | skills#179; `install-hook.sh` copies only where there is no `skills-vendor/`, and `tests/test_skills_hook.py` fails on a copy |
-| The doc's tool table names this repo's artifacts in its context and schema rows | the template's rows are generic, and the schema row's is a database; here it is `outcome-reference` / `issuer-reference`, because an unfiltered context search ranks the dated design plans with them (skills#315) |
+| The doc's tool table names this repo's artifacts in its context and schema rows | the template's rows are generic, and the schema row's is a database; here it names the contracts that list each stream's `reason` values, because an unfiltered context search ranks the dated design plans with them (skills#315) |
 | `codebase_update` | `AGENTS.md` and every doc here are registered artifacts; nothing re-embeds them |
 
 Repo-specific *prose* needs no re-applying. The doc's lives under `## Repo-specific notes` below its
