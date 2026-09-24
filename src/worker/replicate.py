@@ -85,10 +85,11 @@ _ALLOWED_IN_SEGMENT = frozenset(string.ascii_letters + string.digits + "._-+=@,(
 #
 # **Both remaining uses are refusals, and that is the whole scope of it (#87).**
 # It bounds a string that *failed* validation and is being quoted back — one of
-# which also becomes a fact's ``detail`` and a DLQ entry's ``dlq_reason``, so the
-# bound protects the wire and not just the journal. It deliberately does not
-# reach the success path: a key that has passed ``validate_destination`` and been
-# accepted by the provider is no longer untrusted input, it is the name of a
+# which also becomes a fact's ``detail``, so the bound protects the wire and not
+# just the journal. (Not the DLQ entry: its ``dlq.reason`` is the loop's fixed
+# token, and the message rides the dead-letter's log line.) It deliberately does
+# not reach the success path: a key that has passed ``validate_destination`` and
+# been accepted by the provider is no longer untrusted input, it is the name of a
 # permanent artifact, and a prefix of it names nothing.
 _LOGGED_VALUE_CHARS = 120
 
@@ -275,9 +276,9 @@ def _why_bad_destination(rendered: str) -> str | None:
         if bad:
             # Bounded like every other message-derived value (CR #24). This string
             # does not only reach the journal: it becomes the failure fact's
-            # `detail` on the wire and the `dlq_reason` on the DLQ entry, so an
-            # unbounded segment would reach two places the bound exists to
-            # protect. The character set is the actionable part anyway.
+            # `detail` on the wire, so an unbounded segment would reach a place
+            # the bound exists to protect. The character set is the actionable
+            # part anyway.
             return (
                 f"segment {segment[:_LOGGED_VALUE_CHARS]!r} has "
                 f"disallowed characters {sorted(bad)[:8]!r}"

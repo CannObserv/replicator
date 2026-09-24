@@ -272,11 +272,12 @@ def test_every_percent_is_refused_by_the_same_rule(destination):
 
 
 def test_a_long_disallowed_segment_is_bounded_in_the_refusal(binding=GCS_ROOT):
-    """CR #24: the refusal message becomes the fact's ``detail`` and a dlq_reason.
+    """CR #24: the refusal message becomes the fact's ``detail`` and a log line.
 
     Both are places the logging bound was introduced to protect, and the segment
     was being embedded whole — so a multi-kilobyte destination reached the wire
-    and the DLQ entry in full.
+    and the journal in full. (Not the DLQ entry, whose ``dlq.reason`` is the
+    loop's fixed token — a claim this made until #116.)
     """
     with pytest.raises(PermanentReplicateError) as caught:
         validate_destination("!" * 5000 + ".pdf", binding=binding)

@@ -148,7 +148,7 @@ appears and why every one is `terminal=True`: [Reading the failure fact](#readin
 | `schema_version` ≠ 1 | fact, then `content.fetch.dlq` | `fetch_failed` · `unsupported_schema_version` |
 | Frame decodes to a non-`content_fetch` payload | `content.fetch.dlq` | **nothing** — any `command_id` in it is another command's |
 | Command with a blank `command_id` | `content.fetch.dlq`, before the fetch | **nothing** — no correlator to key a fact on |
-| Malformed frame (fails `from_wire`; includes a naive `occurred_at`, and any 0.7.x command with no `info_source_id`) | `content.fetch.dlq`, synthesized record | **nothing** — no payload at all |
+| Malformed frame (fails `from_wire`; includes a naive `occurred_at`, and any 0.7.x command with no `info_source_id`) | `content.fetch.dlq` — the raw frame, or provenance alone if its entry was trimmed | **nothing** — no payload at all |
 | HTTP 4xx — **412 included**, since a failed precondition on a GET is the issuer's error | fact, then `content.fetch.dlq` | `fetch_failed` · `http_status` (+ `status_code`) |
 | HTTP 304 Not Modified — a conditional GET that **succeeded** (#17) | fact, ack, and **no DLQ entry**; the dedupe key is written | `fetch_failed` · `not_modified` (+ `status_code=304`) |
 | URL not fetchable (bad scheme / invalid URL) | fact, then `content.fetch.dlq` | `fetch_failed` · `not_fetchable` |
@@ -262,15 +262,22 @@ is not evidence of a lost dead-letter.
 
 **The DLQ is still readable, and still worth reading** — for what the fact cannot carry. It is an
 ordinary stream on the same broker, and every entry carries the original **command** envelope — so
-`key` is the failed `command_id` — plus `dlq_reason` and `dlq_original_id`. Its value is now the
+`key` is the failed `command_id` — plus co-core's provenance: `dlq.reason`, `dlq.source_id` (the
+original entry id), and `dlq.group` / `dlq.consumer` (the reader that parked it). Its value is now the
 complement of the fact rather than a substitute for it: it is the only place the silent rows
 above show up at all (bar a command trimmed while pending, which has no frame left to copy), and it preserves the offending frame itself, which no fact does. Read it with
 a plain `XREAD` and no consumer group: a group left behind by a non-owner accumulates a PEL nothing
 drains.
 
-One caveat that survives unchanged: the anomaly class that dead-letters a *synthesized* record (a
-frame that failed to decode at all, whose original entry has since been trimmed) carries no `key`
-to match on.
+One caveat survives, narrower: a frame that failed to decode, whose entry has since been trimmed,
+is dead-lettered with **no frame fields**, so no `key` to match on — `dlq.source_id` names the lost
+entry and `dlq.reason` carries the decode error.
+
+**Before co-core 0.19.1 (#116)** the keys were `dlq_reason` / `dlq_original_id`, and that trimmed
+case a synthesized record. Both queues stood at `XLEN 0` at the switch (2026-09-24), so only
+broker's `dlq-evidence/` copies carry the old names: read `dlq.reason`, falling back to
+`dlq_reason`. co-core's `split_dead_letter` separates frame from provenance — a re-publish takes
+only the frame — and `(dlq.group, dlq.source_id)` identifies the duplicate a lost ack leaves.
 
 Inspection commands live in [`docs/COMMANDS.md`](../COMMANDS.md). Monitoring the DLQ on
 Replicator's side remains an operator responsibility, not a bus-level one.
