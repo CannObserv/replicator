@@ -112,7 +112,7 @@ short-circuit work already known to have finished, so its absence costs the
 short-circuit and nothing else. An empty namespace is reachable only by a
 command that is *delivered again*: a PEL entry reclaimed across the restart, or
 an issuer re-publishing an id. Each of those re-runs the handler, and the bill is
-a re-fetch of the origin (`HostPacer` is in-memory, so its escalations are cold
+a re-fetch of the origin (`HostPacer` is in-memory, so its [429/503 escalations](POLITENESS.md#escalation-on-429-and-503) are cold
 too), a content-addressed re-store that is a no-op, and a second fact — which is
 distinguishable, both envelope keys being per occurrence, and exactly what
 contract MUST-4 already requires issuers to tolerate. On `content.replicate` the
