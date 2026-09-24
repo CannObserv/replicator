@@ -151,8 +151,8 @@ and complete them in order.
 2. **Ask clarifying questions** — one at a time; purpose, constraints, success criteria; then write back your understanding, what they said apart from what you assume, and fold in their corrections
 3. **Propose 2–3 approaches** — with trade-offs and a recommendation
 4. **Present design** — in sections scaled to complexity; get approval after each section
-5. **Write design doc** — save to `docs/plans/YYYY-MM-DD-<topic>-design.md` and commit
-6. **Open a GitHub issue** — the tracking record; report its number
+5. **Write design doc** — save to `docs/plans/YYYY-MM-DD-<topic>-design.md`
+6. **Open a GitHub issue, then commit the doc** — the issue is the tracking record (report its number), and the commit carries it: `#<n> docs: add design doc for <topic>`
 7. **Set up worktree** — invoke `using-git-worktrees` for any multi-step implementation
 8. **Hand off** — proceed to implementation, or invoke `writing-plans` if a formal plan is wanted
 
