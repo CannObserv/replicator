@@ -294,20 +294,15 @@ unnoticed for another nine days.
 | `socraticode-health.sh` | SessionStart | Once-per-UTC-day SocratiCode infra check: graph yield, `codebase_health`, a failed last operation, and — from the #72 pin bump ([skills#214](https://github.com/gregoryfoster/skills/issues/214)) — the manifest's declared artifact count against how many are actually indexed, naming the shortfall. **Reports only — never re-indexes, never edits a file, never starts Docker.** Silent when clean; logs to `.git/socraticode-health.log`. Symlink into the vendored skill for the #16 reason above. `init-socraticode` used to instruct a *copy* here; [skills#179](https://github.com/gregoryfoster/skills/issues/179) and [skills#186](https://github.com/gregoryfoster/skills/issues/186) are both closed and it now symlinks both hooks through `managing-skills`' `install-hook.sh`. |
 | `context-budget-guard.sh` | PostToolUse | `curating-context`'s write guard: warns when an edit pushes `AGENTS.md` over the token budget. Non-blocking. |
 
-**The SocratiCode plugin is deliberately not installed here, so the prefetch returns nothing (#92).**
-`.claude/hooks/socraticode-reminder.sh` prints a `ToolSearch` query each session and
-`AGENTS.md` sends you to it, but `socraticode@socraticode` is not registered on this VM —
-so that query answers **"No matching deferred tools found"** and there are no `codebase_*`
-MCP tools in the session at all. That is a configuration choice, not a broken install:
-the plugin launches an **uncapped** server once per session and runs
-`npx -y --prefer-online socraticode@latest`, and co-replicator is 3.9 GB with no swap
-running the production worker beside these sessions. CannObserv/broker#27 is designing a
-capped, pinned launch for the cohort; broker keeps the plugin disabled until it lands and
-so do we.
-
-Until then the driver **is** the supported path, and it is fenced: every invocation in
-[COMMANDS.md](COMMANDS.md) is wrapped in a `systemd-run` memory cap. `validate-store`,
-`validate-manifest` and `resolve` need no server at all. Revisit when broker#27 ships.
+**The SocratiCode plugin is installed, and its launch is pinned (since 2026-09-23).**
+From #92 until then it was deliberately absent — its launch was an uncapped
+`npx -y --prefer-online socraticode@latest` on a 3.9 GB host with no swap — so the
+prefetch `socraticode-reminder.sh` prints answered "No matching deferred tools found".
+The plugin parameterises its spec, so `SOCRATICODE_SPEC` in `.claude/settings.json`
+pins it to a literal version; both launch paths and their pins are in
+[SOCRATICODE.md](SOCRATICODE.md). The driver stays fenced: every invocation in
+[COMMANDS.md](COMMANDS.md) is wrapped in a `systemd-run` memory cap, and
+`validate-store`, `validate-manifest` and `resolve` need no server at all.
 
 **The health hook lies in two situations, and both look like a healthy report.**
 
