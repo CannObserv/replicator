@@ -189,12 +189,17 @@ the argument — and an earlier escalation trigger — is made again in
 Qualifies the pacing entry under
 [what Replicator does not guarantee](content-fetch-issuer-contract.md#what-replicator-does-not-guarantee).
 
-**At the shipped defaults every wait is slept through inside the handler**, so the cost is
-seconds of added turnaround and nothing else. Only when an operator configures the interval
-*above* `REPLICATOR_READ_BLOCK_MS` (5 s) does a paced command instead stay pending for the
-next reclaim, which moves the cadence from seconds to a minute. That is a deployment
-decision, not a default — but it is the one that changes what a reaper should expect, so it
-is stated here rather than left to be discovered.
+**A wait that fits in one poll window (`REPLICATOR_READ_BLOCK_MS`, 5 s) is slept through
+inside the handler**, costing seconds of added turnaround; a longer one stays pending for the
+next reclaim, which moves the cadence from seconds to a minute. The wait follows the host's
+interval in force, which even at the shipped defaults is not always the 1 s fallback: a host's
+published `content.fetch-policy` interval may exceed the window, and a 429 or 503 raises it —
+2 s, 4 s, then 8 s from the fallback, so by the third refusal with no 30-minute gap the
+interval is past the window and a burst queued for that host parks — as does a `Retry-After`
+longer than the window ([POLITENESS.md](../POLITENESS.md#escalation-on-429-and-503)). An
+operator can cause it too, by setting `REPLICATOR_MIN_HOST_INTERVAL_SECONDS` above the window.
+A refusing host is therefore the one whose commands park, which changes what a reaper should
+expect, so it is stated here rather than left to be discovered.
 
 ---
 

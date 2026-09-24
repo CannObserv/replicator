@@ -595,3 +595,10 @@ AGENTS.md :: tighten :: # Load environment (required before running the worker o
 #   is 8); MUST-8 gains its verdict row, no analogue.
 docs/contracts/content-replicate-issuer-contract.md :: disproven :: below says which of the seven fetch obligations apply verbatim — read the deep document for any row
 docs/contracts/content-replicate-issuer-contract.md :: disproven :: Verdicts on the seven fetch obligations. A row that is not *no analogue* is read in the deep
+docs/contracts/content-fetch-outcome-reference.md :: disproven :: **At the shipped defaults every wait is slept through inside the handler**, so the cost is
+docs/contracts/content-fetch-outcome-reference.md :: disproven :: seconds of added turnaround and nothing else. Only when an operator configures the interval
+docs/contracts/content-fetch-outcome-reference.md :: disproven :: *above* `REPLICATOR_READ_BLOCK_MS` (5 s) does a paced command instead stay pending for the
+docs/contracts/content-fetch-outcome-reference.md :: disproven :: next reclaim, which moves the cadence from seconds to a minute. That is a deployment
+docs/contracts/content-fetch-outcome-reference.md :: disproven :: decision, not a default — but it is the one that changes what a reaper should expect, so it
+docs/contracts/content-fetch-outcome-reference.md :: disproven :: is stated here rather than left to be discovered.
+docs/contracts/content-fetch-issuer-contract.md :: disproven :: paced command is slept through or parked for the next reclaim depends on the deployed interval,

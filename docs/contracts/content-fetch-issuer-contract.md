@@ -366,7 +366,8 @@ Two corollaries, both about values you have stored:
   spaced by at least `REPLICATOR_MIN_HOST_INTERVAL_SECONDS` (1 s by default), so 100 commands for
   one host means at least 100 s of fetching. Size a reaper's timeout (MUST-6) against the depth of
   your own burst, not against one fetch; different hosts are unaffected by each other. Whether a
-  paced command is slept through or parked for the next reclaim depends on the deployed interval,
+  paced command is slept through or parked for the next reclaim depends on the host's interval
+  in force, which its published policy sets and a 429 or 503 raises,
   and it changes what a reaper should expect —
   [the reference](content-fetch-issuer-reference.md#pacing-at-the-deployed-defaults).
 - **No ordering.** Two commands issued in sequence may produce facts in either order.
