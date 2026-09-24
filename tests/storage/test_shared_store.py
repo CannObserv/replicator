@@ -20,6 +20,9 @@ rather than a running worker.
   ``src.worker.replicate`` keeps for "these bytes are gone".
 - **Every create is checksummed**, so a body corrupted in transit is refused
   rather than stored under a name that asserts its digest.
+- **``preflight()`` raises on a missing bucket** — what ``preflight_object_store``
+  fails the boot on — and **``open_stream()`` is seekable at the start**, what
+  the replicate driver requires of the handle ``_write`` passes it.
 """
 
 import os
@@ -29,8 +32,9 @@ from pathlib import Path
 import pytest
 from co_core.pure.util.blobstore import BlobStore
 from co_core_sync.drivers.blobstore import GcsBlobStore, LocalBlobStore
+from google.api_core.exceptions import NotFound
 
-from tests.storage.conftest import FINGERPRINT
+from tests.storage.conftest import FINGERPRINT, FakeBucket, FakeClient
 
 
 def _local_path(root: Path, fingerprint: str) -> Path:
@@ -124,3 +128,46 @@ def test_both_backends_satisfy_the_shared_protocol(store, tmp_path):
     for name in members:
         assert callable(getattr(store, name)), name
         assert callable(getattr(LocalBlobStore(tmp_path), name)), name
+
+
+def test_preflight_raises_when_the_bucket_is_not_there():
+    """The CR #1 bug, kept pinned here because the boot depends on it.
+
+    ``preflight_object_store`` fails the worker's boot on this raise. An
+    existence check cannot detect a missing bucket — the SDK swallows the 404 —
+    so a store whose preflight quietly became one would boot clean against a
+    misspelled ``REPLICATOR_BLOB_BUCKET`` and announce ``blob_uri``s nobody can
+    open.
+    """
+    bucket = FakeBucket("a-temp-bucket")
+    store = GcsBlobStore("a-temp-bucket", prefix="blobs", client=FakeClient(bucket, missing=True))
+
+    with pytest.raises(NotFound):
+        store.preflight()
+
+
+def test_preflight_is_a_one_object_listing_that_passes_on_an_empty_bucket(store, client):
+    store.preflight()
+
+    (listing,) = client.listings
+    assert (listing["max_results"], listing["prefix"]) == (1, "blobs")
+
+
+def test_open_stream_is_seekable_and_positioned_at_the_start(store, tmp_path):
+    """What ``AsyncGcsDriver.create_if_absent`` requires of the handle ``_write`` hands it.
+
+    The driver reads the local md5 only on the 412 path, after the failed create
+    has moved the position, so the stream must seek — and it refuses one that
+    cannot with a ``ValueError`` that closes the command as ``handler_error``.
+    Positioned at the start, because a handle left at its end uploads nothing.
+    """
+    local = LocalBlobStore(tmp_path)
+
+    for backend in (store, local):
+        backend.store(b"artifact bytes", FINGERPRINT, "application/pdf")
+        with backend.open_stream(FINGERPRINT) as handle:
+            assert handle.seekable()
+            assert handle.tell() == 0
+            assert handle.read() == b"artifact bytes"
+            handle.seek(0)
+            assert handle.read(8) == b"artifact"
