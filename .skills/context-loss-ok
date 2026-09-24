@@ -574,3 +574,6 @@ docs/contracts/content-replicate-issuer-contract.md :: retarget :: cross-referen
 # #111 CR 7: the per-occurrence key derivation this sentence relies on moved
 #   from the contract's frame section to the request reference.
 docs/contracts/content-fetch-outcome-reference.md :: retarget :: collapse it. That is by design (see [The frame](content-fetch-issuer-contract.md#the-frame-envelope)); it is also not something Replicator can
+# #111 CR 17: the request reference now also carries pacing turnaround and the
+#   lost-map cost, both post-publish, so the division is "mostly" by direction.
+docs/contracts/content-fetch-issuer-reference.md :: retarget :: what an issuer *looks up*, and they divide on the direction of the traffic. **This file is the

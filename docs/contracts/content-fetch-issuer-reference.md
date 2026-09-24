@@ -6,7 +6,7 @@ Replicator's behaviour exactly as the contract does — this file is not comment
 
 **What is here rather than there.** The contract carries what an issuer must *do*: the frame,
 the command, the eight MUSTs, and the guarantee/non-guarantee pair. The two references carry
-what an issuer *looks up*, and they divide on the direction of the traffic. **This file is the
+what an issuer *looks up*, and they divide mostly on the direction of the traffic. **This file is the
 request half** — the header and timeout rules it consults when a command is refused, the envelope
 and what its key is for, the pacing to expect, which co-core version carries what, what losing the
 `command_id` map costs, and the trust posture the whole capability
