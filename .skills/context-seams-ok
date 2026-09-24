@@ -405,3 +405,10 @@ docs/contracts/content-fetch-issuer-reference.md :: Expands [MUST-2](content-fet
 docs/contracts/content-fetch-issuer-reference.md :: | `payload` | the model, JSON-serialized — where every field actually lives: the [command]
 docs/contracts/content-replicate-issuer-contract.md :: [how the blob TTL clock runs](content-fetch-outcome-reference.md#how-the-blob-ttl-clock-runs), which expands
 docs/contracts/content-fetch-outcome-reference.md :: collapse it. That is by design (see [the envelope, key by key](content-fetch-issuer-reference.md#the-envelope-key-by-key)); it is also
+
+# --- #118 curation of docs/DEPLOYMENT.md -------------------------------------
+# The #99 sweep above acked five source pointers as pointing at "the buckets",
+# which it took to have stayed in DEPLOYMENT.md. They had left in #94 (0ae6c0c)
+# for INFRASTRUCTURE.md, so all five lied; #118 retargeted them rather than
+# re-acking. Their entries above now match nothing: src/storage/gcs.py,
+# src/worker/main.py, tests/conftest.py, and both in tests/test_destinations.py.

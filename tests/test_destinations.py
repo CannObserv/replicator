@@ -35,7 +35,7 @@ failure modes, and do not spend effort making this one exhaustive.
 detector is itself tested — a structural scan that quietly walks zero files
 passes forever while enforcing nothing, which is worse than no test because the
 issue then cites it. And the scan is AST-based rather than grep: prose names the
-production bucket legitimately, here and in `docs/DEPLOYMENT.md`, and a test
+production bucket legitimately, here and in `docs/INFRASTRUCTURE.md`, and a test
 whose first tripper is an English sentence gets deleted rather than heeded.
 """
 
@@ -63,7 +63,7 @@ SCANNED = (REPO / "src", REPO / "tests")
 # The literals no module under `src/` or `tests/` may contain. Both halves of the
 # production identity, because either one alone is enough to write:
 #
-# `co-gcs-replication` — the bucket. Named in `docs/DEPLOYMENT.md` and in
+# `co-gcs-replication` — the bucket. Named in `docs/INFRASTRUCTURE.md` and in
 # `scripts/sync_wheelhouse.py`'s docstring, neither of which is scanned; nowhere
 # a runtime value can come from.
 #
