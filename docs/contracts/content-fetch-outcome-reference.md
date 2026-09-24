@@ -8,10 +8,10 @@ Replicator's behaviour exactly as the contract does — this file is not comment
 half of the reference — [`content-fetch-issuer-reference.md`](content-fetch-issuer-reference.md) —
 carries what Replicator will send on an issuer's behalf, what it refuses before the origin is
 contacted, and the trust posture underneath both. This file is the **outcome half**: what an issuer
-looks up once a command has been published. The enriched `blob_available` fields and why they are
-shaped the way they are; the condition-by-condition failure taxonomy; the conditions that report
-nothing at all and the one that reports nothing *yet*; the dead-letter queue; the turnaround to
-expect at the deployed defaults; and the blob TTL clock. The two references were one file until
+looks up once a command has been published. Both facts field by field, and why the enriched
+`blob_available` fields are shaped the way they are; the condition-by-condition failure taxonomy;
+the conditions that report nothing at all and the one that reports nothing *yet*; the dead-letter
+queue; and the blob TTL clock. The two references were one file until
 they outgrew a single read.
 
 **Changing this document.** The rule is the request half's, unchanged: a change to the failure
@@ -22,10 +22,36 @@ issuer actually implements, so "the rules did not change" is not a reason to ski
 
 ---
 
+## The success fact
+
+**Fact — `content.blobs`, `BlobAvailableEvent`**:
+
+| Field | Type | Notes |
+|---|---|---|
+| `schema_version` | `int` = 1 | |
+| `event_type` | `"blob_available"` | |
+| `occurred_at` | `datetime` | UTC, stamped at publish |
+| `content_fingerprint` | `str` | sha256 of the bytes. Content identity, **not** a correlator |
+| `blob_uri` | `str` | `file://<blob_dir>/<ab>/<cd>/<sha256>.bin` today; `gs://<bucket>/<prefix>/<sha256>.bin` where the object-store backend is enabled (#7). **Read the scheme, do not assume it.** Temporary — MUST-7 |
+| `size_bytes` | `int` | |
+| `media_type` | `str` | Normalized, `charset` dropped; `application/octet-stream` when absent |
+| `url` | `str` | Echoed. Confirmation and debugging only |
+| `command_id` | `str` | **Required.** Echoed from the command; half the envelope key |
+| `info_source_id` | `str` | **Required.** Echoed verbatim. Replicator neither parses nor interprets it |
+| `final_url` | `str \| None` | Where the fetch **landed** after redirects. `None` = *unknown*, see below |
+| `status_code` | `int \| None` | **Always 2xx on this fact** — see below |
+| `fetched_at` | `datetime \| None` | tz-aware UTC. When the bytes were on the **wire**, not when the fact was published |
+| `content_type_raw` | `str \| None` | The **verbatim** `Content-Type`, `charset` and all. `None` = *the origin sent none*, see below |
+| `etag` | `str \| None` | Verbatim, `W/` prefix and quotes included. Replay unparsed in `If-None-Match` |
+| `last_modified` | `str \| None` | Verbatim, unparsed. Replay in `If-Modified-Since` |
+| `blob_expires_at` | `datetime \| None` | **Populated since #28.** When the blob stops being retrievable at `blob_uri`. Prefer it to re-deriving MUST-7's TTL — see below |
+
+---
+
 ## The enriched `blob_available` fields
 
 Field types and defaults are in
-[the success fact](content-fetch-issuer-contract.md#the-success-fact). This is why they are
+[the success fact](#the-success-fact), above. This is why they are
 shaped the way they are, and what an issuer owes its own consumer before acting on two of them.
 
 The six enriched fields (cannobserv#271, `final_url` sourced by cannobserv#279, produced by #10)
@@ -76,28 +102,41 @@ are the whole value of the six:
 > consumer written against 0.7.x may still carry a workaround for it. MUST-5 is unaffected — deduping
 > an inbox on the fingerprint is still wrong, and still loses a correlation.
 
-> **The seam is complete on both sides — which moves the question to your side.** `etag` and
-> `last_modified` are the *read* half; since #11 the write half exists, so an `If-None-Match` you
-> send **will** reach the origin; and since **#17** the outcome exists too: a matching validator
-> earns `fetch_failed` · `not_modified` · `terminal=True` · `status_code=304`, with no blob, no
-> dead-letter entry, and the command's dedupe key written. The reference consumer has handled that
-> token since [CannObserv/watcher#249](https://github.com/CannObserv/watcher/issues/249) and
-> implements store-and-replay as of
-> [CannObserv/watcher#269](https://github.com/CannObserv/watcher/issues/269).
->
-> None of that discharges the obligation for *your* consumer, which is why it is stated as
+> **The seam is complete on both sides — which moves the question to your side.** Since #11 an
+> `If-None-Match` you send reaches the origin, and since **#17** a matching validator earns
+> `fetch_failed` · `not_modified` · `terminal=True` · `status_code=304`, with no blob. The reference
+> consumer has handled that token since [CannObserv/watcher#249](https://github.com/CannObserv/watcher/issues/249)
+> and replays `etag` / `last_modified` as of [CannObserv/watcher#269](https://github.com/CannObserv/watcher/issues/269);
+> none of that discharges the obligation for *your* consumer, which
 > [MUST-8](content-fetch-issuer-contract.md#8-do-not-send-a-validator-until-you-handle-not_modified)
-> rather than as a note here. `not_modified` means *no bytes are coming and your last fingerprint
-> still stands*; it arrives on the **failure** event, so a consumer without an explicit branch
-> falls through to whatever its `fetch_failed` handling already does — very likely "the content is
-> gone", "the fetch failed", or a health regression. That converts every successful no-change check
-> into a spurious loss, and the better the origin's caching, the more of them there are.
->
-> So the two fields are safe to *record* unconditionally and safe to *replay* only once that branch
-> exists. Replay them verbatim when you do — parsing and re-serializing hands the origin a value it
-> never sent, which cannot match.
+> states with its reasoning. Record the two fields unconditionally, and replay them — verbatim — only
+> once that branch exists.
 
 ---
+
+## The failure fact
+
+**Fact — `content.blobs`, `FetchFailedEvent`** (cannobserv#270):
+
+| Field | Type | Notes |
+|---|---|---|
+| `schema_version` | `int` = 1 | |
+| `event_type` | `"fetch_failed"` | |
+| `occurred_at` | `datetime` | tz-aware UTC, stamped at publish. Also half the envelope key |
+| `command_id` | `str` | **Required — the correlator, and the whole point of the event** |
+| `url` | `str` | Echoed. Confirmation and debugging only, exactly as on the success fact |
+| `info_source_id` | `str` | **Required.** Echoed verbatim, exactly as on the success fact |
+| `reason` | `str` | Stable token; see below. **Treat an unknown value as opaque** |
+| `terminal` | `bool` | `True` = the command is closed, no blob will ever arrive. **Branch on this first** |
+| `status_code` | `int \| None` | Set for `http_status` and `not_modified`; absent otherwise |
+| `attempts` | `int \| None` | Set only where the attempt count is *why* the command closed |
+| `detail` | `str \| None` | Free text for the journal. **Never branch on it**, and never show it to an end user — on `handler_error` it is an unanticipated exception's text, so unbounded |
+
+The tokens emitted today are `http_status`, `not_modified`, `not_fetchable`, `too_large`,
+`destination_refused`, `unsupported_schema_version`, `invalid_request_options` and `handler_error` —
+one per row of the [failure taxonomy](#failure-taxonomy-what-happens-and-what-the-issuer-sees)
+below, which states each one's condition. Why the list is additive, why `wrong_payload_type` never
+appears and why every one is `terminal=True`: [Reading the failure fact](#reading-the-failure-fact).
 
 ---
 
@@ -148,12 +187,10 @@ The "nothing" rows are not one problem, and the reaper is not the answer to all 
 
 ---
 
----
-
 ## Reading the failure fact
 
 Field types are in
-[the failure fact](content-fetch-issuer-contract.md#the-failure-fact). Three behaviours are not
+[the failure fact](#the-failure-fact), above. Three behaviours are not
 visible from the table.
 
 co-core's own docstring also lists `wrong_payload_type`. **Replicator never emits it**, and an
@@ -172,8 +209,6 @@ broadcast and nothing trims it, so a fact per reclaim during an origin outage is
 growth on a stream nobody prunes. The cost is stated plainly in MUST-6: a retrying command is
 still invisible for as long as it retries. If an issuer needs the in-flight signal, say so on
 its tracker rather than inferring one from silence.
-
----
 
 ---
 
@@ -215,8 +250,6 @@ produces nothing *yet*:
 
 ---
 
----
-
 ## Reading the DLQ
 
 The operator's surface, and the complement of *most* facts rather than a substitute for any.
@@ -243,21 +276,6 @@ Replicator's side remains an operator responsibility, not a bus-level one.
 
 ---
 
----
-
-## Pacing at the deployed defaults
-
-Qualifies the pacing entry under
-[what Replicator does not guarantee](content-fetch-issuer-contract.md#what-replicator-does-not-guarantee).
-
-**At the shipped defaults every wait is slept through inside the handler**, so the cost is
-seconds of added turnaround and nothing else. Only when an operator configures the interval
-*above* `REPLICATOR_READ_BLOCK_MS` (5 s) does a paced command instead stay pending for the
-next reclaim, which moves the cadence from seconds to a minute. That is a deployment
-decision, not a default — but it is the one that changes what a reaper should expect, so it
-is stated here rather than left to be discovered.
-
----
 
 ## Why a duplicate failure fact is not identical
 
@@ -274,11 +292,17 @@ have and must not grow.
 
 ---
 
----
-
 ## How the blob TTL clock runs
 
 Expands [MUST-7](content-fetch-issuer-contract.md#7-copy-the-bytes-before-the-blob-expires).
+
+**Why this is now a commitment rather than a number to ask about.** It used to be
+`REPLICATOR_BLOB_TTL_SECONDS` on Replicator's host — a setting, visible to nobody else, changeable
+by an operator with no consumer the wiser. Under the object-store backend the reap is a **bucket
+lifecycle rule**, which is a stated, auditable window rather than an mtime clock that moves for
+reasons no consumer can see. The rule is `daysSinceCustomTime: 8` against a published 7-day
+horizon; the extra day absorbs lifecycle's one-day granularity so the bucket can never reap inside
+the window this contract promises.
 
 The clock runs from **last reference by a fetch**, not last read by a consumer, and **both backends
 implement that same rule by different means**. A consumer reading the blob extends nothing, on
@@ -316,18 +340,9 @@ keeps:
 
 ---
 
----
-
 ## Consequences an issuer inherits from the MUSTs
 
-Three follow-ons, each expanding a rule rather than adding one.
-
-**Losing the `command_id` -> domain map**
-([MUST-2](content-fetch-issuer-contract.md#2-persist-command_id--domain-durably-before-publishing)):
-
-Losing the map is recoverable but not free: the intent can be re-issued under a fresh
-`command_id`, at the cost of another origin request. What is *not* recoverable is the in-flight
-fact — it will arrive, match nothing, and have to be discarded.
+Two follow-ons, each expanding a rule rather than adding one.
 
 **Fingerprint-dedupe now loses more than a correlation**
 ([MUST-5](content-fetch-issuer-contract.md#5-do-not-dedupe-facts-on-content_fingerprint)) — the

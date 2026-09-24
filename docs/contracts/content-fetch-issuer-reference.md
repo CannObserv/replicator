@@ -5,13 +5,14 @@
 Replicator's behaviour exactly as the contract does — this file is not commentary.
 
 **What is here rather than there.** The contract carries what an issuer must *do*: the frame,
-the payload shapes, the eight MUSTs, and the guarantee/non-guarantee pair. The two references carry
+the command, the eight MUSTs, and the guarantee/non-guarantee pair. The two references carry
 what an issuer *looks up*, and they divide on the direction of the traffic. **This file is the
-request half** — the header and timeout rules it consults when a command is refused, what the
-envelope key is for, which co-core version carries what, and the trust posture the whole capability
+request half** — the header and timeout rules it consults when a command is refused, the envelope
+and what its key is for, the pacing to expect, which co-core version carries what, what losing the
+`command_id` map costs, and the trust posture the whole capability
 rests on. The **outcome half** is
-[`content-fetch-outcome-reference.md`](content-fetch-outcome-reference.md): the reasoning behind the
-enriched `blob_available` fields, the condition-by-condition failure taxonomy, the conditions that
+[`content-fetch-outcome-reference.md`](content-fetch-outcome-reference.md): both facts field by
+field, the reasoning behind the enriched `blob_available` fields, the condition-by-condition failure taxonomy, the conditions that
 report nothing, the dead-letter queue, and the mechanisms behind several of the MUSTs. The split
 exists so the contract stays short enough to read start to finish and neither reference has to be
 read start to finish to answer one question; all three are normative, and a rule does not become
@@ -116,8 +117,6 @@ next command to fetch in full and re-assert the failure.
 
 ---
 
----
-
 ## Provenance and trust
 
 `content.fetch` is an **unauthenticated capability**: any writer to the stream can make Replicator
@@ -185,6 +184,29 @@ the argument — and an earlier escalation trigger — is made again in
 
 ---
 
+## Pacing at the deployed defaults
+
+Qualifies the pacing entry under
+[what Replicator does not guarantee](content-fetch-issuer-contract.md#what-replicator-does-not-guarantee).
+
+**At the shipped defaults every wait is slept through inside the handler**, so the cost is
+seconds of added turnaround and nothing else. Only when an operator configures the interval
+*above* `REPLICATOR_READ_BLOCK_MS` (5 s) does a paced command instead stay pending for the
+next reclaim, which moves the cadence from seconds to a minute. That is a deployment
+decision, not a default — but it is the one that changes what a reaper should expect, so it
+is stated here rather than left to be discovered.
+
+---
+
+## Losing the `command_id` map
+
+**Losing the `command_id` -> domain map**
+([MUST-2](content-fetch-issuer-contract.md#2-persist-command_id--domain-durably-before-publishing)):
+
+Losing the map is recoverable but not free: the intent can be re-issued under a fresh
+`command_id`, at the cost of another origin request. What is *not* recoverable is the in-flight
+fact — it will arrive, match nothing, and have to be discarded.
+
 ---
 
 ## Version history
@@ -200,6 +222,37 @@ Founding rationale:
 [`docs/plans/2026-06-25-replicator-mvp-design.md`](../plans/2026-06-25-replicator-mvp-design.md).
 
 ---
+
+## The envelope, key by key
+
+What `to_wire` puts on the stream; the rule that governs it is
+[The frame](content-fetch-issuer-contract.md#the-frame-envelope).
+
+| Key | Value |
+|---|---|
+| `key` | the envelope's idempotency key, derived by `to_wire` — see the table below |
+| `payload` | the model, JSON-serialized — where everything in the contract's payload tables actually lives |
+| `event_type` | `content_fetch` / `blob_available` / `fetch_failed` — how `from_wire` picks a model |
+| `schema_version` | stringified |
+| `occurred_at` | ISO 8601 UTC, **tz-aware** — see [the command](content-fetch-issuer-contract.md#the-command) |
+| `content_type` | `application/json` |
+
+`key` is derived per payload type, and the three rules differ:
+
+| Payload | Derived `key` |
+|---|---|
+| `content_fetch` | `command_id` |
+| `blob_available` | **`content_fingerprint:command_id`** — per *occurrence*, not per bytes |
+| `fetch_failed` | **`command_id:occurred_at`** — deliberately *not* the bare `command_id` |
+
+Neither fact is keyed on a bare identifier: a key naming less than the occurrence collapses
+occurrences. `fetch_failed` (cannobserv#270) would drop a multi-failure command's **terminal**
+event; `blob_available` (cannobserv#300, the bare `content_fingerprint` through 0.7.7) collapsed two
+InfoSources fetching one URL into one fact naming whichever issuer won the race, and left the second
+command never closed — which reads as a slow origin, not a bug. **The re-key is a delivery-behaviour
+change**: emissions that used to collapse now all deliver. MUST-4 already required idempotence, so
+it moves in the safe direction, but the volume differs. Correlation rides on the `command_id`
+*field*, never on the key.
 
 ---
 

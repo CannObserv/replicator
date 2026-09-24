@@ -441,3 +441,86 @@ docs/contracts/content-replicate-issuer-contract.md :: disproven :: docstring re
 docs/contracts/content-replicate-issuer-contract.md :: disproven :: `reason` is a plain `str`, so nothing on the wire breaks meanwhile; the cost is a
 docs/contracts/content-replicate-issuer-contract.md :: disproven :: consumer-facing registry one row short, the drift that docstring asks to be kept in step.
 docs/contracts/content-replicate-issuer-contract.md :: retarget :: above originally read "no new vocabulary invariant, **and no exemption**".
+# #111: the content.fetch contract family rebalanced. The facts' field tables
+#   moved to the outcome reference beside their reasoning; the envelope tables,
+#   pacing at the deployed defaults and losing the command_id map moved to the
+#   request reference. retarget: a pointer, positional reference or contents
+#   description whose target moved in this change. tighten (--claims passes):
+#   the contract's enriched-fields and not_modified prose, which the outcome
+#   reference states in full; the failure-fact prose, whose "reason is a plain
+#   str" and wrong_payload_type/terminal=True sentences "Reading the failure
+#   fact" carries; MUST-7's second copy of the blob_expires_at-is-a-floor
+#   bullet; the version paragraph, rewrapped around the same atoms; and the
+#   outcome reference's MUST-8 blockquote, which restated the contract's
+#   MUST-8. disproven: "the tokens emitted today" omitted destination_refused,
+#   emitted since #95 (src/worker/egress.py, FailureReason.DESTINATION_REFUSED).
+docs/contracts/content-fetch-issuer-contract.md :: retarget :: must get right (see **The frame**). Fields are tabulated under **The payload**.
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: Version history and the co-core floor:
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: [the reference](content-fetch-issuer-reference.md#version-history). Replicator requires
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: **co-core ≥ 0.8.0**, the release that made `info_source_id` and `BlobAvailableEvent.command_id`
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: required — a 0.7.x command does not degrade, it fails `from_wire` and dead-letters. Founding
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: rationale:
+docs/contracts/content-fetch-issuer-contract.md :: retarget :: produces exactly six keys, all of them derived from the model. None are caller-supplied:
+docs/contracts/content-fetch-issuer-contract.md :: retarget :: | `payload` | the model, JSON-serialized — where everything in the tables below actually lives |
+docs/contracts/content-fetch-issuer-contract.md :: retarget :: | `occurred_at` | ISO 8601 UTC, **tz-aware** — see below |
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: lives here rather than in Watcher. Three rules govern reading them — **`None` means nobody said,
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: never "the default"**; **`status_code` is always 2xx here**, so it is not a success branch;
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: **"verbatim" excludes surrounding whitespace**, and a value Replicator cannot stand behind — an
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: over-long one, or a validator it could not send back — is dropped rather than repaired — and one
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: rule governs *acting* on them: replaying `etag` or `last_modified` **is**
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: conditional GET, so it is gated on your own consumer rather than on Replicator, and
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: [MUST-8](#8-do-not-send-a-validator-until-you-handle-not_modified) states the gate. All four, with
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: the reasoning, in [the reference](content-fetch-outcome-reference.md#the-enriched-blob_available-fields).
+docs/contracts/content-fetch-issuer-contract.md :: disproven :: `unsupported_schema_version`, `invalid_request_options` and `handler_error` — one per row of the
+docs/contracts/content-fetch-issuer-contract.md :: retarget :: [failure taxonomy](content-fetch-outcome-reference.md#failure-taxonomy-what-happens-and-what-the-issuer-sees),
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: which states each one's condition. `reason` is a plain `str`, not a `Literal`, so the list is
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: additive and a consumer branching on `terminal` first is already correct for tokens that do not
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: exist yet. Replicator never emits co-core's `wrong_payload_type`, and everything it emits today is
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: `terminal=True` — both deliberate, both in
+docs/contracts/content-fetch-issuer-contract.md :: retarget :: [the reference](content-fetch-outcome-reference.md#reading-the-failure-fact).
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: **`not_modified` is a success wearing this event's name (#17).** A body-less 304 means the origin
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: agrees your copy is current: no blob is coming, and none is needed. It rides `fetch_failed` because
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: the event's real meaning is *this command will not produce a blob*, and `terminal` is the field that
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: carries it — which is why MUST-4's "treat an unknown `reason` as opaque" was worth insisting on.
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: Two consequences for an issuer: **do not treat it as content loss**, and **do not alert on
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: `fetch_failed` rate** — wherever conditional GET is in use this token dominates at steady state, so
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: the signal is `fetch_failed where reason != "not_modified"`.
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: temporary, still keyed by the same fingerprint. Two obligations follow for a consumer that opens
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: - **Under the object-store backend, `blob_expires_at` is a floor and not an exact horizon.** The reap
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: is a bucket lifecycle rule, whose granularity is one day and whose enforcement is asynchronous, so
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: a blob may outlive its announced expiry — sometimes by more than a day. The direction is the same
+docs/contracts/content-fetch-issuer-contract.md :: tighten :: safe one as before (acting on the published value is early, never late); the margin is wider.
+docs/contracts/content-fetch-issuer-contract.md :: retarget :: [the reference](content-fetch-outcome-reference.md#pacing-at-the-deployed-defaults).
+docs/contracts/content-fetch-issuer-contract.md :: retarget :: envelope key, and the version history.
+docs/contracts/content-fetch-issuer-contract.md :: retarget :: the result side: the enriched fields, the failure taxonomy, the silent conditions, the DLQ, pacing,
+docs/contracts/content-fetch-issuer-contract.md :: retarget :: and the blob TTL clock.
+docs/contracts/content-fetch-outcome-reference.md :: retarget :: looks up once a command has been published. The enriched `blob_available` fields and why they are
+docs/contracts/content-fetch-outcome-reference.md :: retarget :: shaped the way they are; the condition-by-condition failure taxonomy; the conditions that report
+docs/contracts/content-fetch-outcome-reference.md :: retarget :: nothing at all and the one that reports nothing *yet*; the dead-letter queue; the turnaround to
+docs/contracts/content-fetch-outcome-reference.md :: retarget :: expect at the deployed defaults; and the blob TTL clock. The two references were one file until
+docs/contracts/content-fetch-outcome-reference.md :: retarget :: [the success fact](content-fetch-issuer-contract.md#the-success-fact). This is why they are
+docs/contracts/content-fetch-outcome-reference.md :: tighten :: > **The seam is complete on both sides — which moves the question to your side.** `etag` and
+docs/contracts/content-fetch-outcome-reference.md :: tighten :: > `last_modified` are the *read* half; since #11 the write half exists, so an `If-None-Match` you
+docs/contracts/content-fetch-outcome-reference.md :: tighten :: > send **will** reach the origin; and since **#17** the outcome exists too: a matching validator
+docs/contracts/content-fetch-outcome-reference.md :: tighten :: > earns `fetch_failed` · `not_modified` · `terminal=True` · `status_code=304`, with no blob, no
+docs/contracts/content-fetch-outcome-reference.md :: tighten :: > dead-letter entry, and the command's dedupe key written. The reference consumer has handled that
+docs/contracts/content-fetch-outcome-reference.md :: tighten :: > token since [CannObserv/watcher#249](https://github.com/CannObserv/watcher/issues/249) and
+docs/contracts/content-fetch-outcome-reference.md :: tighten :: > implements store-and-replay as of
+docs/contracts/content-fetch-outcome-reference.md :: tighten :: > [CannObserv/watcher#269](https://github.com/CannObserv/watcher/issues/269).
+docs/contracts/content-fetch-outcome-reference.md :: tighten :: >
+docs/contracts/content-fetch-outcome-reference.md :: tighten :: > None of that discharges the obligation for *your* consumer, which is why it is stated as
+docs/contracts/content-fetch-outcome-reference.md :: tighten :: > rather than as a note here. `not_modified` means *no bytes are coming and your last fingerprint
+docs/contracts/content-fetch-outcome-reference.md :: tighten :: > still stands*; it arrives on the **failure** event, so a consumer without an explicit branch
+docs/contracts/content-fetch-outcome-reference.md :: tighten :: > falls through to whatever its `fetch_failed` handling already does — very likely "the content is
+docs/contracts/content-fetch-outcome-reference.md :: tighten :: > gone", "the fetch failed", or a health regression. That converts every successful no-change check
+docs/contracts/content-fetch-outcome-reference.md :: tighten :: > into a spurious loss, and the better the origin's caching, the more of them there are.
+docs/contracts/content-fetch-outcome-reference.md :: tighten :: > So the two fields are safe to *record* unconditionally and safe to *replay* only once that branch
+docs/contracts/content-fetch-outcome-reference.md :: tighten :: > exists. Replay them verbatim when you do — parsing and re-serializing hands the origin a value it
+docs/contracts/content-fetch-outcome-reference.md :: tighten :: > never sent, which cannot match.
+docs/contracts/content-fetch-outcome-reference.md :: retarget :: [the failure fact](content-fetch-issuer-contract.md#the-failure-fact). Three behaviours are not
+docs/contracts/content-fetch-outcome-reference.md :: retarget :: Three follow-ons, each expanding a rule rather than adding one.
+docs/contracts/content-fetch-issuer-reference.md :: retarget :: the payload shapes, the eight MUSTs, and the guarantee/non-guarantee pair. The two references carry
+docs/contracts/content-fetch-issuer-reference.md :: retarget :: request half** — the header and timeout rules it consults when a command is refused, what the
+docs/contracts/content-fetch-issuer-reference.md :: retarget :: envelope key is for, which co-core version carries what, and the trust posture the whole capability
+docs/contracts/content-fetch-issuer-reference.md :: retarget :: [`content-fetch-outcome-reference.md`](content-fetch-outcome-reference.md): the reasoning behind the
+docs/contracts/content-fetch-issuer-reference.md :: retarget :: enriched `blob_available` fields, the condition-by-condition failure taxonomy, the conditions that
