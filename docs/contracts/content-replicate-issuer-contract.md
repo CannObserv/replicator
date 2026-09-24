@@ -280,6 +280,7 @@ So the obligations are:
 Under the object-store backend the reap is a bucket lifecycle rule rather than a local clock, which
 makes the window auditable rather than merely asserted — and makes `blob_expires_at` a **floor**
 with a wider margin, since lifecycle granularity is one day and enforcement is asynchronous. Detail:
+[how the blob TTL clock runs](content-fetch-outcome-reference.md#how-the-blob-ttl-clock-runs), which expands
 [the fetch issuer contract's MUST-7](content-fetch-issuer-contract.md#7-copy-the-bytes-before-the-blob-expires).
 
 ⚙ **R1 — render, do not delegate.** Resolve `path_template` against `rep_fields` before publishing,
