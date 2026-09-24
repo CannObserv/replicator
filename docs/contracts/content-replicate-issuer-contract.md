@@ -28,7 +28,7 @@ adopters had built.
 [`content-fetch-issuer-contract.md`](content-fetch-issuer-contract.md) and its
 [request](content-fetch-issuer-reference.md) and
 [outcome](content-fetch-outcome-reference.md) references. All remain normative here. The MUST verdict table
-below says which of the seven fetch obligations apply verbatim — read the deep document for any row
+below says which of the eight fetch obligations apply verbatim — read the deep document for any row
 that does not say *no analogue*, because a thin delta doc whose reader never opens the deep one is
 the failure mode this shape trades against.
 Its own [reference](content-replicate-issuer-reference.md), equally normative, carries the reasoning
@@ -244,7 +244,7 @@ refuse; the containment check is the alias's root, and it already runs.
 
 ## What the issuer MUST do
 
-Verdicts on the seven fetch obligations. A row that is not *no analogue* is read in the deep
+Verdicts on the eight fetch obligations. A row that is not *no analogue* is read in the deep
 document, not summarized here.
 
 | Fetch MUST | Verdict for replicate |
@@ -256,6 +256,7 @@ document, not summarized here.
 | **5** — do not dedupe facts on `content_fingerprint` | **no analogue** |
 | **6** — handle the failure fact, keep a reaper anyway | **verbatim.** Non-terminal failures are still silent; a command can still close without a fact |
 | **7** — copy the bytes before the blob expires | **inverts.** For fetch this is the consumer's obligation; for replicate it is the issuer's *scheduling* obligation. Issue while the blob lives — the clock runs from last **fetch** reference, not last read — and handle `blob_expired` as terminal. `blob_expires_at` on the `blob_available` fact is the value to schedule against. The window it is drawn from is stated below |
+| **8** — do not send a validator until you handle `not_modified` | **no analogue.** `ContentReplicateCommand` carries no request headers, so there is no validator to send and no `not_modified` to handle |
 
 ⚙ **The window you are scheduling against: at least seven days from last fetch reference.**
 Stated here as well as in the fetch contract because a replicate issuer is the party this number

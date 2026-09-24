@@ -590,3 +590,8 @@ docs/contracts/content-fetch-issuer-contract.md :: tighten :: the window this co
 # #111 CR 25: the Common Commands load comment absorbs the "(dev only)" that
 #   the deleted Environment Variables pointer carried; nothing else changed.
 AGENTS.md :: tighten :: # Load environment (required before running the worker or gh)
+# #111 CR 26: "the seven fetch obligations" — the fetch contract has eight MUSTs
+#   (`grep -c '^### [1-8]\. ' docs/contracts/content-fetch-issuer-contract.md`
+#   is 8); MUST-8 gains its verdict row, no analogue.
+docs/contracts/content-replicate-issuer-contract.md :: disproven :: below says which of the seven fetch obligations apply verbatim — read the deep document for any row
+docs/contracts/content-replicate-issuer-contract.md :: disproven :: Verdicts on the seven fetch obligations. A row that is not *no analogue* is read in the deep
