@@ -429,14 +429,19 @@ def test_a_name_outside_the_rule_drops_the_binding(tmp_path, caplog, name):
         table = load_alias_table(path)
 
     assert table.provisioned == ()
-    assert any(r.message == "ignoring an unusable alias binding" for r in caplog.records)
+    (record,) = [r for r in caplog.records if r.message == "ignoring an unusable alias binding"]
+    assert "<provider>-<role>" in record.detail
 
 
-def test_the_name_must_carry_the_bindings_provider(tmp_path):
+def test_the_name_must_carry_the_bindings_provider(tmp_path, caplog):
     """`ia-publication` bound to `gcs` reads as archive.org to anyone writing a RepSpec."""
     path = write_aliases(tmp_path, {"ia-publication": gcs_entry("co-gcs-publication")})
 
-    assert load_alias_table(path).provisioned == ()
+    with caplog.at_level("WARNING", logger="src.worker.aliases"):
+        assert load_alias_table(path).provisioned == ()
+
+    (record,) = [r for r in caplog.records if r.message == "ignoring an unusable alias binding"]
+    assert "the alias name says 'ia'" in record.detail
 
 
 @pytest.mark.parametrize(
@@ -469,7 +474,8 @@ def test_a_gcs_name_refuses_any_other_bucket(tmp_path, caplog, bucket):
         table = load_alias_table(path)
 
     assert table.provisioned == ()
-    assert any(r.message == "ignoring an unusable alias binding" for r in caplog.records)
+    (record,) = [r for r in caplog.records if r.message == "ignoring an unusable alias binding"]
+    assert "a gcs-publication alias binds" in record.detail
 
 
 def test_a_legacy_name_is_accepted_outside_the_rule(tmp_path):
