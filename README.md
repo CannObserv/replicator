@@ -109,7 +109,7 @@ rather than deleting bytes a consumer was promised.
 | `REPLICATOR_REDIS_URL` | `redis://replicator:<password>@broker:6379/0` | Change-bus client URL — the `replicator` ACL user on `co-broker`, over the tailnet |
 | `REPLICATOR_BLOB_BACKEND` | `gcs` | Temp blobs live in an object store — **not** the `local` default |
 | `REPLICATOR_BLOB_BUCKET` | `co-gcs-blobs` | The temp-blob bucket that backend writes into |
-| `REPLICATOR_PERMANENT_BUCKET` | `co-gcs-replicator` | The permanent content-addressed store, a second replicate source (#114); unset ⇒ none |
+| `REPLICATOR_PERMANENT_BUCKET` | `co-gcs-replicator`, set at the #114 step 5 deploy | The permanent content-addressed store, a second replicate source (#114); unset ⇒ none |
 | `REPLICATOR_BLOB_DIR` | `/var/lib/replicator/blobs` | Temp-storage root; **unused under `gcs`**, kept against a flip back to `local` |
 | `REPLICATOR_REPLICATION_ALIASES_FILE` | `/etc/replicator/replication-aliases.json` | The alias table: one binding, `primary` → `gs://co-gcs-replication`, empty prefix — provisioned 2026-09-10 (#86). `root:exedev 640`, like the key files beside it. Unset ⇒ nothing provisioned, every `content.replicate` command refused `alias_unknown` |
 | `REPLICATOR_CONSUMER_NAME` | *(unset)* | Per-group override; the name is derived from the group — `replicator-fetch-1` — and never shared |
