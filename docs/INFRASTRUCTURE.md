@@ -96,9 +96,9 @@ and any host without this env still get the filesystem backend.
 | Lifecycle | `daysSinceCustomTime: 8`, plus an `age: 365` cost backstop | — |
 | Soft delete | disabled (`--soft-delete-duration=0`) | disabled |
 | Public access | prevented; UBLA on | same |
-| Writer | `co-gcs-replicator` via the custom role below | `co-gcs-test-replicator`, `roles/storage.objectAdmin` |
+| Writer | `co-gcs-replicator-writer` via the custom role below | `co-gcs-test-replicator-writer`, `roles/storage.objectAdmin` |
 | Reader | `co-gcs-blob-reader@co-gcs.iam.gserviceaccount.com`, `roles/storage.objectViewer` | — |
-| Key on the VM | — | `/etc/replicator/co-gcs-test-replicator.json` |
+| Key on the VM | `/etc/replicator/co-gcs-replicator-writer.json` | `/etc/replicator/co-gcs-test-replicator-writer.json` |
 | Consumer key | `/etc/watcher/co-gcs-blob-reader.json`, named by `GCS_BLOB_CREDENTIALS` | — |
 
 **The worker's grant is a custom role, because no predefined one fits.**
@@ -170,9 +170,9 @@ Provisioned 2026-08-18 in project `co-gcs`:
 | | |
 |---|---|
 | Bucket | `gs://co-gcs-test-replication` |
-| Service account | `co-gcs-test-replicator@co-gcs.iam.gserviceaccount.com` |
+| Service account | `co-gcs-test-replicator-writer@co-gcs.iam.gserviceaccount.com` (replaced `co-gcs-test-replicator` in #114) |
 | Grant | `roles/storage.objectAdmin` on that bucket **only** |
-| Key on the VM | `/etc/replicator/co-gcs-test-replicator.json` (`root:exedev`, `0640`) |
+| Key on the VM | `/etc/replicator/co-gcs-test-replicator-writer.json` (`root:exedev`, `0640`) |
 | CI identity | the same SA, keyless, via `principalSet://iam.googleapis.com/projects/912903030445/locations/global/workloadIdentityPools/github/attribute.repository/CannObserv/replicator` |
 
 **`test` is infixed in both names, never suffixed.** `co-gcs-replication-test` would contain the production bucket name as a substring, and `co-gcs-replication-test` likewise for the SA — which would make `tests/test_destinations.py`'s literal scan refuse the very names it exists to steer traffic towards, or force it to carry a negative lookahead nobody maintains. Renaming either resource means revisiting that scan.

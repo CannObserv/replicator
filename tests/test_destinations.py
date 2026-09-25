@@ -68,9 +68,13 @@ SCANNED = (REPO / "src", REPO / "tests")
 # a runtime value can come from.
 #
 # `co-gcs-replicator` — the writer SA, which is also its key file's basename
-# (`/etc/replicator/co-gcs-replicator.json`) and the local part of its email. The
-# bucket name is the fast check; the identity is the one that matters, because a
-# test pointed at the right bucket with the wrong ADC is a state reachable today
+# (`/etc/replicator/co-gcs-replicator.json`) and the local part of its email. One
+# substring covers the names #114 adds too: the split writer
+# `co-gcs-replicator-writer` and the permanent store `gs://co-gcs-replicator`,
+# while their test twins (`co-gcs-test-replicator-writer`, `co-gcs-test-replicator`)
+# stay legal because `test` is infixed. The bucket name is the fast check; the
+# identity is the one that matters, because a test pointed at the right bucket
+# with the wrong ADC is a state reachable today
 # — `AGENTS.md` tells us to `set -a; . /etc/replicator/.env` before shell work,
 # which puts that key into the environment `uv run pytest` inherits.
 #
@@ -143,6 +147,13 @@ def test_no_module_names_a_production_destination():
         pytest.param('URL = "https://storage.googleapis.com/co-gcs-replication/x"', id="a-url"),
         pytest.param('KEY = "/etc/replicator/co-gcs-replicator.json"', id="the-writer-key-path"),
         pytest.param('SA = "co-gcs-replicator@co-gcs.iam.gserviceaccount.com"', id="the-sa-email"),
+        pytest.param(
+            'KEY = "/etc/replicator/co-gcs-replicator-writer.json"', id="the-split-writer-key-path"
+        ),
+        pytest.param(
+            'SA = "co-gcs-replicator-writer@co-gcs.iam.gserviceaccount.com"', id="the-split-writer"
+        ),
+        pytest.param('URI = "gs://co-gcs-replicator/blobs/x.bin"', id="the-permanent-store"),
     ],
 )
 def test_the_destination_detector_sees_a_planted_literal(source):
@@ -155,6 +166,11 @@ def test_the_destination_detector_sees_a_planted_literal(source):
         pytest.param(f'BUCKET = "{TEST_BUCKET}"', id="the-test-bucket"),
         pytest.param('BUCKET = "example-replication-bucket"', id="the-neutral-fake"),
         pytest.param('KEY = "file:///etc/replicator/co-pypi-reader.json"', id="the-wheelhouse-key"),
+        pytest.param(
+            'SA = "co-gcs-test-replicator-writer@co-gcs.iam.gserviceaccount.com"',
+            id="the-test-identity",
+        ),
+        pytest.param('BUCKET = "co-gcs-test-replicator"', id="the-permanent-store-test-twin"),
     ],
 )
 def test_the_destination_detector_passes_a_safe_name(source):
