@@ -142,6 +142,8 @@ Archiver's RepSpecs move to `gcs-publication` in the publication cutover.
    - Test-name scan updates.
 
    Done when CI's `gcs` job exercises a permanent-store source.
+
+   **Code landed 2026-09-25.** The `gcs` job replicates from `co-gcs-test-replicator` with an empty temp store. `primary`'s allowlist expiry is 2026-12-31.
 6. **Persist handler.** Once co-core ships the models, add the `content.persist` loop through the
    existing `run_loop` / `CommandSpec`, plus a new issuer contract under `docs/contracts/`. Done when
    the `gcs` job persists into `co-gcs-test-replicator` twice and the second is a no-op success.

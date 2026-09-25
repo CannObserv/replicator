@@ -57,6 +57,11 @@ archive.org item: `file:///etc/replicator/co-pypi-reader.json` would publish thi
 permanently. Bus access control answers it as everywhere else, and T5's reasoning applies on top —
 one guard against an unretractable failure.
 
+**Two stores, the same comparison (#114).** With a permanent store configured, `locate_blob` asks
+each store to derive the URI for the extracted fingerprint and accepts only an exact match. The
+permanent store therefore widens T3a by one bucket and prefix, not to every `gs://` URI, and the bytes
+are read from whichever store matched.
+
 ## T4: `ia` overwrites, and Wayback would be a fourth provider
 
 Expands T4 in [the contract](content-replicate-issuer-contract.md).
