@@ -129,12 +129,14 @@ def locate_blob(
     inverted — for replicate the scheduling obligation is the issuer's).
     """
     fingerprint = _fingerprint_in(blob_uri)
-    minted = store.uri_for(fingerprint) if fingerprint is not None else None
+    stores = (store, *permanent)
+    # Each store's URI for this fingerprint, temp first. At most one can match:
+    # a URI names a bucket (or a root) and a prefix, and no two stores share both.
+    minted: list[str] = []
     source = None
     if fingerprint is not None:
-        # Temp first, then each permanent store. At most one can match: the URI
-        # names a bucket (or a root) and a prefix, and no two stores share both.
-        source = next((c for c in (store, *permanent) if c.uri_for(fingerprint) == blob_uri), None)
+        minted = [candidate.uri_for(fingerprint) for candidate in stores]
+        source = next((c for c, uri in zip(stores, minted, strict=True) if uri == blob_uri), None)
     if fingerprint is None or source is None:
         if fingerprint is not None and _names_another_backend(blob_uri, minted):
             # The one exception to the paragraph below, and it is about #7's flip
@@ -159,7 +161,8 @@ def locate_blob(
         # recoverable. `detail` carries the value for the journal; it is bounded
         # because an unbounded message value should not reach a log line whole.
         raise _refuse(
-            f"blob_uri is not a reference this store minted: {blob_uri[:_LOGGED_VALUE_CHARS]!r}",
+            "blob_uri is not a reference any store here minted: "
+            f"{blob_uri[:_LOGGED_VALUE_CHARS]!r}",
             ReplicateReason.INVALID_SOURCE,
         )
     if not source.exists(fingerprint):
@@ -167,8 +170,13 @@ def locate_blob(
     return LocatedBlob(fingerprint, source)
 
 
-def _names_another_backend(blob_uri: str, minted: str) -> bool:
-    """Whether these two URIs come from different ``BlobStore`` backends.
+def _names_another_backend(blob_uri: str, minted: Sequence[str]) -> bool:
+    """Whether ``blob_uri``'s scheme is one no store here mints.
+
+    Against every store this host reads, not only the temp one (#114): once a
+    permanent store is configured, ``gs://`` is a scheme this host reads even
+    beside a local temp store, so a stranger bucket there is not ours rather
+    than "the other backend".
 
     Answered by comparing schemes rather than by asking the store what it is:
     ``BlobStore`` is a ``Protocol`` describing what a store *does*, and a
@@ -182,7 +190,7 @@ def _names_another_backend(blob_uri: str, minted: str) -> bool:
     states the caller has already excluded are lines nothing can execute, and
     coverage said so.
     """
-    return urlsplit(blob_uri).scheme != urlsplit(minted).scheme
+    return urlsplit(blob_uri).scheme not in {urlsplit(uri).scheme for uri in minted}
 
 
 def _fingerprint_in(blob_uri: str) -> str | None:

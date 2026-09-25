@@ -715,7 +715,11 @@ async def run(
         # replicate command is refused — the safe default (contract T5), and
         # every host's state until an operator writes the table (this VM's
         # until #86 provisioned `primary`).
-        aliases = load_alias_table(settings.replication_aliases_file)
+        aliases = load_alias_table(
+            settings.replication_aliases_file,
+            # No alias may bind a bucket this host keeps blobs in (#114).
+            host_stores=tuple(b for b in (settings.blob_bucket, settings.permanent_bucket) if b),
+        )
         # One driver per provisioned binding, built **here** and not per command:
         # ``storage.Client()`` resolves ADC synchronously — key files, and on a
         # GCE-style host the metadata server — so constructing it inside the loop

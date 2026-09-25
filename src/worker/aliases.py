@@ -25,7 +25,7 @@ archive.org, where an item cannot be deleted at all.
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -155,7 +155,9 @@ def _empty() -> AliasTable:
     return AliasTable(MappingProxyType({}))
 
 
-def load_alias_table(path: Path | None, *, today: date | None = None) -> AliasTable:
+def load_alias_table(
+    path: Path | None, *, host_stores: Sequence[str] = (), today: date | None = None
+) -> AliasTable:
     """Read the alias table, failing **closed** at every step.
 
     Three degrees of failure, and the difference between them is whether the
@@ -179,7 +181,11 @@ def load_alias_table(path: Path | None, *, today: date | None = None) -> AliasTa
     actual job is ``content.fetch`` — the refusals report it per command, through
     the same channel every other replicate problem reaches the operator by.
 
-    ``today`` is for tests; it decides only whether a legacy name is overdue.
+    ``host_stores`` are the buckets this host keeps blobs in — temp and permanent —
+    which no alias may bind (#114): aliases are publication destinations, and one
+    bound to a store would let any replicate command write arbitrary keys into a
+    bucket meant to hold only content-addressed blobs. ``today`` is for tests; it
+    decides only whether a legacy name is overdue.
     """
     if path is None:
         logger.info(
@@ -221,7 +227,7 @@ def load_alias_table(path: Path | None, *, today: date | None = None) -> AliasTa
 
     bindings: dict[str, AliasBinding] = {}
     for alias, entry in raw.items():
-        binding = _binding_or_none(str(alias), entry)
+        binding = _binding_or_none(str(alias), entry, host_stores)
         if binding is not None:
             bindings[str(alias)] = binding
     table = AliasTable(MappingProxyType(bindings))
@@ -261,14 +267,14 @@ def _report_overdue_legacy_names(table: AliasTable, today: date) -> None:
             )
 
 
-def _binding_or_none(alias: str, entry: Any) -> AliasBinding | None:
+def _binding_or_none(alias: str, entry: Any, host_stores: Sequence[str]) -> AliasBinding | None:
     """One entry, or ``None`` with a reason in the journal.
 
     Only the fields ``AliasBinding`` declares are read, so anything else in the
     file — including something an operator mistook for a credential slot — never
     reaches an attribute.
     """
-    why = _why_unusable(alias, entry)
+    why = _why_unusable(alias, entry, host_stores)
     if why is not None:
         logger.warning("ignoring an unusable alias binding", extra={"alias": alias, "detail": why})
         return None
@@ -280,7 +286,7 @@ def _binding_or_none(alias: str, entry: Any) -> AliasBinding | None:
     )
 
 
-def _why_unusable(alias: str, entry: Any) -> str | None:
+def _why_unusable(alias: str, entry: Any, host_stores: Sequence[str] = ()) -> str | None:
     """Why this entry cannot be provisioned, or ``None`` if it can."""
     if not alias:
         return "the alias name is empty"
@@ -295,6 +301,8 @@ def _why_unusable(alias: str, entry: Any) -> str | None:
         # The bucket *is* the root. Without it there is no containment check to
         # run, and a binding that cannot bound anything is worse than absent.
         return "a gcs binding needs a bucket"
+    if provider == "gcs" and str(entry.get("bucket", "")) in host_stores:
+        return "the bucket is a blob store this host reads; aliases are publication destinations"
     if alias not in LEGACY_ALIASES:
         why = _why_misnamed(alias, provider, str(entry.get("bucket", "")))
         if why is not None:

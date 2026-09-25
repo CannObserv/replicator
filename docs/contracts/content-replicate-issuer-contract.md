@@ -109,8 +109,9 @@ This is the cheap part, taken because it is cheap. It is **not** a substitute fo
 `<provider>-<role>`, matching `^(gcs|gdrive|ia)-[a-z][a-z0-9-]*$`. Its prefix must be the binding's
 provider, and a `gcs-<role>` alias binds `co-gcs-<role>` or its test twin `co-gcs-test-<role>` and no
 other bucket. The name therefore determines the bucket, and one typo can no longer bind the public
-bucket under a private name or the reverse. A binding that breaks the rule is dropped at load, so
-commands naming it are refused `alias_unknown`. co-core will export the pattern (cannobserv#493) so
+bucket under a private name or the reverse. No alias may bind a bucket the host keeps blobs in, the
+temp or the permanent store, because aliases are publication destinations. A binding that breaks
+either rule is dropped at load, so commands naming it are refused `alias_unknown`. co-core will export the pattern (cannobserv#493) so
 Archiver's RepSpec schema validates `credentials_alias` against the same text and a bad name fails
 when the RepSpec is saved.
 

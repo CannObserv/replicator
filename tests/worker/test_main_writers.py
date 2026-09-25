@@ -18,6 +18,7 @@ import json
 import pytest
 
 import src.worker.main
+from src.core.config import get_settings
 from src.worker.aliases import AliasBinding, AliasTable
 from src.worker.main import build_writers, run
 from tests.worker.test_main import _stopped
@@ -380,3 +381,22 @@ def test_a_credentials_file_that_cannot_be_loaded_withholds_that_writer(monkeypa
     (record,) = [r for r in caplog.records if "could not build a provider writer" in r.message]
     assert record.alias == "own-key"
     assert record.credentials_file == "/nope/k.json"
+
+
+async def test_the_alias_table_is_told_which_buckets_are_host_stores(monkeypatch, wired, tmp_path):
+    """The wiring half: both configured stores reach the table, and an empty one does not."""
+    seen = {}
+    real = src.worker.main.load_alias_table
+
+    def spy(path, **kwargs):
+        seen.update(kwargs)
+        return real(path, **kwargs)
+
+    monkeypatch.setattr("src.worker.main.load_alias_table", spy)
+    monkeypatch.setattr("src.worker.main.build_permanent_stores", lambda settings: ())
+    monkeypatch.setenv("REPLICATOR_PERMANENT_BUCKET", "a-permanent-bucket")
+    get_settings.cache_clear()
+
+    await run(_stopped())
+
+    assert seen["host_stores"] == ("a-permanent-bucket",)

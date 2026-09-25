@@ -464,3 +464,14 @@ def test_without_a_permanent_store_its_uris_are_invalid(gcs_store, permanent_sto
         locate_blob(minted, store=gcs_store)
 
     assert caught.value.reason is ReplicateReason.INVALID_SOURCE
+
+
+def test_a_stranger_bucket_is_invalid_even_beside_a_local_temp_store(store, permanent_store):
+    """`gs://` is a scheme this host reads once a permanent store is configured, so a
+    stranger bucket is not "the other backend" (#7's flip) — it is not ours."""
+    stranger = f"gs://a-stranger-bucket/blobs/{FINGERPRINT}.bin"
+
+    with pytest.raises(PermanentReplicateError) as caught:
+        locate_blob(stranger, store=store, permanent=(permanent_store,))
+
+    assert caught.value.reason is ReplicateReason.INVALID_SOURCE

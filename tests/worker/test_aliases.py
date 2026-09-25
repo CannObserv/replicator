@@ -513,3 +513,27 @@ def test_no_legacy_name_has_outlived_its_expiry():
     overdue = {name: str(expiry) for name, expiry in LEGACY_ALIASES.items() if today > expiry}
 
     assert not overdue
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        pytest.param("temp-example", id="the-temp-store"),
+        pytest.param("permanent-example", id="the-permanent-store"),
+    ],
+)
+def test_an_alias_may_not_bind_a_store_this_host_reads(tmp_path, caplog, role):
+    """Aliases are publication destinations (#114). A well-named one bound to the
+    temp or permanent store would let any replicate command write arbitrary keys
+    into a bucket that should hold only content-addressed blobs."""
+    bucket = f"co-gcs-{role}"
+    path = write_aliases(tmp_path, {f"gcs-{role}": {"provider": "gcs", "bucket": bucket}})
+
+    with caplog.at_level("WARNING", logger="src.worker.aliases"):
+        table = load_alias_table(
+            path, host_stores=("co-gcs-temp-example", "co-gcs-permanent-example")
+        )
+
+    assert table.provisioned == ()
+    (record,) = [r for r in caplog.records if r.message == "ignoring an unusable alias binding"]
+    assert "store" in record.detail
