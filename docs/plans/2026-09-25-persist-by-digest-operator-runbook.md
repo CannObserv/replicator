@@ -1,7 +1,7 @@
 ---
 title: Operator runbook for Persist by digest, steps 2 and 3 — identities and buckets
 date: 2026-09-25
-status: phases A and B done 2026-09-25; C next
+status: phases A–D done 2026-09-25; E after a clean day and a live create
 plan: 2026-09-25-content-addressed-persist-and-storage-naming.md
 ---
 
@@ -140,16 +140,40 @@ for B in co-gcs-replicator co-gcs-publication co-gcs-test-replicator co-gcs-test
 done
 ```
 
+**Done 2026-09-25**, all in `us-west1`. Each bucket's IAM policy matches the plan: GCS's four
+default project-role bindings, plus the grants above and nothing else.
+
 ## Phase D — verify, then tidy (on `co-replicator`)
 
 Re-run phase B's permission check with `co-gcs-replicator` added to the bucket list. Expect
 `create`, `get` and `list` there, never `update` or `delete`. Then remove the key copies:
 `rm /tmp/co-gcs-*-writer.json` on the VM, and remove the local copies on the workstation.
 
+**Done 2026-09-25** on the VM. `testIamPermissions` for both identities across all eight buckets:
+
+| Bucket | `co-gcs-replicator-writer` | `co-gcs-test-replicator-writer` |
+|---|---|---|
+| `co-gcs-blobs` | create, get, list, update | none |
+| `co-gcs-replicator` | create, get, list | none |
+| `co-gcs-publication` | get, list (`allUsers`) | get, list (`allUsers`) |
+| `co-gcs-replication` | create (interim), get, list (`allUsers`) | get, list (`allUsers`) |
+| the four test buckets | none | create, delete, get, list, update |
+
+Anonymous listing returns 401 on `co-gcs-replicator` and both test twins, and 200 on
+`co-gcs-publication`. The publication writer has no key yet, so its binding is checked only by the
+policy output. Neither VM identity holds `storage.buckets.get`, so the bucket properties (soft
+delete, lifecycle, public-access prevention) rest on the creation commands. The anonymous 401 is the
+one observed consequence. The VM's `/tmp` key copies were removed after comparing them byte for byte
+with the installed keys.
+
+The first live store under the new identity came at 16:39 UTC. It re-stored an existing object, which
+exercised `get` and `update` but not `create`.
+
 ## Phase E — retire the old identities (workstation, after a clean day)
 
-Run this only once a full day of the journal shows no permission errors under the new identity,
-and CI has passed on the new test identity:
+Run this only once a full day of the journal (from the 15:50 UTC restart) shows no permission errors
+under the new identity **and at least one store that created a new object**, and CI has passed on the
+new test identity (it has: run 36157674876):
 
 ```bash
 gcloud iam service-accounts disable co-gcs-replicator@co-gcs.iam.gserviceaccount.com --project=$PROJECT

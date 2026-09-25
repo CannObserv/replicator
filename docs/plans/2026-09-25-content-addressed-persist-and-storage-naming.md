@@ -124,6 +124,8 @@ Archiver's RepSpecs move to `gcs-publication` in the publication cutover.
      bytes.
 
    Done when `testIamPermissions` shows the grant table above, identity by identity.
+
+   **Done 2026-09-25**, `us-west1`. Step 2 is live, and its old accounts are disabled in runbook phase E.
 4. **Publication cutover**, which needs step 5's per-alias `credentials_file` merged first. Bind `gcs-publication`, and `primary` for the transition, to
    `co-gcs-publication` with the publication writer's `credentials_file`. Revoke every write on
    `co-gcs-replication`, including step 2's interim grant. Done when the next `replication_complete` names the new bucket, and a
