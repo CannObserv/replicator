@@ -292,5 +292,7 @@ jobs:
       - name: pytest (T4 rows against the real bucket)
         env:
           REPLICATOR_TEST_GCS_BUCKET: co-gcs-test-replication
+          # Without it the temp-store rows skip, and did from #7 until #114.
+          REPLICATOR_TEST_BLOB_BUCKET: co-gcs-test-blobs
           REPLICATOR_TEST_GCS_CREDENTIALS: ${{ steps.gcs_auth.outputs.credentials_file_path }}
         run: uv run pytest --no-cov -m gcs -rs
