@@ -317,7 +317,14 @@ def _why_unusable(alias: str, entry: Any, host_stores: Sequence[str] = ()) -> st
 
 
 def _why_misnamed(alias: str, provider: str, bucket: str) -> str | None:
-    """Why this name breaks the naming rule for this binding, or ``None``."""
+    """Why this name breaks the naming rule for this binding, or ``None``.
+
+    The role is everything after the first dash, so it may itself begin with
+    ``test-``: ``gcs-test-publication`` binds ``co-gcs-test-publication`` as its
+    own production form, a second name for the twin ``gcs-publication`` already
+    reaches. Harmless — the bucket is still one the rule derives — and left legal
+    because narrowing it would diverge from the pattern co-core exports.
+    """
     if not _ALIAS_NAME.match(alias):
         return f"the alias name is not <provider>-<role> ({ALIAS_NAME_PATTERN})"
     named, role = alias.split("-", 1)
