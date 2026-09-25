@@ -158,7 +158,7 @@ autouse one: the two destinations are provisioned independently, and a host with
 one should still run the tests it can. A missing *identity* still skips
 everything, since nothing marked can run without it.
 
-All three are dev-only and belong in the repo `.env` or the invoking shell —
+All four are dev-only and belong in the repo `.env` or the invoking shell —
 never in `/etc/replicator/.env`, which is the file the service reads. Contrast
 `REPLICATOR_TEST_REDIS_URL`, which *does* default: localhost is never the broker,
 the broker has no db 15, and `real_redis` refuses db 0 outright. No bucket name

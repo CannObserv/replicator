@@ -195,11 +195,12 @@ def _no_production_destination(request, monkeypatch):
     touched (see ``guarded_init``).
 
     A ``@pytest.mark.gcs`` test opts back in explicitly: it gets the test
-    identity, and whichever of the two test buckets the host has provisioned,
+    identity, and whichever of the three test buckets the host has provisioned,
     all from variables with no default. A missing *identity* skips here; a
     missing *bucket* skips in the fixture that hands it over, because the
-    replicate destination and #7's temp-blob destination are provisioned
-    independently and a host with one should still run its tests.
+    replicate destination, #7's temp-blob destination and #114's permanent-store
+    twin are provisioned independently and a host with one should still run its
+    tests.
 
     Nothing in the tree reaches a real driver today — ``test_main_writers.py``
     stubs it — but that is an accident of how those tests are written rather than
