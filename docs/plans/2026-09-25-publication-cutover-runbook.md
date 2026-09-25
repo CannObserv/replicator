@@ -1,7 +1,7 @@
 ---
 title: Operator runbook for Persist by digest, step 4 — the publication cutover
 date: 2026-09-25
-status: ready to run
+status: phases A and B done 2026-09-25; C waits on a decision about co-gcs-cli-writer
 plan: 2026-09-25-content-addressed-persist-and-storage-naming.md
 ---
 
@@ -42,6 +42,12 @@ gcloud storage buckets get-iam-policy gs://co-gcs-replication --format="yaml(bin
 ```
 
 **Send back:** the policy output, and copy the key to the VM's `/tmp`.
+
+**Done 2026-09-25.** The policy listed three service accounts with `objectCreator` on the old bucket.
+Two were expected: `co-gcs-replicator-writer` (the interim grant) and `co-gcs-replicator` (retired).
+The third, **`co-gcs-cli-writer`**, also holds `objectViewer`, and no CannObserv repo names it. It
+most likely serves a tool outside these repos, perhaps whatever writes `console_workspace/`. Phase C
+leaves it alone until the operator decides.
 
 ## Phase B — bind the new bucket (on `co-replicator`)
 
@@ -117,6 +123,13 @@ curl -s -o /dev/null -w '%{http_code}\n' https://storage.googleapis.com/co-gcs-p
 
 **Send back:** nothing. B1–B3 run on the VM, so the agent can run them and report.
 
+**Done 2026-09-25, 22:53 UTC.** B1 matched the expectation exactly: `create`, `get` and `list` on
+`co-gcs-publication`, the public `get` and `list` on `co-gcs-replication`, and nothing on
+`co-gcs-replicator` or `co-gcs-blobs`. After B2's restart the worker loaded both aliases with the
+publication key in `credentials_files`, built both writers, and logged `worker ready` (build
+`5621367`). B3's probe printed `wrote`, then `already_identical`, and the object is publicly served
+(HTTP 200).
+
 **Rollback, before phase C only:** restore `replication-aliases.json.bak-pre-cutover` and restart.
 `primary` then writes to the old bucket as the worker's own identity again, which works only while
 phase C's revocations have not been made.
@@ -133,7 +146,10 @@ gcloud storage buckets remove-iam-policy-binding gs://co-gcs-replication \
   --member=serviceAccount:$W --role=roles/storage.objectCreator
 gcloud storage buckets remove-iam-policy-binding gs://co-gcs-replication \
   --member=serviceAccount:co-gcs-replicator@co-gcs.iam.gserviceaccount.com --role=roles/storage.objectCreator
-# ...and any other serviceAccount member holding objectCreator, objectUser or objectAdmin there.
+# co-gcs-cli-writer also holds objectCreator (and objectViewer) here, and no repo names it.
+# Revoke it only once whatever uses it is known to be gone or moved:
+#   gcloud storage buckets remove-iam-policy-binding gs://co-gcs-replication \
+#     --member=serviceAccount:co-gcs-cli-writer@co-gcs.iam.gserviceaccount.com --role=roles/storage.objectCreator
 
 gcloud storage rm gs://co-gcs-publication/_cutover-probe/2026-09-25.txt
 

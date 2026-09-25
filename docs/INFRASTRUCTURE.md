@@ -174,15 +174,15 @@ only in code. Design: [the plan](plans/2026-09-25-content-addressed-persist-and-
 | `co-gcs-blobs` | temp tier (above) | `co-gcs-replicator-writer` | the custom temp role: create, get, list, update | `co-gcs-test-blobs` |
 | `co-gcs-replicator` | permanent content-addressed store, private, public access prevented, 7-day soft delete, no lifecycle | `co-gcs-replicator-writer` | `objectCreator` + `objectViewer`: create, get, list, never update or delete | `co-gcs-test-replicator` |
 | `co-gcs-publication` | public citable copies (`allUsers` read) | `co-gcs-publication-writer` | `objectCreator` | `co-gcs-test-publication` |
-| `co-gcs-replication` | legacy public bucket, frozen at the publication cutover | none after the cutover; until then `co-gcs-replicator-writer` holds an **interim** `objectCreator` | — | `co-gcs-test-replication` |
+| `co-gcs-replication` | legacy public bucket; publication left it at the cutover (2026-09-25) | no Replicator identity once the [cutover runbook](plans/2026-09-25-publication-cutover-runbook.md)'s phase C revokes the interim grant; `co-gcs-cli-writer`, which no repo names, also held `objectCreator` there | — | `co-gcs-test-replication` |
 
 The test twins are prevented from public access, have soft delete off and a 1-day age rule, and
 grant `objectAdmin` to `co-gcs-test-replicator-writer` only.
 
 The worker runs as `co-gcs-replicator-writer` (`/etc/replicator/co-gcs-replicator-writer.json`,
 its ADC). It reads `co-gcs-replicator` when `REPLICATOR_PERMANENT_BUCKET` names it. The publication
-writer's key is minted at the cutover and named by the `gcs-publication` alias's `credentials_file`
-([ENVIRONMENT.md](ENVIRONMENT.md)). `co-gcs-replicator` grants `objectViewer` only to identities that
+writer's key, `/etc/replicator/co-gcs-publication-writer.json`, was minted at the cutover and is named
+by the `credentials_file` of both publication aliases ([ENVIRONMENT.md](ENVIRONMENT.md)). `co-gcs-replicator` grants `objectViewer` only to identities that
 open its bytes; Archiver passes references through and needs none.
 
 ## The GCS test bucket — the opposite grant, on purpose (#38, #50)
