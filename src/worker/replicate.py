@@ -428,7 +428,10 @@ def build_replicate_handler(
             source = await asyncio.to_thread(
                 locate_blob, command.blob_uri, store=store, permanent=permanent_stores
             )
-        except PermanentReplicateError:
+        except (PermanentReplicateError, ValueError, TypeError, AttributeError, LookupError):
+            # A refusal is already classified; the rest are defects on this side
+            # of the seam, left to the delivery ceiling like ``_write``'s
+            # ``ValueError`` (CR 7) — classified transient, they retried forever.
             raise
         except Exception as exc:
             # The existence check is a network call on the object store — and on

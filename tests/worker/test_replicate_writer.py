@@ -774,3 +774,21 @@ async def test_a_terminal_failure_locating_the_source_is_left_to_the_ceiling(tmp
 
     with pytest.raises(gexc.Forbidden):
         await handler_for(store, FakeGcs())(command(store.uri_for(FINGERPRINT)))
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(TypeError("a defect"), id="TypeError"),
+        pytest.param(AttributeError("a defect"), id="AttributeError"),
+        pytest.param(ValueError("not a fingerprint"), id="ValueError"),
+    ],
+)
+async def test_a_defect_locating_the_source_is_left_to_the_ceiling(tmp_path, error):
+    """CR 7: a bug on this side of the seam is not an outage. Classified transient, it
+    retried forever and published nothing; unclassified, the delivery ceiling turns
+    it into a `handler_error` fact — the rule `_write` keeps for `ValueError`."""
+    store = UnreachableStore(tmp_path, error)
+
+    with pytest.raises(type(error)):
+        await handler_for(store, FakeGcs())(command(store.uri_for(FINGERPRINT)))
