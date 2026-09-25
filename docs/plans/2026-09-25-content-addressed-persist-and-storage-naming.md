@@ -106,10 +106,13 @@ Archiver's RepSpecs move to `gcs-publication` in the publication cutover.
      against the shared pattern, and migrate RepSpecs from `primary` to `gcs-publication`.
 
    **Done 2026-09-25:** CannObserv/cannobserv#493, CannObserv/watcher#329, CannObserv/archiver#276.
-2. **Identities (operator).** Create `co-gcs-replicator-writer` and `co-gcs-publication-writer`.
-   Grant the first the temp role on `co-gcs-blobs`. Give the worker the new key as its default
-   credentials, restart, and verify a live store. Done when the old account is disabled with no
-   errors in the journal.
+2. **Identities (operator).** Create `co-gcs-replicator-writer`, `co-gcs-publication-writer` and
+   `co-gcs-test-replicator-writer`. Grant the first the temp role on `co-gcs-blobs`, **plus an
+   interim `objectCreator` on `co-gcs-replication`**: until step 4 hands publication to its own
+   identity, the worker's one identity still writes it. Give the worker the new key as its default
+   credentials, restart, and verify a live store. A repo change switches CI's `gcs` job to the new
+   test identity once it exists. Done when a day of the journal shows no permission errors and the
+   old accounts are disabled. Commands: [the operator runbook](2026-09-25-persist-by-digest-operator-runbook.md).
 3. **Buckets (operator).**
    - Create `co-gcs-replicator`: private, uniform bucket-level access, no lifecycle rule, default
      soft delete.
@@ -121,9 +124,9 @@ Archiver's RepSpecs move to `gcs-publication` in the publication cutover.
      bytes.
 
    Done when `testIamPermissions` shows the grant table above, identity by identity.
-4. **Publication cutover.** Bind `gcs-publication`, and `primary` for the transition, to
+4. **Publication cutover**, which needs step 5's per-alias `credentials_file` merged first. Bind `gcs-publication`, and `primary` for the transition, to
    `co-gcs-publication` with the publication writer's `credentials_file`. Revoke every write on
-   `co-gcs-replication`. Done when the next `replication_complete` names the new bucket, and a
+   `co-gcs-replication`, including step 2's interim grant. Done when the next `replication_complete` names the new bucket, and a
    write to the old bucket is refused. `primary` is removed once Archiver's RepSpecs no longer name
    it.
 5. **Replicator code, test-first** (no wire change):
