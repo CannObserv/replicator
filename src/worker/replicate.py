@@ -622,7 +622,10 @@ async def _write(
 
 
 def _classify_source_failure(exc: Exception) -> Exception:
-    """A failure reading the blob out of temp storage (CR #3).
+    """A failure reaching the blob in whichever store holds it (CR #3).
+
+    Two callers: the read in ``_write``, and the handler's existence check through
+    ``locate_blob`` (CR 1) — either store, temp or permanent (#114).
 
     **Only the transient half is claimed**, matching the byte path's
     ``_in_store``. 5xx, 408/429 and anything with no status stay open — the retry
