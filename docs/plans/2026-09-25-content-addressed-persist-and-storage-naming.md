@@ -52,6 +52,26 @@ alias binding gains an optional `credentials_file`, a host path read at boot. Th
 weakening it: credentials still resolve locally and never travel. The old `co-gcs-replicator`
 account is retired once the new identities are live.
 
+**Alias naming becomes a rule with enforcement.** After this change, aliases exist only for
+publication destinations. Persist names no alias: the permanent store is host configuration, like
+the temp store. The rule:
+
+- **Name shape.** An alias is `<provider>-<role>`, matching `^(gcs|gdrive|ia)-[a-z][a-z0-9-]*$`,
+  for example `gcs-publication`.
+- **Replicator refuses a mismatched binding at load.** It refuses a provider prefix that differs
+  from the binding's provider. For `gcs` it also refuses any bucket other than `co-gcs-<role>` or
+  its test twin `co-gcs-test-<role>`. The name then determines the bucket, so a typo can no longer
+  bind the public bucket under a private name or the reverse.
+- **One shared pattern.** co-core exports the pattern, so Archiver's RepSpec schema validates
+  `credentials_alias` against the same definition and a bad name fails when the RepSpec is saved.
+- **The replicate contract lists the cluster's aliases** and what each binds. Names are selectors,
+  not secrets (T1), so listing them costs nothing.
+- **Adding an alias takes three acts in one change:** the host binding (operator), the contract
+  row, and the RepSpec that uses it.
+
+`primary` is the one legacy name. It stays accepted, on an allowlist with an expiry, until
+Archiver's RepSpecs move to `gcs-publication` in the publication cutover.
+
 ## Tradeoffs / alternatives
 
 - **Persist as a replicate alias (#114 item 2 as filed).** Rejected. It needs a destination the
@@ -75,10 +95,15 @@ account is retired once the new identities are live.
 
 1. **Settle this plan**, then file the cross-repo issues it needs. Each names the step it unblocks.
    - **cannobserv:** add `ContentPersistCommand`, `BlobPersistedEvent`, `PersistFailedEvent` and the
-     stream constants. The outcomes go on `content.artifacts`; see the open questions.
-   - **Watcher:** forward the raw-bytes digest on `SourceRevisionObservedEvent`.
-   - **Archiver:** store the digest, issue persists, persist before publishing, and send the
-     permanent URI for publication.
+     stream constants. Recommend putting the outcomes on `content.artifacts`; the placement is
+     co-core's decision. Also export the shared alias-name pattern.
+   - **Watcher:** forward the raw-bytes digest on `SourceRevisionObservedEvent`. Watcher does not
+     read the permanent store: #222's diffs run over Observo's canonical text, stored by hash in
+     Observo's own store.
+   - **Archiver:** store the digest, and issue a persist for every observed revision. Which
+     revisions to persist is Archiver's decision; every one is the working assumption. Persist
+     before publishing, send the permanent URI for publication, validate `credentials_alias`
+     against the shared pattern, and migrate RepSpecs from `primary` to `gcs-publication`.
 
    Done when each issue exists and links here.
 2. **Identities (operator).** Create `co-gcs-replicator-writer` and `co-gcs-publication-writer`.
@@ -93,11 +118,15 @@ account is retired once the new identities are live.
    - Add `objectViewer` for Archiver's and Observo's service accounts on `co-gcs-replicator`.
 
    Done when `testIamPermissions` shows the grant table above, identity by identity.
-4. **Publication cutover.** Point the production alias at `co-gcs-publication` with the publication
-   writer's `credentials_file`, and revoke every write on `co-gcs-replication`. Done when the next
-   `replication_complete` names the new bucket, and a write to the old bucket is refused.
+4. **Publication cutover.** Bind `gcs-publication`, and `primary` for the transition, to
+   `co-gcs-publication` with the publication writer's `credentials_file`. Revoke every write on
+   `co-gcs-replication`. Done when the next `replication_complete` names the new bucket, and a
+   write to the old bucket is refused. `primary` is removed once Archiver's RepSpecs no longer name
+   it.
 5. **Replicator code, test-first** (no wire change):
    - The alias `credentials_file`, with the T1 edit to the contract.
+   - The alias naming rule enforced at load, with the `primary` allowlist and its expiry, plus the
+     contract's alias list.
    - A content-addressed store per permanent alias, built with touch off and preflighted at boot.
    - `locate_blob` resolves temp first, then each permanent store, behind the T3a gate.
    - The additive MUST-7 relaxation in the replicate contract.
@@ -110,21 +139,26 @@ account is retired once the new identities are live.
 7. **Archiver and Watcher changes land in their repos.** Done when one real revision is persisted,
    then published from the permanent URI after its temp blob has expired.
 
+## Decisions (2026-09-25)
+
+- **Persist outcomes go on `content.artifacts`.** That is the recommendation; the final placement is
+  co-core's call.
+- **Archiver persists every observed revision** as the working assumption. The policy is Archiver's.
+- **Alias naming becomes a rule with enforcement now**, as described under Approach.
+- **Watcher gets no permanent-store grant.** Watcher#222's redesign diffs Observo-derived canonical
+  text read from Observo's store by hash, not raw blobs. The only Replicator dependency on that
+  path is Observo's extraction reading the raw blob from the temp store, which the 7-day window
+  already covers.
+- **`co-gcs-replicator` keeps GCS's default 7-day soft delete** as the operator's undo.
+- **The test identity is renamed** from `co-gcs-test-replicator` to `co-gcs-test-replicator-writer`
+  in step 2, so the bucket's test twin can take the name. CI's workload-identity binding moves with
+  it.
+
 ## Open questions / risks
 
-- **Stream placement.** The recommendation is to put persist outcomes on `content.artifacts` beside
-  replicate's, since Archiver already consumes both there. The alternative is `content.blobs`,
-  which is about blobs but is Watcher's stream. This is co-core's call to make.
-- **Which revisions Archiver persists.** Every observed revision, or only those with a RepSpec
-  assignment? This is policy and belongs to Archiver, but it sizes the bucket.
-- **Alias names are data in Archiver's RepSpec documents.** Archiver's docs use names like
-  `gcs-cannobserv-prod`, but production's alias table binds `primary`. Rebinding keeps the name;
-  renaming it is a RepSpec data change coordinated with Archiver.
-- **Watcher needs no permanent-store grant today.** It never re-reads old bytes, because its diff
-  pipeline is gone. Add the grant if diffs return.
-- **Soft delete on `co-gcs-replicator`.** Keep the default 7 days as the operator's undo for an
-  accidental delete, or clear it, since writers hold no delete anyway? The recommendation is to keep
-  it.
-- **`co-gcs-test-replicator` is today's test identity's name.** Rename that identity to
-  `co-gcs-test-replicator-writer` in step 2, so the bucket twin can take the name. CI's
-  workload-identity binding moves with it.
+- **The allowlist expiry for `primary`.** It depends on when Archiver migrates its RepSpecs. The
+  expiry should fail loudly at boot, not silently drop the alias.
+- **Existing RepSpec data may carry other alias names** that production never bound. Archiver's
+  docs mention `gcs-cannobserv-prod`, `ia-cannobserv` and others. The shared pattern would reject
+  any stored RepSpec that doesn't match, so Archiver needs a data audit before it enforces the
+  pattern.
