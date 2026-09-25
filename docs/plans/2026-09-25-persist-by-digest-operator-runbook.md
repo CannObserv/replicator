@@ -1,7 +1,7 @@
 ---
 title: Operator runbook for Persist by digest, steps 2 and 3 — identities and buckets
 date: 2026-09-25
-status: ready to run
+status: phases A and B done 2026-09-25; C next
 plan: 2026-09-25-content-addressed-persist-and-storage-naming.md
 ---
 
@@ -82,6 +82,14 @@ for b in ['co-gcs-blobs', 'co-gcs-replication']:
 A repo change lands alongside phase B, merged only once phase A exists. It switches CI's `gcs` job
 to `co-gcs-test-replicator-writer` and renames the key path in the docs. The
 `REPLICATOR_TEST_GCS_CREDENTIALS` path in the test commands changes the same way.
+
+**Done 2026-09-25.** Before the switch, `testIamPermissions` from each key file matched the plan:
+the worker identity had `create, get, list, update` on `co-gcs-blobs` and `create, get, list` on
+`co-gcs-replication`. The `get` and `list` there come from `allUsers`. The test identity had all five
+on both test buckets and no write on production. The worker restarted at 15:50 UTC as
+`co-gcs-replicator-writer` (checked in `/proc/<pid>/environ`), and its boot preflight listed
+`co-gcs-blobs`. The prior `.env` is at `/etc/replicator/.env.bak-pre-writer`. CI's `gcs` job passed on
+the new identity (run 36157674876). It now also runs the 7 temp-store rows that had skipped since #7.
 
 ## Phase C — buckets (workstation)
 

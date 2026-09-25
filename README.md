@@ -104,7 +104,7 @@ rather than deleting bytes a consumer was promised.
 
 | Variable | Set on this VM | Purpose |
 |---|---|---|
-| `GOOGLE_APPLICATION_CREDENTIALS` | `/etc/replicator/co-gcs-replicator.json` | The worker's ADC — the replication writer SA (`co-gcs-replicator@co-gcs`), never the wheelhouse reader |
+| `GOOGLE_APPLICATION_CREDENTIALS` | `/etc/replicator/co-gcs-replicator-writer.json` | The worker's ADC — the writer SA (`co-gcs-replicator-writer@co-gcs`, #114), never the wheelhouse reader |
 | `REPLICATOR_WHEELHOUSE_CREDENTIALS` | `/etc/replicator/co-pypi-reader.json` | Read-only key for the wheelhouse mirror, so the boot step never holds the writer |
 | `REPLICATOR_REDIS_URL` | `redis://replicator:<password>@broker:6379/0` | Change-bus client URL — the `replicator` ACL user on `co-broker`, over the tailnet |
 | `REPLICATOR_BLOB_BACKEND` | `gcs` | Temp blobs live in an object store — **not** the `local` default |

@@ -247,7 +247,7 @@ docs/COMMANDS.md :: place ([DEPLOYMENT.md](DEPLOYMENT.md)) — it does not remov
 docs/CONVENTIONS.md :: - **A consumer *group's* name is co-core's to define, and both defaults derive it (#77, cannobserv#384).** `<service>.<s
 docs/ENVIRONMENT.md :: and the unit itself are in [DEPLOYMENT.md](DEPLOYMENT.md).
 docs/INFRASTRUCTURE.md :: [DEPLOYMENT.md](DEPLOYMENT.md); what it reports when it fails is in
-.github/workflows/ci.yml :: echo "::error::WIF auth produced no credentials file for co-gcs-test-replicator. The gcs tests would skip, not fail. Che
+.github/workflows/ci.yml :: echo "::error::WIF auth produced no credentials file for co-gcs-test-replicator-writer. The gcs tests would skip, not fail. Che
 .socraticodecontextartifacts.json :: "description": "Top-level README. What Replicator is within the Cannabis Observer cluster: the command -> fetch -> finge
 .socraticodecontextartifacts.json :: "description": "Where this service runs and what it talks to, as opposed to how its unit starts (docs/DEPLOYMENT.md): th
 .socraticodecontextartifacts.json :: "path": "./docs/DEPLOYMENT.md",
