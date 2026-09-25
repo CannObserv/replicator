@@ -195,7 +195,7 @@ Provisioned 2026-08-18 in project `co-gcs`:
 |---|---|
 | Bucket | `gs://co-gcs-test-replication` |
 | Service account | `co-gcs-test-replicator-writer@co-gcs.iam.gserviceaccount.com` (replaced `co-gcs-test-replicator` in #114) |
-| Grant | `roles/storage.objectAdmin` on that bucket **only** |
+| Grant | `roles/storage.objectAdmin` on the test buckets **only**: this one, `co-gcs-test-blobs` (#7), and the #114 twins `co-gcs-test-replicator` and `co-gcs-test-publication`. No write anywhere in production (verified 2026-09-25, [runbook](plans/2026-09-25-persist-by-digest-operator-runbook.md) phase D) |
 | Key on the VM | `/etc/replicator/co-gcs-test-replicator-writer.json` (`root:exedev`, `0640`) |
 | CI identity | the same SA, keyless, via `principalSet://iam.googleapis.com/projects/912903030445/locations/global/workloadIdentityPools/github/attribute.repository/CannObserv/replicator` |
 
