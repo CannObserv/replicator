@@ -3,9 +3,12 @@
 ``credentials_alias`` on a ``content.replicate`` command is a **selector, not a
 secret** (contract T1). It names a binding that exists here or it names nothing,
 and the binding says *where* bytes may land — a bucket, a prefix, later a folder
-id or an identifier prefix. It never says how to authenticate: every provider
-resolves its credential locally, from ADC or host config, so there is nowhere in
-this module to put one and nothing here reads one.
+id or an identifier prefix. Every provider resolves its credential locally, from
+ADC or host config, and nothing here reads one. Since #114 a binding may say
+*which* local key its writer loads — ``credentials_file``, a host path — so the
+public and private buckets can sit behind different identities. That is a
+pointer to host state, not key material, and ``_why_unusable`` refuses anything
+that is not an absolute path, so a pasted key is dropped rather than carried.
 
 **Why a file rather than settings fields.** The provisioned set is a fact about
 this host, which puts it in the env channel of the charter's config taxonomy —
@@ -80,6 +83,10 @@ class AliasBinding:
     provider: str
     bucket: str = ""
     prefix: str = ""
+    # A host path to a service-account key, or "" for the host's ADC (#114). The
+    # path, never the key: ``main.build_writers`` loads it at boot, and a value
+    # that is not an absolute path is refused at load (see ``_why_unusable``).
+    credentials_file: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,7 +198,17 @@ def load_alias_table(path: Path | None) -> AliasTable:
     table = AliasTable(MappingProxyType(bindings))
     logger.info(
         "alias table loaded",
-        extra={"path": str(path), "provisioned": list(table.provisioned)},
+        extra={
+            "path": str(path),
+            "provisioned": list(table.provisioned),
+            # Which bindings write as their own identity rather than ADC — what an
+            # operator checks at the publication cutover (#114). Paths only.
+            "credentials_files": {
+                alias: binding.credentials_file
+                for alias, binding in sorted(bindings.items())
+                if binding.credentials_file
+            },
+        },
     )
     return table
 
@@ -211,6 +228,7 @@ def _binding_or_none(alias: str, entry: Any) -> AliasBinding | None:
         provider=entry["provider"],
         bucket=str(entry.get("bucket", "")),
         prefix=str(entry.get("prefix", "")).strip("/"),
+        credentials_file=entry.get("credentials_file", ""),
     )
 
 
@@ -229,4 +247,10 @@ def _why_unusable(alias: str, entry: Any) -> str | None:
         # The bucket *is* the root. Without it there is no containment check to
         # run, and a binding that cannot bound anything is worse than absent.
         return "a gcs binding needs a bucket"
+    if "credentials_file" in entry:
+        value = entry["credentials_file"]
+        # The rule, never the value: the likeliest wrong value is a pasted key,
+        # and quoting it back would put the key in the journal.
+        if not isinstance(value, str) or not value.startswith("/"):
+            return "credentials_file must be an absolute host path to a key file"
     return None

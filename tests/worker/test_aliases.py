@@ -294,3 +294,79 @@ def _write(tmp_path, text: str):
     path = tmp_path / "aliases.json"
     path.write_text(text)
     return path
+
+
+def test_a_binding_may_name_a_credentials_file(tmp_path):
+    """The one per-alias identity knob (#114): a host *path*, never key material.
+
+    Splitting the writer identities puts public and private buckets behind
+    different service accounts, so a binding has to say which key its writer
+    loads. It says so by path, read at boot like the default ADC key, so T1 holds
+    as written: nothing about the credential comes off the message, and the key
+    itself never enters this object.
+    """
+    entry = {**GCS, "credentials_file": "/etc/replicator/co-gcs-publication-writer.json"}
+
+    binding = load_alias_table(write_aliases(tmp_path, {"primary": entry})).resolve("primary")
+
+    assert binding.credentials_file == "/etc/replicator/co-gcs-publication-writer.json"
+
+
+def test_a_binding_without_a_credentials_file_writes_as_the_host_default(tmp_path):
+    """Absent means ADC: `GOOGLE_APPLICATION_CREDENTIALS`, as every binding did before #114."""
+    binding = load_alias_table(write_aliases(tmp_path, {"primary": GCS})).resolve("primary")
+
+    assert binding.credentials_file == ""
+
+
+PASTED_KEY = '{"type": "service_account", "private_key": "-----BEGIN PRIVATE KEY-----"}'
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param("keys/publication.json", id="relative"),
+        pytest.param("", id="empty"),
+        pytest.param(42, id="not-a-string"),
+        pytest.param(PASTED_KEY, id="a-pasted-key"),
+    ],
+)
+def test_a_credentials_file_that_is_not_an_absolute_path_drops_the_binding(tmp_path, caplog, value):
+    """Refused rather than resolved against the worker's cwd, which is the repo.
+
+    A relative path would load whatever key happened to sit beside the checkout,
+    and a pasted key is the mistake the field's name invites. Either way the
+    binding refuses like an alias nobody wrote — a writer built on the default
+    identity instead would put the wrong account behind a public bucket, which
+    is the boundary the split exists for.
+    """
+    path = write_aliases(tmp_path, {"good": GCS, "bad": {**GCS, "credentials_file": value}})
+
+    with caplog.at_level("WARNING", logger="src.worker.aliases"):
+        table = load_alias_table(path)
+
+    assert table.provisioned == ("good",)
+    assert any(r.message == "ignoring an unusable alias binding" for r in caplog.records)
+
+
+def test_a_pasted_key_never_reaches_the_journal(tmp_path, caplog):
+    """The refusal names the rule, not the value: quoting it back would log the key."""
+    path = write_aliases(tmp_path, {"bad": {**GCS, "credentials_file": PASTED_KEY}})
+
+    with caplog.at_level("DEBUG", logger="src.worker.aliases"):
+        load_alias_table(path)
+
+    assert caplog.records
+    assert not any("PRIVATE KEY" in str(vars(r)) for r in caplog.records)
+
+
+def test_the_boot_line_says_which_bindings_load_their_own_key(tmp_path, caplog):
+    """What an operator checks at the publication cutover: which key each alias writes as."""
+    entry = {**GCS, "credentials_file": "/etc/replicator/co-gcs-publication-writer.json"}
+    path = write_aliases(tmp_path, {"own-key": entry, "default": GCS})
+
+    with caplog.at_level("INFO", logger="src.worker.aliases"):
+        load_alias_table(path)
+
+    (record,) = [r for r in caplog.records if r.message == "alias table loaded"]
+    assert record.credentials_files == {"own-key": "/etc/replicator/co-gcs-publication-writer.json"}

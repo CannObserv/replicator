@@ -27,6 +27,7 @@ from co_core_aio.bus import AsyncBusConsumer
 from co_core_aio.fetch import AsyncFetchDriver
 from co_core_aio.gcs import AsyncGcsDriver
 from co_core_sync.drivers.blobstore import GcsBlobStore, LocalBlobStore, ensure_directory
+from google.oauth2 import service_account
 from redis.asyncio import Redis
 
 from src.core.bus_client import build_bus_client
@@ -293,6 +294,16 @@ def build_consumer(
     )
 
 
+def load_credentials(path: str) -> object:
+    """The service-account identity a binding's ``credentials_file`` names (#114).
+
+    Read at boot, beside the default ADC resolution the other writers do, so a
+    key file is opened here and nowhere on the consume path. The storage client
+    scopes these credentials itself, so none are asked for here.
+    """
+    return service_account.Credentials.from_service_account_file(path)
+
+
 def build_writers(aliases: AliasTable) -> dict[str, AsyncGcsDriver]:
     """One provider writer per provisioned binding, keyed **by alias** (#29).
 
@@ -352,13 +363,22 @@ def build_writers(aliases: AliasTable) -> dict[str, AsyncGcsDriver]:
             )
             continue
         try:
-            writers[alias] = AsyncGcsDriver(binding.bucket)
+            # Its own identity if the binding names one, else ADC (#114). A key
+            # that will not load skips the writer like any unbuildable driver —
+            # never a fallback to ADC, which would put the worker's account
+            # behind the bucket this binding asked to keep it away from.
+            if binding.credentials_file:
+                credentials = load_credentials(binding.credentials_file)
+                writers[alias] = AsyncGcsDriver(binding.bucket, credentials=credentials)
+            else:
+                writers[alias] = AsyncGcsDriver(binding.bucket)
         except Exception as exc:
             logger.error(
                 "could not build a provider writer — this alias will be refused",
                 extra={
                     "alias": alias,
                     "provider": binding.provider,
+                    "credentials_file": binding.credentials_file,
                     "error": f"{type(exc).__name__}: {exc}",
                     "detail": "commands naming it are refused provider_disabled",
                 },

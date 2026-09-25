@@ -42,6 +42,7 @@ class StubDriver:
 
     def __init__(self, bucket, **kwargs):
         self.bucket = bucket
+        self.kwargs = kwargs
         self.closed = False
         StubDriver.built.append(self)
 
@@ -326,3 +327,56 @@ async def test_an_accepted_checkout_is_asked_once_for_the_whole_table(monkeypatc
 
     assert sorted(writers) == ["private", "public"]
     assert asked == [True]
+
+
+def test_a_binding_with_a_credentials_file_writes_as_that_identity(monkeypatch):
+    """The split identity (#114): the publication alias's writer is built on its own key.
+
+    The other binding keeps ADC, and gets no ``credentials=`` at all rather than a
+    ``None`` — the driver refuses ``client=`` beside ``credentials=``, and a
+    default-identity writer should be built exactly as it was before #114.
+    """
+    loaded: list[str] = []
+    monkeypatch.setattr("src.worker.main.checkout_refusal", lambda: None)
+    monkeypatch.setattr("src.worker.main.AsyncGcsDriver", StubDriver)
+    monkeypatch.setattr(
+        "src.worker.main.load_credentials", lambda path: loaded.append(path) or f"key:{path}"
+    )
+    table = AliasTable(
+        {
+            "own-key": AliasBinding(provider="gcs", bucket="b1", credentials_file="/k/pub.json"),
+            "default": AliasBinding(provider="gcs", bucket="b2"),
+        }
+    )
+
+    writers = build_writers(table)
+
+    assert loaded == ["/k/pub.json"]
+    assert writers["own-key"].kwargs == {"credentials": "key:/k/pub.json"}
+    assert writers["default"].kwargs == {}
+
+
+def test_a_credentials_file_that_cannot_be_loaded_withholds_that_writer(monkeypatch, caplog):
+    """Skipped like any unbuildable driver, and never replaced by the default identity.
+
+    Falling back to ADC would put the worker's account behind the bucket this
+    binding asked to keep it away from, which is the boundary the split exists for.
+    The real loader runs here, against a path with nothing behind it.
+    """
+    monkeypatch.setattr("src.worker.main.checkout_refusal", lambda: None)
+    monkeypatch.setattr("src.worker.main.AsyncGcsDriver", StubDriver)
+    table = AliasTable(
+        {
+            "own-key": AliasBinding(provider="gcs", bucket="b1", credentials_file="/nope/k.json"),
+            "default": AliasBinding(provider="gcs", bucket="b2"),
+        }
+    )
+
+    with caplog.at_level("ERROR", logger="src.worker.main"):
+        writers = build_writers(table)
+
+    assert set(writers) == {"default"}
+    assert [b.bucket for b in StubDriver.built] == ["b2"]
+    (record,) = [r for r in caplog.records if "could not build a provider writer" in r.message]
+    assert record.alias == "own-key"
+    assert record.credentials_file == "/nope/k.json"
