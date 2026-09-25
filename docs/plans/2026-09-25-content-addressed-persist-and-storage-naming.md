@@ -1,7 +1,7 @@
 ---
 title: Persist by digest — a content-addressed permanent store, hash as the address, and one naming scheme for buckets and identities
 date: 2026-09-25
-status: draft
+status: approved 2026-09-25
 issue: "#114 (items 2 and 3)"
 ---
 
@@ -105,7 +105,7 @@ Archiver's RepSpecs move to `gcs-publication` in the publication cutover.
      before publishing, send the permanent URI for publication, validate `credentials_alias`
      against the shared pattern, and migrate RepSpecs from `primary` to `gcs-publication`.
 
-   Done when each issue exists and links here.
+   **Done 2026-09-25:** CannObserv/cannobserv#493, CannObserv/watcher#329, CannObserv/archiver#276.
 2. **Identities (operator).** Create `co-gcs-replicator-writer` and `co-gcs-publication-writer`.
    Grant the first the temp role on `co-gcs-blobs`. Give the worker the new key as its default
    credentials, restart, and verify a live store. Done when the old account is disabled with no
@@ -115,7 +115,10 @@ Archiver's RepSpecs move to `gcs-publication` in the publication cutover.
      soft delete.
    - Create `co-gcs-publication`: `allUsers` read, matching the old bucket.
    - Create both test twins, with `test` infixed.
-   - Add `objectViewer` for Archiver's and Observo's service accounts on `co-gcs-replicator`.
+   - Add `objectViewer` on `co-gcs-replicator` only for identities that open bytes. Archiver needs
+     none: it never opens a blob and only passes the reference through
+     (`replication_issuance.py:15-16`). Observo gets one only if its extraction ever re-reads persisted
+     bytes.
 
    Done when `testIamPermissions` shows the grant table above, identity by identity.
 4. **Publication cutover.** Bind `gcs-publication`, and `primary` for the transition, to
