@@ -92,16 +92,6 @@ class Settings(BaseSettings):
     # lifecycle rule, separate grant.
     blob_bucket: str = Field(default="", validation_alias="REPLICATOR_BLOB_BUCKET")
 
-    # The permanent content-addressed store (#114): ``gs://<bucket>/blobs/<sha256>.bin``,
-    # a second source the replicate handler may read a ``blob_uri`` from, so a
-    # publication can follow a persist weeks after the fetch. Empty reads no
-    # permanent store. Host configuration rather than an alias, like the temp
-    # bucket, and read under **any** backend: persisted bytes live in GCS either
-    # way. The prefix is the store's default on purpose — readers derive the
-    # location with co-core's ``gcs_uri(bucket, digest)``, whose default it is too,
-    # and a second knob would be a second place for the two to disagree.
-    permanent_bucket: str = Field(default="", validation_alias="REPLICATOR_PERMANENT_BUCKET")
-
     # Key prefix inside that bucket. Normalized to carry no leading or trailing
     # slash, because it is joined into an object key and a stray one produces
     # either ``//`` or a key rooted somewhere ``uri_for`` would not derive — and
@@ -109,6 +99,16 @@ class Settings(BaseSettings):
     # against (T3a). A prefix that round-trips differently through the two is a
     # refusal of a blob this store really did mint.
     blob_prefix: str = Field(default="blobs", validation_alias="REPLICATOR_BLOB_PREFIX")
+
+    # The permanent content-addressed store (#114): ``gs://<bucket>/blobs/<sha256>.bin``,
+    # a second source the replicate handler may read a ``blob_uri`` from, so a
+    # publication can follow a persist weeks after the fetch. Empty reads no
+    # permanent store. Host configuration rather than an alias, like the temp
+    # bucket, and read under **any** backend: persisted bytes live in GCS either
+    # way. Its prefix is the store's default, not ``blob_prefix``, on purpose:
+    # readers derive the location with co-core's ``gcs_uri(bucket, digest)``, whose
+    # default it is too, and a second knob would be a second place to disagree.
+    permanent_bucket: str = Field(default="", validation_alias="REPLICATOR_PERMANENT_BUCKET")
 
     # How long one object-store operation may block before it gives up. A
     # setting rather than a constant in the store (CR #8) for the reason every
