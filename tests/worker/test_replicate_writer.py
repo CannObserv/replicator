@@ -701,3 +701,94 @@ async def test_the_success_line_reports_how_long_the_handler_took(store, blob_ur
     # microseconds or accumulated twice, and a number that reads high is exactly
     # the error that would mis-size somebody's threshold.
     assert 50 <= record.duration_ms < 5_000
+
+
+class ReadingGcs(FakeGcs):
+    """A writer that keeps the bytes it was handed, read before the handler closes them."""
+
+    def __init__(self, result):
+        super().__init__(result)
+        self.written: list[bytes] = []
+
+    async def create_if_absent(self, effect):
+        self.written.append(effect.data.read())
+        return await super().create_if_absent(effect)
+
+
+async def test_a_permanent_uri_is_replicated_from_the_permanent_store(store, tmp_path):
+    """Item 3 of #114: the source is whichever store minted the URI, and its bytes
+    are the ones written — the temp store is never asked for them."""
+    permanent = LocalBlobStore(tmp_path / "permanent")
+    persisted = permanent.store(b"persisted bytes", FINGERPRINT, "application/pdf")
+    writer = ReadingGcs(result(GcsCreateOutcome.WROTE, public_url=PUBLIC_URL, generation=1))
+    done = Completions()
+    handler = build_replicate_handler(
+        store=store,
+        permanent_stores=(permanent,),
+        aliases=AliasTable({"primary": BINDING}),
+        writers={"primary": writer},
+        complete=done,
+    )
+
+    await handler(command(persisted))
+
+    assert writer.written == [b"persisted bytes"]
+    assert len(done.facts) == 1
+
+
+class UnreachableStore(LocalBlobStore):
+    """A store whose existence check fails the way the object store's does (CR 1)."""
+
+    def __init__(self, root, error):
+        super().__init__(root)
+        self._error = error
+
+    def exists(self, fingerprint):
+        raise self._error
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(gexc.ServiceUnavailable("503 backend error"), id="503"),
+        pytest.param(gexc.TooManyRequests("429 rate limited"), id="429"),
+        pytest.param(ConnectionError("reset"), id="no-status"),
+    ],
+)
+async def test_a_transient_failure_locating_the_source_stays_open(tmp_path, error):
+    """The existence check is a network call on the object store, and on the
+    permanent store for every late publication (#114). Unclassified, a 503 burned
+    the delivery ceiling into a terminal `handler_error` — for the one issuer that
+    cannot re-fetch (archiver#175), the failure `_write` already guards against."""
+    store = UnreachableStore(tmp_path, error)
+    uri = store.uri_for(FINGERPRINT)
+
+    with pytest.raises(TransientReplicateError):
+        await handler_for(store, FakeGcs())(command(uri))
+
+
+async def test_a_terminal_failure_locating_the_source_is_left_to_the_ceiling(tmp_path):
+    """Only the transient half is claimed, as for the read (`_classify_source_failure`)."""
+    error = gexc.Forbidden("403 caller lacks storage.objects.get")
+    store = UnreachableStore(tmp_path, error)
+
+    with pytest.raises(gexc.Forbidden):
+        await handler_for(store, FakeGcs())(command(store.uri_for(FINGERPRINT)))
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(TypeError("a defect"), id="TypeError"),
+        pytest.param(AttributeError("a defect"), id="AttributeError"),
+        pytest.param(ValueError("not a fingerprint"), id="ValueError"),
+    ],
+)
+async def test_a_defect_locating_the_source_is_left_to_the_ceiling(tmp_path, error):
+    """CR 7: a bug on this side of the seam is not an outage. Classified transient, it
+    retried forever and published nothing; unclassified, the delivery ceiling turns
+    it into a `handler_error` fact — the rule `_write` keeps for `ValueError`."""
+    store = UnreachableStore(tmp_path, error)
+
+    with pytest.raises(type(error)):
+        await handler_for(store, FakeGcs())(command(store.uri_for(FINGERPRINT)))

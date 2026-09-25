@@ -44,11 +44,11 @@ makes production untestable (#38).
   wheelhouse reader `co-pypi-reader.json` stays legal, because
   `test_replicate_guards.py` names it on purpose to prove the path guard refuses
   a real secret.
-- **The fixtures** (`tests/conftest.py`, autouse). Four variables are removed from
+- **The fixtures** (`tests/conftest.py`, autouse). Five variables are removed from
   the environment of every test — `REPLICATOR_REPLICATION_ALIASES_FILE`,
-  `GOOGLE_APPLICATION_CREDENTIALS`, `REPLICATOR_BLOB_BACKEND` and
-  `REPLICATOR_BLOB_BUCKET`. The Common Commands snippet sources
-  `/etc/replicator/.env`, so `uv run pytest` inherits all four. The blob pair was
+  `GOOGLE_APPLICATION_CREDENTIALS`, `REPLICATOR_BLOB_BACKEND`,
+  `REPLICATOR_BLOB_BUCKET` and, since #114, `REPLICATOR_PERMANENT_BUCKET`. The Common
+  Commands snippet sources `/etc/replicator/.env`, so `uv run pytest` inherits all five. The blob pair was
   added in #77 CR round 2, when sourcing that file and then running this document's
   own `-m integration` command failed the policy-replay test on `constructed a real
   GcsBlobStore('co-gcs-blobs')` — the construction guard working, but only after
@@ -94,6 +94,7 @@ that also writes to a bucket changes what `-m integration` costs.
 REPLICATOR_TEST_GCS_CREDENTIALS=/etc/replicator/co-gcs-test-replicator-writer.json \
 REPLICATOR_TEST_GCS_BUCKET=co-gcs-test-replication \
 REPLICATOR_TEST_BLOB_BUCKET=co-gcs-test-blobs \
+REPLICATOR_TEST_PERMANENT_BUCKET=co-gcs-test-replicator \
   uv run pytest --no-cov -m gcs
 ```
 
@@ -129,13 +130,14 @@ ordinary unit test's blast radius does not widen to buy three tests' coverage. A
 skip there would be a green run with no verification, so the job asserts the
 credentials file resolved before it runs pytest.
 
-Three variables, **none with a default** — absent means skip, never "use
+Four variables, **none with a default** — absent means skip, never "use
 whatever the code would have picked":
 
 | Variable | What it names |
 |---|---|
 | `REPLICATOR_TEST_GCS_BUCKET` | the provisioned replicate test bucket |
 | `REPLICATOR_TEST_BLOB_BUCKET` | the temp-blob test bucket (#7); `co-gcs-test-blobs` since 2026-08-20 |
+| `REPLICATOR_TEST_PERMANENT_BUCKET` | the permanent-store test twin (#114); `co-gcs-test-replicator` |
 | `REPLICATOR_TEST_GCS_CREDENTIALS` | the test SA key; the fixture maps it onto `GOOGLE_APPLICATION_CREDENTIALS` for marked tests only |
 
 **The marked suite is the only thing that has ever caught an SDK-fidelity bug
@@ -156,7 +158,7 @@ autouse one: the two destinations are provisioned independently, and a host with
 one should still run the tests it can. A missing *identity* still skips
 everything, since nothing marked can run without it.
 
-All three are dev-only and belong in the repo `.env` or the invoking shell —
+All four are dev-only and belong in the repo `.env` or the invoking shell —
 never in `/etc/replicator/.env`, which is the file the service reads. Contrast
 `REPLICATOR_TEST_REDIS_URL`, which *does* default: localhost is never the broker,
 the broker has no db 15, and `real_redis` refuses db 0 outright. No bucket name

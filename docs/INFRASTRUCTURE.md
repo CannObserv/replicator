@@ -161,6 +161,30 @@ may outlive its rule by a day or more. That direction is safe and is stated to
 consumers as such: `blob_expires_at` becomes a floor rather than an exact
 horizon. See **Retention** in [STORAGE.md](STORAGE.md).
 
+## The permanent store, the publication bucket, and one writer each (#114)
+
+Provisioned 2026-09-25 in `co-gcs`, all in `US-WEST1`, by
+[the operator runbook](plans/2026-09-25-persist-by-digest-operator-runbook.md), which records what
+was verified. Buckets are named per service or role, and each has its own writer identity: a private
+blob written into a public bucket is a disclosure, so the public/private line is drawn at IAM, not
+only in code. Design: [the plan](plans/2026-09-25-content-addressed-persist-and-storage-naming.md).
+
+| Bucket | Role | Writer | Its grants | Test twin |
+|---|---|---|---|---|
+| `co-gcs-blobs` | temp tier (above) | `co-gcs-replicator-writer` | the custom temp role: create, get, list, update | `co-gcs-test-blobs` |
+| `co-gcs-replicator` | permanent content-addressed store, private, public access prevented, 7-day soft delete, no lifecycle | `co-gcs-replicator-writer` | `objectCreator` + `objectViewer`: create, get, list, never update or delete | `co-gcs-test-replicator` |
+| `co-gcs-publication` | public citable copies (`allUsers` read) | `co-gcs-publication-writer` | `objectCreator` | `co-gcs-test-publication` |
+| `co-gcs-replication` | legacy public bucket, frozen at the publication cutover | none after the cutover; until then `co-gcs-replicator-writer` holds an **interim** `objectCreator` | — | `co-gcs-test-replication` |
+
+The test twins are prevented from public access, have soft delete off and a 1-day age rule, and
+grant `objectAdmin` to `co-gcs-test-replicator-writer` only.
+
+The worker runs as `co-gcs-replicator-writer` (`/etc/replicator/co-gcs-replicator-writer.json`,
+its ADC). It reads `co-gcs-replicator` when `REPLICATOR_PERMANENT_BUCKET` names it. The publication
+writer's key is minted at the cutover and named by the `gcs-publication` alias's `credentials_file`
+([ENVIRONMENT.md](ENVIRONMENT.md)). `co-gcs-replicator` grants `objectViewer` only to identities that
+open its bytes; Archiver passes references through and needs none.
+
 ## The GCS test bucket — the opposite grant, on purpose (#38, #50)
 
 Production `co-gcs-replication` can never be a test target. Its writer holds `storage.objects.{create,get,list}` and **no `delete`, no `update`** — the property that enforces T4's "never overwrite, never delete" at IAM rather than only in our code, and therefore the property that makes a conflict fixture unable to reset itself. Every verification run against it would be permanent litter, which is why the hand-run T4 e2e was never committed as a test.
@@ -171,7 +195,7 @@ Provisioned 2026-08-18 in project `co-gcs`:
 |---|---|
 | Bucket | `gs://co-gcs-test-replication` |
 | Service account | `co-gcs-test-replicator-writer@co-gcs.iam.gserviceaccount.com` (replaced `co-gcs-test-replicator` in #114) |
-| Grant | `roles/storage.objectAdmin` on that bucket **only** |
+| Grant | `roles/storage.objectAdmin` on the test buckets **only**: this one, `co-gcs-test-blobs` (#7), and the #114 twins `co-gcs-test-replicator` and `co-gcs-test-publication`. No write anywhere in production (verified 2026-09-25, [runbook](plans/2026-09-25-persist-by-digest-operator-runbook.md) phase D) |
 | Key on the VM | `/etc/replicator/co-gcs-test-replicator-writer.json` (`root:exedev`, `0640`) |
 | CI identity | the same SA, keyless, via `principalSet://iam.googleapis.com/projects/912903030445/locations/global/workloadIdentityPools/github/attribute.repository/CannObserv/replicator` |
 

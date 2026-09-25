@@ -1535,3 +1535,91 @@ def test_a_malformed_range_stops_the_worker_at_boot(monkeypatch):
 
     with pytest.raises(ValueError, match="not-a-range"):
         build_fetch_client(Settings())
+
+
+# The permanent store (#114, plan step 5): host configuration, like the temp
+# store, and a second source the replicate handler may read from.
+
+
+def _permanent_env(monkeypatch, tmp_path, bucket="a-permanent-bucket"):
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setenv("REPLICATOR_PERMANENT_BUCKET", bucket)
+    get_settings.cache_clear()
+
+
+def _capture_handler(monkeypatch) -> dict:
+    captured: dict = {}
+    real = src.worker.main.build_replicate_handler
+
+    def capture(**kwargs):
+        captured.update(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr("src.worker.main.build_replicate_handler", capture)
+    return captured
+
+
+async def test_a_permanent_bucket_becomes_a_replicate_source(monkeypatch, fake_redis, tmp_path):
+    """Built beside the temp store, with **touch off** — the shared store's default,
+    and the only safe one here: the permanent writer holds no `update`, and a
+    permanent object has no retention clock to move. Preflighted like the temp
+    bucket, so a misspelled name fails the boot rather than every publication."""
+    _permanent_env(monkeypatch, tmp_path)
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    built, preflighted = [], []
+
+    class FakeStore:
+        def __init__(self, bucket, **options):
+            built.append((bucket, options))
+
+        def preflight(self):
+            preflighted.append(True)
+
+    monkeypatch.setattr("src.worker.main.GcsBlobStore", FakeStore)
+    captured = _capture_handler(monkeypatch)
+
+    await run(_stopped())
+
+    assert built == [
+        ("a-permanent-bucket", {"timeout_seconds": get_settings().blob_timeout_seconds})
+    ]
+    assert preflighted == [True]
+    (permanent,) = captured["permanent_stores"]
+    assert isinstance(permanent, FakeStore)
+
+
+async def test_no_permanent_bucket_means_no_second_source(monkeypatch, fake_redis, tmp_path):
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.delenv("REPLICATOR_PERMANENT_BUCKET", raising=False)
+    get_settings.cache_clear()
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    captured = _capture_handler(monkeypatch)
+
+    await run(_stopped())
+
+    assert captured["permanent_stores"] == ()
+
+
+async def test_an_unreachable_permanent_bucket_fails_the_boot_and_names_it(
+    monkeypatch, fake_redis, tmp_path, capsys
+):
+    """The temp bucket's rule (#7), for the same reason: storing to or reading from
+    an absent bucket is never what an operator meant."""
+    _permanent_env(monkeypatch, tmp_path)
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+
+    class Refusing:
+        def __init__(self, *a, **kw):
+            pass
+
+        def preflight(self):
+            raise OSError("no such bucket")
+
+    monkeypatch.setattr("src.worker.main.GcsBlobStore", Refusing)
+
+    with pytest.raises(OSError, match="no such bucket"):
+        await run(_stopped())
+
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
+    named = [line for line in lines if "a-permanent-bucket" in json.dumps(line)]
+    assert any("permanent blob bucket is not usable" in line.get("message", "") for line in named)

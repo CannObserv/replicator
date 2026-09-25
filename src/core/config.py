@@ -100,6 +100,16 @@ class Settings(BaseSettings):
     # refusal of a blob this store really did mint.
     blob_prefix: str = Field(default="blobs", validation_alias="REPLICATOR_BLOB_PREFIX")
 
+    # The permanent content-addressed store (#114): ``gs://<bucket>/blobs/<sha256>.bin``,
+    # a second source the replicate handler may read a ``blob_uri`` from, so a
+    # publication can follow a persist weeks after the fetch. Empty reads no
+    # permanent store. Host configuration rather than an alias, like the temp
+    # bucket, and read under **any** backend: persisted bytes live in GCS either
+    # way. Its prefix is the store's default, not ``blob_prefix``, on purpose:
+    # readers derive the location with co-core's ``gcs_uri(bucket, digest)``, whose
+    # default it is too, and a second knob would be a second place to disagree.
+    permanent_bucket: str = Field(default="", validation_alias="REPLICATOR_PERMANENT_BUCKET")
+
     # How long one object-store operation may block before it gives up. A
     # setting rather than a constant in the store (CR #8) for the reason every
     # other timeout here is one: it is a property of this host's link to the

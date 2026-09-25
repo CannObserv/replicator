@@ -27,6 +27,7 @@ from co_core_aio.bus import AsyncBusConsumer
 from co_core_aio.fetch import AsyncFetchDriver
 from co_core_aio.gcs import AsyncGcsDriver
 from co_core_sync.drivers.blobstore import GcsBlobStore, LocalBlobStore, ensure_directory
+from google.oauth2 import service_account
 from redis.asyncio import Redis
 
 from src.core.bus_client import build_bus_client
@@ -185,6 +186,37 @@ def preflight_object_store(store: GcsBlobStore, settings: Settings) -> None:
         raise
 
 
+def build_permanent_stores(settings: Settings) -> tuple[BlobStore, ...]:
+    """The permanent store, if this host reads one, preflighted (#114).
+
+    **Touch stays off** — the shared store's default, and the only safe one: the
+    permanent writer holds no ``update``, and a permanent object has no retention
+    clock to move. A bucket that does not answer fails the boot, like the temp
+    bucket (``preflight_object_store``) and for the same reason: reading from an
+    absent bucket is never what an operator meant, and the symptom otherwise is
+    every late publication refused ``invalid_source``, in Archiver's journal.
+    """
+    if not settings.permanent_bucket:
+        return ()
+    store = GcsBlobStore(settings.permanent_bucket, timeout_seconds=settings.blob_timeout_seconds)
+    try:
+        store.preflight()
+    except Exception as exc:
+        logger.error(
+            "permanent blob bucket is not usable",
+            extra={
+                "permanent_bucket": settings.permanent_bucket,
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+        )
+        raise
+    logger.info(
+        "reading persisted blobs from a permanent store",
+        extra={"permanent_bucket": settings.permanent_bucket},
+    )
+    return (store,)
+
+
 def _unreachable_levels(blob_dir: Path) -> list[tuple[Path, int]]:
     """Every level from ``blob_dir`` up that denies traversal, with its mode."""
     resolved = blob_dir.resolve()
@@ -293,6 +325,16 @@ def build_consumer(
     )
 
 
+def load_credentials(path: str) -> object:
+    """The service-account identity a binding's ``credentials_file`` names (#114).
+
+    Read at boot, beside the default ADC resolution the other writers do, so a
+    key file is opened here and nowhere on the consume path. The storage client
+    scopes these credentials itself, so none are asked for here.
+    """
+    return service_account.Credentials.from_service_account_file(path)
+
+
 def build_writers(aliases: AliasTable) -> dict[str, AsyncGcsDriver]:
     """One provider writer per provisioned binding, keyed **by alias** (#29).
 
@@ -352,13 +394,22 @@ def build_writers(aliases: AliasTable) -> dict[str, AsyncGcsDriver]:
             )
             continue
         try:
-            writers[alias] = AsyncGcsDriver(binding.bucket)
+            # Its own identity if the binding names one, else ADC (#114). A key
+            # that will not load skips the writer like any unbuildable driver —
+            # never a fallback to ADC, which would put the worker's account
+            # behind the bucket this binding asked to keep it away from.
+            if binding.credentials_file:
+                credentials = load_credentials(binding.credentials_file)
+                writers[alias] = AsyncGcsDriver(binding.bucket, credentials=credentials)
+            else:
+                writers[alias] = AsyncGcsDriver(binding.bucket)
         except Exception as exc:
             logger.error(
                 "could not build a provider writer — this alias will be refused",
                 extra={
                     "alias": alias,
                     "provider": binding.provider,
+                    "credentials_file": binding.credentials_file,
                     "error": f"{type(exc).__name__}: {exc}",
                     "detail": "commands naming it are refused provider_disabled",
                 },
@@ -608,6 +659,7 @@ async def run(
     # `blob_dir` is None under the object-store backend, and every local-only
     # step goes with it: the directory, the traversal warning, and the sweep.
     store, blob_dir = _prepare_storage(settings)
+    permanent_stores = build_permanent_stores(settings)
 
     owns_signals = stop is None
     # Explicit connection policy (CannObserv/broker#1 R7). The bare from_url
@@ -663,7 +715,11 @@ async def run(
         # replicate command is refused — the safe default (contract T5), and
         # every host's state until an operator writes the table (this VM's
         # until #86 provisioned `primary`).
-        aliases = load_alias_table(settings.replication_aliases_file)
+        aliases = load_alias_table(
+            settings.replication_aliases_file,
+            # No alias may bind a bucket this host keeps blobs in (#114).
+            host_stores=tuple(b for b in (settings.blob_bucket, settings.permanent_bucket) if b),
+        )
         # One driver per provisioned binding, built **here** and not per command:
         # ``storage.Client()`` resolves ADC synchronously — key files, and on a
         # GCE-style host the metadata server — so constructing it inside the loop
@@ -809,6 +865,7 @@ async def run(
                 settings=settings,
                 handler=build_replicate_handler(
                     store=store,
+                    permanent_stores=permanent_stores,
                     aliases=aliases,
                     writers=writers,
                     # The success fact is the handler's to publish, exactly as

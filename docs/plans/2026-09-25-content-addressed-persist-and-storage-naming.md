@@ -135,12 +135,15 @@ Archiver's RepSpecs move to `gcs-publication` in the publication cutover.
    - The alias `credentials_file`, with the T1 edit to the contract.
    - The alias naming rule enforced at load, with the `primary` allowlist and its expiry, plus the
      contract's alias list.
-   - A content-addressed store per permanent alias, built with touch off and preflighted at boot.
+   - The permanent store as host configuration (`REPLICATOR_PERMANENT_BUCKET`), not an alias, as the
+     Approach says. It is a second `GcsBlobStore`, built with touch off and preflighted at boot.
    - `locate_blob` resolves temp first, then each permanent store, behind the T3a gate.
    - The additive MUST-7 relaxation in the replicate contract.
    - Test-name scan updates.
 
    Done when CI's `gcs` job exercises a permanent-store source.
+
+   **Code landed 2026-09-25.** The `gcs` job replicates from `co-gcs-test-replicator` with an empty temp store. `primary`'s allowlist expiry is 2026-12-31.
 6. **Persist handler.** Once co-core ships the models, add the `content.persist` loop through the
    existing `run_loop` / `CommandSpec`, plus a new issuer contract under `docs/contracts/`. Done when
    the `gcs` job persists into `co-gcs-test-replicator` twice and the second is a no-op success.

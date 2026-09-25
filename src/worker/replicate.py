@@ -29,8 +29,8 @@ import asyncio
 import re
 import string
 import time
-from collections.abc import Awaitable, Callable, Mapping
-from typing import Protocol
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from typing import NamedTuple, Protocol
 from urllib.parse import urlsplit
 
 from co_core.effects.gcs import GcsCreateIfAbsent, GcsCreateResult
@@ -93,8 +93,26 @@ def _refuse(message: str, reason: ReplicateReason) -> PermanentReplicateError:
     return PermanentReplicateError(message, reason=reason)
 
 
-def locate_blob(blob_uri: str, *, store: BlobStore) -> str:
-    """The fingerprint ``blob_uri`` names, or a terminal refusal (contract T3a).
+class LocatedBlob(NamedTuple):
+    """A validated source: the fingerprint, and the store that minted its URI."""
+
+    fingerprint: str
+    store: BlobStore
+
+
+def locate_blob(
+    blob_uri: str, *, store: BlobStore, permanent: Sequence[BlobStore] = ()
+) -> LocatedBlob:
+    """The blob ``blob_uri`` names and the store holding it, or a terminal refusal (T3a).
+
+    **Any store this host reads may have minted it** (#114): the temp store, or a
+    permanent store the host is configured with. Each is asked to derive the URI
+    for the fingerprint, and only an exact match selects it, so the permanent
+    store widens T3a by one bucket and not to every ``gs://`` URI. That is what
+    lets Archiver publish weeks after a fetch, once the bytes are persisted,
+    rather than racing the temp tier's seven days (MUST-7). A permanent URI with
+    nothing behind it is ``blob_expired`` too: never persisted, or deleted by an
+    operator, and a fresh fetch and persist is the remedy either way.
 
     **The message's path is never used.** The fingerprint is extracted, validated
     against co-core's ``FINGERPRINT_RE``, and the URI is then compared against one derived
@@ -111,8 +129,15 @@ def locate_blob(blob_uri: str, *, store: BlobStore) -> str:
     inverted — for replicate the scheduling obligation is the issuer's).
     """
     fingerprint = _fingerprint_in(blob_uri)
-    minted = store.uri_for(fingerprint) if fingerprint is not None else None
-    if fingerprint is None or minted != blob_uri:
+    stores = (store, *permanent)
+    # Each store's URI for this fingerprint, temp first. At most one can match:
+    # a URI names a bucket (or a root) and a prefix, and no two stores share both.
+    minted: list[str] = []
+    source = None
+    if fingerprint is not None:
+        minted = [candidate.uri_for(fingerprint) for candidate in stores]
+        source = next((c for c, uri in zip(stores, minted, strict=True) if uri == blob_uri), None)
+    if fingerprint is None or source is None:
         if fingerprint is not None and _names_another_backend(blob_uri, minted):
             # The one exception to the paragraph below, and it is about #7's flip
             # rather than about issuers. A worker restarted onto the other
@@ -136,16 +161,22 @@ def locate_blob(blob_uri: str, *, store: BlobStore) -> str:
         # recoverable. `detail` carries the value for the journal; it is bounded
         # because an unbounded message value should not reach a log line whole.
         raise _refuse(
-            f"blob_uri is not a reference this store minted: {blob_uri[:_LOGGED_VALUE_CHARS]!r}",
+            "blob_uri is not a reference any store here minted: "
+            f"{blob_uri[:_LOGGED_VALUE_CHARS]!r}",
             ReplicateReason.INVALID_SOURCE,
         )
-    if not store.exists(fingerprint):
+    if not source.exists(fingerprint):
         raise _refuse("the blob for this command is no longer stored", ReplicateReason.BLOB_EXPIRED)
-    return fingerprint
+    return LocatedBlob(fingerprint, source)
 
 
-def _names_another_backend(blob_uri: str, minted: str) -> bool:
-    """Whether these two URIs come from different ``BlobStore`` backends.
+def _names_another_backend(blob_uri: str, minted: Sequence[str]) -> bool:
+    """Whether ``blob_uri``'s scheme is one no store here mints.
+
+    Against every store this host reads, not only the temp one (#114): once a
+    permanent store is configured, ``gs://`` is a scheme this host reads even
+    beside a local temp store, so a stranger bucket there is not ours rather
+    than "the other backend".
 
     Answered by comparing schemes rather than by asking the store what it is:
     ``BlobStore`` is a ``Protocol`` describing what a store *does*, and a
@@ -159,7 +190,7 @@ def _names_another_backend(blob_uri: str, minted: str) -> bool:
     states the caller has already excluded are lines nothing can execute, and
     coverage said so.
     """
-    return urlsplit(blob_uri).scheme != urlsplit(minted).scheme
+    return urlsplit(blob_uri).scheme not in {urlsplit(uri).scheme for uri in minted}
 
 
 def _fingerprint_in(blob_uri: str) -> str | None:
@@ -320,6 +351,7 @@ type CompletePublisher = Callable[[ContentReplicateCommand, str], Awaitable[None
 def build_replicate_handler(
     *,
     store: BlobStore,
+    permanent_stores: Sequence[BlobStore] = (),
     aliases: AliasTable,
     writers: Mapping[str, ConditionalWriter],
     complete: CompletePublisher,
@@ -347,6 +379,9 @@ def build_replicate_handler(
 
     ``complete`` publishes the success fact: the handler owns it the way the byte
     path owns ``blob_available``, because the loop's seam sees failures only.
+
+    ``permanent_stores`` are the other stores a ``blob_uri`` may name (#114); the
+    bytes are read from whichever one minted it.
     """
 
     async def handle(command: ContentReplicateCommand) -> None:
@@ -389,14 +424,29 @@ def build_replicate_handler(
         # Off the loop thread: the guard's ``exists`` check is a ``stat`` on the
         # local backend and a network round trip on the object store (#7). Same
         # rule as the byte path — ``tests/worker/test_storage_offloop.py``.
-        fingerprint = await asyncio.to_thread(locate_blob, command.blob_uri, store=store)
+        try:
+            source = await asyncio.to_thread(
+                locate_blob, command.blob_uri, store=store, permanent=permanent_stores
+            )
+        except (PermanentReplicateError, ValueError, TypeError, AttributeError, LookupError):
+            # A refusal is already classified; the rest are defects on this side
+            # of the seam, left to the delivery ceiling like ``_write``'s
+            # ``ValueError`` (CR 7) — classified transient, they retried forever.
+            raise
+        except Exception as exc:
+            # The existence check is a network call on the object store — and on
+            # the permanent store for every late publication (#114) — so it fails
+            # the way the read in ``_write`` does, and is classified the same way.
+            # Unclassified, a 503 burned the delivery ceiling into a terminal
+            # ``handler_error`` for an issuer that cannot re-fetch (archiver#175).
+            raise _classify_source_failure(exc) from exc
 
         result = await _write(
             writer,
             command,
             key=key,
-            fingerprint=fingerprint,
-            store=store,
+            fingerprint=source.fingerprint,
+            store=source.store,
             timeout_seconds=write_timeout_seconds,
         )
         if result.outcome is GcsCreateOutcome.CONFLICT:
@@ -572,7 +622,10 @@ async def _write(
 
 
 def _classify_source_failure(exc: Exception) -> Exception:
-    """A failure reading the blob out of temp storage (CR #3).
+    """A failure reaching the blob in whichever store holds it (CR #3).
+
+    Two callers: the read in ``_write``, and the handler's existence check through
+    ``locate_blob`` (CR 1) — either store, temp or permanent (#114).
 
     **Only the transient half is claimed**, matching the byte path's
     ``_in_store``. 5xx, 408/429 and anything with no status stay open — the retry
@@ -587,7 +640,7 @@ def _classify_source_failure(exc: Exception) -> Exception:
     if is_terminal_provider_status(exc):
         return exc
     return TransientReplicateError(
-        f"the blob could not be read from temp storage: {type(exc).__name__}: {exc}"
+        f"the blob could not be read from storage: {type(exc).__name__}: {exc}"
     )
 
 

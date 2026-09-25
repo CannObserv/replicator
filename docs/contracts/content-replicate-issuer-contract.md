@@ -13,10 +13,10 @@ adopters had built.
 
 | ⚙ obligation | State |
 |---|---|
-| T1 — no credential travels, and none reaches the journal | shipped; `AliasBinding` has nowhere to hold one, asserted structurally |
-| T2 — an alias resolves only if provisioned on this host | shipped (`REPLICATOR_REPLICATION_ALIASES_FILE`) |
+| T1 — no credential travels, and none reaches the journal | shipped; `AliasBinding` holds at most a host key-file *path* (`credentials_file`, #114), never key material, asserted structurally |
+| T2 — an alias resolves only if provisioned on this host | shipped (`REPLICATOR_REPLICATION_ALIASES_FILE`); names follow [the alias naming rule](#alias-names) since #114 |
 | T3 — containment, and the path guard | shipped for `gcs`; the `gdrive`/`ia` rows arrive with those providers |
-| T3a — resolve by fingerprint, never by path | shipped |
+| T3a — resolve by fingerprint, never by path | shipped; since #114 a `blob_uri` may name the temp store **or** the host's permanent store |
 | T4 — the absent/matching/differing table | shipped for `gcs`, and **verified in CI** against `co-gcs-test-replication` — all three rows, every push (#53). Was a hand-run against production, which could never be repeated: that bucket grants no `delete`, so the conflict row could not reset itself (#38) |
 | T5 — `ia` gated on an operator act | shipped by construction: `ia` cannot be provisioned at all yet |
 | T6 — `public_url` never echoed from the command | shipped, **reworded** — see below (#36) |
@@ -58,7 +58,7 @@ names nothing. All three providers resolve locally:
 
 | Provider | Local resolution |
 |---|---|
-| `gcs` | ADC — a service-account key at `GOOGLE_APPLICATION_CREDENTIALS`, the mechanism this VM already uses for the wheelhouse mirror |
+| `gcs` | ADC — a service-account key at `GOOGLE_APPLICATION_CREDENTIALS` — or, since #114, the key file the alias binding's `credentials_file` names. Either way a file on the host, read at boot |
 | `gdrive` | service account, plus a Shared Drive membership **or** domain-wide delegation. A bare SA owns no usable My Drive quota, so the alias binding is a provisioning precondition, not just a key file |
 | `ia` | an archive.org keypair, sent as `Authorization: LOW <accesskey>:<secret>` (IAS3). Read from host config or `IA_ACCESS_KEY`/`IA_SECRET_KEY` — never from the message |
 
@@ -68,6 +68,14 @@ it is refused rather than accommodated — see the escalation triggers.
 
 Two properties the issuer can rely on, mirroring the fetch guarantees: a refused command is refused
 **before** any credential is touched, and no credential value reaches the journal.
+
+**Per-alias identities (#114) amend T1 without weakening it.** A binding may name a key file by
+absolute host path, so public and private destinations sit behind different service accounts: a
+private blob written into a public bucket is a disclosure, and IAM should refuse it, not only our
+code. The path is host config, the key never enters the binding, and a value that is not an absolute
+path drops the binding at load without being quoted back, since the likeliest wrong value is a pasted
+key. A key that will not load withholds that alias's writer (`provider_disabled`); it never falls back
+to the default identity.
 
 ### T2 — The alias namespace is a capability namespace
 
@@ -94,6 +102,29 @@ alias" into "any writer names any alias the operator already stood up," which is
 the schema's `{"type": "string", "minLength": 1}`.
 
 This is the cheap part, taken because it is cheap. It is **not** a substitute for the trust model.
+
+#### Alias names
+
+**Since #114 a name is a rule, enforced when the host loads its table.** An alias is
+`<provider>-<role>`, matching `^(gcs|gdrive|ia)-[a-z][a-z0-9-]*$`. Its prefix must be the binding's
+provider, and a `gcs-<role>` alias binds `co-gcs-<role>` or its test twin `co-gcs-test-<role>` and no
+other bucket. The name therefore determines the bucket, and one typo can no longer bind the public
+bucket under a private name or the reverse. No alias may bind a bucket the host keeps blobs in, the
+temp or the permanent store, because aliases are publication destinations. A binding that breaks
+either rule is dropped at load, so commands naming it are refused `alias_unknown`. co-core will export the pattern (cannobserv#493) so
+Archiver's RepSpec schema validates `credentials_alias` against the same text and a bad name fails
+when the RepSpec is saved.
+
+Names are selectors, not secrets (T1), so the cluster's are listed here. **Adding one is three acts in
+one change:** the host binding (operator), a row here, and the RepSpec that uses it.
+
+| Alias | Binds | Writes as | State |
+|---|---|---|---|
+| `primary` | `gs://co-gcs-replication`, the legacy public bucket, frozen at the cutover | the host default (`co-gcs-replicator-writer`, interim grant) | **legacy**: accepted outside the rule until 2026-12-31, while Archiver's RepSpecs move to `gcs-publication` (archiver#276). Past that date it stays provisioned, logs an ERROR at every boot and fails CI until it is removed or the date moves |
+| `gcs-publication` | `gs://co-gcs-publication`, public | `co-gcs-publication-writer` via `credentials_file` | provisioned at the publication cutover (plan step 4, #114) |
+
+The permanent content-addressed store is **not** an alias: it is host configuration like the temp
+store, and nothing publishes through it.
 
 ### T3 — Destination authority: the issuer renders, the host contains
 
@@ -254,7 +285,7 @@ document, not summarized here.
 | **4** — correlation is idempotent, one command can yield many facts | **verbatim**, and load-bearing here: T4's no-op row deliberately re-emits a fact for an artifact already written |
 | **5** — do not dedupe facts on `content_fingerprint` | **no analogue** |
 | **6** — handle the failure fact, keep a reaper anyway | **verbatim.** Non-terminal failures are still silent; a command can still close without a fact |
-| **7** — copy the bytes before the blob expires | **inverts.** For fetch this is the consumer's obligation; for replicate it is the issuer's *scheduling* obligation. Issue while the blob lives — the clock runs from last **fetch** reference, not last read — and handle `blob_expired` as terminal. `blob_expires_at` on the `blob_available` fact is the value to schedule against. The window it is drawn from is stated below |
+| **7** — copy the bytes before the blob expires | **inverts.** For fetch this is the consumer's obligation; for replicate it is the issuer's *scheduling* obligation. Issue while the blob lives — the clock runs from last **fetch** reference, not last read — and handle `blob_expired` as terminal. `blob_expires_at` on the `blob_available` fact is the value to schedule against. The window it is drawn from is stated below. **Relaxed by #114, additively:** a `blob_uri` naming the host's permanent store (`gs://<bucket>/blobs/<sha256>.bin`) has no expiry, so a persisted blob may be published at any time |
 | **8** — do not send a validator until you handle `not_modified` | **no analogue** — a replicate command carries no request headers |
 
 ⚙ **The window you are scheduling against: at least seven days from last fetch reference.**
@@ -266,6 +297,12 @@ re-issues under a fresh `command_id` and loses only time. A replicate issuer typ
 fetch path — it received a `blob_available` fact, or a `content_cache_uri` on a revision, and passes
 the reference through. For it, `blob_expired` is not a retry: unless something else re-fetches, that
 revision is never replicated, and for a stable InfoItem the next issuance may never come.
+
+**The permanent store takes the clock away (#114).** A worker configured with
+`REPLICATOR_PERMANENT_BUCKET` resolves a `blob_uri` minted by that store as well as by the temp store,
+by the same exact match T3a applies to both, so an issuer that persisted the bytes can publish from
+the permanent URI weeks later. The obligations below hold for **temp** URIs, which is every
+`blob_uri` a fetch fact carries.
 
 So the obligations are:
 
@@ -308,8 +345,8 @@ token on the failure fact. Following the precedent in
 | the provider is not enabled on this host (T5), or the host's credential cannot write there | `provider_disabled` |
 | the rendered path escapes the alias root, or `object_options` names a container the alias does not allow | `invalid_destination` |
 | the destination exists with different bytes | `destination_conflict` |
-| the blob is gone | `blob_expired` |
-| `blob_uri` is not a reference this store minted (T3a) | `invalid_source` |
+| the blob is gone — a temp blob past its window, or a permanent URI with nothing behind it (never persisted, or deleted) | `blob_expired` |
+| `blob_uri` is not a reference any store this host reads minted (T3a): the temp store, or the permanent store if configured | `invalid_source` |
 
 `invalid_destination` covers both the path guard and the container guard for the reason
 `invalid_request_options` covers two fields on the fetch side: the issuer's remedy is identical

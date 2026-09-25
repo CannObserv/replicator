@@ -54,6 +54,7 @@ PRODUCTION_ENV = (
     "GOOGLE_APPLICATION_CREDENTIALS",
     "REPLICATOR_BLOB_BACKEND",
     "REPLICATOR_BLOB_BUCKET",
+    "REPLICATOR_PERMANENT_BUCKET",
 )
 
 # The test destination, and the identity to reach it with. **Neither has a
@@ -76,6 +77,10 @@ TEST_CREDENTIALS_ENV = "REPLICATOR_TEST_GCS_CREDENTIALS"
 # "use whatever the code would have picked".
 TEST_BLOB_BUCKET_ENV = "REPLICATOR_TEST_BLOB_BUCKET"
 
+# The permanent store's test twin (#114): a second `GcsBlobStore` destination, so
+# the store guard admits whichever of the two a host provisioned. No default.
+TEST_PERMANENT_BUCKET_ENV = "REPLICATOR_TEST_PERMANENT_BUCKET"
+
 
 def resolve_test_bucket(env: Mapping[str, str]) -> str | None:
     """The configured test bucket, or ``None``. Deliberately not a lookup with a default."""
@@ -87,9 +92,14 @@ def resolve_test_blob_bucket(env: Mapping[str, str]) -> str | None:
     return env.get(TEST_BLOB_BUCKET_ENV)
 
 
+def resolve_test_permanent_bucket(env: Mapping[str, str]) -> str | None:
+    """The configured permanent-store test bucket, or ``None``. Same rule (#114)."""
+    return env.get(TEST_PERMANENT_BUCKET_ENV)
+
+
 def guarded_init(
     original,
-    expected: str | None,
+    expected: str | tuple[str, ...] | None,
     *,
     label: str = "AsyncGcsDriver",
     env_name: str = TEST_BUCKET_ENV,
@@ -111,6 +121,9 @@ def guarded_init(
     ``expected=None`` means *no* bucket is acceptable — the state every test that
     is not marked ``gcs`` runs in, so a real driver cannot be constructed by
     accident anywhere in the default suite.
+
+    ``expected`` may be several buckets: ``GcsBlobStore`` has two test
+    destinations since #114, the temp twin and the permanent twin.
 
     The bucket is read from either call form. `AsyncGcsDriver(bucket=...)` is as
     legal as the positional call, and a guard that inspected ``args[0]`` alone
@@ -156,7 +169,7 @@ def guarded_init(
                 f"a test that is not marked @pytest.mark.gcs constructed a real "
                 f"{label}({bucket!r}) — mark it, or use a stub"
             )
-        if bucket != expected:
+        if bucket not in ((expected,) if isinstance(expected, str) else expected):
             raise AssertionError(
                 f"refusing {label}({bucket!r}): a gcs test may only reach "
                 f"{expected!r}, the bucket named by {env_name}"
@@ -182,11 +195,12 @@ def _no_production_destination(request, monkeypatch):
     touched (see ``guarded_init``).
 
     A ``@pytest.mark.gcs`` test opts back in explicitly: it gets the test
-    identity, and whichever of the two test buckets the host has provisioned,
+    identity, and whichever of the three test buckets the host has provisioned,
     all from variables with no default. A missing *identity* skips here; a
     missing *bucket* skips in the fixture that hands it over, because the
-    replicate destination and #7's temp-blob destination are provisioned
-    independently and a host with one should still run its tests.
+    replicate destination, #7's temp-blob destination and #114's permanent-store
+    twin are provisioned independently and a host with one should still run its
+    tests.
 
     Nothing in the tree reaches a real driver today — ``test_main_writers.py``
     stubs it — but that is an accident of how those tests are written rather than
@@ -219,7 +233,8 @@ def _no_production_destination(request, monkeypatch):
         # with one and not the other must still run the tests for the one it has.
         # The per-bucket skip belongs to the fixture a test actually depends on.
         expected_driver = resolve_test_bucket(os.environ)
-        expected_store = resolve_test_blob_bucket(os.environ)
+        stores = (resolve_test_blob_bucket(os.environ), resolve_test_permanent_bucket(os.environ))
+        expected_store = tuple(bucket for bucket in stores if bucket) or None
 
     monkeypatch.setattr(
         AsyncGcsDriver,
@@ -233,7 +248,7 @@ def _no_production_destination(request, monkeypatch):
             GcsBlobStore.__init__,
             expected_store,
             label="GcsBlobStore",
-            env_name=TEST_BLOB_BUCKET_ENV,
+            env_name=f"{TEST_BLOB_BUCKET_ENV} or {TEST_PERMANENT_BUCKET_ENV}",
             marked=marked,
         ),
     )
@@ -449,3 +464,13 @@ async def _expire_leftovers(client: Redis) -> None:
     """
     async for key in client.scan_iter(match="replicator.itest.*"):
         await client.expire(key, LEFTOVER_TTL_SECONDS)
+
+
+@pytest.fixture
+def gcs_permanent_bucket(request) -> str:
+    """The provisioned permanent-store test bucket, for a ``@pytest.mark.gcs`` test (#114)."""
+    assert request.node.get_closest_marker("gcs"), "gcs_permanent_bucket requires @pytest.mark.gcs"
+    bucket = resolve_test_permanent_bucket(os.environ)
+    if not bucket:
+        pytest.skip(f"{TEST_PERMANENT_BUCKET_ENV} is unset — no permanent-store bucket (#114)")
+    return bucket

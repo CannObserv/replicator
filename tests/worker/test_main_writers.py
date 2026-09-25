@@ -18,6 +18,7 @@ import json
 import pytest
 
 import src.worker.main
+from src.core.config import get_settings
 from src.worker.aliases import AliasBinding, AliasTable
 from src.worker.main import build_writers, run
 from tests.worker.test_main import _stopped
@@ -42,6 +43,7 @@ class StubDriver:
 
     def __init__(self, bucket, **kwargs):
         self.bucket = bucket
+        self.kwargs = kwargs
         self.closed = False
         StubDriver.built.append(self)
 
@@ -81,8 +83,8 @@ async def test_two_gcs_aliases_get_one_driver_each(monkeypatch, alias_file, wire
     """CR #26. Keyed by alias, because the alias is what names a bucket.
 
     Provisioned together, these two used to collapse to a single ``{"gcs": ...}``
-    entry — so a command naming ``public`` reached the driver holding
-    ``example-internal-bucket`` and wrote outside the root its binding declared. The
+    entry — so a command naming ``gcs-example`` reached the driver holding
+    ``co-gcs-internal`` and wrote outside the root its binding declared. The
     second driver was also never closed, because it was no longer in the dict the
     shutdown path iterates.
     """
@@ -90,8 +92,8 @@ async def test_two_gcs_aliases_get_one_driver_each(monkeypatch, alias_file, wire
         "REPLICATOR_REPLICATION_ALIASES_FILE",
         alias_file(
             {
-                "public": {"provider": "gcs", "bucket": "example-replication-bucket"},
-                "private": {"provider": "gcs", "bucket": "example-internal-bucket"},
+                "gcs-example": {"provider": "gcs", "bucket": "co-gcs-example"},
+                "gcs-internal": {"provider": "gcs", "bucket": "co-gcs-internal"},
             }
         ),
     )
@@ -100,8 +102,8 @@ async def test_two_gcs_aliases_get_one_driver_each(monkeypatch, alias_file, wire
 
     writers = wired["writers"]
     assert {alias: writer.bucket for alias, writer in writers.items()} == {
-        "public": "example-replication-bucket",
-        "private": "example-internal-bucket",
+        "gcs-example": "co-gcs-example",
+        "gcs-internal": "co-gcs-internal",
     }
 
 
@@ -112,8 +114,8 @@ async def test_every_driver_built_is_a_driver_closed(monkeypatch, alias_file, wi
         "REPLICATOR_REPLICATION_ALIASES_FILE",
         alias_file(
             {
-                "public": {"provider": "gcs", "bucket": "example-replication-bucket"},
-                "private": {"provider": "gcs", "bucket": "example-internal-bucket"},
+                "gcs-example": {"provider": "gcs", "bucket": "co-gcs-example"},
+                "gcs-internal": {"provider": "gcs", "bucket": "co-gcs-internal"},
             }
         ),
     )
@@ -142,7 +144,7 @@ async def test_a_driver_that_cannot_be_built_does_not_stop_the_worker(
     monkeypatch.setattr("src.worker.main.AsyncGcsDriver", refuse)
     monkeypatch.setenv(
         "REPLICATOR_REPLICATION_ALIASES_FILE",
-        alias_file({"public": {"provider": "gcs", "bucket": "example-replication-bucket"}}),
+        alias_file({"gcs-example": {"provider": "gcs", "bucket": "co-gcs-example"}}),
     )
 
     await run(_stopped())
@@ -156,7 +158,7 @@ async def test_one_unbuildable_driver_does_not_cost_the_others(monkeypatch, alia
     for one unusable entry in an otherwise readable table."""
 
     def selective(bucket, **kwargs):
-        if bucket == "example-internal-bucket":
+        if bucket == "co-gcs-internal":
             raise RuntimeError("no credentials for this one")
         return StubDriver(bucket)
 
@@ -165,15 +167,15 @@ async def test_one_unbuildable_driver_does_not_cost_the_others(monkeypatch, alia
         "REPLICATOR_REPLICATION_ALIASES_FILE",
         alias_file(
             {
-                "public": {"provider": "gcs", "bucket": "example-replication-bucket"},
-                "private": {"provider": "gcs", "bucket": "example-internal-bucket"},
+                "gcs-example": {"provider": "gcs", "bucket": "co-gcs-example"},
+                "gcs-internal": {"provider": "gcs", "bucket": "co-gcs-internal"},
             }
         ),
     )
 
     await run(_stopped())
 
-    assert list(wired["writers"]) == ["public"]
+    assert list(wired["writers"]) == ["gcs-example"]
 
 
 async def test_a_binding_for_a_provider_with_no_driver_builds_nothing():
@@ -204,15 +206,15 @@ async def test_a_writer_that_fails_to_close_does_not_leak_the_redis_client(
             raise RuntimeError("the transport was already gone")
 
     def build(bucket, **kwargs):
-        return Unclosable(bucket) if bucket == "example-internal-bucket" else StubDriver(bucket)
+        return Unclosable(bucket) if bucket == "co-gcs-internal" else StubDriver(bucket)
 
     monkeypatch.setattr("src.worker.main.AsyncGcsDriver", build)
     monkeypatch.setenv(
         "REPLICATOR_REPLICATION_ALIASES_FILE",
         alias_file(
             {
-                "private": {"provider": "gcs", "bucket": "example-internal-bucket"},
-                "public": {"provider": "gcs", "bucket": "example-replication-bucket"},
+                "gcs-internal": {"provider": "gcs", "bucket": "co-gcs-internal"},
+                "gcs-example": {"provider": "gcs", "bucket": "co-gcs-example"},
             }
         ),
     )
@@ -257,7 +259,7 @@ async def test_a_refused_checkout_builds_no_writer(monkeypatch, alias_file, wire
     )
     monkeypatch.setenv(
         "REPLICATOR_REPLICATION_ALIASES_FILE",
-        alias_file({"public": {"provider": "gcs", "bucket": "example-replication-bucket"}}),
+        alias_file({"gcs-example": {"provider": "gcs", "bucket": "co-gcs-example"}}),
     )
 
     await run(_stopped())
@@ -282,13 +284,13 @@ async def test_a_refused_checkout_withholds_the_writer_and_nothing_else(
     monkeypatch.setattr("src.worker.main.checkout_refusal", lambda: "unmerged")
     monkeypatch.setenv(
         "REPLICATOR_REPLICATION_ALIASES_FILE",
-        alias_file({"public": {"provider": "gcs", "bucket": "example-replication-bucket"}}),
+        alias_file({"gcs-example": {"provider": "gcs", "bucket": "co-gcs-example"}}),
     )
 
     await run(_stopped())
 
     assert wired["writers"] == {}
-    assert list(wired["aliases"].bindings) == ["public"]
+    assert list(wired["aliases"].bindings) == ["gcs-example"]
 
 
 async def test_the_guard_is_not_consulted_without_a_binding_to_build(monkeypatch):
@@ -317,12 +319,84 @@ async def test_an_accepted_checkout_is_asked_once_for_the_whole_table(monkeypatc
     monkeypatch.setattr("src.worker.main.AsyncGcsDriver", StubDriver)
     table = AliasTable(
         {
-            "public": AliasBinding(provider="gcs", bucket="example-replication-bucket"),
-            "private": AliasBinding(provider="gcs", bucket="example-internal-bucket"),
+            "gcs-example": AliasBinding(provider="gcs", bucket="co-gcs-example"),
+            "gcs-internal": AliasBinding(provider="gcs", bucket="co-gcs-internal"),
         }
     )
 
     writers = build_writers(table)
 
-    assert sorted(writers) == ["private", "public"]
+    assert sorted(writers) == ["gcs-example", "gcs-internal"]
     assert asked == [True]
+
+
+def test_a_binding_with_a_credentials_file_writes_as_that_identity(monkeypatch):
+    """The split identity (#114): the publication alias's writer is built on its own key.
+
+    The other binding keeps ADC, and gets no ``credentials=`` at all rather than a
+    ``None`` — the driver refuses ``client=`` beside ``credentials=``, and a
+    default-identity writer should be built exactly as it was before #114.
+    """
+    loaded: list[str] = []
+    monkeypatch.setattr("src.worker.main.checkout_refusal", lambda: None)
+    monkeypatch.setattr("src.worker.main.AsyncGcsDriver", StubDriver)
+    monkeypatch.setattr(
+        "src.worker.main.load_credentials", lambda path: loaded.append(path) or f"key:{path}"
+    )
+    table = AliasTable(
+        {
+            "own-key": AliasBinding(provider="gcs", bucket="b1", credentials_file="/k/pub.json"),
+            "default": AliasBinding(provider="gcs", bucket="b2"),
+        }
+    )
+
+    writers = build_writers(table)
+
+    assert loaded == ["/k/pub.json"]
+    assert writers["own-key"].kwargs == {"credentials": "key:/k/pub.json"}
+    assert writers["default"].kwargs == {}
+
+
+def test_a_credentials_file_that_cannot_be_loaded_withholds_that_writer(monkeypatch, caplog):
+    """Skipped like any unbuildable driver, and never replaced by the default identity.
+
+    Falling back to ADC would put the worker's account behind the bucket this
+    binding asked to keep it away from, which is the boundary the split exists for.
+    The real loader runs here, against a path with nothing behind it.
+    """
+    monkeypatch.setattr("src.worker.main.checkout_refusal", lambda: None)
+    monkeypatch.setattr("src.worker.main.AsyncGcsDriver", StubDriver)
+    table = AliasTable(
+        {
+            "own-key": AliasBinding(provider="gcs", bucket="b1", credentials_file="/nope/k.json"),
+            "default": AliasBinding(provider="gcs", bucket="b2"),
+        }
+    )
+
+    with caplog.at_level("ERROR", logger="src.worker.main"):
+        writers = build_writers(table)
+
+    assert set(writers) == {"default"}
+    assert [b.bucket for b in StubDriver.built] == ["b2"]
+    (record,) = [r for r in caplog.records if "could not build a provider writer" in r.message]
+    assert record.alias == "own-key"
+    assert record.credentials_file == "/nope/k.json"
+
+
+async def test_the_alias_table_is_told_which_buckets_are_host_stores(monkeypatch, wired, tmp_path):
+    """The wiring half: both configured stores reach the table, and an empty one does not."""
+    seen = {}
+    real = src.worker.main.load_alias_table
+
+    def spy(path, **kwargs):
+        seen.update(kwargs)
+        return real(path, **kwargs)
+
+    monkeypatch.setattr("src.worker.main.load_alias_table", spy)
+    monkeypatch.setattr("src.worker.main.build_permanent_stores", lambda settings: ())
+    monkeypatch.setenv("REPLICATOR_PERMANENT_BUCKET", "a-permanent-bucket")
+    get_settings.cache_clear()
+
+    await run(_stopped())
+
+    assert seen["host_stores"] == ("a-permanent-bucket",)

@@ -520,3 +520,16 @@ def test_a_whole_fetch_ceiling_under_the_per_operation_one_fails_at_startup(monk
 
     with pytest.raises(ValidationError, match="REPLICATOR_MAX_FETCH_SECONDS"):
         Settings()
+
+
+def test_no_permanent_bucket_by_default(monkeypatch):
+    """Unset reads no permanent store (#114): a host opts in, like the temp bucket."""
+    monkeypatch.delenv("REPLICATOR_PERMANENT_BUCKET", raising=False)
+
+    assert get_settings().permanent_bucket == ""
+
+
+def test_the_permanent_bucket_is_selected_by_env(monkeypatch):
+    monkeypatch.setenv("REPLICATOR_PERMANENT_BUCKET", "a-permanent-bucket")
+
+    assert get_settings().permanent_bucket == "a-permanent-bucket"
