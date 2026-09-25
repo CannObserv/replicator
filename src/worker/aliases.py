@@ -24,8 +24,10 @@ archive.org, where an item cannot be deleted at all.
 """
 
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -59,6 +61,31 @@ _UNPROVISIONED = "no alias table on this host — replication is not provisioned
 # review an irreversible destination should get. The operator still decides
 # *whether* any of it is reachable, by provisioning an alias or not.
 KNOWN_PROVIDERS = ("gcs",)
+
+# **The alias naming rule** (#114): ``<provider>-<role>``. The provider prefix
+# must be the binding's, and a ``gcs`` binding must name ``co-gcs-<role>`` or its
+# test twin ``co-gcs-test-<role>`` — so the name determines the bucket, and a typo
+# can no longer bind the public bucket under a private name or the reverse. The
+# prefixes span every provider the wire knows, not just ``KNOWN_PROVIDERS``: a
+# name can be well-formed for a provider this host cannot bind yet.
+#
+# co-core will export this pattern (cannobserv#493) so Archiver's RepSpec schema
+# validates ``credentials_alias`` against the same text; import it from there
+# once it ships. ``tests/worker/test_aliases.py`` pins the string until then.
+ALIAS_NAME_PATTERN = r"^(gcs|gdrive|ia)-[a-z][a-z0-9-]*$"
+_ALIAS_NAME = re.compile(ALIAS_NAME_PATTERN)
+
+# Names accepted outside the rule, each until a date. ``primary`` predates it and
+# Archiver's RepSpecs name it; it goes once they name ``gcs-publication``
+# (archiver#276, the publication cutover). Its bucket is unchecked, since no
+# ``co-gcs-<role>`` follows from it.
+#
+# **Past its date a name is kept and reported, never dropped.** Dropping it would
+# refuse Archiver's publications ``alias_unknown`` — a terminal answer to a date
+# nobody acted on. The loud half is twofold: an ERROR at every boot, and a test
+# that fails every CI run from the day after, until the name is removed or the
+# date is moved on purpose.
+LEGACY_ALIASES: Mapping[str, date] = MappingProxyType({"primary": date(2026, 12, 31)})
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,7 +155,7 @@ def _empty() -> AliasTable:
     return AliasTable(MappingProxyType({}))
 
 
-def load_alias_table(path: Path | None) -> AliasTable:
+def load_alias_table(path: Path | None, *, today: date | None = None) -> AliasTable:
     """Read the alias table, failing **closed** at every step.
 
     Three degrees of failure, and the difference between them is whether the
@@ -151,6 +178,8 @@ def load_alias_table(path: Path | None) -> AliasTable:
     Never raises. A replicate misconfiguration must not take down a worker whose
     actual job is ``content.fetch`` — the refusals report it per command, through
     the same channel every other replicate problem reaches the operator by.
+
+    ``today`` is for tests; it decides only whether a legacy name is overdue.
     """
     if path is None:
         logger.info(
@@ -196,6 +225,7 @@ def load_alias_table(path: Path | None) -> AliasTable:
         if binding is not None:
             bindings[str(alias)] = binding
     table = AliasTable(MappingProxyType(bindings))
+    _report_overdue_legacy_names(table, today or datetime.now(UTC).date())
     logger.info(
         "alias table loaded",
         extra={
@@ -211,6 +241,24 @@ def load_alias_table(path: Path | None) -> AliasTable:
         },
     )
     return table
+
+
+def _report_overdue_legacy_names(table: AliasTable, today: date) -> None:
+    """An ERROR per provisioned legacy name past its date; the binding stands."""
+    for alias in table.provisioned:
+        expiry = LEGACY_ALIASES.get(alias)
+        if expiry is not None and today > expiry:
+            logger.error(
+                "a legacy alias is past its expiry",
+                extra={
+                    "alias": alias,
+                    "expiry": expiry.isoformat(),
+                    "detail": (
+                        "still provisioned; move the RepSpecs naming it to a "
+                        "<provider>-<role> alias, then remove it from the table"
+                    ),
+                },
+            )
 
 
 def _binding_or_none(alias: str, entry: Any) -> AliasBinding | None:
@@ -247,10 +295,26 @@ def _why_unusable(alias: str, entry: Any) -> str | None:
         # The bucket *is* the root. Without it there is no containment check to
         # run, and a binding that cannot bound anything is worse than absent.
         return "a gcs binding needs a bucket"
+    if alias not in LEGACY_ALIASES:
+        why = _why_misnamed(alias, provider, str(entry.get("bucket", "")))
+        if why is not None:
+            return why
     if "credentials_file" in entry:
         value = entry["credentials_file"]
         # The rule, never the value: the likeliest wrong value is a pasted key,
         # and quoting it back would put the key in the journal.
         if not isinstance(value, str) or not value.startswith("/"):
             return "credentials_file must be an absolute host path to a key file"
+    return None
+
+
+def _why_misnamed(alias: str, provider: str, bucket: str) -> str | None:
+    """Why this name breaks the naming rule for this binding, or ``None``."""
+    if not _ALIAS_NAME.match(alias):
+        return f"the alias name is not <provider>-<role> ({ALIAS_NAME_PATTERN})"
+    named, role = alias.split("-", 1)
+    if named != provider:
+        return f"the alias name says {named!r} but the binding is {provider!r}"
+    if provider == "gcs" and bucket not in (f"co-gcs-{role}", f"co-gcs-test-{role}"):
+        return f"a gcs-{role} alias binds co-gcs-{role} or co-gcs-test-{role}, nothing else"
     return None

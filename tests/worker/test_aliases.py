@@ -8,21 +8,33 @@ up is a terminal refusal before any provider client is constructed.
 
 What they deliberately do *not* cover is credential material. A binding names a
 bucket, a folder, an identifier prefix — never a key. The credential is resolved
-by the provider SDK from host state (ADC, a keypair in host config), which is why
-``AliasBinding`` has nowhere to put one.
+by the provider SDK from host state (ADC, a keypair in host config); since #114 a
+binding may name *which* key file, by absolute path, and nothing else about it.
+
+The alias naming rule (#114) is here too: a name determines its provider and,
+for ``gcs``, its bucket.
 """
 
 import json
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from src.worker.aliases import AliasBinding, AliasTable, load_alias_table
+from src.worker.aliases import (
+    ALIAS_NAME_PATTERN,
+    LEGACY_ALIASES,
+    AliasBinding,
+    AliasTable,
+    load_alias_table,
+)
 
+# Named by the #114 rule: `gcs-<role>` binds `co-gcs-<role>`.
 GCS = {
     "provider": "gcs",
-    "bucket": "co-artifacts",
+    "bucket": "co-gcs-artifacts",
     "prefix": "replications",
 }
+OTHER = {"provider": "gcs", "bucket": "co-gcs-other"}
 
 
 def write_aliases(tmp_path, mapping):
@@ -41,7 +53,7 @@ def test_an_unset_path_provisions_nothing():
     """
     table = load_alias_table(None)
 
-    assert table.resolve("primary") is None
+    assert table.resolve("gcs-artifacts") is None
     assert table.provisioned == ()
 
 
@@ -88,12 +100,12 @@ def test_a_missing_file_provisions_nothing_rather_than_raising(tmp_path, caplog)
 
 
 def test_a_binding_is_resolved_by_name(tmp_path):
-    table = load_alias_table(write_aliases(tmp_path, {"primary": GCS}))
+    table = load_alias_table(write_aliases(tmp_path, {"gcs-artifacts": GCS}))
 
-    binding = table.resolve("primary")
+    binding = table.resolve("gcs-artifacts")
 
-    assert binding == AliasBinding(provider="gcs", bucket="co-artifacts", prefix="replications")
-    assert table.provisioned == ("primary",)
+    assert binding == AliasBinding(provider="gcs", bucket="co-gcs-artifacts", prefix="replications")
+    assert table.provisioned == ("gcs-artifacts",)
 
 
 def test_an_unprovisioned_alias_resolves_to_nothing(tmp_path):
@@ -102,7 +114,7 @@ def test_an_unprovisioned_alias_resolves_to_nothing(tmp_path):
     This is what converts "any writer names any alias" into "any writer names any
     alias the operator already stood up".
     """
-    table = load_alias_table(write_aliases(tmp_path, {"primary": GCS}))
+    table = load_alias_table(write_aliases(tmp_path, {"gcs-artifacts": GCS}))
 
     assert table.resolve("not-provisioned") is None
     assert table.resolve("") is None
@@ -144,13 +156,13 @@ def test_an_unusable_entry_is_dropped_rather_than_half_provisioned(tmp_path, cap
     which rows are good, so the good ones stand and the bad one refuses like an
     alias nobody wrote.
     """
-    path = write_aliases(tmp_path, {"good": GCS, "bad": entry})
+    path = write_aliases(tmp_path, {"gcs-artifacts": GCS, "gcs-other": entry})
 
     with caplog.at_level("WARNING", logger="src.worker.aliases"):
         table = load_alias_table(path)
 
-    assert table.provisioned == ("good",)
-    assert table.resolve("bad") is None
+    assert table.provisioned == ("gcs-artifacts",)
+    assert table.resolve("gcs-other") is None
     assert any(r.message == "ignoring an unusable alias binding" for r in caplog.records)
 
 
@@ -185,12 +197,12 @@ def test_an_empty_alias_name_is_dropped(tmp_path, caplog):
     but a file with `"": {...}` would have made the empty alias *resolvable* —
     every command that omitted the field landing on one operator's binding.
     """
-    path = write_aliases(tmp_path, {"": GCS, "good": GCS})
+    path = write_aliases(tmp_path, {"": GCS, "gcs-artifacts": GCS})
 
     with caplog.at_level("WARNING", logger="src.worker.aliases"):
         table = load_alias_table(path)
 
-    assert table.provisioned == ("good",)
+    assert table.provisioned == ("gcs-artifacts",)
     assert table.resolve("") is None
 
 
@@ -201,7 +213,7 @@ def test_the_bindings_mapping_cannot_be_mutated_through(tmp_path):
     below only pinned attribute reassignment — so the property it is named for
     was not the property it checked.
     """
-    table = load_alias_table(write_aliases(tmp_path, {"primary": GCS}))
+    table = load_alias_table(write_aliases(tmp_path, {"gcs-artifacts": GCS}))
 
     with pytest.raises(TypeError):
         table.bindings["smuggled"] = AliasBinding(provider="gcs", bucket="b")
@@ -215,8 +227,8 @@ def test_the_table_is_a_snapshot_a_command_cannot_reach(tmp_path):
     ``AliasTable`` is frozen and its bindings are frozen: there is no path from
     the consume loop that could add an alias, which is the property T2 leans on.
     """
-    table = load_alias_table(write_aliases(tmp_path, {"primary": GCS}))
-    binding = table.resolve("primary")
+    table = load_alias_table(write_aliases(tmp_path, {"gcs-artifacts": GCS}))
+    binding = table.resolve("gcs-artifacts")
 
     with pytest.raises(AttributeError):
         binding.bucket = "somewhere-else"  # type: ignore[misc]
@@ -227,9 +239,11 @@ def test_the_table_is_a_snapshot_a_command_cannot_reach(tmp_path):
 def test_a_gcs_binding_may_omit_the_prefix(tmp_path):
     """The bucket alone is a root. A prefix narrows it; its absence does not widen
     anything beyond the bucket the operator named."""
-    table = load_alias_table(write_aliases(tmp_path, {"flat": {"provider": "gcs", "bucket": "b"}}))
+    table = load_alias_table(
+        write_aliases(tmp_path, {"gcs-flat": {"provider": "gcs", "bucket": "co-gcs-flat"}})
+    )
 
-    assert table.resolve("flat").prefix == ""
+    assert table.resolve("gcs-flat").prefix == ""
 
 
 def test_no_binding_field_can_carry_a_credential(tmp_path):
@@ -241,10 +255,10 @@ def test_no_binding_field_can_carry_a_credential(tmp_path):
     field named for a secret has to get past this test first.
     """
     path = write_aliases(
-        tmp_path, {"primary": {**GCS, "secret": "s3cr3t", "credentials": "/etc/key.json"}}
+        tmp_path, {"gcs-artifacts": {**GCS, "secret": "s3cr3t", "credentials": "/etc/key.json"}}
     )
 
-    binding = load_alias_table(path).resolve("primary")
+    binding = load_alias_table(path).resolve("gcs-artifacts")
 
     assert not hasattr(binding, "secret")
     assert not hasattr(binding, "credentials")
@@ -253,9 +267,10 @@ def test_no_binding_field_can_carry_a_credential(tmp_path):
 
 def test_the_table_reports_what_it_provisioned_in_a_stable_order(tmp_path):
     """Logged at boot, so an operator can see what this host will accept."""
-    table = load_alias_table(write_aliases(tmp_path, {"zed": GCS, "alpha": GCS}))
+    zed, alpha = {**GCS, "bucket": "co-gcs-zed"}, {**GCS, "bucket": "co-gcs-alpha"}
+    table = load_alias_table(write_aliases(tmp_path, {"gcs-zed": zed, "gcs-alpha": alpha}))
 
-    assert table.provisioned == ("alpha", "zed")
+    assert table.provisioned == ("gcs-alpha", "gcs-zed")
 
 
 def test_an_empty_table_is_not_an_error(tmp_path):
@@ -273,7 +288,7 @@ def test_an_empty_table_is_not_an_error(tmp_path):
         pytest.param(lambda tmp: _write(tmp, "{not json"), id="unreadable"),
         pytest.param(lambda tmp: _write(tmp, "[]"), id="not-a-table"),
         pytest.param(lambda tmp: _write(tmp, json.dumps({})), id="empty-table"),
-        pytest.param(lambda tmp: _write(tmp, json.dumps({"primary": GCS})), id="populated"),
+        pytest.param(lambda tmp: _write(tmp, json.dumps({"gcs-artifacts": GCS})), id="populated"),
     ],
 )
 def test_every_construction_path_returns_an_immutable_table(tmp_path, make):
@@ -307,14 +322,18 @@ def test_a_binding_may_name_a_credentials_file(tmp_path):
     """
     entry = {**GCS, "credentials_file": "/etc/replicator/co-gcs-publication-writer.json"}
 
-    binding = load_alias_table(write_aliases(tmp_path, {"primary": entry})).resolve("primary")
+    binding = load_alias_table(write_aliases(tmp_path, {"gcs-artifacts": entry})).resolve(
+        "gcs-artifacts"
+    )
 
     assert binding.credentials_file == "/etc/replicator/co-gcs-publication-writer.json"
 
 
 def test_a_binding_without_a_credentials_file_writes_as_the_host_default(tmp_path):
     """Absent means ADC: `GOOGLE_APPLICATION_CREDENTIALS`, as every binding did before #114."""
-    binding = load_alias_table(write_aliases(tmp_path, {"primary": GCS})).resolve("primary")
+    binding = load_alias_table(write_aliases(tmp_path, {"gcs-artifacts": GCS})).resolve(
+        "gcs-artifacts"
+    )
 
     assert binding.credentials_file == ""
 
@@ -340,18 +359,21 @@ def test_a_credentials_file_that_is_not_an_absolute_path_drops_the_binding(tmp_p
     identity instead would put the wrong account behind a public bucket, which
     is the boundary the split exists for.
     """
-    path = write_aliases(tmp_path, {"good": GCS, "bad": {**GCS, "credentials_file": value}})
+    path = write_aliases(
+        tmp_path, {"gcs-artifacts": GCS, "gcs-other": {**OTHER, "credentials_file": value}}
+    )
 
     with caplog.at_level("WARNING", logger="src.worker.aliases"):
         table = load_alias_table(path)
 
-    assert table.provisioned == ("good",)
-    assert any(r.message == "ignoring an unusable alias binding" for r in caplog.records)
+    assert table.provisioned == ("gcs-artifacts",)
+    (record,) = [r for r in caplog.records if r.message == "ignoring an unusable alias binding"]
+    assert "credentials_file" in record.detail
 
 
 def test_a_pasted_key_never_reaches_the_journal(tmp_path, caplog):
     """The refusal names the rule, not the value: quoting it back would log the key."""
-    path = write_aliases(tmp_path, {"bad": {**GCS, "credentials_file": PASTED_KEY}})
+    path = write_aliases(tmp_path, {"gcs-other": {**OTHER, "credentials_file": PASTED_KEY}})
 
     with caplog.at_level("DEBUG", logger="src.worker.aliases"):
         load_alias_table(path)
@@ -362,11 +384,132 @@ def test_a_pasted_key_never_reaches_the_journal(tmp_path, caplog):
 
 def test_the_boot_line_says_which_bindings_load_their_own_key(tmp_path, caplog):
     """What an operator checks at the publication cutover: which key each alias writes as."""
-    entry = {**GCS, "credentials_file": "/etc/replicator/co-gcs-publication-writer.json"}
-    path = write_aliases(tmp_path, {"own-key": entry, "default": GCS})
+    entry = {**OTHER, "credentials_file": "/etc/replicator/co-gcs-publication-writer.json"}
+    path = write_aliases(tmp_path, {"gcs-other": entry, "gcs-artifacts": GCS})
 
     with caplog.at_level("INFO", logger="src.worker.aliases"):
         load_alias_table(path)
 
     (record,) = [r for r in caplog.records if r.message == "alias table loaded"]
-    assert record.credentials_files == {"own-key": "/etc/replicator/co-gcs-publication-writer.json"}
+    assert record.credentials_files == {
+        "gcs-other": "/etc/replicator/co-gcs-publication-writer.json"
+    }
+
+
+# The alias naming rule (#114). A name determines its provider and, for `gcs`,
+# its bucket, so one typo can no longer bind the public bucket under a private
+# name or the reverse.
+
+
+def gcs_entry(bucket, **extra):
+    return {"provider": "gcs", "bucket": bucket, **extra}
+
+
+def test_the_name_pattern_is_the_plans():
+    """Pinned as a string because co-core will export it (cannobserv#493) for
+    Archiver's RepSpec schema, and the two definitions must be the same text."""
+    assert ALIAS_NAME_PATTERN == r"^(gcs|gdrive|ia)-[a-z][a-z0-9-]*$"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("public", id="no-provider-prefix"),
+        pytest.param("GCS-publication", id="upper-case"),
+        pytest.param("gcs_publication", id="underscore"),
+        pytest.param("gcs-", id="no-role"),
+        pytest.param("gcs-9lives", id="role-starts-with-a-digit"),
+        pytest.param("s3-publication", id="unknown-provider-prefix"),
+    ],
+)
+def test_a_name_outside_the_rule_drops_the_binding(tmp_path, caplog, name):
+    path = write_aliases(tmp_path, {name: gcs_entry("co-gcs-publication")})
+
+    with caplog.at_level("WARNING", logger="src.worker.aliases"):
+        table = load_alias_table(path)
+
+    assert table.provisioned == ()
+    assert any(r.message == "ignoring an unusable alias binding" for r in caplog.records)
+
+
+def test_the_name_must_carry_the_bindings_provider(tmp_path):
+    """`ia-publication` bound to `gcs` reads as archive.org to anyone writing a RepSpec."""
+    path = write_aliases(tmp_path, {"ia-publication": gcs_entry("co-gcs-publication")})
+
+    assert load_alias_table(path).provisioned == ()
+
+
+@pytest.mark.parametrize(
+    "bucket",
+    [
+        pytest.param("co-gcs-publication", id="production"),
+        pytest.param("co-gcs-test-publication", id="test-twin"),
+    ],
+)
+def test_a_gcs_name_binds_the_bucket_it_names(tmp_path, bucket):
+    table = load_alias_table(write_aliases(tmp_path, {"gcs-publication": gcs_entry(bucket)}))
+
+    assert table.resolve("gcs-publication").bucket == bucket
+
+
+@pytest.mark.parametrize(
+    "bucket",
+    [
+        pytest.param("co-gcs-blobs", id="another-role"),
+        pytest.param("co-gcs-publication-archive", id="a-superstring"),
+        pytest.param("co-gcs-publicatio", id="a-typo"),
+        pytest.param("example-bucket", id="outside-the-scheme"),
+    ],
+)
+def test_a_gcs_name_refuses_any_other_bucket(tmp_path, caplog, bucket):
+    """The typo this rule exists for: a name and a bucket that disagree."""
+    path = write_aliases(tmp_path, {"gcs-publication": gcs_entry(bucket)})
+
+    with caplog.at_level("WARNING", logger="src.worker.aliases"):
+        table = load_alias_table(path)
+
+    assert table.provisioned == ()
+    assert any(r.message == "ignoring an unusable alias binding" for r in caplog.records)
+
+
+def test_a_legacy_name_is_accepted_outside_the_rule(tmp_path):
+    """`primary` predates the rule and Archiver's RepSpecs name it; it stands until
+    they move to `gcs-publication` (archiver#276), bucket unchecked."""
+    table = load_alias_table(write_aliases(tmp_path, {"primary": gcs_entry("co-artifacts")}))
+
+    assert table.provisioned == ("primary",)
+
+
+def test_a_legacy_name_past_its_expiry_is_kept_and_reported(tmp_path, caplog):
+    """Loud, not lossy. Dropping it would refuse Archiver's publications
+    `alias_unknown`, a terminal answer to a date nobody acted on."""
+    (name, expiry), *_ = LEGACY_ALIASES.items()
+    path = write_aliases(tmp_path, {name: gcs_entry("co-artifacts")})
+
+    with caplog.at_level("ERROR", logger="src.worker.aliases"):
+        table = load_alias_table(path, today=expiry + timedelta(days=1))
+
+    assert table.provisioned == (name,)
+    (record,) = [r for r in caplog.records if r.message == "a legacy alias is past its expiry"]
+    assert record.alias == name
+    assert record.expiry == expiry.isoformat()
+
+
+def test_a_legacy_name_within_its_expiry_is_not_reported(tmp_path, caplog):
+    (name, expiry), *_ = LEGACY_ALIASES.items()
+    path = write_aliases(tmp_path, {name: gcs_entry("co-artifacts")})
+
+    with caplog.at_level("ERROR", logger="src.worker.aliases"):
+        load_alias_table(path, today=expiry)
+
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]
+
+
+def test_no_legacy_name_has_outlived_its_expiry():
+    """The tripwire. On the expiry this fails every CI run until someone removes the
+    name (Archiver migrated) or moves the date (it has not): the decision the
+    date stands for, forced rather than forgotten."""
+    today = datetime.now(UTC).date()
+    overdue = {name: str(expiry) for name, expiry in LEGACY_ALIASES.items() if today > expiry}
+
+    assert not overdue
