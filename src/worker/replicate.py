@@ -424,9 +424,19 @@ def build_replicate_handler(
         # Off the loop thread: the guard's ``exists`` check is a ``stat`` on the
         # local backend and a network round trip on the object store (#7). Same
         # rule as the byte path — ``tests/worker/test_storage_offloop.py``.
-        source = await asyncio.to_thread(
-            locate_blob, command.blob_uri, store=store, permanent=permanent_stores
-        )
+        try:
+            source = await asyncio.to_thread(
+                locate_blob, command.blob_uri, store=store, permanent=permanent_stores
+            )
+        except PermanentReplicateError:
+            raise
+        except Exception as exc:
+            # The existence check is a network call on the object store — and on
+            # the permanent store for every late publication (#114) — so it fails
+            # the way the read in ``_write`` does, and is classified the same way.
+            # Unclassified, a 503 burned the delivery ceiling into a terminal
+            # ``handler_error`` for an issuer that cannot re-fetch (archiver#175).
+            raise _classify_source_failure(exc) from exc
 
         result = await _write(
             writer,

@@ -734,3 +734,43 @@ async def test_a_permanent_uri_is_replicated_from_the_permanent_store(store, tmp
 
     assert writer.written == [b"persisted bytes"]
     assert len(done.facts) == 1
+
+
+class UnreachableStore(LocalBlobStore):
+    """A store whose existence check fails the way the object store's does (CR 1)."""
+
+    def __init__(self, root, error):
+        super().__init__(root)
+        self._error = error
+
+    def exists(self, fingerprint):
+        raise self._error
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(gexc.ServiceUnavailable("503 backend error"), id="503"),
+        pytest.param(gexc.TooManyRequests("429 rate limited"), id="429"),
+        pytest.param(ConnectionError("reset"), id="no-status"),
+    ],
+)
+async def test_a_transient_failure_locating_the_source_stays_open(tmp_path, error):
+    """The existence check is a network call on the object store, and on the
+    permanent store for every late publication (#114). Unclassified, a 503 burned
+    the delivery ceiling into a terminal `handler_error` — for the one issuer that
+    cannot re-fetch (archiver#175), the failure `_write` already guards against."""
+    store = UnreachableStore(tmp_path, error)
+    uri = store.uri_for(FINGERPRINT)
+
+    with pytest.raises(TransientReplicateError):
+        await handler_for(store, FakeGcs())(command(uri))
+
+
+async def test_a_terminal_failure_locating_the_source_is_left_to_the_ceiling(tmp_path):
+    """Only the transient half is claimed, as for the read (`_classify_source_failure`)."""
+    error = gexc.Forbidden("403 caller lacks storage.objects.get")
+    store = UnreachableStore(tmp_path, error)
+
+    with pytest.raises(gexc.Forbidden):
+        await handler_for(store, FakeGcs())(command(store.uri_for(FINGERPRINT)))
