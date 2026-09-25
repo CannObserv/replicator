@@ -161,9 +161,11 @@ Re-run phase B's permission check with `co-gcs-replicator` added to the bucket l
 
 Anonymous listing returns 401 on `co-gcs-replicator` and both test twins, and 200 on
 `co-gcs-publication`. The publication writer has no key yet, so its binding is checked only by the
-policy output. Neither VM identity holds `storage.buckets.get`, so the bucket properties (soft
-delete, lifecycle, public-access prevention) rest on the creation commands. The anonymous 401 is the
-one observed consequence. The VM's `/tmp` key copies were removed after comparing them byte for byte
+policy output. Neither VM identity holds `storage.buckets.get`, so the operator ran `buckets
+describe` from the workstation. All four are in `US-WEST1`. `co-gcs-replicator` has public-access
+prevention enforced, 7-day soft delete and no lifecycle rule. `co-gcs-publication` has prevention
+inherited, so it is public, with 7-day soft delete. Both test twins have prevention enforced, soft
+delete at 0 and the 1-day age rule. The VM's `/tmp` key copies were removed after comparing them byte for byte
 with the installed keys.
 
 The first live store under the new identity came at 16:39 UTC. It re-stored an existing object, which
