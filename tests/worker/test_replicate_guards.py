@@ -22,7 +22,7 @@ from co_core_sync.drivers.blobstore import GcsBlobStore, LocalBlobStore
 
 from src.core.errors import PermanentReplicateError, ReplicateReason
 from src.worker.aliases import AliasBinding
-from src.worker.replicate import locate_blob, validate_destination
+from src.worker.replicate import LocatedBlob, locate_blob, validate_destination
 from tests.storage.conftest import FakeBucket, FakeClient
 
 FINGERPRINT = "a" * 64
@@ -46,7 +46,7 @@ def stored(store):
 
 
 def test_a_uri_this_store_minted_locates_its_fingerprint(store, stored):
-    assert locate_blob(stored, store=store) == FINGERPRINT
+    assert locate_blob(stored, store=store).fingerprint == FINGERPRINT
 
 
 def test_locating_a_blob_reads_none_of_it(store, stored, monkeypatch):
@@ -66,7 +66,7 @@ def test_locating_a_blob_reads_none_of_it(store, stored, monkeypatch):
             LocalBlobStore, method, lambda self, fp: pytest.fail("the guard must not read the blob")
         )
 
-    assert locate_blob(stored, store=store) == FINGERPRINT
+    assert locate_blob(stored, store=store).fingerprint == FINGERPRINT
 
 
 @pytest.mark.parametrize(
@@ -155,7 +155,7 @@ def test_the_resolver_never_touches_a_path_from_the_message(store, stored, monke
         lambda self, fingerprint: opened.append(fingerprint) or io.BytesIO(b""),
     )
 
-    store.open_stream(locate_blob(stored, store=store))
+    store.open_stream(locate_blob(stored, store=store).fingerprint)
 
     assert opened == [FINGERPRINT]
 
@@ -304,7 +304,7 @@ def gcs_stored(gcs_store):
 
 def test_a_gs_uri_this_store_minted_locates_its_fingerprint(gcs_store, gcs_stored):
     assert gcs_stored.startswith("gs://")
-    assert locate_blob(gcs_stored, store=gcs_store) == FINGERPRINT
+    assert locate_blob(gcs_stored, store=gcs_store).fingerprint == FINGERPRINT
 
 
 @pytest.mark.parametrize(
@@ -404,5 +404,63 @@ def test_a_junk_path_under_the_other_scheme_is_still_invalid(gcs_store):
     """
     with pytest.raises(PermanentReplicateError) as caught:
         locate_blob("file:///etc/passwd", store=gcs_store)
+
+    assert caught.value.reason is ReplicateReason.INVALID_SOURCE
+
+
+# --------------------------------------------------------------------------
+# T3a across stores — the permanent store as a source (#114, plan step 5)
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def permanent_store():
+    """The permanent tier's shape: touch off, its own bucket, the default prefix."""
+    return GcsBlobStore("a-permanent-bucket", client=FakeClient(FakeBucket("a-permanent-bucket")))
+
+
+def test_a_uri_the_permanent_store_minted_locates_in_that_store(store, permanent_store):
+    """Archiver can publish weeks after a fetch, once the bytes are persisted,
+    instead of racing the temp tier's seven days (MUST-7)."""
+    persisted = permanent_store.store(b"persisted bytes", FINGERPRINT, "application/pdf")
+
+    located = locate_blob(persisted, store=store, permanent=(permanent_store,))
+
+    assert located == LocatedBlob(FINGERPRINT, permanent_store)
+
+
+def test_a_temp_uri_still_locates_in_the_temp_store(store, stored, permanent_store):
+    located = locate_blob(stored, store=store, permanent=(permanent_store,))
+
+    assert located == LocatedBlob(FINGERPRINT, store)
+
+
+def test_a_permanent_uri_with_nothing_behind_it_is_expired(store, permanent_store):
+    """Never persisted, or deleted by an operator: a fresh fetch and persist is the
+    remedy, which is what `blob_expired` tells an issuer."""
+    minted = permanent_store.uri_for(FINGERPRINT)
+
+    with pytest.raises(PermanentReplicateError) as caught:
+        locate_blob(minted, store=store, permanent=(permanent_store,))
+
+    assert caught.value.reason is ReplicateReason.BLOB_EXPIRED
+
+
+def test_a_bucket_neither_store_owns_is_still_invalid(gcs_store, permanent_store):
+    """The permanent store widens T3a by exactly one bucket, not to every gs:// URI."""
+    stranger = f"gs://a-stranger-bucket/blobs/{FINGERPRINT}.bin"
+
+    with pytest.raises(PermanentReplicateError) as caught:
+        locate_blob(stranger, store=gcs_store, permanent=(permanent_store,))
+
+    assert caught.value.reason is ReplicateReason.INVALID_SOURCE
+
+
+def test_without_a_permanent_store_its_uris_are_invalid(gcs_store, permanent_store):
+    """A host that reads no permanent store never minted those references."""
+    minted = permanent_store.store(b"persisted bytes", FINGERPRINT, "application/pdf")
+
+    with pytest.raises(PermanentReplicateError) as caught:
+        locate_blob(minted, store=gcs_store)
 
     assert caught.value.reason is ReplicateReason.INVALID_SOURCE

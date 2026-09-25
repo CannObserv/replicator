@@ -233,7 +233,12 @@ def test_the_scrub_covers_the_whole_snippet_agents_are_told_to_source():
     which looks stronger and is weaker: on a fresh clone or in CI nothing exported
     the variable, so it passed without the scrub having done anything (CR round 3).
     """
-    assert {"REPLICATOR_BLOB_BACKEND", "REPLICATOR_BLOB_BUCKET"} <= set(PRODUCTION_ENV)
+    assert {
+        "REPLICATOR_BLOB_BACKEND",
+        "REPLICATOR_BLOB_BUCKET",
+        # #114: the production permanent store, same collision one bucket over.
+        "REPLICATOR_PERMANENT_BUCKET",
+    } <= set(PRODUCTION_ENV)
 
 
 def test_the_test_bucket_variable_has_no_fallback():
@@ -287,6 +292,29 @@ def test_the_bucket_guard_reads_the_keyword_form_too():
 
     with pytest.raises(AssertionError):
         guarded(object(), bucket="co-gcs-replication")
+
+
+def test_the_store_guard_admits_either_test_store_bucket_and_nothing_else():
+    """#114 gives `GcsBlobStore` a second test destination, the permanent twin.
+
+    Both are stores and both are named by their own variable, so the guard takes
+    the set a host provisioned rather than growing a second patch — and every
+    other bucket is still refused before the constructor resolves a credential.
+    """
+    seen = []
+    guarded = guarded_init(
+        lambda self, bucket, **kw: seen.append(bucket),
+        ("a-temp-test-bucket", "a-permanent-test-bucket"),
+        label="GcsBlobStore",
+        marked=True,
+    )
+
+    guarded(object(), "a-temp-test-bucket")
+    guarded(object(), "a-permanent-test-bucket")
+    with pytest.raises(AssertionError, match="refusing GcsBlobStore"):
+        guarded(object(), "a-stranger-bucket")
+
+    assert seen == ["a-temp-test-bucket", "a-permanent-test-bucket"]
 
 
 def test_the_bucket_guard_passes_the_test_bucket():

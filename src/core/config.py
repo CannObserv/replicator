@@ -92,6 +92,16 @@ class Settings(BaseSettings):
     # lifecycle rule, separate grant.
     blob_bucket: str = Field(default="", validation_alias="REPLICATOR_BLOB_BUCKET")
 
+    # The permanent content-addressed store (#114): ``gs://<bucket>/blobs/<sha256>.bin``,
+    # a second source the replicate handler may read a ``blob_uri`` from, so a
+    # publication can follow a persist weeks after the fetch. Empty reads no
+    # permanent store. Host configuration rather than an alias, like the temp
+    # bucket, and read under **any** backend: persisted bytes live in GCS either
+    # way. The prefix is the store's default on purpose — readers derive the
+    # location with co-core's ``gcs_uri(bucket, digest)``, whose default it is too,
+    # and a second knob would be a second place for the two to disagree.
+    permanent_bucket: str = Field(default="", validation_alias="REPLICATOR_PERMANENT_BUCKET")
+
     # Key prefix inside that bucket. Normalized to carry no leading or trailing
     # slash, because it is joined into an object key and a stray one produces
     # either ``//`` or a key rooted somewhere ``uri_for`` would not derive — and

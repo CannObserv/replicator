@@ -701,3 +701,36 @@ async def test_the_success_line_reports_how_long_the_handler_took(store, blob_ur
     # microseconds or accumulated twice, and a number that reads high is exactly
     # the error that would mis-size somebody's threshold.
     assert 50 <= record.duration_ms < 5_000
+
+
+class ReadingGcs(FakeGcs):
+    """A writer that keeps the bytes it was handed, read before the handler closes them."""
+
+    def __init__(self, result):
+        super().__init__(result)
+        self.written: list[bytes] = []
+
+    async def create_if_absent(self, effect):
+        self.written.append(effect.data.read())
+        return await super().create_if_absent(effect)
+
+
+async def test_a_permanent_uri_is_replicated_from_the_permanent_store(store, tmp_path):
+    """Item 3 of #114: the source is whichever store minted the URI, and its bytes
+    are the ones written — the temp store is never asked for them."""
+    permanent = LocalBlobStore(tmp_path / "permanent")
+    persisted = permanent.store(b"persisted bytes", FINGERPRINT, "application/pdf")
+    writer = ReadingGcs(result(GcsCreateOutcome.WROTE, public_url=PUBLIC_URL, generation=1))
+    done = Completions()
+    handler = build_replicate_handler(
+        store=store,
+        permanent_stores=(permanent,),
+        aliases=AliasTable({"primary": BINDING}),
+        writers={"primary": writer},
+        complete=done,
+    )
+
+    await handler(command(persisted))
+
+    assert writer.written == [b"persisted bytes"]
+    assert len(done.facts) == 1

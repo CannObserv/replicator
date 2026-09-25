@@ -186,6 +186,37 @@ def preflight_object_store(store: GcsBlobStore, settings: Settings) -> None:
         raise
 
 
+def build_permanent_stores(settings: Settings) -> tuple[BlobStore, ...]:
+    """The permanent store, if this host reads one, preflighted (#114).
+
+    **Touch stays off** — the shared store's default, and the only safe one: the
+    permanent writer holds no ``update``, and a permanent object has no retention
+    clock to move. A bucket that does not answer fails the boot, like the temp
+    bucket (``preflight_object_store``) and for the same reason: reading from an
+    absent bucket is never what an operator meant, and the symptom otherwise is
+    every late publication refused ``invalid_source``, in Archiver's journal.
+    """
+    if not settings.permanent_bucket:
+        return ()
+    store = GcsBlobStore(settings.permanent_bucket, timeout_seconds=settings.blob_timeout_seconds)
+    try:
+        store.preflight()
+    except Exception as exc:
+        logger.error(
+            "permanent blob bucket is not usable",
+            extra={
+                "permanent_bucket": settings.permanent_bucket,
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+        )
+        raise
+    logger.info(
+        "reading persisted blobs from a permanent store",
+        extra={"permanent_bucket": settings.permanent_bucket},
+    )
+    return (store,)
+
+
 def _unreachable_levels(blob_dir: Path) -> list[tuple[Path, int]]:
     """Every level from ``blob_dir`` up that denies traversal, with its mode."""
     resolved = blob_dir.resolve()
@@ -628,6 +659,7 @@ async def run(
     # `blob_dir` is None under the object-store backend, and every local-only
     # step goes with it: the directory, the traversal warning, and the sweep.
     store, blob_dir = _prepare_storage(settings)
+    permanent_stores = build_permanent_stores(settings)
 
     owns_signals = stop is None
     # Explicit connection policy (CannObserv/broker#1 R7). The bare from_url
@@ -829,6 +861,7 @@ async def run(
                 settings=settings,
                 handler=build_replicate_handler(
                     store=store,
+                    permanent_stores=permanent_stores,
                     aliases=aliases,
                     writers=writers,
                     # The success fact is the handler's to publish, exactly as

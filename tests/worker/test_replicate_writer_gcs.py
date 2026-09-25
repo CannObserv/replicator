@@ -32,7 +32,7 @@ import uuid
 import pytest
 from co_core.pure.models.changes import ReplicationCompleteEvent
 from co_core_aio.gcs import AsyncGcsDriver
-from co_core_sync.drivers.blobstore import LocalBlobStore
+from co_core_sync.drivers.blobstore import GcsBlobStore, LocalBlobStore
 from google.cloud import storage
 
 from src.core.errors import PermanentReplicateError, ReplicateReason
@@ -256,3 +256,46 @@ async def test_a_conflict_fixture_can_reset_itself(gcs, run_prefix):
     gcs.blob(key).delete()
 
     assert gcs.get_blob(key) is None
+
+
+async def test_a_persisted_blob_is_replicated_from_the_permanent_store(
+    driver, gcs, gcs_bucket, gcs_permanent_bucket, command, run_prefix, written, tmp_path
+):
+    """Plan step 5's done condition (#114): a permanent-store source, end to end.
+
+    The temp store is empty, so the only way these bytes reach the destination
+    is through the permanent store's URI — resolved by T3a's exact match against
+    a real bucket, read with touch off, written through the real driver.
+
+    Content-addressed, so the key is shared by every run that stores the same
+    bytes: the artifact carries this run's prefix, which makes its digest, and
+    so its key, this run's own. Removed in the ``finally``, asserted gone.
+    """
+    data = ARTIFACT + run_prefix.encode()
+    fingerprint = fingerprint_of(data)
+    client = storage.Client()
+    permanent = GcsBlobStore(gcs_permanent_bucket, client=client)
+    persisted = client.bucket(gcs_permanent_bucket).blob(permanent.key_for(fingerprint))
+    try:
+        uri = permanent.store(data, fingerprint, MEDIA_TYPE)
+        assert uri == f"gs://{gcs_permanent_bucket}/blobs/{fingerprint}.bin"
+        done = Completions()
+        handler = build_replicate_handler(
+            store=LocalBlobStore(tmp_path),
+            permanent_stores=(permanent,),
+            aliases=AliasTable({"primary": AliasBinding(provider="gcs", bucket=gcs_bucket)}),
+            writers={"primary": driver},
+            complete=done,
+        )
+        destination = f"{run_prefix}/persisted.pdf"
+
+        await handler(command(uri, destination))
+
+        (fact,) = done.facts
+        assert fact.public_url.endswith(destination)
+        assert gcs.get_blob(destination).download_as_bytes() == data
+    finally:
+        if persisted.exists():
+            persisted.delete()
+        assert not persisted.exists(), "teardown left the persisted object behind"
+        client.close()
