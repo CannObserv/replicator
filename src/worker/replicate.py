@@ -8,7 +8,9 @@ removes the bound the fetch trust model rests on
 (``docs/contracts/content-replicate-issuer-contract.md``).
 
 **This writes for ``gcs``** (#29), through ``AsyncGcsDriver.create_if_absent`` —
-T4's primitive, behind every guard below. ``gdrive`` and ``ia`` have no
+T4's primitive, behind every guard below — or, when the blob already sits in a
+bucket, ``copy_if_absent``: the same never-overwrite rule as a server-side
+``rewrite``, so the bytes never transit this host (#114 item 5). ``gdrive`` and ``ia`` have no
 conditional create yet, so a command naming one is refused ``provider_disabled``,
 the same path a host with no binding at all takes.
 
@@ -33,7 +35,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import NamedTuple, Protocol
 from urllib.parse import urlsplit
 
-from co_core.effects.gcs import GcsCreateIfAbsent, GcsCreateResult
+from co_core.effects.gcs import GcsCopyIfAbsent, GcsCreateIfAbsent, GcsCreateResult
 from co_core.pure.models.changes import ContentReplicateCommand
 from co_core.pure.util.blobstore import FINGERPRINT_RE, METADATA_CONTENT_SHA256, BlobStore
 from co_core.pure.util.gcs import GcsCreateOutcome
@@ -322,9 +324,14 @@ def _why_bad_destination(rendered: str) -> str | None:
 # as a Protocol so the handler is testable without a bucket and so a second
 # provider satisfies it without importing anything from here.
 class ConditionalWriter(Protocol):
-    """Write only if absent; never overwrite. The contract's T4 primitive."""
+    """Write only if absent; never overwrite. The contract's T4 primitive.
+
+    Two shapes of it: from bytes this host holds, or bucket to bucket (#114 item 5).
+    """
 
     async def create_if_absent(self, effect: GcsCreateIfAbsent) -> GcsCreateResult: ...
+
+    async def copy_if_absent(self, effect: GcsCopyIfAbsent) -> GcsCreateResult: ...
 
 
 # The archiver ``gcs`` sub-schema's fields, and the only keys read out of
@@ -441,12 +448,16 @@ def build_replicate_handler(
             # ``handler_error`` for an issuer that cannot re-fetch (archiver#175).
             raise _classify_source_failure(exc) from exc
 
+        # A blob already in a bucket is copied there, server-side, rather than
+        # downloaded and uploaded again (#114 item 5).
+        bucket_source = _bucket_object(source.store, source.fingerprint)
         result = await _write(
             writer,
             command,
             key=key,
             fingerprint=source.fingerprint,
             store=source.store,
+            bucket_source=bucket_source,
             timeout_seconds=write_timeout_seconds,
         )
         if result.outcome is GcsCreateOutcome.CONFLICT:
@@ -505,6 +516,10 @@ def build_replicate_handler(
                 "command_id": command.command_id,
                 "provider": command.provider,
                 "outcome": result.outcome.value,
+                # How the bytes got there (#114 item 5): a server-side `copy` from
+                # a bucket, or an `upload` from this host. The runbook's phase C
+                # reads it to confirm the copy is live.
+                "method": "upload" if bucket_source is None else "copy",
                 # In full, deliberately (#87). This is the only place the journal
                 # records what was written as a *key*, and a truncated one is
                 # worse than useless: it cannot be pasted into `gcloud storage`,
@@ -548,9 +563,13 @@ async def _write(
     key: str,
     fingerprint: str,
     store: BlobStore,
+    bucket_source: tuple[str, str] | None,
     timeout_seconds: int,
 ) -> GcsCreateResult:
     """Hand the blob to the provider, classifying whatever comes back.
+
+    ``bucket_source`` — the source's bucket and key — selects the server-side copy
+    (#114 item 5); ``None``, a filesystem store, keeps the upload below.
 
     The stream is closed on every path — a leaked handle per failed command is a
     slow descriptor exhaustion, and the failing paths are the ones that repeat.
@@ -566,6 +585,22 @@ async def _write(
     # read like a per-key condition.
     supplied = command.object_options if isinstance(command.object_options, dict) else {}
     options = {name: supplied.get(name) for name in _GCS_OPTIONS}
+    # The object's content address (#114 item 4): its key is the issuer's, so
+    # nothing else on it leads back to the blob. Rides the write itself — no
+    # `update` grant — and is not back-filled on a 412, so it marks objects
+    # written since.
+    stamp = {METADATA_CONTENT_SHA256: fingerprint}
+
+    if bucket_source is not None:
+        return await _copy(
+            writer,
+            command,
+            key=key,
+            source=bucket_source,
+            metadata=stamp,
+            options=options,
+            timeout_seconds=timeout_seconds,
+        )
 
     try:
         # The heaviest ``BlobStore`` call there is, and therefore the one that
@@ -612,11 +647,7 @@ async def _write(
                     # field required.
                     content_type=command.media_type,
                     timeout_seconds=timeout_seconds,
-                    # The object's content address (#114 item 4): its key is the
-                    # issuer's, so nothing else on it leads back to the blob.
-                    # Rides the create itself — no `update` grant — and is not
-                    # back-filled on a 412, so it marks objects written since.
-                    metadata={METADATA_CONTENT_SHA256: fingerprint},
+                    metadata=stamp,
                     **options,
                 )
             )
@@ -624,6 +655,67 @@ async def _write(
             raise
         except Exception as exc:
             raise _classify_provider_failure(exc) from exc
+
+
+async def _copy(
+    writer: ConditionalWriter,
+    command: ContentReplicateCommand,
+    *,
+    key: str,
+    source: tuple[str, str],
+    metadata: Mapping[str, str],
+    options: Mapping[str, str | None],
+    timeout_seconds: int,
+) -> GcsCreateResult:
+    """The bucket-to-bucket write: a ``rewrite`` under ``ifGenerationMatch=0`` (#114 item 5).
+
+    T4 unchanged: create-if-absent, and a 412 resolved from the two objects'
+    *reported* md5s, which co-core compares — so the outcomes are the upload's.
+    It runs as the alias's writer, which therefore needs ``get`` on the source
+    bucket as well as ``create`` on its own; without it the copy is a 403 and
+    closes ``provider_disabled``, like any other missing grant.
+
+    A missing source is ``FileNotFoundError`` from co-core and only then, so it
+    maps to ``blob_expired`` exactly as a failed read does in ``_write``.
+    """
+    source_bucket, source_key = source
+    try:
+        return await writer.copy_if_absent(
+            GcsCopyIfAbsent(
+                source_bucket=source_bucket,
+                source_blob_name=source_key,
+                blob_name=key,
+                # Required on the copy too, and **as** the command says: a body
+                # naming a property also keeps the temp tier's `customTime` off
+                # the destination (co-core's docstring).
+                content_type=command.media_type,
+                timeout_seconds=timeout_seconds,
+                metadata=metadata,
+                **options,
+            )
+        )
+    except FileNotFoundError as exc:
+        raise _refuse(
+            "the blob for this command was swept before it could be copied",
+            ReplicateReason.BLOB_EXPIRED,
+        ) from exc
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise _classify_provider_failure(exc) from exc
+
+
+def _bucket_object(store: BlobStore, fingerprint: str) -> tuple[str, str] | None:
+    """The bucket and key ``store`` keeps these bytes under, or ``None`` off an object store.
+
+    Parsed from ``store.uri_for`` — a URI the store *minted*, not the message's
+    ``blob_uri`` — so this is not the parse T3a forbids: the only string read is
+    one this host built from a validated fingerprint.
+    """
+    parts = urlsplit(store.uri_for(fingerprint))
+    if parts.scheme != "gs":
+        return None
+    return parts.netloc, parts.path.lstrip("/")
 
 
 def _classify_source_failure(exc: Exception) -> Exception:
