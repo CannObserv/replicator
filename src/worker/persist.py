@@ -1,0 +1,160 @@
+"""The ``content.persist`` handler: keep a blob's bytes in the permanent store (#114 step 6).
+
+The digest is the address (cannobserv#493), so there is no destination to guard
+and no URL to report. What the handler must prove is that the command names
+bytes this host holds under that digest, and then put them in the permanent
+store under the same one:
+
+1. **T3a on the source**, the replicate guard reused: ``blob_uri`` must be one a
+   store here minted — the temp store, or the permanent store itself — matched
+   exactly, never parsed into a path.
+2. **The two digests agree.** The URI's fingerprint must be
+   ``content_fingerprint``; a disagreement, or a malformed digest, is
+   ``invalid_source``, and the consumer decides that rather than the issuer.
+3. **Read, then create if absent**, touch off. The permanent store hashes the
+   bytes it is about to write (cannobserv#492), so a corrupted temp blob is
+   refused before it can reach the tier nothing may delete from.
+4. **Then the fact.** Store, then publish: a ``blob_persisted`` naming absent
+   bytes would be unrepairable by the issuer.
+
+A second persist of the same bytes is a no-op success that re-emits the fact,
+and so is a persist whose ``blob_uri`` already names the permanent store. The
+address is the digest, so an object already there holds these bytes by
+construction, and nothing like ``destination_conflict`` exists here.
+
+**No domain echo**, by co-core's contract: a persisted blob belongs to every
+revision whose bytes hash to it, so the issuer correlates on ``command_id``.
+"""
+
+import asyncio
+import time
+from collections.abc import Awaitable, Callable
+
+from co_core.pure.models.changes import ContentPersistCommand
+from co_core.pure.util.blobstore import BlobStore, FingerprintMismatch
+
+from src.core.errors import (
+    PermanentPersistError,
+    PermanentReplicateError,
+    PersistReason,
+    TransientPersistError,
+    is_terminal_provider_status,
+)
+from src.core.logging import get_logger
+from src.worker.replicate import locate_blob
+
+logger = get_logger(__name__)
+
+# The handler seam the loop dispatches to.
+type PersistHandler = Callable[[ContentPersistCommand], Awaitable[None]]
+
+# The success-fact seam: the command and the stored size. The handler publishes
+# its own success, as the other two command handlers do; the loop sees failures.
+type PersistedPublisher = Callable[[ContentPersistCommand, int], Awaitable[None]]
+
+# Defects on this side of the seam: left unclassified, so the delivery ceiling
+# turns them into a ``handler_error`` fact rather than an endless retry (#114 CR 7).
+# ``FingerprintMismatch`` is a ``ValueError`` and is caught before this.
+_DEFECTS = (ValueError, TypeError, AttributeError, LookupError)
+
+# The guard's two refusals, in this stream's vocabulary. ``locate_blob`` is
+# replicate's and raises replicate's leaf; the tokens are the same wire strings.
+_FROM_LOCATE = {
+    "invalid_source": PersistReason.INVALID_SOURCE,
+    "blob_expired": PersistReason.BLOB_EXPIRED,
+}
+
+
+def build_persist_handler(
+    *,
+    store: BlobStore,
+    permanent: BlobStore,
+    complete: PersistedPublisher,
+) -> PersistHandler:
+    """Wire the persist byte path: T3a, the digest check, the copy, the fact.
+
+    ``store`` is the temp store. ``permanent`` is where bytes are kept, built with
+    touch off; it is also a source, for a ``blob_uri`` that already names it.
+    """
+
+    async def handle(command: ContentPersistCommand) -> None:
+        started = time.monotonic()
+        # Off the loop thread: `exists` is a network round trip on the object store.
+        try:
+            source = await asyncio.to_thread(
+                locate_blob, command.blob_uri, store=store, permanent=(permanent,)
+            )
+        except PermanentReplicateError as exc:
+            raise PermanentPersistError(str(exc), reason=_FROM_LOCATE[exc.reason]) from exc
+        except _DEFECTS:
+            raise
+        except Exception as exc:
+            raise _classify(exc, "the source could not be located") from exc
+
+        if source.fingerprint != command.content_fingerprint:
+            raise PermanentPersistError(
+                "blob_uri names a different digest from content_fingerprint",
+                reason=PersistReason.INVALID_SOURCE,
+            )
+
+        try:
+            data = await asyncio.to_thread(source.store.open, source.fingerprint)
+        except FileNotFoundError as exc:
+            # Swept between the guard's existence check and this read.
+            raise PermanentPersistError(
+                "the blob for this command was swept before it could be read",
+                reason=PersistReason.BLOB_EXPIRED,
+            ) from exc
+        except OSError as exc:
+            raise TransientPersistError(f"the blob could not be read: {exc}") from exc
+        except _DEFECTS:
+            raise
+        except Exception as exc:
+            raise _classify(exc, "the blob could not be read") from exc
+
+        try:
+            await asyncio.to_thread(permanent.store, data, source.fingerprint, command.media_type)
+        except FingerprintMismatch as exc:
+            raise PermanentPersistError(
+                f"the stored bytes do not hash to their fingerprint: {exc}",
+                reason=PersistReason.SOURCE_CORRUPT,
+            ) from exc
+        except _DEFECTS:
+            raise
+        except Exception as exc:
+            if is_terminal_provider_status(exc):
+                raise PermanentPersistError(
+                    f"the permanent store refused the write ({getattr(exc, 'code', None)}): {exc}",
+                    reason=PersistReason.STORE_REFUSED,
+                ) from exc
+            raise TransientPersistError(
+                f"the permanent store write failed: {type(exc).__name__}: {exc}"
+            ) from exc
+
+        # After the object exists. A failed publish re-raises: the command stays
+        # pending and the redelivery re-runs a no-op, so the fact gets another
+        # chance rather than the command closing silently.
+        await complete(command, len(data))
+        logger.info(
+            "persisted a blob",
+            extra={
+                "command_id": command.command_id,
+                "content_fingerprint": source.fingerprint,
+                "size_bytes": len(data),
+                "duration_ms": round((time.monotonic() - started) * 1000, 1),
+            },
+        )
+
+    return handle
+
+
+def _classify(exc: Exception, what: str) -> Exception:
+    """A failure reaching the source: transient unless the status is terminal.
+
+    Only the transient half is claimed, as for replicate's source read: a terminal
+    status is re-raised unclassified for the delivery ceiling to close, because no
+    persist token describes "this worker cannot read its own temp store".
+    """
+    if is_terminal_provider_status(exc):
+        return exc
+    return TransientPersistError(f"{what}: {type(exc).__name__}: {exc}")
