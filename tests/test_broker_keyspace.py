@@ -32,7 +32,8 @@ from pathlib import Path
 import pytest
 
 from src.core.config import Settings
-from src.worker.loop import DEDUPE_KEY_PREFIX, FETCH_SPEC, REPLICATE_SPEC
+from src.worker import loop
+from src.worker.loop import DEDUPE_KEY_PREFIX, FETCH_SPEC, REPLICATE_SPEC, CommandSpec
 
 REPO = Path(__file__).resolve().parents[1]
 SRC = REPO / "src"
@@ -159,10 +160,17 @@ def test_the_documented_command_set_is_the_one_the_code_uses() -> None:
 
 
 def test_the_documented_key_shape_matches_the_code() -> None:
-    """Prefix and both segments, so a third command stream forces a doc edit."""
+    """Prefix and every spec's segment, so a new command stream forces a doc edit.
+
+    Every ``CommandSpec`` in ``loop``, not a list of them: the list this replaced
+    named fetch and replicate, and ``content.persist`` then reached the code and
+    not this section (#114 CR 4).
+    """
     section = documented_section()
     assert DEDUPE_KEY_PREFIX in section
-    for spec in (FETCH_SPEC, REPLICATE_SPEC):
+    specs = [value for value in vars(loop).values() if isinstance(value, CommandSpec)]
+    assert {FETCH_SPEC, REPLICATE_SPEC} <= set(specs), "the spec scan found nothing"
+    for spec in specs:
         assert spec.dedupe_key("<command_id>") in section, (
             f"the {spec.label} stream's key shape is not in the section"
         )
