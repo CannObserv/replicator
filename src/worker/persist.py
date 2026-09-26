@@ -20,7 +20,8 @@ store under the same one:
    bytes would be unrepairable by the issuer.
 
 A second persist of the same bytes is a no-op success that re-emits the fact,
-and so is a persist whose ``blob_uri`` already names the permanent store. The
+and so is a persist whose ``blob_uri`` already names the permanent store, or
+names a temp blob that has expired since an earlier persist kept its digest. The
 address is the digest, so an object already there holds these bytes by
 construction, and nothing like ``destination_conflict`` exists here.
 
@@ -43,7 +44,7 @@ from src.core.errors import (
     is_terminal_provider_status,
 )
 from src.core.logging import get_logger
-from src.worker.replicate import fingerprint_in, locate_blob
+from src.worker.replicate import LocatedBlob, fingerprint_in, locate_blob
 
 logger = get_logger(__name__)
 
@@ -79,6 +80,16 @@ def build_persist_handler(
     touch off; it is also a source, for a ``blob_uri`` that already names it.
     """
 
+    async def already_kept(command: ContentPersistCommand) -> bool:
+        # Its own classification: raised inside the refusal's handler, a failure
+        # here would otherwise escape the one below it unclassified.
+        try:
+            return await asyncio.to_thread(permanent.exists, command.content_fingerprint)
+        except _DEFECTS:
+            raise
+        except Exception as exc:
+            raise _classify(exc, "the permanent store could not be checked") from exc
+
     async def handle(command: ContentPersistCommand) -> None:
         started = time.monotonic()
         # Before existence, not after (#114 CR 1): a gone blob would otherwise
@@ -97,7 +108,13 @@ def build_persist_handler(
                 locate_blob, command.blob_uri, store=store, permanent=(permanent,)
             )
         except PermanentReplicateError as exc:
-            raise PermanentPersistError(str(exc), reason=_FROM_LOCATE[exc.reason]) from exc
+            reason = _FROM_LOCATE[exc.reason]
+            if reason is not PersistReason.BLOB_EXPIRED or not await already_kept(command):
+                raise PermanentPersistError(str(exc), reason=reason) from exc
+            # Gone from where the command pointed, but already kept (#114 CR 2):
+            # the permanent store is the authority on the outcome this command
+            # asks for, and `blob_expired` would tell the issuer its bytes are lost.
+            source = LocatedBlob(command.content_fingerprint, permanent)
         except _DEFECTS:
             raise
         except Exception as exc:

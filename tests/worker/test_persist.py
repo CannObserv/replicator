@@ -337,6 +337,49 @@ async def test_a_terminal_or_defective_read_is_left_to_the_ceiling(tmp_path, per
         await _persist_from(UnreadableTemp(tmp_path / "t", error), permanent)
 
 
+async def test_an_expired_temp_blob_already_kept_is_a_success(temp, permanent):
+    """The permanent store is the authority on whether the bytes are kept (#114 CR 2).
+
+    A reaper re-issuing after the temp tier's seven days, for bytes an earlier
+    command already persisted, was told ``blob_expired`` — that they are lost —
+    and a re-fetch may no longer return them.
+    """
+    permanent.store(DATA, FINGERPRINT, "application/pdf")
+    done = Persisted()
+
+    await build_persist_handler(store=temp, permanent=permanent, complete=done)(
+        command(temp.uri_for(FINGERPRINT))
+    )
+
+    assert done.facts == [("per-1", len(DATA))]
+
+
+class UncheckablePermanent(LocalBlobStore):
+    def __init__(self, root, error):
+        super().__init__(root)
+        self._error = error
+
+    def exists(self, fingerprint):
+        raise self._error
+
+
+@pytest.mark.parametrize(
+    ("error", "raised"),
+    [
+        pytest.param(gexc.ServiceUnavailable("503"), TransientPersistError, id="503"),
+        pytest.param(TypeError("a defect"), TypeError, id="a-defect"),
+    ],
+)
+async def test_a_failure_checking_the_permanent_store_is_classified(temp, tmp_path, error, raised):
+    """The fallback's own round trip: an outage stays open, a defect reaches the ceiling."""
+    permanent = UncheckablePermanent(tmp_path / "p", error)
+
+    with pytest.raises(raised):
+        await build_persist_handler(store=temp, permanent=permanent, complete=Persisted())(
+            command(temp.uri_for(FINGERPRINT))
+        )
+
+
 @pytest.mark.parametrize(
     "error",
     [

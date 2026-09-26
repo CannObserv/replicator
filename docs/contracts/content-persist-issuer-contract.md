@@ -51,7 +51,9 @@ it to your own revision rows.
    bytes.
 
 **A second persist of the same bytes is a no-op success** that publishes `blob_persisted` again, and so
-is a persist whose `blob_uri` already names the permanent store. An object already at the address holds
+is a persist whose `blob_uri` already names the permanent store. So is one whose temp blob has expired
+when the permanent store already holds its digest: the permanent store decides whether the bytes are
+kept, and a temp blob gone *after* a persist is not a loss. An object already at the address holds
 these bytes by construction, so no conflict outcome exists. A later persist under another `media_type`
 is still a success and does not change the stored type.
 
@@ -59,7 +61,8 @@ is still a success and does not change the stored type.
 
 **P1 — Issue on receipt of the revision.** The temp tier keeps a blob for at least seven days from its
 last fetch reference ([fetch contract MUST-7](content-fetch-issuer-contract.md#7-copy-the-bytes-before-the-blob-expires)),
-and a persist that runs after that is refused `blob_expired`. `blob_expires_at` on the `blob_available`
+and a persist that runs after that is refused `blob_expired`, unless an earlier persist already kept
+the digest. `blob_expires_at` on the `blob_available`
 fact is the value to schedule against. Persisting is what removes the clock: once `blob_persisted`
 arrives, publish from the permanent URI, which a replicate command accepts with no expiry (replicate
 contract, MUST-7).
@@ -90,7 +93,7 @@ co-core's contract shape.
 | Condition | `reason` | Issuer's remedy |
 |---|---|---|
 | `blob_uri` is not a URI this host's stores minted, `content_fingerprint` is malformed, or the two name different digests | `invalid_source` | Fix the plumbing; re-fetching fixes nothing |
-| The bytes left the temp tier before the persist ran | `blob_expired` | A fresh fetch, then a persist of what it returns |
+| The bytes left the temp tier before the persist ran, and the permanent store does not hold the digest | `blob_expired` | A fresh fetch, then a persist of what it returns |
 | The stored bytes do not hash to their own fingerprint, so the permanent store refused them | `source_corrupt` | A fresh fetch, as for `blob_expired`. It is a storage fault on Replicator's side, and its journal records it |
 | The permanent store refused the write with a terminal status (403, 404) | `store_refused` | Wait for the operator, then re-issue under a fresh `command_id`. The host cannot write there |
 
