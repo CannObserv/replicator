@@ -275,11 +275,11 @@ def consumer_name_for(settings: Settings, group: str) -> str:
     An empty override (``REPLICATOR_CONSUMER_NAME=``) is falsy and so reads as
     unset rather than registering a nameless consumer.
     """
-    override = (
-        settings.replicate_consumer_name
-        if group == settings.replicate_consumer_group
-        else settings.consumer_name
-    )
+    overrides = {
+        settings.replicate_consumer_group: settings.replicate_consumer_name,
+        settings.persist_consumer_group: settings.persist_consumer_name,
+    }
+    override = overrides.get(group, settings.consumer_name)
     return override or resolve_consumer_name(group)
 
 

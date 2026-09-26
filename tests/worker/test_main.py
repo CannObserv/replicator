@@ -169,6 +169,17 @@ def test_one_precedence_rule_serves_every_caller(monkeypatch):
     assert (
         consumer_name_for(settings, settings.replicate_consumer_group) == "replicator-replicate-1"
     )
+    assert consumer_name_for(settings, settings.persist_consumer_group) == "replicator-persist-1"
+
+
+def test_the_persist_override_moves_only_its_own_group(monkeypatch):
+    monkeypatch.setenv("REPLICATOR_PERSIST_CONSUMER_NAME", "replicator-persist-dev")
+    monkeypatch.delenv("REPLICATOR_CONSUMER_NAME", raising=False)
+    monkeypatch.delenv("REPLICATOR_REPLICATE_CONSUMER_NAME", raising=False)
+    settings = get_settings()
+
+    assert consumer_name_for(settings, settings.persist_consumer_group) == "replicator-persist-dev"
+    assert consumer_name_for(settings, settings.consumer_group) == "replicator-fetch-1"
 
 
 def test_an_override_moves_only_its_own_group(monkeypatch):

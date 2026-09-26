@@ -283,6 +283,25 @@ class Settings(BaseSettings):
         default=None, validation_alias="REPLICATOR_REPLICATE_CONSUMER_NAME"
     )
 
+    # The third command stream's group and override (#114 step 6), for the reasons
+    # the replicate pair above has them.
+    persist_consumer_group: str = Field(
+        default=streams.group_name(streams.CONTENT_PERSIST, SERVICE_NAME),
+        validation_alias="REPLICATOR_PERSIST_CONSUMER_GROUP",
+    )
+    persist_consumer_name: str | None = Field(
+        default=None, validation_alias="REPLICATOR_PERSIST_CONSUMER_NAME"
+    )
+
+    # Whether this worker consumes ``content.persist`` at all (#114 step 6).
+    # **Off by default, and an operator act to turn on**, for a reason beyond
+    # caution: the loop creates its consumer group at boot, and ``XGROUP CREATE``
+    # is the one broker refusal that does not retry. On a broker that has not yet
+    # granted the stream (CannObserv/broker#64) a default-on loop would stop the
+    # whole worker, fetch included. Requires ``permanent_bucket``: persisting needs
+    # somewhere to write.
+    persist_enabled: bool = Field(default=False, validation_alias="REPLICATOR_PERSIST_ENABLED")
+
     # Where the alias table lives, or None on a host that does not replicate.
     #
     # A *path*, not the table itself: the provisioned set is host state, which
@@ -555,12 +574,35 @@ class Settings(BaseSettings):
         in ``XINFO`` on a broker three services share is a reading someone gets
         wrong under time pressure.
         """
-        if self.consumer_group == self.replicate_consumer_group:
+        groups = {
+            "REPLICATOR_CONSUMER_GROUP": self.consumer_group,
+            "REPLICATOR_REPLICATE_CONSUMER_GROUP": self.replicate_consumer_group,
+            "REPLICATOR_PERSIST_CONSUMER_GROUP": self.persist_consumer_group,
+        }
+        names = list(groups)
+        for i, first in enumerate(names):
+            for second in names[i + 1 :]:
+                if groups[first] == groups[second]:
+                    raise ValueError(
+                        f"{first} and {second} "
+                        f"must name different groups (both are {groups[first]!r}) — "
+                        "the consumer-name override is chosen by group, so two groups "
+                        "spelled alike leave no way to tell which override applies"
+                    )
+        return self
+
+    @model_validator(mode="after")
+    def _persist_has_somewhere_to_write(self) -> "Settings":
+        """An enabled persist loop needs the permanent store (#114 step 6).
+
+        Refused here rather than discovered per command: without a bucket every
+        persist would close with a failure fact for what is a host misconfiguration,
+        and Archiver would record each as a refusal of its bytes.
+        """
+        if self.persist_enabled and not self.permanent_bucket:
             raise ValueError(
-                "REPLICATOR_CONSUMER_GROUP and REPLICATOR_REPLICATE_CONSUMER_GROUP "
-                f"must name different groups (both are {self.consumer_group!r}) — "
-                "the consumer-name override is chosen by group, so two groups "
-                "spelled alike leave no way to tell which override applies"
+                "REPLICATOR_PERSIST_ENABLED needs REPLICATOR_PERMANENT_BUCKET — "
+                "persisting copies bytes into the permanent store, and none is configured"
             )
         return self
 
