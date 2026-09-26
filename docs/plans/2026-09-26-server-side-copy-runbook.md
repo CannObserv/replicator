@@ -1,7 +1,7 @@
 ---
 title: Operator runbook for #114 item 5 — the server-side copy's grant
 date: 2026-09-26
-status: phase A pending
+status: phases A–B done 2026-09-26; phase C waits for the first real replicate after the deploy
 plan: 2026-09-26-replicate-content-stamp-and-server-side-copy.md
 ---
 
@@ -42,6 +42,13 @@ done
 
 **Send back:** both policies.
 
+**Done 2026-09-26.** `co-gcs-publication-writer` is listed under `roles/storage.objectViewer` on both
+buckets. On `co-gcs-blobs` it sits beside `co-gcs-blob-reader`, an existing reader; on
+`co-gcs-replicator` beside `co-gcs-replicator-writer`. The policies also show the retired
+`co-gcs-replicator` account still holding the temp role on `co-gcs-blobs`. That is expected: it is
+disabled in phase E of the [persist-by-digest runbook](2026-09-25-persist-by-digest-operator-runbook.md),
+not here.
+
 ## Phase B — check the grant with the writer's key (on `co-replicator`)
 
 This check is read-only, and deliberately so: a probe write into the public bucket would be permanent,
@@ -68,6 +75,15 @@ for b in ['co-gcs-publication', 'co-gcs-blobs', 'co-gcs-replicator', 'co-gcs-rep
 | `co-gcs-replication` | `get`, `list` (public) | unchanged |
 
 `update` and `delete` must appear nowhere.
+
+**Done 2026-09-26.** The output matched the table row for row:
+
+```
+co-gcs-publication     ['create', 'get', 'list']
+co-gcs-blobs           ['get', 'list']
+co-gcs-replicator      ['get', 'list']
+co-gcs-replication     ['get', 'list']
+```
 
 ## Then: merge and deploy
 
