@@ -55,6 +55,9 @@ PRODUCTION_ENV = (
     "REPLICATOR_BLOB_BACKEND",
     "REPLICATOR_BLOB_BUCKET",
     "REPLICATOR_PERMANENT_BUCKET",
+    # Scrubbed with the bucket it requires, or the day an operator turns persist
+    # on, every `Settings()` here refuses persist-without-a-bucket (#114 CR 3).
+    "REPLICATOR_PERSIST_ENABLED",
 )
 
 # The test destination, and the identity to reach it with. **Neither has a
