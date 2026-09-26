@@ -47,7 +47,7 @@ src/api/        — FastAPI app (/health only; not part of the MVP loop)
 src/api/main.py — App factory, lifespan, router registration
 src/core/       — Shared domain logic, logging, config
 src/core/errors.py   — TransientError / PermanentError (what the loop catches) + the *Fetch/*Replicate leaves + FailureReason / ReplicateReason
-src/worker/replicate.py — The content.replicate handler: alias resolve, T3/T3a guards, refusals
+src/worker/replicate.py — The content.replicate handler: alias resolve, T3/T3a guards, refusals; upload or server-side copy
 src/worker/aliases.py — The provisioned destination set, read once from env-referenced host config
 src/worker/replicate_reporter.py — replication_failed on content.artifacts
 src/worker/persist.py — The content.persist handler: T3a, the digest check, the copy into the permanent store (#114)

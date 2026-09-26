@@ -69,6 +69,10 @@ The floor is already 0.19.6, so no dependency change is needed.
    - INFRASTRUCTURE.md's grant table;
    - ARCHITECTURE.md;
    - the #114 plan's item notes.
+
+   *Revised in execution:* the reference and the #114 plan needed no edit — the reference's T4
+   section is about `ia`, and the #114 plan's steps never covered items 4 and 5. TESTING.md's
+   real-bucket section did need one.
 6. **Ship in order:** runbook phases A–B done, then merge and deploy, then phase C.
 
 ## Open questions / risks
