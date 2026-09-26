@@ -257,3 +257,74 @@ async def test_a_failed_success_publish_leaves_the_command_open(temp, permanent)
         await build_persist_handler(store=temp, permanent=permanent, complete=broken)(command(uri))
 
     assert permanent.exists(FINGERPRINT)
+
+
+# The source read, and the rest of the locate classification. These branches were
+# written with the handler; the tests below pin them.
+
+
+class UnreadableTemp(LocalBlobStore):
+    """The existence check passes; the read then fails the given way."""
+
+    def __init__(self, root, error):
+        super().__init__(root, touch_on_rereference=True)
+        self._error = error
+
+    def open(self, fingerprint):
+        raise self._error
+
+
+async def _persist_from(temp, permanent):
+    uri = LocalBlobStore.store(temp, DATA, FINGERPRINT, "application/pdf")
+    await build_persist_handler(store=temp, permanent=permanent, complete=Persisted())(command(uri))
+
+
+async def test_a_blob_swept_between_the_check_and_the_read_is_expired(tmp_path, permanent):
+    """The retention sweep runs beside this loop; the window between the two is real."""
+    with pytest.raises(PermanentPersistError) as caught:
+        await _persist_from(UnreadableTemp(tmp_path / "t", FileNotFoundError("gone")), permanent)
+
+    assert caught.value.reason is PersistReason.BLOB_EXPIRED
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(OSError(28, "No space left on device"), id="a-full-disk"),
+        pytest.param(gexc.ServiceUnavailable("503"), id="503"),
+    ],
+)
+async def test_a_transient_read_failure_stays_open(tmp_path, permanent, error):
+    with pytest.raises(TransientPersistError):
+        await _persist_from(UnreadableTemp(tmp_path / "t", error), permanent)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(gexc.Forbidden("403 no storage.objects.get"), id="a-terminal-status"),
+        pytest.param(TypeError("a defect"), id="a-defect"),
+    ],
+)
+async def test_a_terminal_or_defective_read_is_left_to_the_ceiling(tmp_path, permanent, error):
+    """No persist token says "this worker cannot read its own temp store"."""
+    with pytest.raises(type(error)):
+        await _persist_from(UnreadableTemp(tmp_path / "t", error), permanent)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(gexc.Forbidden("403 no storage.objects.get"), id="a-terminal-status"),
+        pytest.param(TypeError("a defect"), id="a-defect"),
+    ],
+)
+async def test_a_terminal_or_defective_locate_failure_is_left_to_the_ceiling(
+    tmp_path, permanent, error
+):
+    temp = UnreachableTemp(tmp_path / "t", error)
+
+    with pytest.raises(type(error)):
+        await build_persist_handler(store=temp, permanent=permanent, complete=Persisted())(
+            command(temp.uri_for(FINGERPRINT))
+        )
