@@ -1,9 +1,11 @@
 # The `content.persist` issuer contract
 
-**Status: shipped, and off until an operator turns it on.** `src/` runs a `content.persist` loop when
-`REPLICATOR_PERSIST_ENABLED` is set. It is off by default on every host, because the loop creates its
-consumer group at boot, and a broker that has not granted `content.persist` refuses that once and for
-all. The grant is CannObserv/broker#64. The loop copies a blob into the permanent content-addressed
+**Status: shipped, and live in production since 2026-09-26T21:38Z.** `src/` runs a `content.persist`
+loop when `REPLICATOR_PERSIST_ENABLED` is set. It is off by default on every host, because the loop
+creates its consumer group at boot, and a broker that has not granted `content.persist` refuses that
+once and for all. The grant is CannObserv/broker#64, live since 2026-09-26T02:42Z; `co-replicator`
+then set the flag, and its `worker ready` line reports `persist: enabled`. **Archiver may issue now**,
+once it runs co-core 0.19.6 (P5) — broker#64 fixed the order: Replicator enables first. The loop copies a blob into the permanent content-addressed
 store and reports the outcome on `content.artifacts` (#114 step 6, cannobserv#493).
 
 **Audience:** Archiver, the sole issuer ([archiver#276](https://github.com/CannObserv/archiver/issues/276)).

@@ -140,10 +140,11 @@ rather than a policy, and it was closed with a **Redis 7.0 ACL selector** rather
 command grant:
 
 ```
-(+xdel ~content.fetch.dlq ~content.replicate.dlq)
+(+xdel ~content.fetch.dlq ~content.replicate.dlq ~content.persist.dlq)
 ```
 
-So `XDEL` works on those two queues and is refused on every other key this credential can
+The third queue joined with `content.persist` (broker#64, read from broker's `deploy/redis-acl.conf` on
+2026-09-26). So `XDEL` works on those three queues and is refused on every other key this credential can
 reach — the command streams and the fact streams included. The root permission set never
 gains `+xdel`. Verified on the broker's node against 7.0.15, not from here: this host can
 confirm a drained queue by its depth (`content.replicate.dlq` is 0) but cannot prove the
@@ -174,6 +175,7 @@ See [Redis](#redis) for what to know before asking.
 # filter to entries idle at least that long (what claim_stale would reclaim).
 rcli XPENDING content.fetch replicator.fetch - + 10
 rcli XPENDING content.replicate replicator.replicate - + 10
+rcli XPENDING content.persist replicator.persist - + 10
 
 # Dead-lettered frames. Reading, triaging and deleting are all granted here.
 # Each entry is the frame plus dlq.reason / dlq.source_id / dlq.group /
@@ -182,10 +184,13 @@ rcli XLEN content.fetch.dlq
 rcli XRANGE content.fetch.dlq - + COUNT 5
 rcli XLEN content.replicate.dlq
 rcli XRANGE content.replicate.dlq - + COUNT 5
+rcli XLEN content.persist.dlq
+rcli XRANGE content.persist.dlq - + COUNT 5
 
 # Disposal, once a frame is triaged and its command closed. One entry at a
 # time by id, which is the whole point of a selector: a drain cannot become a
-# wipe. Resting state for both queues is 0 — verified 2026-09-11, both at
+# wipe. Resting state for every queue is 0 — content.persist.dlq at 0 when its
+# stream was created, 2026-09-26; the other two verified 2026-09-11, both at
 # XLEN 0 (broker#12). The id comes from the XRANGE above.
 ENTRY_ID=1789074122299-0
 rcli XDEL content.replicate.dlq "$ENTRY_ID"
