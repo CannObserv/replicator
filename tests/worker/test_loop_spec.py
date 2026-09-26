@@ -24,7 +24,7 @@ from dataclasses import dataclass
 import pytest
 from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.envelope import to_wire
-from co_core.pure.models.changes import ContentReplicateCommand
+from co_core.pure.models.changes import ContentPersistCommand, ContentReplicateCommand
 
 from src.core.errors import PermanentError
 from src.worker import loop
@@ -344,3 +344,52 @@ async def test_a_describe_naming_a_log_record_attribute_cannot_break_the_dead_le
     assert record.destination == "reports/2026/abcd.pdf"  # the safe key survived
     assert record.module != "shadowed"  # the reserved one did not shadow it
     assert record.dropped_detail_keys == ["module"]  # and its loss is on the record
+
+
+# The persist spec (#114 step 6) — the shipped one, since its report shape is the
+# point: no ``status_code`` and no ``attempts``, because ``PersistFailedEvent``
+# models neither.
+
+
+def make_persist_command_model(**overrides) -> ContentPersistCommand:
+    """A well-formed ``ContentPersistCommand``, shared with the persist handler tests."""
+    fields = {
+        "occurred_at": "2026-09-26T00:00:00.000000Z",
+        "command_id": "per-1",
+        "content_fingerprint": "ab" * 32,
+        "blob_uri": f"file:///var/lib/replicator/blobs/ab/ab/{'ab' * 32}.bin",
+        "media_type": "application/pdf",
+    }
+    return ContentPersistCommand(**{**fields, **overrides})
+
+
+def test_the_persist_spec_labels_its_stream_and_has_its_own_namespace():
+    assert loop.PERSIST_SPEC.label == streams.CONTENT_PERSIST
+    assert loop.PERSIST_SPEC.dedupe_key("x") not in {
+        FETCH_SPEC.dedupe_key("x"),
+        loop.REPLICATE_SPEC.dedupe_key("x"),
+    }
+
+
+def test_the_persist_report_echoes_the_digest_and_drops_what_its_fact_cannot_carry():
+    command = make_persist_command_model()
+
+    report = loop.PERSIST_SPEC.build_report(
+        command, reason="blob_expired", status_code=500, attempts=3, detail="gone"
+    )
+
+    assert report == loop.PersistFailureReport(
+        command_id="per-1",
+        content_fingerprint="ab" * 32,
+        reason="blob_expired",
+        detail="gone",
+    )
+    assert not hasattr(report, "status_code")
+    assert not hasattr(report, "attempts")
+
+
+def test_a_persist_command_is_described_by_its_digest():
+    """No URL and no destination: what names a persist is the bytes it keeps."""
+    command = make_persist_command_model()
+
+    assert loop.PERSIST_SPEC.describe(command) == {"content_fingerprint": "ab" * 32}

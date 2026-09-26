@@ -38,7 +38,11 @@ from typing import Protocol
 from co_core.effects.bus import BusMessage, PoisonFrame
 from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
-from co_core.pure.models.changes import ContentFetchCommand, ContentReplicateCommand
+from co_core.pure.models.changes import (
+    ContentFetchCommand,
+    ContentPersistCommand,
+    ContentReplicateCommand,
+)
 from co_core_aio.bus import AsyncBusConsumer
 from redis.asyncio import Redis
 from redis.exceptions import BusyLoadingError, NoPermissionError, OutOfMemoryError
@@ -208,6 +212,22 @@ class ReplicateFailureReport:
     detail: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class PersistFailureReport:
+    """What a ``persist_failed`` fact needs (#114 step 6).
+
+    No ``attempts`` and no ``status_code``: ``PersistFailedEvent`` models neither.
+    No domain echo either — co-core's persist contract carries none, because a
+    persisted blob is shared by every revision whose bytes hash to it
+    (cannobserv#493). ``content_fingerprint`` is echoed verbatim, malformed or not.
+    """
+
+    command_id: str
+    content_fingerprint: str
+    reason: str
+    detail: str | None = None
+
+
 class Command(Protocol):
     """The only two fields the loop reads off a command, whatever stream it came from.
 
@@ -357,6 +377,21 @@ REPLICATE_SPEC: CommandSpec[ContentReplicateCommand, ReplicateFailureReport] = C
     ),
     # A replicate command has no URL; what names it is where it was going.
     describe=lambda command: {"destination": command.destination},
+)
+
+# The third command stream (#114 step 6). ``status_code`` and ``attempts`` are
+# bound and discarded: its fact models neither.
+PERSIST_SPEC: CommandSpec[ContentPersistCommand, PersistFailureReport] = CommandSpec(
+    command_type=ContentPersistCommand,
+    label=streams.CONTENT_PERSIST,
+    dedupe_segment="persist",
+    build_report=lambda command, *, status_code=None, attempts=None, **cause: PersistFailureReport(
+        command_id=command.command_id,
+        content_fingerprint=command.content_fingerprint,
+        **cause,
+    ),
+    # No URL and no destination: what names a persist is the bytes it keeps.
+    describe=lambda command: {"content_fingerprint": command.content_fingerprint},
 )
 
 

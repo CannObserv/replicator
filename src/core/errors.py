@@ -215,6 +215,39 @@ class ReplicateReason(StrEnum):
     """
 
 
+class PersistReason(StrEnum):
+    """The ``reason`` token on a ``persist_failed`` fact (#114 step 6).
+
+    Its own enum for ``ReplicateReason``'s reason: the vocabulary is
+    producer-owned per stream. The loop's two (``unsupported_schema_version``,
+    ``handler_error``) stay on ``FailureReason`` and reach ``content.artifacts``
+    for this stream too.
+
+    Normative source: ``docs/contracts/content-persist-issuer-contract.md``. The
+    first two are fixed by co-core's contract shape (cannobserv#493,
+    ``PersistFailedEvent``); the other two are Replicator's.
+    """
+
+    INVALID_SOURCE = "invalid_source"
+    """``blob_uri`` is not a reference this host's stores minted, or it names a
+    different digest from ``content_fingerprint`` (T3a). Re-fetching fixes nothing."""
+
+    BLOB_EXPIRED = "blob_expired"
+    """The bytes left the temp tier before the persist ran. The remedy is the
+    issuer's: a fresh fetch, then a persist of what it returns (MUST-7)."""
+
+    SOURCE_CORRUPT = "source_corrupt"
+    """The stored bytes do not hash to their own fingerprint, so the permanent store
+    refused them (co-core's ``FingerprintMismatch``, cannobserv#492). The remedy is a
+    fresh fetch, as for ``blob_expired``; separate because it is a storage fault on
+    this side worth an operator's look, not a timing one on the issuer's."""
+
+    STORE_REFUSED = "store_refused"
+    """The permanent store refused the write with a terminal status (403, 404):
+    the host cannot write there, and the remedy is an operator act. The persist
+    counterpart of replicate's ``provider_disabled``."""
+
+
 class HandlerError(RuntimeError):
     """Base for failures a command handler reports deliberately."""
 
@@ -318,6 +351,20 @@ class PermanentReplicateError(PermanentError):
     """
 
     def __init__(self, message: str, *, reason: ReplicateReason) -> None:
+        super().__init__(message, reason=reason)
+
+
+class TransientPersistError(TransientError):
+    """A ``content.persist`` handler's transient failure: a store 5xx, a timeout."""
+
+
+class PermanentPersistError(PermanentError):
+    """A ``content.persist`` handler's permanent failure, narrowed to ``PersistReason``.
+
+    No ``status_code``: ``PersistFailedEvent`` models none.
+    """
+
+    def __init__(self, message: str, *, reason: PersistReason) -> None:
         super().__init__(message, reason=reason)
 
 
