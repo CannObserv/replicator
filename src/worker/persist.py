@@ -90,6 +90,29 @@ def build_persist_handler(
         except Exception as exc:
             raise _classify(exc, "the permanent store could not be checked") from exc
 
+    async def keep(data: bytes, command: ContentPersistCommand) -> None:
+        # Create-if-absent, touch off; the store re-hashes `data` first (#492).
+        try:
+            await asyncio.to_thread(
+                permanent.store, data, command.content_fingerprint, command.media_type
+            )
+        except FingerprintMismatch as exc:
+            raise PermanentPersistError(
+                f"the stored bytes do not hash to their fingerprint: {exc}",
+                reason=PersistReason.SOURCE_CORRUPT,
+            ) from exc
+        except _DEFECTS:
+            raise
+        except Exception as exc:
+            if is_terminal_provider_status(exc):
+                raise PermanentPersistError(
+                    f"the permanent store refused the write ({getattr(exc, 'code', None)}): {exc}",
+                    reason=PersistReason.STORE_REFUSED,
+                ) from exc
+            raise TransientPersistError(
+                f"the permanent store write failed: {type(exc).__name__}: {exc}"
+            ) from exc
+
     async def handle(command: ContentPersistCommand) -> None:
         started = time.monotonic()
         # Before existence, not after (#114 CR 1): a gone blob would otherwise
@@ -135,24 +158,11 @@ def build_persist_handler(
         except Exception as exc:
             raise _classify(exc, "the blob could not be read") from exc
 
-        try:
-            await asyncio.to_thread(permanent.store, data, source.fingerprint, command.media_type)
-        except FingerprintMismatch as exc:
-            raise PermanentPersistError(
-                f"the stored bytes do not hash to their fingerprint: {exc}",
-                reason=PersistReason.SOURCE_CORRUPT,
-            ) from exc
-        except _DEFECTS:
-            raise
-        except Exception as exc:
-            if is_terminal_provider_status(exc):
-                raise PermanentPersistError(
-                    f"the permanent store refused the write ({getattr(exc, 'code', None)}): {exc}",
-                    reason=PersistReason.STORE_REFUSED,
-                ) from exc
-            raise TransientPersistError(
-                f"the permanent store write failed: {type(exc).__name__}: {exc}"
-            ) from exc
+        # Read from the permanent store — the URI named it, or the temp blob had
+        # expired — means already kept: the create-if-absent is a known no-op, and
+        # skipping it saves a full re-hash and a 412 round trip (#114 CR 6).
+        if source.store is not permanent:
+            await keep(data, command)
 
         # After the object exists. A failed publish re-raises: the command stays
         # pending and the redelivery re-runs a no-op, so the fact gets another

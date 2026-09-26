@@ -252,6 +252,20 @@ async def test_a_defect_in_the_store_reaches_the_ceiling(temp, tmp_path):
         )(command(uri))
 
 
+@pytest.mark.parametrize("names", ["the-permanent-store", "an-expired-temp-blob"])
+async def test_bytes_read_from_the_permanent_store_are_not_written_back(temp, tmp_path, names):
+    """Already there, so the create-if-absent is a known no-op (#114 CR 6): a full
+    re-hash and a 412 round trip spent on an outcome decided in advance."""
+    permanent = RefusingStore(tmp_path / "p", AssertionError("wrote to the permanent store"))
+    kept = LocalBlobStore.store(permanent, DATA, FINGERPRINT, "application/pdf")
+    uri = kept if names == "the-permanent-store" else temp.uri_for(FINGERPRINT)
+    done = Persisted()
+
+    await build_persist_handler(store=temp, permanent=permanent, complete=done)(command(uri))
+
+    assert done.facts == [("per-1", len(DATA))]
+
+
 class UnreachableTemp(LocalBlobStore):
     def __init__(self, root, error):
         super().__init__(root)
