@@ -1,7 +1,7 @@
 ---
 title: Operator runbook for Persist by digest, step 4 — the publication cutover
 date: 2026-09-25
-status: phases A and B done 2026-09-25; C waits on a decision about co-gcs-cli-writer
+status: phases A–D done 2026-09-26; the first real replication into the new bucket is still to come
 plan: 2026-09-25-content-addressed-persist-and-storage-naming.md
 ---
 
@@ -46,8 +46,9 @@ gcloud storage buckets get-iam-policy gs://co-gcs-replication --format="yaml(bin
 **Done 2026-09-25.** The policy listed three service accounts with `objectCreator` on the old bucket.
 Two were expected: `co-gcs-replicator-writer` (the interim grant) and `co-gcs-replicator` (retired).
 The third, **`co-gcs-cli-writer`**, also holds `objectViewer`, and no CannObserv repo names it. It
-most likely serves a tool outside these repos, perhaps whatever writes `console_workspace/`. Phase C
-leaves it alone until the operator decides.
+serves **CannObserv/cli**, which writes to the old bucket directly. It keeps its grants, by the
+operator's decision on 2026-09-26, until the CLI moves onto the Archiver cohort; that migration is
+not yet scheduled. The old bucket is therefore closed to Replicator, not to every writer.
 
 ## Phase B — bind the new bucket (on `co-replicator`)
 
@@ -158,6 +159,10 @@ gcloud storage buckets get-iam-policy gs://co-gcs-replication --format="yaml(bin
 
 **Send back:** the final policy output.
 
+**Done 2026-09-26.** Both Replicator accounts lost `objectCreator`. `co-gcs-cli-writer` keeps
+`objectCreator` and `objectViewer`, and the retired `co-gcs-replicator` keeps `objectViewer` until
+the first runbook's phase E disables it. The probe object was deleted.
+
 ## Phase D — verify (on `co-replicator`)
 
 - **The old bucket refuses writes.** Re-run B1 with the worker's key
@@ -168,6 +173,12 @@ gcloud storage buckets get-iam-policy gs://co-gcs-replication --format="yaml(bin
 - **The plan's done condition, whenever it comes.** The next `replicated a blob` line in the journal
   names its `key`. Check that the key is served at `https://storage.googleapis.com/co-gcs-publication/<key>`
   and is absent from the old bucket.
+
+**Done 2026-09-26.** Checked with the worker's key: `get` and `list` only on `co-gcs-replication`
+and on `co-gcs-publication`, and its own grants on the two private buckets. So neither public bucket
+takes a write from the worker's identity. The probe returns 404, and the VM's key copy is removed. The
+journal has no warnings since the 22:53 restart. The last real replication was 2026-09-16, so the
+done condition waits on Archiver's next one.
 
 A repo change lands with phase B. It updates the alias table's description in `docs/ENVIRONMENT.md`
 and `README.md`, the alias list's state column in the replicate contract, and the old bucket's writer

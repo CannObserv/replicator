@@ -131,6 +131,10 @@ Archiver's RepSpecs move to `gcs-publication` in the publication cutover.
    `co-gcs-replication`, including step 2's interim grant. Done when the next `replication_complete` names the new bucket, and a
    write to the old bucket is refused. `primary` is removed once Archiver's RepSpecs no longer name
    it. Commands: [the cutover runbook](2026-09-25-publication-cutover-runbook.md).
+
+   **Cut over 2026-09-25; the old bucket was closed to Replicator on 2026-09-26.** The CLI's
+   `co-gcs-cli-writer` keeps its write access for now. The done condition waits on the next real
+   replication.
 5. **Replicator code, test-first** (no wire change):
    - The alias `credentials_file`, with the T1 edit to the contract.
    - The alias naming rule enforced at load, with the `primary` allowlist and its expiry, plus the
