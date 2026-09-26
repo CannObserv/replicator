@@ -1,7 +1,8 @@
 # The `content.replicate` issuer contract
 
 **Status: shipped for `gcs`.** `src/` runs a `content.replicate` loop that resolves the alias,
-guards both paths, writes through `AsyncGcsDriver.create_if_absent`, and emits both facts. All six
+guards both paths, writes through `AsyncGcsDriver.create_if_absent` — or `copy_if_absent`, a
+server-side copy, when the blob already sits in a bucket (#114) — and emits both facts. All six
 refusals are reachable. `gdrive` and `ia` have no conditional create yet and are refused
 `provider_disabled` — the same path a host with no binding takes.
 
@@ -17,7 +18,7 @@ adopters had built.
 | T2 — an alias resolves only if provisioned on this host | shipped (`REPLICATOR_REPLICATION_ALIASES_FILE`); names follow [the alias naming rule](#alias-names) since #114 |
 | T3 — containment, and the path guard | shipped for `gcs`; the `gdrive`/`ia` rows arrive with those providers |
 | T3a — resolve by fingerprint, never by path | shipped; since #114 a `blob_uri` may name the temp store **or** the host's permanent store |
-| T4 — the absent/matching/differing table | shipped for `gcs`, and **verified in CI** against `co-gcs-test-replication` — all three rows, every push (#53). Was a hand-run against production, which could never be repeated: that bucket grants no `delete`, so the conflict row could not reset itself (#38) |
+| T4 — the absent/matching/differing table | shipped for `gcs`, and **verified in CI** against `co-gcs-test-replication` — all three rows, every push (#53), through the upload and, since #114, the server-side copy. Was a hand-run against production, which could never be repeated: that bucket grants no `delete`, so the conflict row could not reset itself (#38) |
 | T5 — `ia` gated on an operator act | shipped by construction: `ia` cannot be provisioned at all yet |
 | T6 — `public_url` never echoed from the command | shipped, **reworded** — see below (#36) |
 | Charter — the alias is a key, never a value | shipped, plus a second scan that no payload field feeds a credential parameter |
@@ -199,9 +200,15 @@ intuited to be, and why Wayback semantics would be a fourth provider rather than
 
 | Provider | Create-if-absent primitive |
 |---|---|
-| `gcs` | `ifGenerationMatch=0` — atomic. On 412, compare md5 to choose row two or row three |
+| `gcs` | `ifGenerationMatch=0` — atomic. On 412, compare md5 to choose row two or row three. A blob already in a bucket (the `gcs` temp tier, the permanent store) is copied by `rewrite` under the same precondition, and the md5s compared are the two objects' *reported* ones (#114) |
 | `gdrive` | `get_files_by_name(name, parent_id)` then compare `md5Checksum` — the method already exists on cannobserv's `GoogleDriveAdapter` |
 | `ia` | `upload(..., checksum=True)` skips when the remote md5 matches. Unreliable while tasks are pending on the item ([jjjake/internetarchive#289](https://github.com/jjjake/internetarchive/issues/289)), so pair it with `x-archive-keep-old-version:1` as the recoverable-overwrite backstop |
+
+**The content stamp (informative, #114).** Every object Replicator writes to a `gcs` destination
+carries the custom metadata `co-content-sha256=<content_fingerprint>`, so a public artifact leads back
+to its content address. It is set on the create itself and never back-filled: an object written before
+the release, or one a redelivery found already there (row two), may not carry it. Read it as "objects
+written since", not as a property of every object.
 
 ### T5 — `ia` is public and permanent
 

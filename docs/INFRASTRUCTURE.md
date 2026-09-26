@@ -173,7 +173,7 @@ only in code. Design: [the plan](plans/2026-09-25-content-addressed-persist-and-
 |---|---|---|---|---|
 | `co-gcs-blobs` | temp tier (above) | `co-gcs-replicator-writer` | the custom temp role: create, get, list, update | `co-gcs-test-blobs` |
 | `co-gcs-replicator` | permanent content-addressed store, private, public access prevented, 7-day soft delete, no lifecycle | `co-gcs-replicator-writer` | `objectCreator` + `objectViewer`: create, get, list, never update or delete | `co-gcs-test-replicator` |
-| `co-gcs-publication` | public citable copies (`allUsers` read) | `co-gcs-publication-writer` | `objectCreator` | `co-gcs-test-publication` |
+| `co-gcs-publication` | public citable copies (`allUsers` read) | `co-gcs-publication-writer` | `objectCreator`; plus `objectViewer` on `co-gcs-blobs` and `co-gcs-replicator`, the sources of its server-side copy (#114 item 5, [runbook](plans/2026-09-26-server-side-copy-runbook.md)) | `co-gcs-test-publication` |
 | `co-gcs-replication` | legacy public bucket; publication left it at the cutover (2026-09-25) | no Replicator identity since the [cutover runbook](plans/2026-09-25-publication-cutover-runbook.md)'s phase C (2026-09-26). `co-gcs-cli-writer` (CannObserv/cli) keeps `objectCreator` until the CLI moves onto the Archiver cohort | — | `co-gcs-test-replication` |
 
 The test twins are prevented from public access, have soft delete off and a 1-day age rule, and
@@ -183,7 +183,8 @@ The worker runs as `co-gcs-replicator-writer` (`/etc/replicator/co-gcs-replicato
 its ADC). It reads `co-gcs-replicator` when `REPLICATOR_PERMANENT_BUCKET` names it. The publication
 writer's key, `/etc/replicator/co-gcs-publication-writer.json`, was minted at the cutover and is named
 by the `credentials_file` of both publication aliases ([ENVIRONMENT.md](ENVIRONMENT.md)). `co-gcs-replicator` grants `objectViewer` only to identities that
-open its bytes; Archiver passes references through and needs none.
+open its bytes — the worker, and the publication writer, whose `rewrite` reads the source (#114 item 5);
+Archiver passes references through and needs none.
 
 ## The GCS test bucket — the opposite grant, on purpose (#38, #50)
 

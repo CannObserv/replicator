@@ -117,6 +117,13 @@ terminal `destination_conflict` with nothing overwritten. The fourth outcome,
 create and the confirming read is either flaky or needs a seam in the write path
 that exists only for the test, and it is covered against the fake.
 
+The same rows run again **through the server-side copy** (#114 item 5): a blob
+stored in `co-gcs-test-blobs`, touch on, is copied into the destination by
+`rewrite`. Those tests also assert what only a real bucket can vouch for — the
+`co-content-sha256` stamp lands, and the temp tier's `customTime` does *not* ride
+onto the copy. Their temp blobs sit under the run's own prefix and are removed and
+asserted gone the same way.
+
 Each test writes under its own `replicator-t4/<random>/` prefix and its teardown
 deletes it, then **asserts the prefix is empty** — a cleanup that silently missed
 an object would be collected by the lifecycle rule a day later, so nothing would
