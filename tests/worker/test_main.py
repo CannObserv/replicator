@@ -7,6 +7,7 @@ contract that actually matters for competing consumers and crash recovery.
 
 import asyncio
 import errno
+import hashlib
 import json
 import logging
 import os
@@ -168,6 +169,17 @@ def test_one_precedence_rule_serves_every_caller(monkeypatch):
     assert (
         consumer_name_for(settings, settings.replicate_consumer_group) == "replicator-replicate-1"
     )
+    assert consumer_name_for(settings, settings.persist_consumer_group) == "replicator-persist-1"
+
+
+def test_the_persist_override_moves_only_its_own_group(monkeypatch):
+    monkeypatch.setenv("REPLICATOR_PERSIST_CONSUMER_NAME", "replicator-persist-dev")
+    monkeypatch.delenv("REPLICATOR_CONSUMER_NAME", raising=False)
+    monkeypatch.delenv("REPLICATOR_REPLICATE_CONSUMER_NAME", raising=False)
+    settings = get_settings()
+
+    assert consumer_name_for(settings, settings.persist_consumer_group) == "replicator-persist-dev"
+    assert consumer_name_for(settings, settings.consumer_group) == "replicator-fetch-1"
 
 
 def test_an_override_moves_only_its_own_group(monkeypatch):
@@ -1165,8 +1177,8 @@ async def test_the_local_backend_restarts_the_retention_clock_on_a_re_store(
     await run(_stopped())
 
     (store,) = built
-    fingerprint = "c" * 64
-    path = tmp_path / "blobs" / "cc" / "cc" / f"{fingerprint}.bin"
+    fingerprint = hashlib.sha256(b"bytes").hexdigest()
+    path = tmp_path / "blobs" / fingerprint[0:2] / fingerprint[2:4] / f"{fingerprint}.bin"
     store.store(b"bytes", fingerprint, "text/plain")
     backdated = time.time() - 3600
     os.utime(path, (backdated, backdated))

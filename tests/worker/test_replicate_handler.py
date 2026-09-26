@@ -12,6 +12,8 @@ takes an authenticated read — so it is decided from the write's own outcome an
 lives with the rest of the write path in ``test_replicate_writer.py``.
 """
 
+import hashlib
+
 import pytest
 from co_core_sync.drivers.blobstore import LocalBlobStore
 
@@ -20,7 +22,8 @@ from src.worker.aliases import AliasBinding, AliasTable
 from src.worker.replicate import build_replicate_handler
 from tests.worker.test_loop_spec import make_replicate_command_model
 
-FINGERPRINT = "b" * 64
+# The real digest of the bytes stored under it (co-core 0.19.6, cannobserv#492).
+FINGERPRINT = hashlib.sha256(b"artifact bytes").hexdigest()
 BINDING = AliasBinding(provider="gcs", bucket="co-artifacts", prefix="reps")
 
 

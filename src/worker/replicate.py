@@ -128,7 +128,7 @@ def locate_blob(
     too late, which a fresh fetch under a new ``command_id`` does fix (MUST-7
     inverted — for replicate the scheduling obligation is the issuer's).
     """
-    fingerprint = _fingerprint_in(blob_uri)
+    fingerprint = fingerprint_in(blob_uri)
     stores = (store, *permanent)
     # Each store's URI for this fingerprint, temp first. At most one can match:
     # a URI names a bucket (or a root) and a prefix, and no two stores share both.
@@ -185,7 +185,7 @@ def _names_another_backend(blob_uri: str, minted: Sequence[str]) -> bool:
     difference, and it is one ``uri_for`` hands over for free.
 
     Neither guard the first cut carried survived: this is reached only where
-    ``_fingerprint_in`` already returned a fingerprint, which means ``blob_uri``
+    ``fingerprint_in`` already returned a fingerprint, which means ``blob_uri``
     parsed and ``minted`` exists. A ``None`` check and a ``ValueError`` catch for
     states the caller has already excluded are lines nothing can execute, and
     coverage said so.
@@ -193,7 +193,7 @@ def _names_another_backend(blob_uri: str, minted: Sequence[str]) -> bool:
     return urlsplit(blob_uri).scheme not in {urlsplit(uri).scheme for uri in minted}
 
 
-def _fingerprint_in(blob_uri: str) -> str | None:
+def fingerprint_in(blob_uri: str) -> str | None:
     """The fingerprint a blob URI ends with, if it is one at all.
 
     Scheme-checked here rather than by the caller because the backend decides

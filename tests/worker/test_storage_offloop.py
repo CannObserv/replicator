@@ -19,6 +19,7 @@ disk sync, on a VM shared with three other services. Both backends are wrapped,
 so a `REPLICATOR_BLOB_BACKEND` flip cannot change whether the loop stalls.
 """
 
+import hashlib
 import threading
 
 import pytest
@@ -27,7 +28,9 @@ from co_core_sync.drivers.blobstore import LocalBlobStore
 
 from src.core.config import get_settings
 from src.worker.handler import build_handler
+from src.worker.persist import build_persist_handler
 from tests.worker.conftest import FakeFetcher, command
+from tests.worker.test_loop_spec import make_persist_command_model
 from tests.worker.test_replicate_writer import (
     FakeGcs,
     handler_for,
@@ -37,7 +40,8 @@ from tests.worker.test_replicate_writer import (
     command as replicate_command,
 )
 
-FINGERPRINT = "e" * 64
+# The real digest of the bytes stored under it (co-core 0.19.6, cannobserv#492).
+FINGERPRINT = hashlib.sha256(b"artifact bytes").hexdigest()
 PUBLIC_URL = "https://storage.googleapis.com/example-replication-bucket/organizations/x/report.pdf"
 
 
@@ -64,6 +68,10 @@ class ThreadRecordingStore(LocalBlobStore):
     def open_stream(self, fingerprint):
         self.threads["open_stream"] = threading.get_ident()
         return super().open_stream(fingerprint)
+
+    def open(self, fingerprint):
+        self.threads["open"] = threading.get_ident()
+        return super().open(fingerprint)
 
 
 @pytest.fixture
@@ -129,6 +137,35 @@ async def test_the_replicate_guard_resolves_the_source_off_the_loop_thread(store
     await handler_for(store, writer)(replicate_command(blob_uri))
 
     assert store.threads["exists"] != threading.get_ident()
+
+
+@pytest.mark.parametrize("call", ["exists", "open"])
+async def test_the_persist_path_reads_its_source_off_the_loop_thread(store, tmp_path, call):
+    """The source check and the read, both network calls on the object store (#114)."""
+    blob_uri = store.store(b"artifact bytes", FINGERPRINT, "application/pdf")
+    store.threads.clear()
+    handler = build_persist_handler(
+        store=store, permanent=LocalBlobStore(tmp_path / "permanent"), complete=_ignore
+    )
+
+    await handler(make_persist_command_model(blob_uri=blob_uri, content_fingerprint=FINGERPRINT))
+
+    assert store.threads[call] != threading.get_ident()
+
+
+async def test_the_persist_path_writes_the_permanent_store_off_the_loop_thread(store, tmp_path):
+    """The permanent create: a PUT on the object store."""
+    source = LocalBlobStore(tmp_path / "temp")
+    blob_uri = source.store(b"artifact bytes", FINGERPRINT, "application/pdf")
+    handler = build_persist_handler(store=source, permanent=store, complete=_ignore)
+
+    await handler(make_persist_command_model(blob_uri=blob_uri, content_fingerprint=FINGERPRINT))
+
+    assert store.threads["store"] != threading.get_ident()
+
+
+async def _ignore(command, size_bytes):
+    return None
 
 
 async def test_the_recording_store_would_notice_an_unwrapped_call(store, fake_redis):

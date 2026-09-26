@@ -25,6 +25,7 @@ parameter, or a dict key.
 """
 
 import ast
+import hashlib
 import tomllib
 from pathlib import Path
 
@@ -1255,7 +1256,7 @@ def test_a_blob_uri_is_host_local_on_the_default_backend(tmp_path):
     """
     store = LocalBlobStore(tmp_path)
 
-    uri = store.store(b"bytes", "0" * 64, "text/plain")
+    uri = store.store(b"bytes", hashlib.sha256(b"bytes").hexdigest(), "text/plain")
 
     assert uri.startswith("file://")
     assert Settings().blob_backend == "local"

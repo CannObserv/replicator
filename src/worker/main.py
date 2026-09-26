@@ -38,7 +38,9 @@ from src.worker.aliases import AliasTable, load_alias_table
 from src.worker.checkout import checkout_refusal
 from src.worker.egress import BodyCeilingTransport, GuardedTransport, blocked_networks
 from src.worker.handler import build_handler
-from src.worker.loop import FETCH_SPEC, REPLICATE_SPEC, run_loop
+from src.worker.loop import FETCH_SPEC, PERSIST_SPEC, REPLICATE_SPEC, run_loop
+from src.worker.persist import build_persist_handler
+from src.worker.persist_reporter import build_persist_reporter, build_persisted_publisher
 from src.worker.policy import (
     FetchPolicyMap,
     build_policy_reader,
@@ -275,11 +277,11 @@ def consumer_name_for(settings: Settings, group: str) -> str:
     An empty override (``REPLICATOR_CONSUMER_NAME=``) is falsy and so reads as
     unset rather than registering a nameless consumer.
     """
-    override = (
-        settings.replicate_consumer_name
-        if group == settings.replicate_consumer_group
-        else settings.consumer_name
-    )
+    overrides = {
+        settings.replicate_consumer_group: settings.replicate_consumer_name,
+        settings.persist_consumer_group: settings.persist_consumer_name,
+    }
+    override = overrides.get(group, settings.consumer_name)
     return override or resolve_consumer_name(group)
 
 
@@ -625,13 +627,14 @@ async def run(
     *,
     policy_topic: str = streams.CONTENT_FETCH_POLICY,
     replicate_topic: str = streams.CONTENT_REPLICATE,
+    persist_topic: str = streams.CONTENT_PERSIST,
 ) -> None:
     """Connect to the bus, ensure the consumer group, and consume until stopped.
 
     ``stop`` is injectable so tests drive the loop without signals; left unset,
     the process owns its own event and wires SIGTERM/SIGINT to it.
 
-    ``policy_topic`` and ``replicate_topic`` are defaulted arguments for the same
+    ``policy_topic``, ``replicate_topic`` and ``persist_topic`` are defaulted arguments for the same
     reason ``content.fetch`` and ``content.blobs`` are: the only caller that moves
     them is a live-broker test working on a scratch stream.
     """
@@ -710,6 +713,18 @@ async def run(
         # (#77, CR round 1).
         fetch_consumer_name = consumer_name_for(settings, settings.consumer_group)
         replicate_consumer_name = consumer_name_for(settings, settings.replicate_consumer_group)
+        # The third command stream (#114 step 6), **only when an operator turned it
+        # on**. No consumer means no group, so no `XGROUP CREATE … MKSTREAM` on a
+        # broker that may not grant `content.persist` yet (broker#64): that refusal
+        # does not retry, and would stop the worker, fetch included.
+        persist_consumer = (
+            build_consumer(
+                client, settings, topic=persist_topic, group=settings.persist_consumer_group
+            )
+            if settings.persist_enabled
+            else None
+        )
+        persist_consumer_name = consumer_name_for(settings, settings.persist_consumer_group)
         # Host state, read once at boot: which destinations an operator
         # provisioned here. Unset means nothing is provisioned and every
         # replicate command is refused — the safe default (contract T5), and
@@ -747,6 +762,8 @@ async def run(
         # through (issuer contract MUST-6), so "$" stands with a live issuer too.
         await consumer.ensure_group(start_id=settings.consumer_start_id)
         await replicate_consumer.ensure_group(start_id=settings.consumer_start_id)
+        if persist_consumer is not None:
+            await persist_consumer.ensure_group(start_id=settings.consumer_start_id)
         # One instance, deliberately shared: the sweep measures the tree and the
         # byte path adds to it between sweeps. Wired to two objects both halves
         # would be individually correct and the ceiling would never fire, with
@@ -808,6 +825,16 @@ async def run(
                     # the expected value today and says so plainly, rather than
                     # leaving an operator to infer it from a stream of refusals.
                     "replication_aliases": list(aliases.provisioned),
+                    # Whether this worker keeps blobs (#114 step 6), and as whom.
+                    "persist": "enabled" if persist_consumer is not None else "disabled",
+                    **(
+                        {
+                            "persist_group": settings.persist_consumer_group,
+                            "persist_consumer": persist_consumer_name,
+                        }
+                        if persist_consumer is not None
+                        else {}
+                    ),
                 },
             )
         await _run_until_first_exit(
@@ -876,6 +903,28 @@ async def run(
                 reporter=build_replicate_reporter(client=client),
                 spec=REPLICATE_SPEC,
                 stop=stop,
+            ),
+            # The third command loop (#114 step 6), when enabled. The settings
+            # refuse persist without a permanent bucket, so the store is there.
+            *(
+                []
+                if persist_consumer is None
+                else [
+                    run_loop(
+                        client=client,
+                        consumer=persist_consumer,
+                        group=settings.persist_consumer_group,
+                        settings=settings,
+                        handler=build_persist_handler(
+                            store=store,
+                            permanent=permanent_stores[0],
+                            complete=build_persisted_publisher(client=client),
+                        ),
+                        reporter=build_persist_reporter(client=client),
+                        spec=PERSIST_SPEC,
+                        stop=stop,
+                    )
+                ]
             ),
             # Retention is a task only over a filesystem. Under the
             # object-store backend the window is a bucket lifecycle rule and

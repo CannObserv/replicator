@@ -24,7 +24,7 @@ Python ≥3.12, uv, pytest, ruff. `ty` is a **non-gating** type checker (`uv run
 uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
 ```
 
-Auth is ADC. Pin the current minor — `>=0.19.3,<0.20` — and raise the **patch** floor with every co-core feature the code starts depending on; the ways a skew has already failed are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+Auth is ADC. Pin the current minor — `>=0.19.6,<0.20` — and raise the **patch** floor with every co-core feature the code starts depending on; the ways a skew has already failed are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 <!-- BEGIN socraticode-policy -->
 ## Code Exploration Policy
@@ -156,11 +156,12 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
 - **Consumers must be idempotent; producers own the outbox.** Replicator has no DB
   — its durable record of intent is the consumer group's PEL. Do not add a
   Postgres outbox to the consume path.
-- **Three stream kinds, three sets of rules.** `content.fetch` and
-  `content.replicate` are command streams (one group each, competing consumers);
-  `content.blobs` and `content.artifacts` each carry both outcomes of their
-  command; `content.fetch-policy` is read **groupless** — no group, no ack, no
-  DLQ.
+- **Three stream kinds, three sets of rules.** `content.fetch`,
+  `content.replicate` and `content.persist` are command streams (one group each,
+  competing consumers; persist runs only with `REPLICATOR_PERSIST_ENABLED`, off by
+  default); `content.blobs` carries both fetch outcomes and `content.artifacts`
+  both outcomes of replicate and of persist; `content.fetch-policy` is read
+  **groupless** — no group, no ack, no DLQ.
 - **The replicate loop writes for `gcs` (#29)** — create-if-absent, and `blob_uri` is
   never resolved as a path. Read [docs/CONVENTIONS.md](docs/CONVENTIONS.md) first.
 - **A fetch may not reach loopback, RFC 1918, or the tailnet (#89, #95).** Per redirect hop.
@@ -248,3 +249,4 @@ source — each with its rationale and ruff gate in [docs/STYLE.md](docs/STYLE.m
 - [replicator-boundaries.md](docs/contracts/replicator-boundaries.md) — what Replicator may become; run its three tests against any proposed capability
 - [content-replicate-issuer-contract.md](docs/contracts/content-replicate-issuer-contract.md) — the replicate trust model and issuer obligations (#34)
 - [content-replicate-issuer-reference.md](docs/contracts/content-replicate-issuer-reference.md) — its reasoning half: the trust comparison, T3a, T4, T6, the exemption
+- [content-persist-issuer-contract.md](docs/contracts/content-persist-issuer-contract.md) — keeping a blob in the permanent store by digest: obligations, the refusal registry, enabling it on a host (#114)

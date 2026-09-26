@@ -164,10 +164,10 @@ def test_open_stream_is_seekable_and_positioned_at_the_start(store, tmp_path):
     local = LocalBlobStore(tmp_path)
 
     for backend in (store, local):
-        backend.store(b"artifact bytes", FINGERPRINT, "application/pdf")
+        backend.store(b"bytes", FINGERPRINT, "application/pdf")
         with backend.open_stream(FINGERPRINT) as handle:
             assert handle.seekable()
             assert handle.tell() == 0
-            assert handle.read() == b"artifact bytes"
+            assert handle.read() == b"bytes"
             handle.seek(0)
-            assert handle.read(8) == b"artifact"
+            assert handle.read(3) == b"byt"

@@ -65,7 +65,7 @@ def _group_field_defaults() -> dict[str, ast.expr]:
         for node in ast.parse(source).body
         if isinstance(node, ast.ClassDef) and node.name == "Settings"
     )
-    wanted = {"consumer_group", "replicate_consumer_group"}
+    wanted = {"consumer_group", "replicate_consumer_group", "persist_consumer_group"}
     defaults: dict[str, ast.expr] = {}
     for node in settings_class.body:
         if not (isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)):
@@ -91,7 +91,7 @@ def test_the_group_defaults_are_derived_not_spelled():
     ``_group_field_defaults`` for why the obvious value comparison proves nothing.
     """
     defaults = _group_field_defaults()
-    assert set(defaults) == {"consumer_group", "replicate_consumer_group"}
+    assert set(defaults) == {"consumer_group", "replicate_consumer_group", "persist_consumer_group"}
 
     called = {}
     for field, expr in defaults.items():
@@ -104,6 +104,7 @@ def test_the_group_defaults_are_derived_not_spelled():
     assert called == {
         "consumer_group": "streams.group_name(streams.CONTENT_FETCH, SERVICE_NAME)",
         "replicate_consumer_group": "streams.group_name(streams.CONTENT_REPLICATE, SERVICE_NAME)",
+        "persist_consumer_group": "streams.group_name(streams.CONTENT_PERSIST, SERVICE_NAME)",
     }
 
 
@@ -117,7 +118,11 @@ def test_the_derived_groups_are_the_ones_live_on_the_broker(monkeypatch):
     rather than at ``ensure_group``, where the symptom is a *new empty group*
     beside the real one and a worker reading a stream nothing delivers to.
     """
-    for var in ("REPLICATOR_CONSUMER_GROUP", "REPLICATOR_REPLICATE_CONSUMER_GROUP"):
+    for var in (
+        "REPLICATOR_CONSUMER_GROUP",
+        "REPLICATOR_REPLICATE_CONSUMER_GROUP",
+        "REPLICATOR_PERSIST_CONSUMER_GROUP",
+    ):
         monkeypatch.delenv(var, raising=False)
 
     settings = get_settings()
@@ -125,6 +130,8 @@ def test_the_derived_groups_are_the_ones_live_on_the_broker(monkeypatch):
         "replicator.fetch",
         "replicator.replicate",
     )
+    # Not yet on the broker: broker#64 provisions it. cannobserv#493 names it.
+    assert settings.persist_consumer_group == "replicator.persist"
 
 
 def test_the_policy_stream_takes_no_group():
@@ -533,3 +540,53 @@ def test_the_permanent_bucket_is_selected_by_env(monkeypatch):
     monkeypatch.setenv("REPLICATOR_PERMANENT_BUCKET", "a-permanent-bucket")
 
     assert get_settings().permanent_bucket == "a-permanent-bucket"
+
+
+# The persist loop (#114 step 6).
+
+
+def test_persist_is_off_unless_an_operator_turns_it_on(monkeypatch):
+    """Off by default, and not only for caution: the loop creates its group at boot,
+    and a broker that has not granted ``content.persist`` (broker#64) refuses that
+    once and for all — ``XGROUP CREATE`` is the one refusal that does not retry, so
+    a default-on loop would stop the whole worker, fetch included."""
+    monkeypatch.delenv("REPLICATOR_PERSIST_ENABLED", raising=False)
+
+    assert get_settings().persist_enabled is False
+
+
+def test_persist_needs_a_permanent_store_to_write_to(monkeypatch):
+    """Refused where it is written: an enabled loop with nowhere to persist would
+    close every command with a failure fact for a host misconfiguration."""
+    monkeypatch.setenv("REPLICATOR_PERSIST_ENABLED", "true")
+    monkeypatch.delenv("REPLICATOR_PERMANENT_BUCKET", raising=False)
+
+    with pytest.raises(ValidationError, match="REPLICATOR_PERMANENT_BUCKET"):
+        get_settings()
+
+
+def test_persist_with_a_permanent_store_is_accepted(monkeypatch):
+    monkeypatch.setenv("REPLICATOR_PERSIST_ENABLED", "true")
+    monkeypatch.setenv("REPLICATOR_PERMANENT_BUCKET", "a-permanent-bucket")
+
+    assert get_settings().persist_enabled is True
+
+
+@pytest.mark.parametrize(
+    "other", ["REPLICATOR_CONSUMER_GROUP", "REPLICATOR_REPLICATE_CONSUMER_GROUP"]
+)
+def test_the_persist_group_may_not_collide_with_another(monkeypatch, other):
+    """Three command groups now, and the override is still keyed by group."""
+    monkeypatch.setenv(other, "replicator.shared")
+    monkeypatch.setenv("REPLICATOR_PERSIST_CONSUMER_GROUP", "replicator.shared")
+
+    with pytest.raises(ValidationError, match="different groups"):
+        get_settings()
+
+
+def test_the_persist_group_has_its_own_name_override(monkeypatch):
+    monkeypatch.setenv("REPLICATOR_PERSIST_CONSUMER_NAME", "replicator-persist-2")
+
+    settings = get_settings()
+    assert settings.persist_consumer_name == "replicator-persist-2"
+    assert settings.replicate_consumer_name is None

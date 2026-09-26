@@ -50,6 +50,8 @@ src/core/errors.py   — TransientError / PermanentError (what the loop catches)
 src/worker/replicate.py — The content.replicate handler: alias resolve, T3/T3a guards, refusals
 src/worker/aliases.py — The provisioned destination set, read once from env-referenced host config
 src/worker/replicate_reporter.py — replication_failed on content.artifacts
+src/worker/persist.py — The content.persist handler: T3a, the digest check, the copy into the permanent store (#114)
+src/worker/persist_reporter.py — blob_persisted / persist_failed on content.artifacts
 src/worker/checkout.py — Is this checkout main's code? Asked before a write identity is built (#52)
 src/core/logging.py  — build_json_formatter() + ColorMessageFilter + configure_logging() + get_logger()
 src/core/log_config.json — uvicorn --log-config; routes uvicorn's own loggers through that formatter

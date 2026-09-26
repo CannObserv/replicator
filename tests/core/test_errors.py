@@ -26,8 +26,11 @@ from src.core.errors import (
     HandlerError,
     PermanentError,
     PermanentFetchError,
+    PermanentPersistError,
+    PersistReason,
     TransientError,
     TransientFetchError,
+    TransientPersistError,
 )
 
 
@@ -160,3 +163,30 @@ def test_the_reason_is_required_on_the_third_fate_too():
     """Same argument as ``PermanentError``'s: a default relabels on the wire."""
     with pytest.raises(TypeError):
         CompletedWithoutBlobError("unclassified")  # type: ignore[call-arg]
+
+
+# The persist vocabulary (#114 step 6).
+
+
+def test_the_persist_reason_tokens_are_the_wire_tokens():
+    """Pinned literally, for fetch's reason: Archiver branches on these, and a rename
+    must break a test here rather than change what an issuer sees. The first two are
+    fixed by co-core's contract (cannobserv#493); the other two are Replicator's."""
+    assert {reason.value for reason in PersistReason} == {
+        "invalid_source",
+        "blob_expired",
+        "source_corrupt",
+        "store_refused",
+    }
+
+
+def test_a_permanent_persist_failure_is_a_permanent_failure_with_its_own_tokens():
+    exc = PermanentPersistError("gone", reason=PersistReason.BLOB_EXPIRED)
+
+    assert isinstance(exc, PermanentError)
+    assert exc.reason == "blob_expired"
+    assert exc.status_code is None
+
+
+def test_a_transient_persist_failure_is_a_transient_failure():
+    assert issubclass(TransientPersistError, TransientError)
