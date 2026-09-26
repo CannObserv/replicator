@@ -115,11 +115,12 @@ rather than deleting bytes a consumer was promised.
 | `REPLICATOR_BLOB_BACKEND` | `gcs` | Temp blobs live in an object store — **not** the `local` default |
 | `REPLICATOR_BLOB_BUCKET` | `co-gcs-blobs` | The temp-blob bucket that backend writes into |
 | `REPLICATOR_PERSIST_ENABLED` | *(unset — off)* | Whether this worker consumes `content.persist` (#114). Off until the broker grants the stream (broker#64); needs `REPLICATOR_PERMANENT_BUCKET` |
-| `REPLICATOR_PERMANENT_BUCKET` | `co-gcs-replicator`, set at the #114 step 5 deploy | The permanent content-addressed store, a second replicate source (#114); unset ⇒ none |
+| `REPLICATOR_PERMANENT_BUCKET` | `co-gcs-replicator`, set at the #114 step 5 deploy | The permanent content-addressed store: a second replicate source, and where `content.persist` writes (#114); unset ⇒ none |
 | `REPLICATOR_BLOB_DIR` | `/var/lib/replicator/blobs` | Temp-storage root; **unused under `gcs`**, kept against a flip back to `local` |
 | `REPLICATOR_REPLICATION_ALIASES_FILE` | `/etc/replicator/replication-aliases.json` | The alias table: `gcs-publication` and `primary`, both → `gs://co-gcs-publication` with the publication writer's `credentials_file`, empty prefix — since the #114 cutover (2026-09-25); `primary` → `gs://co-gcs-replication` before it (#86). `root:exedev 640`, like the key files beside it. Unset ⇒ nothing provisioned, every `content.replicate` command refused `alias_unknown` |
 | `REPLICATOR_CONSUMER_NAME` | *(unset)* | Per-group override; the name is derived from the group — `replicator-fetch-1` — and never shared |
 | `REPLICATOR_REPLICATE_CONSUMER_NAME` | *(unset)* | The same, for `replicator.replicate` — derives `replicator-replicate-1` |
+| `REPLICATOR_PERSIST_CONSUMER_NAME` | *(unset)* | The same, for `replicator.persist` — derives `replicator-persist-1` |
 | `REPLICATOR_LOG_LEVEL` | `INFO` | Root log level |
 
 `BUILD_ID` is stamped by the unit's `ExecStartPre` rather than set in the env file. Every
