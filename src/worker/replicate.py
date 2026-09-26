@@ -35,7 +35,7 @@ from urllib.parse import urlsplit
 
 from co_core.effects.gcs import GcsCreateIfAbsent, GcsCreateResult
 from co_core.pure.models.changes import ContentReplicateCommand
-from co_core.pure.util.blobstore import FINGERPRINT_RE, BlobStore
+from co_core.pure.util.blobstore import FINGERPRINT_RE, METADATA_CONTENT_SHA256, BlobStore
 from co_core.pure.util.gcs import GcsCreateOutcome
 
 from src.core.config import DEFAULT_WRITE_TIMEOUT_SECONDS
@@ -612,6 +612,11 @@ async def _write(
                     # field required.
                     content_type=command.media_type,
                     timeout_seconds=timeout_seconds,
+                    # The object's content address (#114 item 4): its key is the
+                    # issuer's, so nothing else on it leads back to the blob.
+                    # Rides the create itself — no `update` grant — and is not
+                    # back-filled on a 412, so it marks objects written since.
+                    metadata={METADATA_CONTENT_SHA256: fingerprint},
                     **options,
                 )
             )

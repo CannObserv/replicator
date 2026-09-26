@@ -31,6 +31,7 @@ import uuid
 
 import pytest
 from co_core.pure.models.changes import ReplicationCompleteEvent
+from co_core.pure.util.blobstore import METADATA_CONTENT_SHA256
 from co_core_aio.gcs import AsyncGcsDriver
 from co_core_sync.drivers.blobstore import GcsBlobStore, LocalBlobStore
 from google.cloud import storage
@@ -188,6 +189,8 @@ async def test_an_absent_destination_is_written(
     # The round trip a fake cannot get wrong: the driver sets it, GCS stores it,
     # and a consumer of the public URL is served it.
     assert remote.content_type == MEDIA_TYPE
+    # The content address, stored as GCS custom metadata on the create (#114 item 4).
+    assert remote.metadata == {METADATA_CONTENT_SHA256: fingerprint_of(ARTIFACT)}
 
 
 async def test_a_redelivery_onto_identical_bytes_is_a_no_op_that_still_emits(

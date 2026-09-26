@@ -28,6 +28,7 @@ import hashlib
 import pytest
 from co_core.effects.gcs import GcsCreateResult
 from co_core.pure.models.changes import ReplicationCompleteEvent, ReplicationFailedEvent
+from co_core.pure.util.blobstore import METADATA_CONTENT_SHA256
 from co_core.pure.util.gcs import GcsCreateOutcome
 from co_core_sync.drivers.blobstore import LocalBlobStore
 from google.api_core import exceptions as gexc
@@ -204,6 +205,20 @@ async def test_the_write_carries_the_commands_media_type(store, blob_uri):
 
     (effect,) = writer.effects
     assert effect.content_type == "application/pdf"
+
+
+async def test_the_write_stamps_the_objects_content_address(store, blob_uri):
+    """``co-content-sha256`` on every object written (#114 item 4, cannobserv#490).
+
+    A public artifact's key is the issuer's rendered destination, so without this
+    nothing on the object leads back to the blob it was copied from. It rides the
+    create's own request, which is why it needs no ``update`` grant.
+    """
+    writer = FakeGcs(result(GcsCreateOutcome.WROTE, public_url=PUBLIC_URL))
+    await handler_for(store, writer)(command(blob_uri))
+
+    (effect,) = writer.effects
+    assert effect.metadata == {METADATA_CONTENT_SHA256: FINGERPRINT}
 
 
 async def test_the_write_is_handed_a_seekable_binary_stream(store, blob_uri):
