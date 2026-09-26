@@ -1,7 +1,7 @@
 ---
 title: Stamp replicated objects with their digest, and copy GCS to GCS server-side (#114 items 4 and 5)
 date: 2026-09-26
-status: draft
+status: approved
 ---
 
 # Replicate: the content stamp and the server-side copy
@@ -72,6 +72,8 @@ The floor is already 0.19.6, so no dependency change is needed.
 6. **Ship in order:** runbook phases A–B done, then merge and deploy, then phase C.
 
 ## Open questions / risks
+
+**Decided at review (2026-09-26):** question 1 — grant first, no boot probe; question 2 — the wider read is accepted.
 
 1. **A missing grant closes publications as `provider_disabled`.** Grant-first (recommended) makes that an ordering rule; the boot probe (alternatives, third bullet) makes it impossible at the cost of a silent slow path. Which do you want?
 2. **The grant widens the publication writer's reach.** It could then read the private permanent store and the temp tier. Its key sits on this VM beside the worker's, which reads both already, so the change in exposure on this host is small. It is still a new read path for a key whose job is a public bucket.
