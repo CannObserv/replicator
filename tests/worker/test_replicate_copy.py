@@ -44,15 +44,14 @@ class BucketStore:
     bytes onto this host — the whole point of item 5.
     """
 
-    def __init__(self, bucket=SOURCE_BUCKET, *, present=True):
+    def __init__(self, bucket=SOURCE_BUCKET):
         self.bucket = bucket
-        self._present = present
 
     def uri_for(self, fingerprint):
         return gcs_uri(self.bucket, fingerprint)
 
     def exists(self, fingerprint):
-        return self._present
+        return True
 
     def open_stream(self, fingerprint):
         raise AssertionError("the copy path downloaded the blob")
