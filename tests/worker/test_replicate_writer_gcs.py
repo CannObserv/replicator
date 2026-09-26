@@ -296,9 +296,102 @@ async def test_a_persisted_blob_is_replicated_from_the_permanent_store(
 
         (fact,) = done.facts
         assert fact.public_url.endswith(destination)
-        assert gcs.get_blob(destination).download_as_bytes() == data
+        remote = gcs.get_blob(destination)
+        assert remote.download_as_bytes() == data
+        # Copied server-side from the permanent store since #114 item 5.
+        assert remote.metadata == {METADATA_CONTENT_SHA256: fingerprint}
     finally:
         if persisted.exists():
             persisted.delete()
         assert not persisted.exists(), "teardown left the persisted object behind"
         client.close()
+
+
+@pytest.fixture
+def temp_in_a_bucket(gcs_blob_bucket, run_prefix):
+    """The ``gcs`` backend's temp tier, in the test twin, under this run's prefix.
+
+    Touch on, as production's is, so a stored blob carries the ``customTime``
+    retention clock the copy must not carry onto the destination. Everything
+    under the prefix is removed afterwards, and the removal asserted.
+    """
+    client = storage.Client()
+    prefix = f"{run_prefix}/blobs"
+    try:
+        yield GcsBlobStore(gcs_blob_bucket, prefix=prefix, client=client, touch_on_rereference=True)
+    finally:
+        bucket = client.bucket(gcs_blob_bucket)
+        for blob in client.list_blobs(bucket, prefix=f"{prefix}/"):
+            blob.delete()
+        leftover = [b.name for b in client.list_blobs(bucket, prefix=f"{prefix}/")]
+        client.close()
+        assert leftover == [], f"teardown left temp blobs behind: {leftover}"
+
+
+def _copying_handler(temp, driver, gcs_bucket, done):
+    return build_replicate_handler(
+        store=temp,
+        aliases=AliasTable({"primary": AliasBinding(provider="gcs", bucket=gcs_bucket)}),
+        writers={"primary": driver},
+        complete=done,
+    )
+
+
+async def test_a_temp_blob_in_a_bucket_is_copied_server_side(
+    driver, gcs, gcs_bucket, gcs_blob_bucket, temp_in_a_bucket, command, run_prefix, written, caplog
+):
+    """#114 item 5, T4 rows one and two through ``rewrite`` against real buckets.
+
+    What a fake cannot vouch for: that the copy lands the bytes and the command's
+    content type, that it carries the content stamp, that the temp tier's
+    ``customTime`` does **not** ride along (co-core keeps the rewrite body
+    non-empty for exactly this), and that a redelivery resolves the 412 from the
+    reported md5s without a second write.
+    """
+    data = ARTIFACT + run_prefix.encode()
+    fingerprint = fingerprint_of(data)
+    uri = temp_in_a_bucket.store(data, fingerprint, MEDIA_TYPE)
+    source = gcs.client.bucket(gcs_blob_bucket)
+    assert source.get_blob(temp_in_a_bucket.key_for(fingerprint)).custom_time is not None
+    done = Completions()
+    handler = _copying_handler(temp_in_a_bucket, driver, gcs_bucket, done)
+    destination = f"{run_prefix}/copied.pdf"
+
+    with caplog.at_level("INFO", logger="src.worker.replicate"):
+        await handler(command(uri, destination, command_id="rep-first"))
+
+    remote = gcs.get_blob(destination)
+    assert remote.download_as_bytes() == data
+    assert remote.content_type == MEDIA_TYPE
+    assert remote.metadata == {METADATA_CONTENT_SHA256: fingerprint}
+    assert remote.custom_time is None
+    [record] = [r for r in caplog.records if r.message == "replicated a blob"]
+    assert record.method == "copy"
+
+    await handler(command(uri, destination, command_id="rep-redelivered"))
+
+    first, second = done.facts
+    assert second.public_url == first.public_url
+    assert gcs.get_blob(destination).generation == remote.generation
+
+
+async def test_a_copy_onto_differing_bytes_is_a_terminal_conflict(
+    driver, gcs, gcs_bucket, temp_in_a_bucket, command, run_prefix, written
+):
+    """T4 row three through ``rewrite``: refused, and nothing overwritten."""
+    data = ARTIFACT + run_prefix.encode()
+    uri = temp_in_a_bucket.store(data, fingerprint_of(data), MEDIA_TYPE)
+    destination = f"{run_prefix}/copied.pdf"
+    gcs.blob(destination).upload_from_string(
+        DIFFERENT, content_type=MEDIA_TYPE, if_generation_match=0
+    )
+    done = Completions()
+
+    with pytest.raises(PermanentReplicateError) as caught:
+        await _copying_handler(temp_in_a_bucket, driver, gcs_bucket, done)(
+            command(uri, destination)
+        )
+
+    assert caught.value.reason is ReplicateReason.DESTINATION_CONFLICT
+    assert gcs.get_blob(destination).download_as_bytes() == DIFFERENT
+    assert done.facts == []
