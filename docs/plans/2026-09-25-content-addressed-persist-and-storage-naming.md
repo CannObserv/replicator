@@ -151,6 +151,9 @@ Archiver's RepSpecs move to `gcs-publication` in the publication cutover.
 6. **Persist handler.** Once co-core ships the models, add the `content.persist` loop through the
    existing `run_loop` / `CommandSpec`, plus a new issuer contract under `docs/contracts/`. Done when
    the `gcs` job persists into `co-gcs-test-replicator` twice and the second is a no-op success.
+
+   **Code landed 2026-09-26, off by default** (`REPLICATOR_PERSIST_ENABLED`) until broker#64 grants
+   `content.persist`. Contract: [content-persist-issuer-contract.md](../contracts/content-persist-issuer-contract.md).
 7. **Archiver and Watcher changes land in their repos.** Done when one real revision is persisted,
    then published from the permanent URI after its temp blob has expired.
 
