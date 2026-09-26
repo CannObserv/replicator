@@ -99,13 +99,21 @@ journalctl -u replicator --since "2026-09-26" -o cat | grep '"replicated a blob"
 ```
 
 Expect `"method": "copy"`. Then check that the object carries the stamp and not the temp tier's
-retention clock:
+retention clock. The line's `key` field names the object; the bucket is public, so the read needs no
+key file. `gcloud` is not installed on this VM, hence the client library:
 
 ```bash
-gcloud storage objects describe gs://co-gcs-publication/<key> --format="yaml(metadata,custom_time)"
+cd /home/exedev/replicator && uv run --no-sync python -c "
+import sys
+from google.cloud import storage
+blob = storage.Client.create_anonymous_client().bucket('co-gcs-publication').get_blob(sys.argv[1])
+print('metadata:', blob.metadata)
+print('custom_time:', blob.custom_time)
+" '<key>'
 ```
 
-Expect `co-content-sha256: <digest>` and no `custom_time`.
+Expect `metadata: {'co-content-sha256': '<digest>'}` and `custom_time: None`. Tried on 2026-09-26
+against an object in the legacy public bucket, which printed `None` for both.
 
 **Rollback.** Revert the merge and redeploy. The upload path needs no grant, and the extra read can
 stay or be removed with `remove-iam-policy-binding`.
