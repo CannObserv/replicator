@@ -142,6 +142,31 @@ async def test_a_malformed_fingerprint_is_invalid_source(temp, permanent):
     assert caught.value.reason is PersistReason.INVALID_SOURCE
 
 
+@pytest.mark.parametrize(
+    "content_fingerprint",
+    [
+        pytest.param(hashlib.sha256(b"another revision").hexdigest(), id="another-digest"),
+        pytest.param("not-a-digest", id="malformed"),
+    ],
+)
+async def test_a_disagreement_is_invalid_source_even_when_the_blob_is_gone(
+    temp, permanent, content_fingerprint
+):
+    """The agreement is decided before existence (#114 CR 1).
+
+    Checked after, the gone blob answered first with ``blob_expired``, whose remedy
+    is a re-fetch — which cannot fix a command whose two digests disagree.
+    """
+    uri = temp.uri_for(FINGERPRINT)
+
+    with pytest.raises(PermanentPersistError) as caught:
+        await build_persist_handler(store=temp, permanent=permanent, complete=Persisted())(
+            command(uri, content_fingerprint=content_fingerprint)
+        )
+
+    assert caught.value.reason is PersistReason.INVALID_SOURCE
+
+
 async def test_a_blob_that_left_the_temp_tier_is_expired(temp, permanent):
     uri = temp.uri_for(FINGERPRINT)
 

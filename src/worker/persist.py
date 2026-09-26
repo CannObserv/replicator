@@ -11,6 +11,8 @@ store under the same one:
 2. **The two digests agree.** The URI's fingerprint must be
    ``content_fingerprint``; a disagreement, or a malformed digest, is
    ``invalid_source``, and the consumer decides that rather than the issuer.
+   Decided *before* the guard asks whether the blob exists, so a gone blob
+   cannot mask it as ``blob_expired`` (#114 CR 1).
 3. **Read, then create if absent**, touch off. The permanent store hashes the
    bytes it is about to write (cannobserv#492), so a corrupted temp blob is
    refused before it can reach the tier nothing may delete from.
@@ -41,7 +43,7 @@ from src.core.errors import (
     is_terminal_provider_status,
 )
 from src.core.logging import get_logger
-from src.worker.replicate import locate_blob
+from src.worker.replicate import fingerprint_in, locate_blob
 
 logger = get_logger(__name__)
 
@@ -79,6 +81,16 @@ def build_persist_handler(
 
     async def handle(command: ContentPersistCommand) -> None:
         started = time.monotonic()
+        # Before existence, not after (#114 CR 1): a gone blob would otherwise
+        # answer first with `blob_expired`, whose remedy — a re-fetch — cannot fix
+        # a command whose two digests disagree. `None` (not a blob URI at all) is
+        # left to the guard, which refuses it `invalid_source` in the same words.
+        named = fingerprint_in(command.blob_uri)
+        if named is not None and named != command.content_fingerprint:
+            raise PermanentPersistError(
+                "blob_uri names a different digest from content_fingerprint",
+                reason=PersistReason.INVALID_SOURCE,
+            )
         # Off the loop thread: `exists` is a network round trip on the object store.
         try:
             source = await asyncio.to_thread(
@@ -90,12 +102,6 @@ def build_persist_handler(
             raise
         except Exception as exc:
             raise _classify(exc, "the source could not be located") from exc
-
-        if source.fingerprint != command.content_fingerprint:
-            raise PermanentPersistError(
-                "blob_uri names a different digest from content_fingerprint",
-                reason=PersistReason.INVALID_SOURCE,
-            )
 
         try:
             data = await asyncio.to_thread(source.store.open, source.fingerprint)
