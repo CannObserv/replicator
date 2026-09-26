@@ -23,6 +23,7 @@ misprovisioned bucket retried forever and the issuer waited forever.
 """
 
 import asyncio
+import hashlib
 
 import pytest
 from co_core.effects.gcs import GcsCreateResult
@@ -37,7 +38,8 @@ from src.worker.replicate import build_replicate_handler
 from tests.worker.conftest import now
 from tests.worker.test_loop_spec import make_replicate_command_model
 
-FINGERPRINT = "d" * 64
+# The real digest of the bytes stored under it (co-core 0.19.6, cannobserv#492).
+FINGERPRINT = hashlib.sha256(b"artifact bytes").hexdigest()
 BINDING = AliasBinding(provider="gcs", bucket="example-replication-bucket")
 PUBLIC_URL = "https://storage.googleapis.com/example-replication-bucket/organizations/x/report.pdf"
 
@@ -719,7 +721,8 @@ async def test_a_permanent_uri_is_replicated_from_the_permanent_store(store, tmp
     """Item 3 of #114: the source is whichever store minted the URI, and its bytes
     are the ones written — the temp store is never asked for them."""
     permanent = LocalBlobStore(tmp_path / "permanent")
-    persisted = permanent.store(b"persisted bytes", FINGERPRINT, "application/pdf")
+    data = b"persisted bytes"
+    persisted = permanent.store(data, hashlib.sha256(data).hexdigest(), "application/pdf")
     writer = ReadingGcs(result(GcsCreateOutcome.WROTE, public_url=PUBLIC_URL, generation=1))
     done = Completions()
     handler = build_replicate_handler(

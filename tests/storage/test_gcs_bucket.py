@@ -26,6 +26,7 @@ withholds so that T4's "never overwrite, never delete" is enforced at IAM rather
 than only in our code.
 """
 
+import hashlib
 import uuid
 
 import pytest
@@ -41,15 +42,22 @@ TEST_PREFIX = "pytest-blobs"
 
 
 @pytest.fixture
-def fingerprint() -> str:
-    """A unique content-addressed name per test.
+def payload() -> bytes:
+    """Unique bytes per test, so each test gets its own content-addressed key.
 
     Deliberately not a fixed literal: these tests create real objects, and a
     shared key would make a crashed run's leftovers decide whether the next run's
     ``store`` takes the create path or the short-circuit — the two branches this
     module exists to tell apart.
     """
-    return uuid.uuid4().hex + uuid.uuid4().hex  # 64 hex characters, like a sha256
+    return b"integration bytes " + uuid.uuid4().hex.encode()
+
+
+@pytest.fixture
+def fingerprint(payload) -> str:
+    """The real digest of ``payload``: since co-core 0.19.6 the store refuses any
+    other (cannobserv#492), so a random name is no longer a usable key."""
+    return hashlib.sha256(payload).hexdigest()
 
 
 @pytest.fixture
@@ -74,13 +82,13 @@ def test_preflight_passes_against_the_provisioned_bucket(store):
 
 
 def test_a_round_trip_stores_reads_and_records_the_content_type(
-    store, fingerprint, gcs_blob_bucket
+    store, payload, fingerprint, gcs_blob_bucket
 ):
-    uri = store.store(b"integration bytes", fingerprint, "text/plain")
+    uri = store.store(payload, fingerprint, "text/plain")
 
     assert uri == store.uri_for(fingerprint)
     assert store.exists(fingerprint) is True
-    assert store.open(fingerprint) == b"integration bytes"
+    assert store.open(fingerprint) == payload
     # The field the filesystem backend had nowhere to put, read back off the
     # object rather than off the request we sent: a consumer fetching these bytes
     # over the API gets the type from here, and nothing else carries it.
@@ -90,22 +98,22 @@ def test_a_round_trip_stores_reads_and_records_the_content_type(
     )
 
 
-def test_a_second_store_short_circuits_rather_than_rewriting(store, fingerprint):
+def test_a_second_store_short_circuits_rather_than_rewriting(store, payload, fingerprint):
     """The ordinary redelivery path: `exists` answers yes and no write happens.
 
     The byte path relies on this — the dedupe key is written *after* the handler
     returns, so re-running an already-successful handler is an expected outcome
     rather than an error.
     """
-    store.store(b"integration bytes", fingerprint, "text/plain")
+    store.store(payload, fingerprint, "text/plain")
 
-    assert store.store(b"integration bytes", fingerprint, "text/plain") == store.uri_for(
-        fingerprint
-    )
-    assert store.open(fingerprint) == b"integration bytes"
+    assert store.store(payload, fingerprint, "text/plain") == store.uri_for(fingerprint)
+    assert store.open(fingerprint) == payload
 
 
-def test_a_lost_create_race_is_a_success_against_the_real_api(store, fingerprint, monkeypatch):
+def test_a_lost_create_race_is_a_success_against_the_real_api(
+    store, payload, fingerprint, monkeypatch
+):
     """`if_generation_match=0` against the live service — the point of this file.
 
     The short-circuit above never reaches the precondition, so on its own it
@@ -119,15 +127,13 @@ def test_a_lost_create_race_is_a_success_against_the_real_api(store, fingerprint
     does — a real 412 reaching the handler dead-letters a command whose blob is
     sitting at the key it names.
     """
-    store.store(b"integration bytes", fingerprint, "text/plain")
+    store.store(payload, fingerprint, "text/plain")
     monkeypatch.setattr(GcsBlobStore, "exists", lambda self, fp: False)
 
-    assert store.store(b"integration bytes", fingerprint, "text/plain") == store.uri_for(
-        fingerprint
-    )
+    assert store.store(payload, fingerprint, "text/plain") == store.uri_for(fingerprint)
 
 
-def test_the_retention_clock_is_a_real_settable_field(store, fingerprint, gcs_blob_bucket):
+def test_the_retention_clock_is_a_real_settable_field(store, payload, fingerprint, gcs_blob_bucket):
     """`customTime` is what the lifecycle rule reads, so it has to actually be set.
 
     The one property in this module with no local symptom if it is wrong: a
@@ -135,11 +141,11 @@ def test_the_retention_clock_is_a_real_settable_field(store, fingerprint, gcs_bl
     on creation age instead, which looks identical until a re-referenced blob
     disappears inside its announced window.
     """
-    store.store(b"integration bytes", fingerprint, "text/plain")
+    store.store(payload, fingerprint, "text/plain")
     bucket = storage.Client().bucket(gcs_blob_bucket)
 
     first = bucket.get_blob(store.key_for(fingerprint)).custom_time
-    store.store(b"integration bytes", fingerprint, "text/plain")
+    store.store(payload, fingerprint, "text/plain")
     second = bucket.get_blob(store.key_for(fingerprint)).custom_time
 
     assert first is not None
@@ -175,9 +181,9 @@ def test_a_missing_object_reads_as_a_file_not_found(store, fingerprint):
     assert isinstance(streamed.value.__cause__, NotFound)
 
 
-def test_a_stream_of_a_stored_blob_is_seekable(store, fingerprint):
-    store.store(b"integration bytes", fingerprint, "application/pdf")
+def test_a_stream_of_a_stored_blob_is_seekable(store, payload, fingerprint):
+    store.store(payload, fingerprint, "application/pdf")
 
     with store.open_stream(fingerprint) as handle:
         assert handle.seekable()
-        assert handle.read() == b"integration bytes"
+        assert handle.read() == payload

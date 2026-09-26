@@ -19,6 +19,7 @@ disk sync, on a VM shared with three other services. Both backends are wrapped,
 so a `REPLICATOR_BLOB_BACKEND` flip cannot change whether the loop stalls.
 """
 
+import hashlib
 import threading
 
 import pytest
@@ -37,7 +38,8 @@ from tests.worker.test_replicate_writer import (
     command as replicate_command,
 )
 
-FINGERPRINT = "e" * 64
+# The real digest of the bytes stored under it (co-core 0.19.6, cannobserv#492).
+FINGERPRINT = hashlib.sha256(b"artifact bytes").hexdigest()
 PUBLIC_URL = "https://storage.googleapis.com/example-replication-bucket/organizations/x/report.pdf"
 
 

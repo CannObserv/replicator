@@ -143,7 +143,7 @@
     {
       "name": "dependency-contract",
       "path": "./pyproject.toml",
-      "description": "Project and tooling contract. The co-core / co-core-aio / co-core-sync pins (>=0.19.3,<0.20, for the shared content-addressed BlobStore since #114 — cannobserv#475) with their [extract], [bus,gcs] and [gcs] extras, the floor history that explains each raise, the [tool.uv] find-links wheelhouse resolution, the ruff rule set and its skills-vendor exclusion, the ty exclusion, the replicator-worker console script, pytest configuration (asyncio auto mode, the integration and gcs markers both deselected by default, timeout) and the 80% coverage gate."
+      "description": "Project and tooling contract. The co-core / co-core-aio / co-core-sync pins (>=0.19.6,<0.20, for the content.persist contract since #114 step 6 — cannobserv#493; 0.19.3 brought the shared content-addressed BlobStore, cannobserv#475) with their [extract], [bus,gcs] and [gcs] extras, the floor history that explains each raise, the [tool.uv] find-links wheelhouse resolution, the ruff rule set and its skills-vendor exclusion, the ty exclusion, the replicator-worker console script, pytest configuration (asyncio auto mode, the integration and gcs markers both deselected by default, timeout) and the 80% coverage gate."
     },
     {
       "name": "main-checkout-guard",

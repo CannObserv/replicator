@@ -1,5 +1,6 @@
 """The retention sweep over the blob tree."""
 
+import hashlib
 import os
 import time
 from pathlib import Path
@@ -12,10 +13,15 @@ from src.storage.sweeper import BLOB_GLOB, TEMP_GLOB, BlobUsage, sweep
 TTL = 600.0
 TEMP_GRACE = 3600.0
 
-# Two fingerprints landing in different shards, so a test can age one and leave
-# the other alone without the two sharing a directory.
-FRESH = "9f2a7c1e" + "0" * 56
-AGED = "1b3d5f70" + "0" * 56
+# Two blobs landing in different shards, so a test can age one and leave the
+# other alone without the two sharing a directory. Each fingerprint is the real
+# digest of its bytes: since co-core 0.19.6 the store refuses any other
+# (cannobserv#492, `FingerprintMismatch`).
+AGED_DATA = b"hello"
+FRESH_DATA = b"world!"
+AGED = hashlib.sha256(AGED_DATA).hexdigest()
+FRESH = hashlib.sha256(FRESH_DATA).hexdigest()
+PARTIAL_DATA = b"partial"
 
 
 @pytest.fixture
@@ -41,7 +47,7 @@ def run(root: Path, *, ttl: float = TTL, temp_grace: float = TEMP_GRACE):
 
 
 def test_a_blob_older_than_the_ttl_is_removed(store, tmp_path):
-    store.store(b"hello", AGED, "text/plain")
+    store.store(AGED_DATA, AGED, "text/plain")
     age(blob_path(tmp_path, AGED), TTL + 1)
 
     run(tmp_path)
@@ -50,7 +56,7 @@ def test_a_blob_older_than_the_ttl_is_removed(store, tmp_path):
 
 
 def test_a_blob_younger_than_the_ttl_is_left_alone(store, tmp_path):
-    store.store(b"hello", FRESH, "text/plain")
+    store.store(FRESH_DATA, FRESH, "text/plain")
 
     run(tmp_path)
 
@@ -65,33 +71,33 @@ def test_a_blob_whose_fact_was_just_republished_is_not_reaped(store, tmp_path):
     the *first* store's mtime, the blob announced a moment ago would be inside
     the reap window immediately.
     """
-    store.store(b"hello", AGED, "text/plain")
+    store.store(AGED_DATA, AGED, "text/plain")
     age(blob_path(tmp_path, AGED), TTL + 1)
 
-    store.store(b"hello", AGED, "text/plain")  # the re-fetch that re-announces it
+    store.store(AGED_DATA, AGED, "text/plain")  # the re-fetch that re-announces it
     run(tmp_path)
 
     assert blob_path(tmp_path, AGED).exists()
 
 
 def test_the_result_counts_what_was_reaped_and_how_much_it_freed(store, tmp_path):
-    store.store(b"hello", AGED, "text/plain")
+    store.store(AGED_DATA, AGED, "text/plain")
     age(blob_path(tmp_path, AGED), TTL + 1)
 
     result = run(tmp_path)
 
-    assert (result.blobs_reaped, result.bytes_reclaimed) == (1, len(b"hello"))
+    assert (result.blobs_reaped, result.bytes_reclaimed) == (1, len(AGED_DATA))
 
 
 def test_the_result_reports_what_is_left(store, tmp_path):
     """The ceiling reads this number, so it has to exclude what the sweep just freed."""
-    store.store(b"hello", AGED, "text/plain")
-    store.store(b"world!", FRESH, "text/plain")
+    store.store(AGED_DATA, AGED, "text/plain")
+    store.store(FRESH_DATA, FRESH, "text/plain")
     age(blob_path(tmp_path, AGED), TTL + 1)
 
     result = run(tmp_path)
 
-    assert (result.blobs_remaining, result.bytes_remaining) == (1, len(b"world!"))
+    assert (result.blobs_remaining, result.bytes_remaining) == (1, len(FRESH_DATA))
 
 
 def test_an_in_flight_temporary_is_never_matched_as_a_blob(store, tmp_path):
@@ -128,7 +134,7 @@ def test_the_shared_store_writes_temporaries_the_sweep_recognises(tmp_path, monk
 
     monkeypatch.setattr(shared_local.os, "replace", lambda src, dst: None)
     shared_local.LocalBlobStore(tmp_path, touch_on_rereference=True).store(
-        b"partial", FRESH, "text/plain"
+        PARTIAL_DATA, hashlib.sha256(PARTIAL_DATA).hexdigest(), "text/plain"
     )
 
     temps = list(tmp_path.glob(TEMP_GLOB))
@@ -154,7 +160,7 @@ def test_a_temporary_older_than_the_grace_is_debris_and_is_removed(store, tmp_pa
 
 
 def test_an_emptied_shard_directory_does_not_accumulate(store, tmp_path):
-    store.store(b"hello", AGED, "text/plain")
+    store.store(AGED_DATA, AGED, "text/plain")
     age(blob_path(tmp_path, AGED), TTL + 1)
 
     run(tmp_path)
@@ -163,7 +169,7 @@ def test_an_emptied_shard_directory_does_not_accumulate(store, tmp_path):
 
 
 def test_a_shard_still_holding_a_blob_is_kept(store, tmp_path):
-    store.store(b"hello", FRESH, "text/plain")
+    store.store(FRESH_DATA, FRESH, "text/plain")
 
     run(tmp_path)
 
@@ -197,7 +203,7 @@ def test_a_missing_root_sweeps_to_nothing(tmp_path):
 
 def test_a_blob_that_vanishes_mid_sweep_does_not_fail_the_sweep(store, tmp_path, monkeypatch):
     """Another worker on the same tree can reap the same expired blob first."""
-    store.store(b"hello", AGED, "text/plain")
+    store.store(AGED_DATA, AGED, "text/plain")
     age(blob_path(tmp_path, AGED), TTL + 1)
     real_unlink = Path.unlink
 
@@ -221,7 +227,7 @@ def test_a_blob_that_vanishes_before_it_is_measured_does_not_fail_the_sweep(
     take the whole pass down with it — an aborted sweep reaps nothing and leaves
     the ceiling reading a stale total.
     """
-    store.store(b"hello", FRESH, "text/plain")
+    store.store(FRESH_DATA, FRESH, "text/plain")
     real_stat = Path.stat
 
     def vanishing_stat(self, *args, **kwargs):
@@ -243,7 +249,7 @@ def test_a_file_is_stat_ed_once_per_sweep(store, tmp_path, monkeypatch):
     The tree is walked on a timer forever, so the per-file cost is the sweep's
     whole cost — and re-stat-ing is what opened the race above in the first place.
     """
-    store.store(b"hello", FRESH, "text/plain")
+    store.store(FRESH_DATA, FRESH, "text/plain")
     real_stat = Path.stat
     stats = []
 
@@ -260,7 +266,7 @@ def test_a_file_is_stat_ed_once_per_sweep(store, tmp_path, monkeypatch):
 
 def test_an_unreapable_blob_still_counts_against_the_ceiling(store, tmp_path, monkeypatch):
     """It is expired but still on disk, and the ceiling is about disk."""
-    store.store(b"hello", AGED, "text/plain")
+    store.store(AGED_DATA, AGED, "text/plain")
     age(blob_path(tmp_path, AGED), TTL + 1)
 
     def denied(self, *args, **kwargs):
@@ -270,7 +276,7 @@ def test_an_unreapable_blob_still_counts_against_the_ceiling(store, tmp_path, mo
 
     result = run(tmp_path)
 
-    assert (result.blobs_remaining, result.bytes_remaining) == (1, len(b"hello"))
+    assert (result.blobs_remaining, result.bytes_remaining) == (1, len(AGED_DATA))
 
 
 def test_a_live_temporary_counts_against_the_ceiling(tmp_path):
@@ -343,8 +349,8 @@ def test_reap_failures_are_counted_with_one_sample_rather_than_logged_each(
     long outage. The sweep counts instead, and names one example so the errno is
     still reachable.
     """
-    store.store(b"hello", AGED, "text/plain")
-    store.store(b"world!", FRESH, "text/plain")
+    store.store(AGED_DATA, AGED, "text/plain")
+    store.store(FRESH_DATA, FRESH, "text/plain")
     for fingerprint in (AGED, FRESH):
         age(blob_path(tmp_path, fingerprint), TTL + 1)
 
@@ -379,7 +385,7 @@ def test_a_file_that_cannot_even_be_stat_ed_is_counted_as_a_failure(store, tmp_p
     It still occupies disk, and the operator still needs to know — so it lands in
     the same tally as a file that could be read but not unlinked.
     """
-    store.store(b"hello", AGED, "text/plain")
+    store.store(AGED_DATA, AGED, "text/plain")
     blob = blob_path(tmp_path, AGED)
     real_stat = Path.stat
 
@@ -402,7 +408,7 @@ def test_surviving_temporaries_are_reported_separately_from_blobs(store, tmp_pat
     An operator dividing bytes by blobs to get an average size would otherwise
     get a wrong answer during a crash loop — the exact moment they are looking.
     """
-    store.store(b"hello", FRESH, "text/plain")
+    store.store(FRESH_DATA, FRESH, "text/plain")
     shard = tmp_path / "1b" / "3d"
     shard.mkdir(parents=True)
     (shard / f".{AGED}.abc123.tmp").write_bytes(b"partial")
@@ -411,4 +417,4 @@ def test_surviving_temporaries_are_reported_separately_from_blobs(store, tmp_pat
 
     assert (result.blobs_remaining, result.temps_remaining) == (1, 1)
     assert result.temp_bytes_remaining == len(b"partial")
-    assert result.bytes_remaining == len(b"hello") + len(b"partial")
+    assert result.bytes_remaining == len(FRESH_DATA) + len(b"partial")

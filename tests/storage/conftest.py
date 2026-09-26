@@ -19,11 +19,15 @@ test can assert the corruption guard is on) and `timeout=` on `exists` and
 `patch`.
 """
 
+import hashlib
+
 import pytest
 from co_core_sync.drivers.blobstore.gcs import GcsBlobStore
 from google.api_core.exceptions import NotFound, PreconditionFailed
 
-FINGERPRINT = "9f2a7c1e" + "0" * 56
+# The real digest of the bytes these tests store: since co-core 0.19.6 the store
+# refuses any other (cannobserv#492).
+FINGERPRINT = hashlib.sha256(b"bytes").hexdigest()
 
 
 class FakeBlob:

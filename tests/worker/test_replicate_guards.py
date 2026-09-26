@@ -15,6 +15,7 @@ on after three rounds of an incomplete deny-list: enumerate what is allowed, and
 the shapes nobody thought of are refused for free.
 """
 
+import hashlib
 import io
 
 import pytest
@@ -25,7 +26,8 @@ from src.worker.aliases import AliasBinding
 from src.worker.replicate import LocatedBlob, locate_blob, validate_destination
 from tests.storage.conftest import FakeBucket, FakeClient
 
-FINGERPRINT = "a" * 64
+# The real digest of the bytes stored under it (co-core 0.19.6, cannobserv#492).
+FINGERPRINT = hashlib.sha256(b"artifact bytes").hexdigest()
 GCS_ROOT = AliasBinding(provider="gcs", bucket="co-artifacts", prefix="reps")
 
 
@@ -422,7 +424,7 @@ def permanent_store():
 def test_a_uri_the_permanent_store_minted_locates_in_that_store(store, permanent_store):
     """Archiver can publish weeks after a fetch, once the bytes are persisted,
     instead of racing the temp tier's seven days (MUST-7)."""
-    persisted = permanent_store.store(b"persisted bytes", FINGERPRINT, "application/pdf")
+    persisted = permanent_store.store(b"artifact bytes", FINGERPRINT, "application/pdf")
 
     located = locate_blob(persisted, store=store, permanent=(permanent_store,))
 
@@ -458,7 +460,7 @@ def test_a_bucket_neither_store_owns_is_still_invalid(gcs_store, permanent_store
 
 def test_without_a_permanent_store_its_uris_are_invalid(gcs_store, permanent_store):
     """A host that reads no permanent store never minted those references."""
-    minted = permanent_store.store(b"persisted bytes", FINGERPRINT, "application/pdf")
+    minted = permanent_store.store(b"artifact bytes", FINGERPRINT, "application/pdf")
 
     with pytest.raises(PermanentReplicateError) as caught:
         locate_blob(minted, store=gcs_store)

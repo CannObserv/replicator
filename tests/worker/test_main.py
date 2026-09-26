@@ -7,6 +7,7 @@ contract that actually matters for competing consumers and crash recovery.
 
 import asyncio
 import errno
+import hashlib
 import json
 import logging
 import os
@@ -1165,8 +1166,8 @@ async def test_the_local_backend_restarts_the_retention_clock_on_a_re_store(
     await run(_stopped())
 
     (store,) = built
-    fingerprint = "c" * 64
-    path = tmp_path / "blobs" / "cc" / "cc" / f"{fingerprint}.bin"
+    fingerprint = hashlib.sha256(b"bytes").hexdigest()
+    path = tmp_path / "blobs" / fingerprint[0:2] / fingerprint[2:4] / f"{fingerprint}.bin"
     store.store(b"bytes", fingerprint, "text/plain")
     backdated = time.time() - 3600
     os.utime(path, (backdated, backdated))
