@@ -14,7 +14,10 @@ takes no writes. Nothing moves out of it, because every citation to it must keep
 
 **What does not change.** Archiver's RepSpecs name `primary`, and `primary` now binds the new bucket
 too, so no RepSpec edit is needed on cutover day. `gcs-publication` is bound beside it for Archiver's
-migration (archiver#276), which must land before `primary` expires on 2026-12-31. The key layout is
+migration (archiver#276), which must land before `primary` expires on 2026-12-31. *(Landed
+2026-09-27, archiver#281: Archiver names `gcs-publication`, and `primary` was retired from the table,
+kept as `replication-aliases.json.bak-pre-primary-removal`, and from the code the same day, #114. The
+table this runbook installed is therefore no longer the live one.)* The key layout is
 unchanged: the prefix is still empty, and a rendered destination lands at the same key, in the new
 bucket. No cluster code depends on the bucket name. Archiver records the `public_url` each
 `replication_complete` returns, and cannobserv names the old bucket only in test fixtures.

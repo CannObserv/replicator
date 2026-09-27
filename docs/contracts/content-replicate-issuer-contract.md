@@ -121,8 +121,12 @@ one change:** the host binding (operator), a row here, and the RepSpec that uses
 
 | Alias | Binds | Writes as | State |
 |---|---|---|---|
-| `primary` | `gs://co-gcs-publication` since the cutover (2026-09-25); `gs://co-gcs-replication`, now frozen, before it | `co-gcs-publication-writer` via `credentials_file` | **legacy**: accepted outside the rule until 2026-12-31, while Archiver's RepSpecs move to `gcs-publication` (archiver#276). Past that date it stays provisioned, logs an ERROR at every boot and fails CI until it is removed or the date moves |
 | `gcs-publication` | `gs://co-gcs-publication`, public | `co-gcs-publication-writer` via `credentials_file` | provisioned 2026-09-25 at the publication cutover (plan step 4, #114) |
+
+**No name is accepted outside the rule.** `primary`, the one name that predated it, was retired on
+2026-09-27. Archiver moved its RepSpecs to `gcs-publication` (archiver#281), the in-flight commands
+naming `primary` had drained, and it left the host table and the code the same day (#114). A command
+naming it is now refused `alias_unknown`.
 
 The permanent content-addressed store is **not** an alias: it is host configuration like the temp
 store, and nothing publishes through it.
