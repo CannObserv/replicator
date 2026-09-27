@@ -157,6 +157,14 @@ Archiver's RepSpecs move to `gcs-publication` in the publication cutover.
 7. **Archiver and Watcher changes land in their repos.** Done when one real revision is persisted,
    then published from the permanent URI after its temp blob has expired.
 
+   *Status 2026-09-27:* **Archiver's half is shipped** (archiver build `da36ee9`, archiver#276; issuance
+   enabling moves to archiver#283). It issues on receipt, keeps a 6 h reaper capped at 3 re-issues per
+   digest, and publishes from the permanent URI. Issuance ships **off** (`ARCHIVER_PERSIST_ISSUANCE`)
+   until **Watcher sends `blob_fingerprint`** (watcher#329), the one remaining gate. Replicator's side
+   is live: persist has been on since 2026-09-26T21:38Z, and `primary` was retired on 2026-09-27. The
+   done condition is observed here once the first `blob_persisted` lands, and so is the handler timing
+   broker wants for its 300 s threshold.
+
 ## Decisions (2026-09-25)
 
 - **Persist outcomes go on `content.artifacts`.** That is the recommendation; the final placement is
