@@ -16,13 +16,11 @@ for ``gcs``, its bucket.
 """
 
 import json
-from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from src.worker.aliases import (
     ALIAS_NAME_PATTERN,
-    LEGACY_ALIASES,
     AliasBinding,
     AliasTable,
     load_alias_table,
@@ -478,47 +476,17 @@ def test_a_gcs_name_refuses_any_other_bucket(tmp_path, caplog, bucket):
     assert "a gcs-publication alias binds" in record.detail
 
 
-def test_a_legacy_name_is_accepted_outside_the_rule(tmp_path):
-    """`primary` predates the rule and Archiver's RepSpecs name it; it stands until
-    they move to `gcs-publication` (archiver#276), bucket unchecked."""
-    table = load_alias_table(write_aliases(tmp_path, {"primary": gcs_entry("co-artifacts")}))
+def test_primary_is_refused_like_any_other_misnamed_alias(tmp_path, caplog):
+    """No legacy names any more (#114): Archiver moved its RepSpecs to
+    `gcs-publication` (archiver#281, 2026-09-27), so `primary` meets the rule."""
+    path = write_aliases(tmp_path, {"primary": gcs_entry("co-gcs-publication")})
 
-    assert table.provisioned == ("primary",)
+    with caplog.at_level("WARNING", logger="src.worker.aliases"):
+        table = load_alias_table(path)
 
-
-def test_a_legacy_name_past_its_expiry_is_kept_and_reported(tmp_path, caplog):
-    """Loud, not lossy. Dropping it would refuse Archiver's publications
-    `alias_unknown`, a terminal answer to a date nobody acted on."""
-    (name, expiry), *_ = LEGACY_ALIASES.items()
-    path = write_aliases(tmp_path, {name: gcs_entry("co-artifacts")})
-
-    with caplog.at_level("ERROR", logger="src.worker.aliases"):
-        table = load_alias_table(path, today=expiry + timedelta(days=1))
-
-    assert table.provisioned == (name,)
-    (record,) = [r for r in caplog.records if r.message == "a legacy alias is past its expiry"]
-    assert record.alias == name
-    assert record.expiry == expiry.isoformat()
-
-
-def test_a_legacy_name_within_its_expiry_is_not_reported(tmp_path, caplog):
-    (name, expiry), *_ = LEGACY_ALIASES.items()
-    path = write_aliases(tmp_path, {name: gcs_entry("co-artifacts")})
-
-    with caplog.at_level("ERROR", logger="src.worker.aliases"):
-        load_alias_table(path, today=expiry)
-
-    assert not [r for r in caplog.records if r.levelname == "ERROR"]
-
-
-def test_no_legacy_name_has_outlived_its_expiry():
-    """The tripwire. On the expiry this fails every CI run until someone removes the
-    name (Archiver migrated) or moves the date (it has not): the decision the
-    date stands for, forced rather than forgotten."""
-    today = datetime.now(UTC).date()
-    overdue = {name: str(expiry) for name, expiry in LEGACY_ALIASES.items() if today > expiry}
-
-    assert not overdue
+    assert table.provisioned == ()
+    (record,) = [r for r in caplog.records if r.message == "ignoring an unusable alias binding"]
+    assert record.alias == "primary"
 
 
 @pytest.mark.parametrize(

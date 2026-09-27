@@ -27,7 +27,6 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -75,17 +74,11 @@ KNOWN_PROVIDERS = ("gcs",)
 ALIAS_NAME_PATTERN = r"^(gcs|gdrive|ia)-[a-z][a-z0-9-]*$"
 _ALIAS_NAME = re.compile(ALIAS_NAME_PATTERN)
 
-# Names accepted outside the rule, each until a date. ``primary`` predates it and
-# Archiver's RepSpecs name it; it goes once they name ``gcs-publication``
-# (archiver#276, the publication cutover). Its bucket is unchecked, since no
-# ``co-gcs-<role>`` follows from it.
-#
-# **Past its date a name is kept and reported, never dropped.** Dropping it would
-# refuse Archiver's publications ``alias_unknown`` — a terminal answer to a date
-# nobody acted on. The loud half is twofold: an ERROR at every boot, and a test
-# that fails every CI run from the day after, until the name is removed or the
-# date is moved on purpose.
-LEGACY_ALIASES: Mapping[str, date] = MappingProxyType({"primary": date(2026, 12, 31)})
+# **No name is accepted outside the rule.** ``primary`` predated it and was
+# accepted until Archiver's RepSpecs moved to ``gcs-publication``; they did on
+# 2026-09-27 (archiver#281), and it was removed from the table and from here the
+# same day (#114). A table that still names it is refused at load, like any
+# other misnamed alias.
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,9 +148,7 @@ def _empty() -> AliasTable:
     return AliasTable(MappingProxyType({}))
 
 
-def load_alias_table(
-    path: Path | None, *, host_stores: Sequence[str] = (), today: date | None = None
-) -> AliasTable:
+def load_alias_table(path: Path | None, *, host_stores: Sequence[str] = ()) -> AliasTable:
     """Read the alias table, failing **closed** at every step.
 
     Three degrees of failure, and the difference between them is whether the
@@ -184,8 +175,7 @@ def load_alias_table(
     ``host_stores`` are the buckets this host keeps blobs in — temp and permanent —
     which no alias may bind (#114): aliases are publication destinations, and one
     bound to a store would let any replicate command write arbitrary keys into a
-    bucket meant to hold only content-addressed blobs. ``today`` is for tests; it
-    decides only whether a legacy name is overdue.
+    bucket meant to hold only content-addressed blobs.
     """
     if path is None:
         logger.info(
@@ -231,7 +221,6 @@ def load_alias_table(
         if binding is not None:
             bindings[str(alias)] = binding
     table = AliasTable(MappingProxyType(bindings))
-    _report_overdue_legacy_names(table, today or datetime.now(UTC).date())
     logger.info(
         "alias table loaded",
         extra={
@@ -247,24 +236,6 @@ def load_alias_table(
         },
     )
     return table
-
-
-def _report_overdue_legacy_names(table: AliasTable, today: date) -> None:
-    """An ERROR per provisioned legacy name past its date; the binding stands."""
-    for alias in table.provisioned:
-        expiry = LEGACY_ALIASES.get(alias)
-        if expiry is not None and today > expiry:
-            logger.error(
-                "a legacy alias is past its expiry",
-                extra={
-                    "alias": alias,
-                    "expiry": expiry.isoformat(),
-                    "detail": (
-                        "still provisioned; move the RepSpecs naming it to a "
-                        "<provider>-<role> alias, then remove it from the table"
-                    ),
-                },
-            )
 
 
 def _binding_or_none(alias: str, entry: Any, host_stores: Sequence[str]) -> AliasBinding | None:
@@ -303,10 +274,9 @@ def _why_unusable(alias: str, entry: Any, host_stores: Sequence[str] = ()) -> st
         return "a gcs binding needs a bucket"
     if provider == "gcs" and str(entry.get("bucket", "")) in host_stores:
         return "the bucket is a blob store this host reads; aliases are publication destinations"
-    if alias not in LEGACY_ALIASES:
-        why = _why_misnamed(alias, provider, str(entry.get("bucket", "")))
-        if why is not None:
-            return why
+    why = _why_misnamed(alias, provider, str(entry.get("bucket", "")))
+    if why is not None:
+        return why
     if "credentials_file" in entry:
         value = entry["credentials_file"]
         # The rule, never the value: the likeliest wrong value is a pasted key,
