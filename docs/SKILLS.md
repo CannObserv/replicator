@@ -51,6 +51,7 @@ Every override's `SKILL.md` must declare `overrides:` and `override-reason:` in 
 | `reviewing-code-python-fastapi` | Structured code review for uv + ruff + pytest + Pydantic v2 projects |
 | `shipping-work-python-fastapi` | Finalizes work: gates, commits, PR |
 | `using-git-worktrees` | Parallel branch checkouts via `git worktree` |
+| `using-mayfly-chat` | Live agent-to-agent exchange over a Mayfly Chat channel (`mayfly`, `open a channel`, `chat with <repo>`) |
 | `writing-plans` | Short reviewed plan before non-trivial implementation |
 
 Only the `-python-fastapi` variants of the cross-cutting review/ship workflows are linked; the
@@ -60,6 +61,9 @@ stack-neutral and other-stack variants are deliberately skipped.
 is accepted with a `N: fix + fitness` or bare `N: fitness` directive — without the symlink that
 directive fails to resolve. The daily auto-refresh hook bumps the submodule pointer but never creates
 per-skill symlinks, so linking a newly published skill stays a manual step (#13).
+
+`using-mayfly-chat` (#120) needs Node ≥ 18. **Never commit a channel URL** — no test here guards
+it; run its `references/security.md` leak check first.
 
 **The table lists what is linked, which is a subset of what is vendored.** The `3fc7b71` → `2e1cf28`
 bump (#41) published skills this repo has not evaluated — `vendoring-openapi-client` is the one with
