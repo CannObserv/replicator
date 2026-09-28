@@ -375,8 +375,11 @@ Two corollaries, both about values you have stored:
   design — that is what makes MUST-1 work.
 - **No retention guarantee on `content.blobs`.** Replicator never trims it — `BusPublish` takes no
   `MAXLEN` and nothing here issues `XTRIM`, which `tests/test_broker_keyspace.py` holds (#106) —
-  so whatever policy applies is the broker operator's, not part of this contract. It is not an
-  archive to reconcile against later.
+  so the broker's `maxmemory` is its only bound, by decision (#119). It is not an archive to
+  reconcile against later: a group created after a fact was published is promised nothing
+  about it, and a `blob_available` past its `blob_expires_at` names bytes already reaped. The one
+  promise is negative: **if Replicator ever trims, it trims only facts every existing consumer
+  group has read and acknowledged**, never by length.
 
 ---
 

@@ -341,6 +341,10 @@ revision, its timestamp, or the fingerprint — rather than relying on a provide
 ⚙ **R3 — do not treat `public_url` as stable across occasions.** Each replication occasion yields its
 own artifact and its own URL; the registry row records which.
 
+⚙ **`content.artifacts` is not a history (#119)** — `content.blobs`'
+[retention terms](content-fetch-issuer-contract.md#what-replicator-does-not-guarantee) apply;
+a fact your group never read is MUST-6's, and the reaper its backstop.
+
 ---
 
 ## What Replicator refuses

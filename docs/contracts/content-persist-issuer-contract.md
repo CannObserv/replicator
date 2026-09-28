@@ -78,6 +78,8 @@ the write time.** For the earliest time the bytes were kept, take the minimum ov
 **P3 — Branch on `terminal`, then treat an unknown `reason` as opaque.** Every fact this service emits
 today is terminal. A failure that is still retrying publishes nothing, so silence means "still trying".
 **Keep a reaper** that re-issues under a fresh `command_id`, as the fetch contract's MUST-6 requires.
+`content.artifacts` is not a history either: its retention terms are the replicate contract's
+(#119), so read its facts as they arrive.
 
 **P4 — Send the raw-bytes digest and the URI the fetch fact gave you, verbatim.** Do not rebuild
 `blob_uri` from a bucket name. The URI a store minted is the only one T3a accepts.
