@@ -37,8 +37,9 @@ makes production untestable (#38).
 `tests/test_destinations.py` refuses it in two halves, one static and one runtime:
 
 - **The scan.** No module under `src/` or `tests/` may contain
-  `co-gcs-replication` (the bucket) or `co-gcs-replicator` (the writer SA, which
-  is also its key file's basename and its email's local part) in a string
+  `co-gcs-replication` (the bucket) or `co-gcs-replicator` (the old writer SA, disabled 2026-09-28, whose
+  key file's basename and email local part it also was; since #114 also the
+  permanent store's bucket name) in a string
   literal. AST-based, docstrings included, and it excludes only itself. Unit
   tests use `example-replication-bucket` and `example-internal-bucket`; the
   wheelhouse reader `co-pypi-reader.json` stays legal, because

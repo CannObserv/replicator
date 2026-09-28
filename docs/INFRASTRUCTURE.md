@@ -182,7 +182,7 @@ grant `objectAdmin` to `co-gcs-test-replicator-writer` only.
 The worker runs as `co-gcs-replicator-writer` (`/etc/replicator/co-gcs-replicator-writer.json`,
 its ADC). It reads `co-gcs-replicator` when `REPLICATOR_PERMANENT_BUCKET` names it. The publication
 writer's key, `/etc/replicator/co-gcs-publication-writer.json`, was minted at the cutover and is named
-by the `credentials_file` of both publication aliases ([ENVIRONMENT.md](ENVIRONMENT.md)). `co-gcs-replicator` grants `objectViewer` only to identities that
+by the `credentials_file` of the `gcs-publication` alias (`primary`, which also named it, was retired 2026-09-27) ([ENVIRONMENT.md](ENVIRONMENT.md)). `co-gcs-replicator` grants `objectViewer` only to identities that
 open its bytes — the worker, and the publication writer, whose `rewrite` reads the source (#114 item 5);
 Archiver passes references through and needs none.
 

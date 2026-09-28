@@ -1,7 +1,7 @@
 ---
 title: Operator runbook for Persist by digest, steps 2 and 3 — identities and buckets
 date: 2026-09-25
-status: phases A–D done 2026-09-25; E after a clean day and a live create
+status: phases A–D done 2026-09-25; E (disable) done 2026-09-28; deleting the accounts and key files is due on or after 2026-10-05
 plan: 2026-09-25-content-addressed-persist-and-storage-naming.md
 ---
 
@@ -185,3 +185,19 @@ gcloud iam service-accounts disable co-gcs-test-replicator@co-gcs.iam.gserviceac
 Disabling is reversible, and deleting is not. Delete a week later, then remove
 `/etc/replicator/co-gcs-replicator.json` and `/etc/replicator/co-gcs-test-replicator.json` from the
 VM. The interim `objectCreator` on `co-gcs-replication` is removed in the step 4 cutover, not here.
+
+**Disabled 2026-09-28.** The conditions, as checked that day:
+- **A new object under the new identity:** the first temp blob created since the 15:50 UTC switch landed in
+  `co-gcs-blobs` at 2026-09-26T19:11Z.
+- **No permission errors:** none in the journal since the switch.
+- **Nothing still used either old key:** not `/etc/replicator/.env`, the repo `.env` (moved to
+  `co-gcs-test-replicator-writer.json` on 2026-09-26), the unit, CI, or the wheelhouse sync, which uses
+  `co-pypi-reader.json`.
+
+Afterwards:
+- **The old keys are refused:** both are rejected at token exchange (`invalid_grant`).
+- **The new identities are unaffected:** the worker's `test_iam_permissions` is unchanged, the service
+  logged no warnings, and the real-bucket suite passed 16 of 16 as `co-gcs-test-replicator-writer`.
+
+**Still to do, on or after 2026-10-05:** delete both accounts, then remove the two key files from
+`/etc/replicator/`.
