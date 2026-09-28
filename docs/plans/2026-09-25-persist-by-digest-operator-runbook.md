@@ -199,5 +199,5 @@ Afterwards:
 - **The new identities are unaffected:** the worker's `test_iam_permissions` is unchanged, the service
   logged no warnings, and the real-bucket suite passed 16 of 16 as `co-gcs-test-replicator-writer`.
 
-**Still to do, on or after 2026-10-05:** delete both accounts, then remove the two key files from
-`/etc/replicator/`.
+**Still to do, on or after 2026-10-05, tracked as #123:** delete both accounts, remove their leftover
+`deleted:` bucket bindings, then remove the two key files from `/etc/replicator/`.
