@@ -130,8 +130,13 @@ sudo tailscale set --accept-dns=true     # if it is not
 
 ## Joining — the setup script as it ran
 
-`new --setup-script` runs once at first boot and cannot be re-run, and it runs
-before any admin path exists. This is what created this node (key redacted),
+`new --setup-script` cannot be re-run on demand, and it runs before any admin
+path exists. It is **not** first-boot-only, whatever `exe-setup.service`'s
+description says: the unit is gated on `ConditionPathExists=/exe.dev/setup`, and
+on this node the script ran on all six boots through 2026-09-28 (its `tailscale
+up` and both `shred`s are in each boot's `journalctl -u exe-setup`), although the
+trap below shreds the file and the unit's `ExecStartPost=` removes it. exe.dev
+puts it back before each boot (#122, CannObserv/notifier#93). This is what created this node (key redacted),
 passed inline over `POST https://exe.dev/exec` with `\n` escapes:
 
 ```bash
