@@ -457,6 +457,7 @@ diff /etc/systemd/system/replicator.service deploy/replicator.service
 diff '/etc/systemd/system/replicator-failure-notify@.service' 'deploy/replicator-failure-notify@.service'
 diff /etc/systemd/system/tailscaled.service.d/memory.conf deploy/tailscaled.service.d/memory.conf
 diff /etc/systemd/system/system.slice.d/replicator-memory.conf deploy/system.slice.d/replicator-memory.conf
+diff /etc/needrestart/conf.d/replicator.conf deploy/needrestart.conf.d/replicator.conf
 
 sudo journalctl -u replicator -f
 journalctl -t replicator-failure                        # what the OnFailure= handler reported

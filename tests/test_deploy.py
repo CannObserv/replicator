@@ -23,6 +23,7 @@ rule.
 
 import os
 import re
+import shutil
 import socket
 import subprocess
 from pathlib import Path
@@ -786,3 +787,68 @@ class TestTheEarlyoomDecline:
             "plus -s 100,100: with swap, earlyoom otherwise waits for swap to drain, "
             "and a bare -s 100 still gates SIGKILL on half of it)"
         )
+
+
+NEEDRESTART_DROPIN = REPO_ROOT / "deploy" / "needrestart.conf.d" / "replicator.conf"
+NEEDRESTART_INSTALLED = Path("/etc/needrestart/conf.d/replicator.conf")
+NEEDRESTART_MAIN = Path("/etc/needrestart/needrestart.conf")
+
+# needrestart's config is Perl, eval'd into `%nrconf`; evaluating it the same way
+# is the only honest parse. A syntax error makes needrestart die, and apt's hook
+# swallows that with `|| true` — restarting nothing, so it fails safe but silent.
+_NRCONF_EVAL = (
+    "our %nrconf; our $LOGPREF = q(); "
+    "eval do { local(@ARGV, $/) = $ARGV[0]; <> }; die $@ if $@; "
+    "print defined $nrconf{restart} ? $nrconf{restart} : q(undef);"
+)
+
+
+def _needrestart_mode(conf: Path) -> str:
+    """Evaluate ``conf`` as needrestart does and return ``$nrconf{restart}``."""
+    perl = shutil.which("perl")
+    if perl is None:
+        pytest.skip("perl not available")
+    return subprocess.run(
+        [perl, "-e", _NRCONF_EVAL, str(conf)], capture_output=True, text=True, check=True
+    ).stdout
+
+
+class TestNeedrestartListsNeverRestarts:
+    """apt's needrestart hook lists restarts and never performs them (#122).
+
+    ``/etc/apt/apt.conf.d/99needrestart`` runs ``needrestart -m u`` after every
+    dpkg run, and Ubuntu's patch makes that *automatic* restarts while
+    ``$nrconf{restart}`` is unset — the stock state. The worker runs on
+    ``/usr/bin/python3.12`` and maps ``libc6`` and ``libexpat1``, so a security
+    apply would restart it mid-apply, outside the owner's window, spending a
+    start from the 6-per-2h budget. The drop-in makes that independent of
+    whether ``NEEDRESTART_MODE=l`` survives every process between the operator
+    and the hook. Shape from CannObserv/broker#65 and CannObserv/notifier#91.
+    """
+
+    def test_the_drop_in_sets_list_only(self) -> None:
+        assert _needrestart_mode(NEEDRESTART_DROPIN) == "l"
+
+    def test_the_drop_in_sets_nothing_else(self) -> None:
+        """One key: ``$nrconf{ui}`` stays unset, since setting it without the
+        restart key forces interactive mode instead."""
+        lines = [
+            line.strip()
+            for line in NEEDRESTART_DROPIN.read_text().splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        assert lines == ["$nrconf{restart} = 'l';"]
+
+    @on_the_host
+    def test_the_installed_copy_matches_the_tracked_one(self) -> None:
+        if not NEEDRESTART_INSTALLED.exists():
+            pytest.skip(f"{NEEDRESTART_INSTALLED} not installed yet")
+        assert NEEDRESTART_INSTALLED.read_text() == NEEDRESTART_DROPIN.read_text()
+
+    @on_the_host
+    def test_the_live_chain_resolves_to_list_only(self) -> None:
+        """The main config globs ``conf.d/*.conf`` in sort order, so a later
+        file could override this one: evaluate the chain needrestart reads."""
+        if not NEEDRESTART_INSTALLED.exists():
+            pytest.skip(f"{NEEDRESTART_INSTALLED} not installed yet")
+        assert _needrestart_mode(NEEDRESTART_MAIN) == "l"
