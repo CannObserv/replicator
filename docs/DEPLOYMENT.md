@@ -90,7 +90,9 @@ survivable reclaim instead of failed atomic allocations; it and
 Measured 2026-09-24 at 8 GiB (#112); the 675 recorded on 2026-09-18 was at
 3.9 GB. Read tailscaled's place against CannObserv/broker#17, where the failure
 *was* the tailnet: killing tailscaled takes the bus away exactly as effectively
-as killing this worker. So
+as killing this worker. The same 2026-09-24 pass found a session
+`dbus-daemon` above the user manager (adj +200, 800), started under
+`user@1000` at 04:04. So
 [`deploy/tailscaled.service.d/memory.conf`](../deploy/tailscaled.service.d/memory.conf)
 gave it the worker's own -900, as CannObserv/broker#21 does — 69 and 68 after
 the restart — and since #112 gives it -950, CannObserv/power-map#588's value.
@@ -104,9 +106,7 @@ budget is spent, not per kill — travels the tailnet. One cost: a Tailscale SSH
 session into this node (`RunSSH: true`) forks from `tailscaled` and inherits
 -950, so dev tooling launched from it would outlive the worker — #92's
 inversion. Start such a session with `choom -n 0 -- $SHELL`; raising your own
-score needs no privilege. The same pass found a session `dbus-daemon` above the user manager
-(adj +200, 800), started under `user@1000` at 04:04.
-CannObserv/watcher#309 and CannObserv/archiver#285 chose -400 because their
+score needs no privilege. CannObserv/watcher#309 and CannObserv/archiver#285 chose -400 because their
 services do not use the tailnet; this worker does.
 
 **Since #125 the dev tooling follows the user manager directly.** Measured
