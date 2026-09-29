@@ -155,9 +155,13 @@ What this is not:
   arguments take `systemd --user` (11 MiB), as the kernel would first; tuned
   with `--prefer '^(node|npm|claude|MainThread)'` and the worker, `tailscaled`,
   `sshd` and `systemd` avoided, a VSCode `MainThread` (476 MiB, badness 993),
-  the kernel's next choice after the 14 MiB user manager. earlyoom would kill at ~10% `MemAvailable`, which counts page cache the kernel
-  reclaims before it kills anything — so a session spike the kernel would have
-  absorbed becomes a lost session. Memory PSI read 0 since boot, with no OOM kill
+  the kernel's next choice after the 14 MiB user manager. Neither setting adds
+  anything. On stock `-s 10` it waits for swap to be ≤10% free as well —
+  ~3.7 G paged out here, deep into the thrashing that ends at the kernel's own
+  kill. On the `-s 100,100` this
+  host would need, it kills at ~10% `MemAvailable`, which still counts page
+  cache the kernel reclaims before it kills anything — so a session spike the
+  kernel would have absorbed becomes a lost session. Memory PSI read 0 since boot, with no OOM kill
   in the previous boot. The cohort read it the same way:
   CannObserv/archiver#285 adopted, measured and purged it, CannObserv/watcher#337
   kept it declined, CannObserv/power-map#588 is removing it. What it would have

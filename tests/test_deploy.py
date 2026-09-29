@@ -803,8 +803,11 @@ class TestTheEarlyoomDecline:
     Declined twice. At -1000 (2026-09-24) it could not reach the sessions at
     all. At 0 (2026-09-29, after #125) it can, but the kernel already ranks the
     heaviest session process first and the worker and tailscaled last, so
-    earlyoom's only addition is timing: it kills at ~10% ``MemAvailable``, which
-    counts page cache the kernel reclaims before it kills anything. The
+    earlyoom's only addition is timing, and neither setting helps: stock
+    ``-s 10`` also waits for swap to be ≤10% free, deep into the thrashing that
+    ends at the kernel's own kill, and the ``-s 100,100`` this host would need
+    kills at ~10% ``MemAvailable``, which still counts page cache the kernel
+    reclaims before it kills anything. The
     cohort's reading too — CannObserv/archiver#285 purged it, CannObserv/watcher#337
     kept it declined, CannObserv/power-map#588 is removing it. What it would
     have protected is held by scores the kernel honours (the units' -900,
