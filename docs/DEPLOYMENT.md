@@ -167,8 +167,9 @@ What this is not:
   kill. On the `-s 100,100` this
   host would need, it kills at ~10% `MemAvailable`, which still counts page
   cache the kernel reclaims before it kills anything — so a session spike the
-  kernel would have absorbed becomes a lost session. Memory PSI read 0 since boot, with no OOM kill
-  in the previous boot. The cohort read it the same way:
+  kernel would have absorbed becomes a lost session. Memory PSI read 0 since boot, and none of the
+  three saved boots (since 2026-09-23) logged an OOM kill or an allocation
+  failure. The cohort read it the same way:
   CannObserv/archiver#285 adopted, measured and purged it, CannObserv/watcher#337
   kept it declined, CannObserv/power-map#588 is removing it. What it would have
   protected is held by scores the kernel honours and by `vm.min_free_kbytes`,
