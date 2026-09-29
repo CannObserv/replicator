@@ -741,7 +741,12 @@ def _fake_process(proc: Path, pid: int, ppid: int, comm: str, adj: int) -> None:
 
 
 class TestTheSessionPremise:
-    """Sessions here must be killable: every memory decision below assumes it.
+    """Sessions here must be killable, or two things this repo relies on stop holding.
+
+    The -900 on both units wins a real comparison against the dev tooling only
+    while the tooling is eligible, and #112's earlyoom question is decided on
+    the same premise. The other memory settings (``MemoryLow=``, the sysctls)
+    hold at either value.
 
     Until #125, ``exe-init`` 8579326 started every session at ``oom_score_adj``
     -1000 — a bug exe.dev confirmed on 2026-09-29 (CannObserv/status#5) — so the
