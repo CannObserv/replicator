@@ -668,3 +668,7 @@ docs/ENVIRONMENT.md :: disproven :: - `REPLICATOR_ALLOW_ANY_CHECKOUT` — bypass
 # CR 2: both pointed at the escalation triggers in the contract, which the curation moved to the reference.
 docs/contracts/content-replicate-issuer-contract.md :: retarget :: [the triggers](#escalation-triggers--this-capabilitys-own)). The read/write comparison, the IAS3
 docs/contracts/content-replicate-issuer-contract.md :: retarget :: ⚠ **The declared set is one; the granted set is two, and that is trigger 1 below (#89).**
+# CR 4: the intro's exception list now names every doc a variable's reasoning moved to —
+# POLITENESS.md in this change, FAILURE-NOTIFICATION.md in an earlier one it never caught up with.
+docs/ENVIRONMENT.md :: retarget :: default — except the blob and temp-store settings, whose reasoning sits beside
+docs/ENVIRONMENT.md :: retarget :: the behaviour it argues about in [STORAGE.md](STORAGE.md#variables). Two env
