@@ -98,6 +98,11 @@ restart. The same pass found a session `dbus-daemon` above the user manager
 CannObserv/watcher#309 chose -400 because its dashboard does not use the
 tailnet; this worker does.
 
+**Since #125 the dev tooling follows the user manager directly.** Measured
+2026-09-29 after the restart: a VSCode `MainThread` at 694 (504 MB RSS), then
+three `claude` processes at 682–678, all adj 0 and all ahead of every daemon —
+the order #92 wanted, and the baseline #112 measures earlyoom against.
+
 CannObserv/broker#17 is what it costs when it fires, and it fires in a shape
 worth recognising: launching a SocratiCode server on the broker's VM took the
 bus out for **57m48s with nothing OOM-killed at all**. The kernel failed
