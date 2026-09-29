@@ -144,7 +144,7 @@ What this is not:
   shed small daemons — `systemd --user` 733, `tailscaled` 670 until #113, the
   adj-0 daemons 666 — while the ~1.7 GiB of session tooling stayed out of reach.
   broker (CannObserv/broker#58) and watcher (CannObserv/watcher#323) run it on
-  readings that skip hides. With sessions at 0, notifier's shape
+  dry-run scores printed *before* that skip. With sessions at 0, notifier's shape
   (CannObserv/notifier#74), `--prefer` reaches them, and #112 re-measures. If it
   is installed here, `-s 100,100`: it acts only with memory *and* swap under
   their minimums, and a bare `-s 100` leaves SIGKILL's swap minimum at 50% — 2 G
