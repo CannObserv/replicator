@@ -62,7 +62,8 @@ notifier mode and its delivery scoring:
 Both units set `OOMScoreAdjust=-900`. co-replicator is also the dev workspace:
 VSCode Server, Claude Code, and any MCP server they start share the VM with the
 worker. At the default adj of 0 the worker read `oom_score` 670, second from the
-top of the eligible list; at -900 it reads 72, the bottom of it:
+top of the eligible list; at -900 it reads 72, above only `tailscaled` (-950,
+#112):
 
 ```bash
 cat /proc/self/oom_score_adj                                          # 0 from a session shell; -1000 before #125

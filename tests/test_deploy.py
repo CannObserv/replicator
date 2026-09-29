@@ -415,7 +415,7 @@ def test_the_production_units_outrank_dev_tooling_for_the_oom_killer(unit: Path)
     Claude Code, and any MCP server they start — the tooling that took
     CannObserv/broker#17 down. At the default adj of 0 the worker read
     ``oom_score`` 670, second from the top of the eligible list (#92); at -900
-    it reads 72, the bottom of it.
+    it reads 72, above only tailscaled (-950, #112).
 
     Until #125 that rank was all it bought: ``exe-init`` 8579326 started every
     session at ``oom_score_adj=-1000``, which is ineligibility, not a low score

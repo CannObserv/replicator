@@ -77,7 +77,8 @@ WorkingDirectory=/home/exedev/replicator
 # co-replicator was 3.9 GB with no swap then (8 GiB + 4 G since #99), and it is
 # also the dev workspace: VSCode Server, Claude Code, and any MCP server they
 # start share this VM with the worker. At the default adj of 0 the worker
-# scored 670, second from the top of the eligible list; -900 puts it last.
+# scored 670, second from the top of the eligible list; -900 puts it last but
+# tailscaled, whose -950 keeps the bus's only path alive longer (#112).
 # Until #125 the dev tooling was not on that list at all — exe-init 8579326
 # started sessions at oom_score_adj=-1000, *exempt* — so the kernel would have
 # killed the worker to relieve pressure the tooling created. exe-init 14fd603
