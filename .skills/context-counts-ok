@@ -16,7 +16,7 @@
 # --- immediately under it, so the number is checkable by reading the section.
 docs/ARCHITECTURE.md :: enumerated :: **two backends** (`local`, `gcs`)
 AGENTS.md :: enumerated :: Two that bite, each symptomless until it matters:
-AGENTS.md :: enumerated :: Two env files, and the boundary between them
+AGENTS.md :: enumerated :: Two env files, split by a security boundary
 AGENTS.md :: enumerated :: **Two blob backends, one seam.**
 AGENTS.md :: enumerated :: **Three stream kinds, three sets of rules.**
 # The three contracts and their four documents are the four `docs/contracts/`
@@ -25,7 +25,7 @@ AGENTS.md :: enumerated :: **Three stream kinds, three sets of rules.**
 # --- stable: structural, and cannot change without the sentence being rewritten.
 # XAUTOCLAIM's reply shape is Redis wire format, and the ≥7.0 floor beside it is
 # what the sentence exists to state; a fourth element would rewrite both.
-AGENTS.md :: stable :: `XAUTOCLAIM`'s three-element reply
+# (AGENTS.md's own entry here was pruned when its curation left the clause to INFRASTRUCTURE.md.)
 # Added 2026-09-13 (#91), after the first pass: the same clause in DEPLOYMENT.md's
 # Redis-floor paragraph, which the AGENTS.md line summarises, and which the
 # unpinned entry matched only by coincidence. Read here, the same warrant holds,
@@ -40,4 +40,4 @@ docs/DEPLOYMENT.md :: stable :: `XAUTOCLAIM`'s three-element reply
 # that OnFailure= names it, so a second file cannot silently become one or three.
 # The two _TRANSIENT_ERRORS members — src/worker/loop.py:80, imported and
 # asserted by tests/worker/test_oom_integration.py against a live broker.
-AGENTS.md :: gated :: `OutOfMemoryError` and `NoPermissionError` are the two
+AGENTS.md :: gated :: `OutOfMemoryError` and `NoPermissionError`, the two `ResponseError` subclasses

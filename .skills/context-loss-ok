@@ -674,3 +674,32 @@ docs/ENVIRONMENT.md :: retarget :: default — except the blob and temp-store se
 docs/ENVIRONMENT.md :: retarget :: the behaviour it argues about in [STORAGE.md](STORAGE.md#variables). Two env
 # CR 5: the index line now names the sections this change moved into the replicate reference.
 AGENTS.md :: retarget :: - [content-replicate-issuer-reference.md](docs/contracts/content-replicate-issuer-reference.md) — its reasoning half: the trust comparison, T3a, T4, T6, the exemption
+# ---- AGENTS.md curation (over budget 6,071 -> under 6,000) ----
+# Class C: each passage rewritten in place, same claims; --claims drops no atom.
+# The Redis floor's reason (`claim_stale_page`, `XAUTOCLAIM`'s three-element reply)
+# now sits behind "Why" -> INFRASTRUCTURE.md, whose "Redis ≥ 7.0" paragraph carries it verbatim.
+AGENTS.md :: tighten :: Python ≥3.12, uv, pytest, ruff. `ty` is a **non-gating** type checker
+AGENTS.md :: tighten :: `src/worker/` is the primary process — the bus consumer; `tests/` mirrors `src/`.
+AGENTS.md :: tighten :: Every module with the job it owns, the seams each sits behind, and the file-level
+AGENTS.md :: tighten :: critical — `claim_stale_page` reads `XAUTOCLAIM`'s three-element reply — guarded by
+AGENTS.md :: tighten :: `scripts/check_redis_floor.sh`. Ports, redis-py pin: [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md).
+AGENTS.md :: tighten :: Two env files, and the boundary between them is a security boundary, not a
+AGENTS.md :: tighten :: convention:
+AGENTS.md :: tighten :: - **A capped broker and an ACL denial are both transient (#79, #82).**
+AGENTS.md :: tighten :: `OutOfMemoryError` and `NoPermissionError` are the two `ResponseError`
+AGENTS.md :: tighten :: subclasses in `_TRANSIENT_ERRORS`, exempt from the delivery ceiling, so an OOM
+AGENTS.md :: tighten :: is a *publishing* incident and a wrong grant backs off rather than closing
+AGENTS.md :: tighten :: valid commands. Boot-only `XGROUP CREATE … MKSTREAM` is the one refusal that
+AGENTS.md :: tighten :: does **not** retry. Cap a broker the tests spawn, **never the shared one**, and
+AGENTS.md :: tighten :: never answer an OOM with a client-level retry, which
+AGENTS.md :: tighten :: republishes an `XADD` the broker already applied. Each classification and what it
+AGENTS.md :: tighten :: - **The `replicator:cmd:*` keys are the only non-stream keys on the broker (#80).**
+AGENTS.md :: tighten :: Per-stream dedupe — `SET NX EX` after a *completing* close, `EXISTS` before the
+AGENTS.md :: tighten :: handler — so losing them costs one TTL window of re-fetches, never correctness:
+AGENTS.md :: tighten :: - **Consumers must be idempotent; producers own the outbox.** Replicator has no DB
+AGENTS.md :: tighten :: — its durable record of intent is the consumer group's PEL. Do not add a
+AGENTS.md :: tighten :: Postgres outbox to the consume path.
+AGENTS.md :: tighten :: - [CONVENTIONS.md](docs/CONVENTIONS.md) — the rules common to every stream:
+AGENTS.md :: tighten :: - [INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) — VM topology, ports, the broker, and the buckets
+AGENTS.md :: tighten :: - [TESTING.md](docs/TESTING.md) — fakeredis's divergences, the keys an integration run may create
+AGENTS.md :: tighten :: - [content-persist-issuer-contract.md](docs/contracts/content-persist-issuer-contract.md) — keeping a blob in the permanent store by digest: obligations, the refusal registry

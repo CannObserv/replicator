@@ -16,7 +16,7 @@ TDD required: no production code without a failing test first.
 
 ## Environment & Tooling
 
-Python ≥3.12, uv, pytest, ruff. `ty` is a **non-gating** type checker (`uv run ty check`) — advisory, no pre-commit or CI gate.
+Python ≥3.12, uv, pytest, ruff. `ty` (`uv run ty check`) is a **non-gating** type checker — no pre-commit or CI gate.
 
 **co-core comes from the wheelhouse, not PyPI.** `co-core` / `co-core-aio` / `co-core-sync` resolve from `./.wheelhouse`, mirrored from the private GCS index `gs://co-gcs-pypi` by `scripts/sync_wheelhouse.py` via `[tool.uv] find-links`. Run the sync **before** `uv sync` on a fresh clone or after a version bump:
 
@@ -59,9 +59,8 @@ Full tool table, prefetch hook, per-tool guidance: [`docs/SOCRATICODE.md`](docs/
 
 ## Project Layout
 
-`src/worker/` is the primary process — the bus consumer; `tests/` mirrors `src/`.
-Every module with the job it owns, the seams each sits behind, and the file-level
-map: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+`src/worker/` is the bus consumer; `tests/` mirrors `src/`. Each module's job, its
+seams, and the file map: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Infrastructure
 
@@ -70,8 +69,8 @@ Main is the deployed code.
 
 Worker binds no port; 8001 is dev, 8000 reserved. **The broker is `co-broker`**
 (CannObserv/broker); Replicator is a client, never ships one. Server **≥ 7.0** is
-critical — `claim_stale_page` reads `XAUTOCLAIM`'s three-element reply — guarded by
-`scripts/check_redis_floor.sh`. Ports, redis-py pin: [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md).
+critical, guarded by `scripts/check_redis_floor.sh`. Why, ports, redis-py pin:
+[docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md).
 
 ## Server Lifecycle
 
@@ -95,8 +94,7 @@ Every deploy situation, the guard's verdict table, and the dev-server invocation
 
 ## Environment Variables
 
-Two env files, and the boundary between them is a security boundary, not a
-convention:
+Two env files, split by a security boundary, not a convention:
 
 1. **`/etc/replicator/.env`** — production config. **The only file `replicator.service` reads.**
 2. **`.env`** (repo root, git-ignored) — dev/agent secrets, chiefly org-wide GitHub PATs. Never commit.
@@ -140,22 +138,20 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
   *before* it; **draining the queue is ours too** (broker#12, #86). Retry cadence
   is `REPLICATOR_CLAIM_MIN_IDLE_MS`; a failing *cycle* is `run_loop`'s problem,
   not the message's.
-- **A capped broker and an ACL denial are both transient (#79, #82).**
-  `OutOfMemoryError` and `NoPermissionError` are the two `ResponseError`
-  subclasses in `_TRANSIENT_ERRORS`, exempt from the delivery ceiling, so an OOM
-  is a *publishing* incident and a wrong grant backs off rather than closing
-  valid commands. Boot-only `XGROUP CREATE … MKSTREAM` is the one refusal that
-  does **not** retry. Cap a broker the tests spawn, **never the shared one**, and
-  never answer an OOM with a client-level retry, which
-  republishes an `XADD` the broker already applied. Each classification and what it
-  costs: [docs/CONVENTIONS.md](docs/CONVENTIONS.md).
-- **The `replicator:cmd:*` keys are the only non-stream keys on the broker (#80).**
-  Per-stream dedupe — `SET NX EX` after a *completing* close, `EXISTS` before the
-  handler — so losing them costs one TTL window of re-fetches, never correctness:
+- **A capped broker and an ACL denial are both transient (#79, #82)** —
+  `OutOfMemoryError` and `NoPermissionError`, the two `ResponseError` subclasses
+  in `_TRANSIENT_ERRORS`, are exempt from the delivery ceiling: an OOM is a
+  *publishing* incident, a wrong grant backs off instead of closing valid
+  commands. Only boot's `XGROUP CREATE … MKSTREAM` does **not** retry. Cap a
+  broker the tests spawn, **never the shared one**; never answer an OOM with a
+  client-level retry, which republishes an `XADD` the broker already applied.
+  Each classification's cost: [docs/CONVENTIONS.md](docs/CONVENTIONS.md).
+- **The `replicator:cmd:*` keys are the only non-stream keys on the broker (#80)** —
+  per-stream dedupe, `EXISTS` before the handler, `SET NX EX` after a *completing*
+  close; losing them costs one TTL window of re-fetches, never correctness:
   [docs/CONVENTIONS.md](docs/CONVENTIONS.md#the-replicatorcmd-keys).
-- **Consumers must be idempotent; producers own the outbox.** Replicator has no DB
-  — its durable record of intent is the consumer group's PEL. Do not add a
-  Postgres outbox to the consume path.
+- **Consumers are idempotent; producers own the outbox.** No DB here — the durable
+  record of intent is the group's PEL; never add a Postgres outbox to the consume path.
 - **Three stream kinds, three sets of rules.** `content.fetch`,
   `content.replicate` and `content.persist` are command streams (one group each,
   competing consumers; persist runs only with `REPLICATOR_PERSIST_ENABLED`, off by
@@ -231,14 +227,14 @@ source — each with its rationale and ruff gate in [docs/STYLE.md](docs/STYLE.m
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) — founding design, the command → fact flow, module by module; read before changing one
 - [STREAMS.md](docs/STREAMS.md) — what each stream carries, one bullet per rule `AGENTS.md` states in a line
 - [POLITENESS.md](docs/POLITENESS.md) — per-host pacing: the policy stream, sleep vs park, 429/503 escalation
-- [CONVENTIONS.md](docs/CONVENTIONS.md) — the rules common to every stream: idempotency, validation, DLQ, `claim_stale`, and the `replicator:cmd:*` keys (#80)
+- [CONVENTIONS.md](docs/CONVENTIONS.md) — rules common to every stream: idempotency, validation, DLQ, `claim_stale`, the `replicator:cmd:*` keys (#80)
 - [STORAGE.md](docs/STORAGE.md) — blob paths and modes, the populations under `REPLICATOR_BLOB_DIR`, TTL and ceilings
 - [DEPLOYMENT.md](docs/DEPLOYMENT.md) — the unit's lifecycle, its start guards, the co-core pin, the host's memory tunables
 - [FAILURE-NOTIFICATION.md](docs/FAILURE-NOTIFICATION.md) — the `OnFailure=` handler: `REPLICATOR_NOTIFY_*`, notifier mode, delivery scoring
-- [INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) — VM topology, ports, the broker, and the buckets either side of the test/production line
+- [INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) — VM topology, ports, the broker, buckets either side of the test/production line
 - [tailscale.md](docs/reference/tailscale.md) — this node: tailnet, ACL, DNS, broker latency
 - [ENVIRONMENT.md](docs/ENVIRONMENT.md) — every variable either env file carries, and the boundary between them
-- [TESTING.md](docs/TESTING.md) — fakeredis's divergences, the keys an integration run may create, why production `co-gcs-replication` is unreachable (#38)
+- [TESTING.md](docs/TESTING.md) — fakeredis's divergences, keys an integration run may create, why production `co-gcs-replication` is unreachable (#38)
 - [STYLE.md](docs/STYLE.md) — the logging stack: formatter, installers, the non-JSON journald lines
 - [COMMANDS.md](docs/COMMANDS.md) — every runnable command, with flags
 - [SKILLS.md](docs/SKILLS.md) — vendored skill inventory, refresh procedure, doc-check lists
@@ -249,4 +245,4 @@ source — each with its rationale and ruff gate in [docs/STYLE.md](docs/STYLE.m
 - [replicator-boundaries.md](docs/contracts/replicator-boundaries.md) — what Replicator may become; run its three tests against any proposed capability
 - [content-replicate-issuer-contract.md](docs/contracts/content-replicate-issuer-contract.md) — the replicate trust model and issuer obligations (#34)
 - [content-replicate-issuer-reference.md](docs/contracts/content-replicate-issuer-reference.md) — the why behind trust, T3a, T4, T6; triggers, Charter check, open questions
-- [content-persist-issuer-contract.md](docs/contracts/content-persist-issuer-contract.md) — keeping a blob in the permanent store by digest: obligations, the refusal registry, enabling it on a host (#114)
+- [content-persist-issuer-contract.md](docs/contracts/content-persist-issuer-contract.md) — keeping a blob in the permanent store by digest: obligations, refusal registry, enabling it on a host (#114)
