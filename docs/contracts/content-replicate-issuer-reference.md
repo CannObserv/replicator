@@ -10,6 +10,8 @@ rest on and the corrections recorded against them, each under the clause it expa
 escalation triggers, the Charter check and what is deliberately open, whole — so the
 contract stays short enough to read start to finish — the shape the `content.fetch` contract and
 its two references already have.
+Passages marked **⚙** mean what the contract's preamble says they mean: obligations settled ahead of
+the code, most now claims about it.
 
 ---
 
