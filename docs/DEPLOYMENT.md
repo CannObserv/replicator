@@ -136,8 +136,8 @@ What this is not:
 - **Not a substitute for capping the launch.** The cap bounds a SocratiCode
   server before any killer has to act, and its `choom -n 500` keeps the capped
   process killable under an `exe-init` that exempts sessions — at -1000 a cgroup
-  cap *stalls* a process rather than killing it. This is the unit's half; the
-  capped invocation is in [COMMANDS.md](COMMANDS.md).
+  cap *stalls* a process rather than killing it. `OOMScoreAdjust=` is the
+  unit's half; the launch's, the capped invocation, is in [COMMANDS.md](COMMANDS.md).
 - **`earlyoom` — declined at -1000, reopened at 0 (#112).** Measured 2026-09-24
   against the packaged 1.7-2 in `--dryrun`: it skips `oom_score_adj` -1000
   exactly as the kernel does (`kill.c`), `--prefer` or not, so it would have
