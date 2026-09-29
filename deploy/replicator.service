@@ -96,7 +96,7 @@ WorkingDirectory=/home/exedev/replicator
 # tests/test_deploy.py pins both bounds.
 #
 # earlyoom was declined (#112) while sessions sat at -1000, which 1.7 skips
-# exactly as the kernel does; with sessions at 0 (#125) #112 is reopened.
+# exactly as the kernel does; with sessions at 0 (#125), #112 re-decides it.
 # tests/test_deploy.py::TestTheSessionPremise pins the 0 live.
 OOMScoreAdjust=-900
 # A reservation, never a cap (#113): keeps the worker's working set out of

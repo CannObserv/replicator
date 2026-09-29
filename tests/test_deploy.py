@@ -754,7 +754,7 @@ class TestTheSessionPremise:
     that caused CannObserv/broker#17 and would have shed the host's daemons
     instead. That is why #112 declined earlyoom. ``exe-init`` 14fd603 starts
     sessions at the default 0, notifier's shape (CannObserv/notifier#74), and
-    #112 is reopened on it. Pinned live because ``/exe.dev/bin/`` is exe.dev's
+    #112 re-decides earlyoom on it. Pinned live because ``/exe.dev/bin/`` is exe.dev's
     to replace: if -1000 comes back, so does every consequence above.
     """
 
