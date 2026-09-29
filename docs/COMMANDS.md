@@ -337,7 +337,7 @@ indefinitely, but since #98 it no longer stops the group reading.
 names a host whose real policy is stricter than the fallback that would replace it if the
 policy were revoked or missed on a replay.
 
-The last two greps fire on a *change*, not on every apply — so an empty one is not "resolved";
+`applied a host fetch policy` and `stricter than the fallback` fire on a *change*, not on every apply — so an empty grep is not "resolved";
 read `hosts_stricter_than_default` on the replay summary instead. Why:
 [POLITENESS.md](POLITENESS.md#reading-the-apply-log).
 
