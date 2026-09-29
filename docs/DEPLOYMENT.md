@@ -151,7 +151,11 @@ What this is not:
   (2026-09-29, after #125) it can, and adds nothing but timing: 17 MiB of RSS
   sits at -1000, ~3.4 GiB is eligible, and the kernel's own order already puts
   the heaviest session process first and the worker and `tailscaled` last.
-  earlyoom would kill at ~10% `MemAvailable`, which counts page cache the kernel
+  The re-run `--dryrun` (1.7-2, unprivileged, thresholds forced) agrees: stock
+  arguments take `systemd --user` (11 MiB), as the kernel would first; tuned
+  with `--prefer '^(node|npm|claude|MainThread)'` and the worker, `tailscaled`,
+  `sshd` and `systemd` avoided, a VSCode `MainThread` (476 MiB, badness 993),
+  the kernel's next choice after the 14 MiB user manager. earlyoom would kill at ~10% `MemAvailable`, which counts page cache the kernel
   reclaims before it kills anything — so a session spike the kernel would have
   absorbed becomes a lost session. Memory PSI read 0 since boot, with no OOM kill
   in the previous boot. The cohort read it the same way:
