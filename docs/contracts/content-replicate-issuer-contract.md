@@ -45,7 +45,7 @@ RepSpec's *resolution* half never reaches this service.
 A write removes the bound the fetch trust argument rests on — that the damage is what a **read**
 can do — so the conclusion is reached again rather than inherited: bus access control is still
 proportionate to this capability, but the **escalation trigger is not** (see
-[the triggers](#escalation-triggers--this-capabilitys-own)). The read/write comparison, the IAS3
+[the triggers](content-replicate-issuer-reference.md#escalation-triggers--this-capabilitys-own)). The read/write comparison, the IAS3
 evidence behind T4 and T5, and the premise #89 retired: [the reference](content-replicate-issuer-reference.md#why-this-is-not-the-fetch-capability-widened).
 
 ---
@@ -85,7 +85,7 @@ therefore **all-or-nothing**. That is proportionate only while the set of *grant
 the same argument the fetch document makes, and it survives the change of direction only for that
 reason.
 
-⚠ **The declared set is one; the granted set is two, and that is trigger 1 below (#89).**
+⚠ **The declared set is one; the granted set is two, and that is [trigger 1](content-replicate-issuer-reference.md#escalation-triggers--this-capabilitys-own) (#89).**
 CannObserv/broker#14 measured the live ACL: a service's key patterns apply to every command it
 holds, so `replicator` — which must read `content.replicate` — can also `XADD` to it. The second
 writer is this service rather than a third party, so nothing forges commands today, but the

@@ -665,3 +665,6 @@ docs/contracts/content-replicate-issuer-contract.md :: retarget :: normative**: 
 # INFRASTRUCTURE.md and DEPLOYMENT.md, and the lines now link there.
 docs/ENVIRONMENT.md :: disproven :: All four belong in the repo `.env` or the invoking shell
 docs/ENVIRONMENT.md :: disproven :: - `REPLICATOR_ALLOW_ANY_CHECKOUT` — bypasses the `main`-checkout guard
+# CR 2: both pointed at the escalation triggers in the contract, which the curation moved to the reference.
+docs/contracts/content-replicate-issuer-contract.md :: retarget :: [the triggers](#escalation-triggers--this-capabilitys-own)). The read/write comparison, the IAS3
+docs/contracts/content-replicate-issuer-contract.md :: retarget :: ⚠ **The declared set is one; the granted set is two, and that is trigger 1 below (#89).**
