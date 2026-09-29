@@ -99,7 +99,11 @@ the worker's python read 72 (88 MiB) and `tailscaled` 71 (79 MiB) on
 network path outlasts its only consumer: a killed worker restarts into a
 working bus path, while a killed `tailscaled` leaves the worker running and cut
 off, and the `OnFailure=` alert to `notifier:9000` — sent once the restart
-budget is spent, not per kill — travels the tailnet. The same pass found a session `dbus-daemon` above the user manager
+budget is spent, not per kill — travels the tailnet. One cost: a Tailscale SSH
+session into this node (`RunSSH: true`) forks from `tailscaled` and inherits
+-950, so dev tooling launched from it would outlive the worker — #92's
+inversion. Start such a session with `choom -n 0 -- $SHELL`; raising your own
+score needs no privilege. The same pass found a session `dbus-daemon` above the user manager
 (adj +200, 800), started under `user@1000` at 04:04.
 CannObserv/watcher#309 and CannObserv/archiver#285 chose -400 because their
 services do not use the tailnet; this worker does.
