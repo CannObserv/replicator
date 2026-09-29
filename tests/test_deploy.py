@@ -460,23 +460,27 @@ TAILSCALED_DROPIN = REPO_ROOT / "deploy" / "tailscaled.service.d" / "memory.conf
 SLICE_DROPIN = REPO_ROOT / "deploy" / "system.slice.d" / "replicator-memory.conf"
 
 
-def test_tailscaled_ranks_with_the_worker_it_carries():
-    """The network path and its only consumer, together at the bottom of the list.
+def test_tailscaled_outlasts_the_worker_it_carries():
+    """The network path goes after its only consumer, never with or before it.
 
-    The same bounds as the units above, for a different reason: nothing here
-    competes with the dev tooling, but a tailscaled the kernel reaches first
-    ends the worker's bus exactly as killing the worker would, and a failing
-    tailscaled was a named symptom of CannObserv/broker#17. broker gives it
-    -900 (CannObserv/broker#21); watcher's -400 (CannObserv/watcher#309) is for
-    a dashboard that does not use the tailnet, which this worker does.
+    Nothing here competes with the dev tooling, but a tailscaled the kernel
+    reaches first ends the worker's bus exactly as killing the worker would,
+    and a failing tailscaled was a named symptom of CannObserv/broker#17. At a
+    tied adj the larger process goes first, and that is tailscaled (81 MiB
+    charged against the worker's ~70, #113), so it sits strictly below the
+    worker: -950, CannObserv/power-map#588's value (#112). watcher's and
+    archiver's -400 (CannObserv/watcher#309, CannObserv/archiver#285) is for
+    services that do not use the tailnet, which this worker does.
     """
     assert TAILSCALED_DROPIN.exists(), (
         f"{TAILSCALED_DROPIN.name} is missing from deploy/tailscaled.service.d/ — "
         "tailscaled sits at adj 0, second on this VM's OOM list"
     )
     adjust = int(_directive("OOMScoreAdjust", TAILSCALED_DROPIN))
-    assert adjust <= COHORT_OOM_SCORE_ADJUST, (
-        f"tailscaled's drop-in sets OOMScoreAdjust={adjust}, above the worker it carries"
+    worker = int(_directive("OOMScoreAdjust", UNIT))
+    assert adjust < worker, (
+        f"tailscaled's drop-in sets OOMScoreAdjust={adjust}, not below the worker's "
+        f"{worker} — the kernel can take the bus's only path before its consumer"
     )
     assert adjust > OOM_FLOOR, (
         f"tailscaled's drop-in sets OOMScoreAdjust={adjust} — exempt, so a leak in it "
@@ -787,6 +791,35 @@ class TestTheSessionPremise:
             "`/exe.dev/bin/exe-init --version` against 14fd603. Until it is "
             "replaced the kernel skips the dev tooling and takes the host's daemons "
             "instead, and any earlyoom --prefer from #112 no longer reaches it"
+        )
+
+
+class TestTheEarlyoomDecline:
+    """earlyoom stays off this host: the kernel's own order already does its job (#112).
+
+    Declined twice. At -1000 (2026-09-24) it could not reach the sessions at
+    all. At 0 (2026-09-29, after #125) it can, but the kernel already ranks the
+    heaviest session process first and the worker and tailscaled last, so
+    earlyoom's only addition is timing: it kills at ~10% ``MemAvailable``, which
+    counts page cache the kernel reclaims before it kills anything. The
+    cohort's reading too — CannObserv/archiver#285 purged it, CannObserv/watcher#337
+    kept it declined, CannObserv/power-map#588 is removing it. What it would
+    have protected is held by scores the kernel honours (the units' -900,
+    tailscaled's -950) and by ``vm.min_free_kbytes`` for the atomic allocations
+    no killer helps.
+    """
+
+    def test_the_repo_ships_no_earlyoom_config(self) -> None:
+        found = [p.relative_to(REPO_ROOT) for p in (REPO_ROOT / "deploy").rglob("*earlyoom*")]
+        assert not found, (
+            f"{found} is earlyoom config, which #112 declined — re-decide it there first"
+        )
+
+    @on_the_host
+    def test_earlyoom_is_not_installed_here(self) -> None:
+        assert shutil.which("earlyoom") is None, (
+            "earlyoom is installed on this host, which #112 declined — "
+            "`sudo apt purge earlyoom`, or re-decide it on #112"
         )
 
 
