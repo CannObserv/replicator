@@ -469,8 +469,9 @@ def test_tailscaled_outlasts_the_worker_it_carries():
     tied adj the larger RSS goes first — a coin toss here, 72 against 71 on
     2026-09-29, which tailscaled's 123 MiB peak reverses — so it sits strictly
     below the worker: -950, CannObserv/power-map#588's value (#112). A killed
-    worker restarts into a working bus path; its ``OnFailure=`` alert to
-    ``notifier:9000`` needs the tailnet. watcher's and
+    worker restarts into a working bus path; a killed tailscaled leaves it
+    running and cut off, and the ``OnFailure=`` alert to ``notifier:9000``,
+    sent once the restart budget is spent, needs the tailnet. watcher's and
     archiver's -400 (CannObserv/watcher#309, CannObserv/archiver#285) is for
     services that do not use the tailnet, which this worker does.
     """
