@@ -91,17 +91,22 @@ Measured 2026-09-24 at 8 GiB (#112); the 675 recorded on 2026-09-18 was at
 *was* the tailnet: killing tailscaled takes the bus away exactly as effectively
 as killing this worker. So
 [`deploy/tailscaled.service.d/memory.conf`](../deploy/tailscaled.service.d/memory.conf)
-gives it the worker's own -900, as CannObserv/broker#21 does, and the network
-path and its only consumer now rank together at the bottom: 69 and 68 after the
-restart. The same pass found a session `dbus-daemon` above the user manager
+gave it the worker's own -900, as CannObserv/broker#21 does — 69 and 68 after
+the restart — and since #112 gives it -950, CannObserv/power-map#588's value.
+At a tied adj the kernel takes whichever has the larger RSS, a coin toss here:
+the worker's python read 72 (88 MiB) and `tailscaled` 71 (79 MiB) on
+2026-09-29, and `tailscaled` has peaked at 123 MiB. Below the worker, the
+network path outlasts its only consumer: a killed worker restarts into a
+working bus path, and the `OnFailure=` alert to `notifier:9000` travels the
+tailnet. The same pass found a session `dbus-daemon` above the user manager
 (adj +200, 800), started under `user@1000` at 04:04.
-CannObserv/watcher#309 chose -400 because its dashboard does not use the
-tailnet; this worker does.
+CannObserv/watcher#309 and CannObserv/archiver#285 chose -400 because their
+services do not use the tailnet; this worker does.
 
 **Since #125 the dev tooling follows the user manager directly.** Measured
 2026-09-29 after the restart: a VSCode `MainThread` at 694 (504 MB RSS), then
 three `claude` processes at 682–678, all adj 0 and all ahead of every daemon —
-the order #92 wanted, and the baseline #112 measures earlyoom against.
+the order #92 wanted. It is also why #112 declined earlyoom a second time.
 
 CannObserv/broker#17 is what it costs when it fires, and it fires in a shape
 worth recognising: launching a SocratiCode server on the broker's VM took the
@@ -138,22 +143,31 @@ What this is not:
   process killable under an `exe-init` that exempts sessions — at -1000 a cgroup
   cap *stalls* a process rather than killing it. `OOMScoreAdjust=` is the
   unit's half; the launch's, the capped invocation, is in [COMMANDS.md](COMMANDS.md).
-- **`earlyoom` — declined at -1000; #112 re-decides it at 0.** Measured 2026-09-24
-  against the packaged 1.7-2 in `--dryrun`: it skips `oom_score_adj` -1000
-  exactly as the kernel does (`kill.c`), `--prefer` or not, so it would have
-  shed small daemons — `systemd --user` 733, `tailscaled` 670 until #113, the
-  adj-0 daemons 666 — while the ~1.7 GiB of session tooling stayed out of reach.
-  broker (CannObserv/broker#58) and watcher (CannObserv/watcher#323) run it on
-  dry-run scores printed *before* that skip. With sessions at 0, notifier's shape
-  (CannObserv/notifier#74), `--prefer` reaches them, and #112 re-measures. If it
-  is installed here, `-s 100,100`: it acts only with memory *and* swap under
-  their minimums, and a bare `-s 100` leaves SIGKILL's swap minimum at 50% — 2 G
-  in use, which `vm.swappiness = 10` may never reach (gregoryfoster/skills#331).
+- **Not `earlyoom` — declined twice (#112).** At -1000 (2026-09-24, the
+  packaged 1.7-2 in `--dryrun`) it could not reach the sessions: it skips -1000
+  exactly as the kernel does (`kill.c`), `--prefer` or not, and would have shed
+  small daemons — `systemd --user` 733, `tailscaled` 670 until #113, the adj-0
+  daemons 666 — while ~1.7 GiB of session tooling stayed out of reach. At 0
+  (2026-09-29, after #125) it can, and adds nothing but timing: 17 MiB of RSS
+  sits at -1000, ~3.4 GiB is eligible, and the kernel's own order already puts
+  the heaviest session process first and the worker and `tailscaled` last.
+  earlyoom would kill at ~10% `MemAvailable`, which counts page cache the kernel
+  reclaims before it kills anything — so a session spike the kernel would have
+  absorbed becomes a lost session. Memory PSI read 0 since boot, with no OOM kill
+  in the previous boot. The cohort read it the same way:
+  CannObserv/archiver#285 adopted, measured and purged it, CannObserv/watcher#337
+  kept it declined, CannObserv/power-map#588 is removing it. What it would have
+  protected is held by scores the kernel honours and by `vm.min_free_kbytes`,
+  the one lever for atomic allocations. `tests/test_deploy.py::TestTheEarlyoomDecline`
+  fails if its config or its binary returns. Re-deciding it here would start
+  from `-s 100,100`: a bare `-s 100` leaves SIGKILL's swap minimum at 50%, 2 G in
+  use, which `vm.swappiness = 10` may never reach (gregoryfoster/skills#331).
 - **Not `-1000`.** That is exemption, and an exempt worker that leaks
   is unreclaimable — the kernel would work through everything else on the box
   first. `-900` is the cohort's value (CannObserv/broker#25): last of the
-  eligible, not exempt. `tests/test_deploy.py` pins both bounds, for both units
-  and tailscaled's drop-in.
+  eligible, not exempt; `tailscaled`'s -950 is below it and still eligible.
+  `tests/test_deploy.py` pins both bounds, for both units and tailscaled's
+  drop-in.
 
 The handler unit carries it for a sharper reason than the worker does: memory
 exhaustion is one of the conditions that *fires* it, so the moment it is most

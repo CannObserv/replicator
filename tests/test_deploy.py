@@ -428,8 +428,8 @@ def test_the_production_units_outrank_dev_tooling_for_the_oom_killer(unit: Path)
     whatever launches a SocratiCode server — the cap bounds the launch before
     any killer has to act. And the worker's rank protects nothing if the kernel
     reaches ``tailscaled`` first — it read 670 in #112, just below the user
-    manager, until #113 gave it the same -900
-    (``test_tailscaled_ranks_with_the_worker_it_carries``). It is what degraded
+    manager, until #113 gave it -900 and #112 -950
+    (``test_tailscaled_outlasts_the_worker_it_carries``). It is what degraded
     in CannObserv/broker#17, a 57-minute bus outage with nothing OOM-killed at
     all: the kernel failed *atomic* allocations while every process stayed
     alive, and this worker did not reconnect on its own (#94).
@@ -466,9 +466,11 @@ def test_tailscaled_outlasts_the_worker_it_carries():
     Nothing here competes with the dev tooling, but a tailscaled the kernel
     reaches first ends the worker's bus exactly as killing the worker would,
     and a failing tailscaled was a named symptom of CannObserv/broker#17. At a
-    tied adj the larger process goes first, and that is tailscaled (81 MiB
-    charged against the worker's ~70, #113), so it sits strictly below the
-    worker: -950, CannObserv/power-map#588's value (#112). watcher's and
+    tied adj the larger RSS goes first — a coin toss here, 72 against 71 on
+    2026-09-29, which tailscaled's 123 MiB peak reverses — so it sits strictly
+    below the worker: -950, CannObserv/power-map#588's value (#112). A killed
+    worker restarts into a working bus path; its ``OnFailure=`` alert to
+    ``notifier:9000`` needs the tailnet. watcher's and
     archiver's -400 (CannObserv/watcher#309, CannObserv/archiver#285) is for
     services that do not use the tailnet, which this worker does.
     """
@@ -748,7 +750,7 @@ class TestTheSessionPremise:
     """Sessions here must be killable, or two things this repo relies on stop holding.
 
     The -900 on both units wins a real comparison against the dev tooling only
-    while the tooling is eligible, and #112's earlyoom question is decided on
+    while the tooling is eligible, and #112's earlyoom decline is decided on
     the same premise. The other memory settings (``MemoryLow=``, the sysctls)
     hold at either value.
 
@@ -756,9 +758,10 @@ class TestTheSessionPremise:
     -1000 — a bug exe.dev confirmed on 2026-09-29 (CannObserv/status#5) — so the
     kernel and earlyoom 1.7 (``kill.c:250``) both passed over the dev tooling
     that caused CannObserv/broker#17 and would have shed the host's daemons
-    instead. That is why #112 declined earlyoom. ``exe-init`` 14fd603 starts
-    sessions at the default 0, notifier's shape (CannObserv/notifier#74), and
-    #112 re-decides earlyoom on it. Pinned live because ``/exe.dev/bin/`` is exe.dev's
+    instead. That is why #112 first declined earlyoom. ``exe-init`` 14fd603
+    starts sessions at the default 0, notifier's shape (CannObserv/notifier#74),
+    where the kernel's own order takes them first — why #112 declined it again
+    (``TestTheEarlyoomDecline``). Pinned live because ``/exe.dev/bin/`` is exe.dev's
     to replace: if -1000 comes back, so does every consequence above.
     """
 
@@ -790,7 +793,7 @@ class TestTheSessionPremise:
             "/exe.dev/bin/exe-init starts sessions exempt again (#125) — check "
             "`/exe.dev/bin/exe-init --version` against 14fd603. Until it is "
             "replaced the kernel skips the dev tooling and takes the host's daemons "
-            "instead, and any earlyoom --prefer from #112 no longer reaches it"
+            "instead, and #112's reason for declining earlyoom at 0 no longer holds"
         )
 
 
