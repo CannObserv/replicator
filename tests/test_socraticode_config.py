@@ -427,8 +427,9 @@ class TestServerLaunchCost:
     Neither cost is visible from a green health check, and the failure they
     produce is not an OOM kill. On 2026-09-16 broker's kernel failed *atomic*
     allocations in `tailscaled` and `ksoftirqd`, nothing was killed, and the bus
-    was down 57m48s. Agent sessions inherit `oom_score_adj` -1000 from
-    `exe-init`, so the killer cannot choose one and takes the service instead.
+    was down 57m48s. That VM's `exe-init` started agent sessions at
+    `oom_score_adj` -1000, as this one's did until #125, so the killer could not
+    choose one and would have taken the service instead.
 
     So both paths are pinned here rather than left to resolve at launch.
     """
@@ -463,9 +464,11 @@ class TestServerLaunchCost:
         skills#330 the vendored hook opens that scope itself, so the cap is
         read here from the script `.claude/hooks/` resolves to.
 
-        `choom` is part of the contract, not decoration: a session process sits
-        at `oom_score_adj` -1000, where a cgroup cap *stalls* the process rather
-        than killing it. How the hook probes and falls back is upstream's to
+        `choom` is part of the contract, not decoration: under an `exe-init`
+        that starts sessions at `oom_score_adj` -1000 — this host's until #125,
+        and still some of the cohort's — a cgroup cap *stalls* the process
+        rather than killing it, and `choom` holds the launch at 500 whatever the
+        session inherited. How the hook probes and falls back is upstream's to
         pin (`skills-vendor/gregoryfoster-skills/tests/structural/test_health_hook_cap.py`);
         this asserts only that the build vendored here has a cap at all.
         """
@@ -482,7 +485,8 @@ class TestServerLaunchCost:
         )
         assert CHOOM_CALL in script, (
             f"the vendored {HEALTH_HOOK}.sh is capped but not re-scored — at "
-            "oom_score_adj -1000 a cgroup cap stalls the process instead of killing it"
+            "oom_score_adj -1000, which a session inherits under a buggy exe-init (#125), "
+            "a cgroup cap stalls the process instead of killing it"
         )
 
     def test_the_hook_cap_is_the_manual_ceiling(self) -> None:

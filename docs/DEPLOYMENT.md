@@ -59,23 +59,22 @@ notifier mode and its delivery scoring:
 
 ### Memory protection — the worker outranks the dev session that shares this VM
 
-Both units set `OOMScoreAdjust=-900`. The reason is a property of exe.dev, not
-of this service: **every process descended from a session is exempt from the OOM
-killer.** VSCode Server, Claude Code, and any MCP server they start inherit
-`oom_score_adj=-1000` from `exe-init` and `sshd`. Measured on co-replicator
-while adopting the shared SocratiCode index:
+Both units set `OOMScoreAdjust=-900`. co-replicator is also the dev workspace:
+VSCode Server, Claude Code, and any MCP server they start share the VM with the
+worker. At the default adj of 0 the worker read `oom_score` 670, second from the
+top of the eligible list; at -900 it reads 72, the bottom of it:
 
 ```bash
-cat /proc/self/oom_score_adj                                          # -1000, from a session shell
+cat /proc/self/oom_score_adj                                          # 0 from a session shell; -1000 before #125
 cat /proc/$(systemctl show -p MainPID --value replicator)/oom_score   # 72 at adj -900; 670 before
 ```
 
-**`-1000` is not a low score, it is ineligibility** — the OOM killer skips such a
-process entirely. 28 processes here hold it. So the directive was never going to
-win a comparison against them; what it changes is the worker's rank among the
-processes that *can* be chosen, and there it is decisive: 670 put the worker
-second from the top of that list, and 72 puts it at the bottom. co-replicator is
-also the dev workspace, so this is not a remote condition.
+**Until #125 the sessions were not on that list at all.** `exe-init` 8579326
+started every session at `oom_score_adj=-1000` — ineligibility, not a low score;
+28 processes held it — a bug exe.dev confirmed on 2026-09-29
+(CannObserv/status#5). `exe-init` 14fd603 starts them at 0, so the directive now
+wins a real comparison. `/exe.dev/bin/` is exe.dev's to replace, so
+`tests/test_deploy.py` pins the 0 live; the swap and its rollback are in #125.
 
 **Resized 2026-09-23 (#99): 8 GiB + 4 G swap, where the scores above were
 measured at 3.9 GB with none.** The scores stand — `oom_score_adj` is a rank,
@@ -129,28 +128,23 @@ host reads every claim under the slice back from `/sys/fs/cgroup`, as
 
 What this is not:
 
-- **Not a substitute for capping the launch.** A cgroup cap on a process at adj
-  -1000 *stalls* it rather than killing it, so the two halves are separate: this
-  is the unit's half, and the capped invocation for anything that starts a
-  SocratiCode server is in [COMMANDS.md](COMMANDS.md).
-- **Not reachable with `earlyoom` (#112).** Measured 2026-09-24 against the
-  packaged 1.7-2 in `--dryrun`: it skips `oom_score_adj` -1000 exactly as the
-  kernel does (`kill.c`), `--prefer` or not — a preferred `sshd` prints badness
-  300 and is passed over. So its order is the kernel's: `systemd --user` 733,
-  `tailscaled` 670 until #113, the adj-0 daemons 666, journald 501, the worker
-  71. It would shed small daemons, freeing little, while the ~1.7 GiB
-  held at -1000 stays out of reach. The one session process it *can* take is
-  one under `choom -n 500`, and the capped launch already bounds that. broker
-  runs it on a "300 floor" reading of the same dry run — the score printed
-  *before* the skip (CannObserv/broker#58) — and watcher on its sessions'
-  `node` sitting at adj 0, which on that -1000 host it does not
-  (CannObserv/watcher#323). What would change the answer: sessions leaving
-  -1000, notifier's shape (CannObserv/notifier#74), which
-  `tests/test_deploy.py` pins live; and, if it is ever installed here,
-  `-s 100,100` — it acts only with memory *and* swap under their minimums, and
-  a bare `-s 100` leaves SIGKILL's swap minimum at 50%: 2 G in use, which
-  `vm.swappiness = 10` may never reach (gregoryfoster/skills#331).
-- **Not `-1000`.** That is the exemption above, and an exempt worker that leaks
+- **Not a substitute for capping the launch.** The cap bounds a SocratiCode
+  server before any killer has to act, and its `choom -n 500` keeps the capped
+  process killable under an `exe-init` that exempts sessions — at -1000 a cgroup
+  cap *stalls* a process rather than killing it. This is the unit's half; the
+  capped invocation is in [COMMANDS.md](COMMANDS.md).
+- **`earlyoom` — declined at -1000, reopened at 0 (#112).** Measured 2026-09-24
+  against the packaged 1.7-2 in `--dryrun`: it skips `oom_score_adj` -1000
+  exactly as the kernel does (`kill.c`), `--prefer` or not, so it would have
+  shed small daemons — `systemd --user` 733, `tailscaled` 670 until #113, the
+  adj-0 daemons 666 — while the ~1.7 GiB of session tooling stayed out of reach.
+  broker (CannObserv/broker#58) and watcher (CannObserv/watcher#323) run it on
+  readings that skip hides. With sessions at 0, notifier's shape
+  (CannObserv/notifier#74), `--prefer` reaches them, and #112 re-measures. If it
+  is installed here, `-s 100,100`: it acts only with memory *and* swap under
+  their minimums, and a bare `-s 100` leaves SIGKILL's swap minimum at 50% — 2 G
+  in use, which `vm.swappiness = 10` may never reach (gregoryfoster/skills#331).
+- **Not `-1000`.** That is exemption, and an exempt worker that leaks
   is unreclaimable — the kernel would work through everything else on the box
   first. `-900` is the cohort's value (CannObserv/broker#25): last of the
   eligible, not exempt. `tests/test_deploy.py` pins both bounds, for both units

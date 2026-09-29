@@ -364,9 +364,10 @@ since #99 — headroom, not immunity, as broker was 8 GiB too — and runs the
 worker beside these sessions. On CannObserv/broker's VM an uncapped
 launch degraded the tailnet for 57m48s with nothing OOM-killed (broker#17, our
 #94). `OOMScoreAdjust=-900` on the units is the other half and is already in
-place ([DEPLOYMENT.md](DEPLOYMENT.md)) — it does not remove the need for the cap,
-because a cgroup cap on a process at `oom_score_adj=-1000` *stalls* it rather
-than killing it, and everything a session starts sits at -1000 here.
+place ([DEPLOYMENT.md](DEPLOYMENT.md)) — it does not remove the need for the cap.
+`choom -n 500` is part of it: under an `exe-init` that starts sessions at
+`oom_score_adj=-1000`, as this host's did until #125, a cgroup cap *stalls* a
+process rather than killing it.
 
 ```bash
 # Offline, no server, no network — run these first; they catch a malformed

@@ -411,31 +411,28 @@ COHORT_OOM_SCORE_ADJUST = -900
 def test_the_production_units_outrank_dev_tooling_for_the_oom_killer(unit: Path):
     """This VM's OOM killer must reach the worker last, not first.
 
-    Everything descended from an exe.dev session inherits ``oom_score_adj=-1000``
-    from ``exe-init`` and ``sshd``: VSCode Server, Claude Code, and any MCP
-    server they start. **-1000 is ineligibility, not a low score** — the kernel
-    skips such a process entirely, and 28 of them were counted here. So this
-    directive was never going to win a comparison against the dev tooling; what
-    it changes is the worker's rank among the processes that *can* be chosen.
+    co-replicator is also the dev workspace, and a session starts VSCode Server,
+    Claude Code, and any MCP server they start — the tooling that took
+    CannObserv/broker#17 down. At the default adj of 0 the worker read
+    ``oom_score`` 670, second from the top of the eligible list (#92); at -900
+    it reads 72, the bottom of it.
 
-    Measured on this VM while adopting the shared SocratiCode index (#92): the
-    worker read ``oom_score`` 670 at the default adj of 0 — second from the top
-    of the eligible list — and 72 at -900, which is the bottom of it.
+    Until #125 that rank was all it bought: ``exe-init`` 8579326 started every
+    session at ``oom_score_adj=-1000``, which is ineligibility, not a low score
+    — 28 processes held it, and the kernel skipped them entirely. Sessions now
+    start at 0 (``TestTheSessionPremise``), so the comparison this test is named
+    for is a real one.
 
     Two things that rank does not buy, both recorded in docs/DEPLOYMENT.md so
     the doc and this test say the same thing. It is no substitute for capping
-    whatever launches a SocratiCode server, since a cgroup cap on a process at
-    -1000 stalls it rather than killing it. And the worker's rank protects
-    nothing if the kernel reaches ``tailscaled`` first — it read 670 in #112,
-    just below the user manager, until #113 gave it the same -900
+    whatever launches a SocratiCode server — the cap bounds the launch before
+    any killer has to act. And the worker's rank protects nothing if the kernel
+    reaches ``tailscaled`` first — it read 670 in #112, just below the user
+    manager, until #113 gave it the same -900
     (``test_tailscaled_ranks_with_the_worker_it_carries``). It is what degraded
     in CannObserv/broker#17, a 57-minute bus outage with nothing OOM-killed at
     all: the kernel failed *atomic* allocations while every process stayed
     alive, and this worker did not reconnect on its own (#94).
-
-    ``earlyoom`` does not close it either: it skips -1000 as the kernel does, so
-    it takes the same list in the same order, only sooner
-    (``TestTheEarlyoomDecline``).
     """
     assert re.search(r"^OOMScoreAdjust=", unit.read_text(), flags=re.MULTILINE), (
         f"{unit.name} sets no OOMScoreAdjust, so it sits at the default 0 and reads "
@@ -713,7 +710,7 @@ class TestHostMemoryTunables:
         )
 
 
-# What exe.dev starts a session from; the -1000 is theirs, inherited or not.
+# What exe.dev starts a session from; the session's adj is theirs, inherited or not.
 SESSION_PARENTS = frozenset({"exe-init", "sshd"})
 
 
@@ -743,22 +740,22 @@ def _fake_process(proc: Path, pid: int, ppid: int, comm: str, adj: int) -> None:
     (proc / str(pid) / "oom_score_adj").write_text(f"{adj}\n")
 
 
-class TestTheEarlyoomDecline:
-    """#112 declined earlyoom on a premise that belongs to exe.dev, not to us.
+class TestTheSessionPremise:
+    """Sessions here must be killable: every memory decision below assumes it.
 
-    Sessions here inherit ``oom_score_adj`` -1000, and earlyoom 1.7 skips a
-    -1000 process exactly as the kernel does (``kill.c:250``), ``--prefer`` or
-    not — so it cannot reach the dev tooling that caused CannObserv/broker#17,
-    and would shed small daemons instead (and, before #113, ``tailscaled``).
-    The premise is not universal: notifier's sessions sit at 0
-    (CannObserv/notifier#74, gregoryfoster/skills#303), and what decides it was
-    never determined. So it is pinned live rather than assumed; if it flips,
-    the decline no longer holds and #112 reopens.
+    Until #125, ``exe-init`` 8579326 started every session at ``oom_score_adj``
+    -1000 — a bug exe.dev confirmed on 2026-09-29 (CannObserv/status#5) — so the
+    kernel and earlyoom 1.7 (``kill.c:250``) both passed over the dev tooling
+    that caused CannObserv/broker#17 and would have shed the host's daemons
+    instead. That is why #112 declined earlyoom. ``exe-init`` 14fd603 starts
+    sessions at the default 0, notifier's shape (CannObserv/notifier#74), and
+    #112 is reopened on it. Pinned live because ``/exe.dev/bin/`` is exe.dev's
+    to replace: if -1000 comes back, so does every consequence above.
     """
 
     def test_a_session_under_exe_init_reports_its_root(self, tmp_path: Path) -> None:
         _fake_process(tmp_path, 217, 1, "exe-init", -1000)
-        _fake_process(tmp_path, 581, 217, "bash", -1000)
+        _fake_process(tmp_path, 581, 217, "bash", -1000)  # 8579326's shape
         _fake_process(tmp_path, 900, 581, "python3", 500)  # a choom'd leaf
         assert _session_root_adj(tmp_path, 900) == -1000
 
@@ -775,17 +772,16 @@ class TestTheEarlyoomDecline:
         assert _session_root_adj(tmp_path, 301) is None
 
     @on_the_host
-    def test_sessions_here_are_still_exempt(self) -> None:
+    def test_sessions_here_are_killable(self) -> None:
         adj = _session_root_adj(Path("/proc"), os.getpid())
         if adj is None:
             pytest.skip("not run from an exe.dev session")
-        assert adj == OOM_FLOOR, (
-            f"this session's root reads oom_score_adj={adj}, not {OOM_FLOOR}: "
-            "exe.dev no longer exempts sessions here, so earlyoom's --prefer now "
-            "reaches the dev tooling and #112's decline no longer holds — "
-            "reopen it (notifier's deploy/earlyoom.default is the working shape, "
-            "plus -s 100,100: with swap, earlyoom otherwise waits for swap to drain, "
-            "and a bare -s 100 still gates SIGKILL on half of it)"
+        assert adj == 0, (
+            f"this session's root reads oom_score_adj={adj}, not 0: "
+            "/exe.dev/bin/exe-init starts sessions exempt again (#125) — check "
+            "`/exe.dev/bin/exe-init --version` against 14fd603, and until it is "
+            "replaced the OOM killer and earlyoom both pass over the dev tooling "
+            "and take the host's daemons instead"
         )
 
 
