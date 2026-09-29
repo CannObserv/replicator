@@ -151,7 +151,7 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
   per-stream dedupe, `EXISTS` before the handler, `SET NX EX` after a *completing*
   close; losing them costs one TTL window of re-fetches, never correctness:
   [docs/CONVENTIONS.md](docs/CONVENTIONS.md#the-replicatorcmd-keys).
-- **Consumers are idempotent; producers own the outbox.** No DB here — the durable
+- **Consumers must be idempotent; producers own the outbox.** No DB here — the durable
   record of intent is the group's PEL; never add a Postgres outbox to the consume path.
 - **Three stream kinds, three sets of rules.** `content.fetch`,
   `content.replicate` and `content.persist` are command streams (one group each,
