@@ -672,3 +672,5 @@ docs/contracts/content-replicate-issuer-contract.md :: retarget :: ⚠ **The dec
 # POLITENESS.md in this change, FAILURE-NOTIFICATION.md in an earlier one it never caught up with.
 docs/ENVIRONMENT.md :: retarget :: default — except the blob and temp-store settings, whose reasoning sits beside
 docs/ENVIRONMENT.md :: retarget :: the behaviour it argues about in [STORAGE.md](STORAGE.md#variables). Two env
+# CR 5: the index line now names the sections this change moved into the replicate reference.
+AGENTS.md :: retarget :: - [content-replicate-issuer-reference.md](docs/contracts/content-replicate-issuer-reference.md) — its reasoning half: the trust comparison, T3a, T4, T6, the exemption

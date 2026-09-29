@@ -248,5 +248,5 @@ source — each with its rationale and ruff gate in [docs/STYLE.md](docs/STYLE.m
 - [content-fetch-outcome-reference.md](docs/contracts/content-fetch-outcome-reference.md) — its result side: both facts field by field, failure taxonomy, silent conditions, the DLQ
 - [replicator-boundaries.md](docs/contracts/replicator-boundaries.md) — what Replicator may become; run its three tests against any proposed capability
 - [content-replicate-issuer-contract.md](docs/contracts/content-replicate-issuer-contract.md) — the replicate trust model and issuer obligations (#34)
-- [content-replicate-issuer-reference.md](docs/contracts/content-replicate-issuer-reference.md) — its reasoning half: the trust comparison, T3a, T4, T6, the exemption
+- [content-replicate-issuer-reference.md](docs/contracts/content-replicate-issuer-reference.md) — the why behind trust, T3a, T4, T6; triggers, Charter check, open questions
 - [content-persist-issuer-contract.md](docs/contracts/content-persist-issuer-contract.md) — keeping a blob in the permanent store by digest: obligations, the refusal registry, enabling it on a host (#114)
