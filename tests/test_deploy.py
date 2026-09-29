@@ -784,9 +784,9 @@ class TestTheSessionPremise:
         assert adj == 0, (
             f"this session's root reads oom_score_adj={adj}, not 0: "
             "/exe.dev/bin/exe-init starts sessions exempt again (#125) — check "
-            "`/exe.dev/bin/exe-init --version` against 14fd603, and until it is "
-            "replaced the OOM killer and earlyoom both pass over the dev tooling "
-            "and take the host's daemons instead"
+            "`/exe.dev/bin/exe-init --version` against 14fd603. Until it is "
+            "replaced the kernel skips the dev tooling and takes the host's daemons "
+            "instead, and any earlyoom --prefer from #112 no longer reaches it"
         )
 
 
