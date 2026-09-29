@@ -251,35 +251,8 @@ together. Provenance of the string was a proxy for that, and a lossy one.
 
 ### Escalation triggers — this capability's own
 
-The fetch document's trigger is "the moment the bus spans hosts or tenants." Replication's fire
-**earlier**, and there are three:
-
-1. **A second service gains write access to `content.replicate`.** All-or-nothing aliases stop being
-   proportionate the moment more than one writer exists, because the operator loses the ability to
-   say *which* writer may use *which* alias. **Met, in capability, as of CannObserv/broker#14's
-   measurement** — `replicator`'s own grant reaches the stream it consumes. Answered by that
-   issue's per-service selectors rather than by issuer identity on the frame (T2), because a grant
-   that is wider than declared is a broker fact, not a wire fact.
-2. **The broker leaves localhost, or the worker fleet shards across hosts.** Alias resolution becomes
-   remote at that point. The answer is workload identity — a per-host service account with its own
-   IAM binding — **not** a credential on the wire. Stated explicitly because "just put a token in the
-   payload" is the shape this failure mode reliably takes, and T1 is the line it crosses.
-   **Met since CannObserv/broker#1 and #88**, and the wire is unchanged by it: every alias still
-   resolves locally, so T1 holds as written. What it leaves is a provisioning question rather than a
-   protocol one — whether this node's binding is its own service account or one it shares — and that
-   is the operator's to confirm per host.
-3. **A provider is proposed that cannot resolve its credential locally.** Refuse the provider; do not
-   widen the payload. Not met.
-
-**Two of the three are now met (#89), and neither answer is on the wire.** Trigger 1 is a broker
-grant to narrow; trigger 2 is a provisioning fact to confirm. No payload field, no signature, no
-credential travels — which is the outcome T1 exists to protect and the reason these triggers were
-written down before they fired. Message signing becomes the conversation if a writer that *holds* a
-legitimate grant is compromised, and not before.
-
-**The fetch document's destination guard (#95) does not extend here.** A replicate destination is
-host-bound by the alias (T3) rather than named by the issuer, so there is no address for a guard to
-refuse; the containment check is the alias's root, and it already runs.
+Three triggers that fire earlier than the fetch document's, two of them met (#89), and neither
+answer on the wire: [the reference](content-replicate-issuer-reference.md#escalation-triggers--this-capabilitys-own).
 
 ---
 
@@ -392,53 +365,22 @@ docstring since [cannobserv#330](https://github.com/CannObserv/cannobserv/issues
 
 ## Charter check
 
-⚙ **No new vocabulary invariant from `required_fields`.** #34's Q7 asks about a collision between
-`required_fields`' dotted domain keys (`^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`, e.g. `info_item.slug`)
-and the no-domain-vocabulary scan, which bans those words in `src/` as identifiers *and* as string
-literals. Under T3 that collision does not arise: the dotted keys never reach this service. Recorded
-as a **consequence of the render decision** — adopting the rejected alternative reopens it, and would
-require the render path to treat every key as opaque with no prefix ever special-cased.
-
-⚙ **A second exemption is needed anyway (#29).** co-core 0.9.4 requires `info_item_rep_spec_id`, and
-it carries the `info_item` token; why this document once predicted otherwise: [the reference](content-replicate-issuer-reference.md#the-exemption-the-charter-check-did-not-foresee).
-
-Granted on exactly `info_source_id`'s terms and no wider, with the arithmetic and the cross-wiring
-rule pinned by their own tests. The charter is the authoritative record:
-[**replicator-boundaries.md**](replicator-boundaries.md#reviewing-a-proposed-payload-field). Note
-what stays refused — `info_item_id`, the *real* domain key, is one underscore-separated step away and
-holding a table of them is precisely the domain model the charter exists to prevent.
-
-⚙ **One new invariant when the code lands: the alias is a key, never a value.** An AST scan asserting
-every `credentials_alias` occurrence is a lookup key or a resolver argument — the mirror of the
-existing scan that keeps `info_source_id` echoed and never interpreted — plus the assertion that no
-payload field feeds a provider client's credential.
-
-**Unaffected:** *no locally-defined wire models* (Replicator declares none; under T3 the RepSpec
-resolution half does not travel, so there is nothing here tempted to model it), *no database* (alias
-bindings are host config read into memory — no per-resource history, rebuildable from the file), and
-*ingress is read-only* (no new surface).
+No new vocabulary invariant, one exemption (`info_item_rep_spec_id`), and one new invariant — the
+alias is a key, never a value: [the reference](content-replicate-issuer-reference.md#charter-check).
 
 ---
 
 ## Deliberately open
 
-Settled in a cannobserv `docs/plans/` design doc alongside #303, not here:
-
-- **Fan-out** — one command per (revision, RepSpec) with independent `command_id`s, or one command
-  carrying a list. Per-spec is probably right, for MUST-1's reason.
-- **Blob lifetime** — whether an expired blob terminates or triggers a re-issued fetch. #7 settled
-  the half that was Replicator's: the window is now a stated commitment with an auditable
-  mechanism behind it (above). What remains open is cluster-level and no single service can decide
-  it — whether *anything* turns "a replication observed an expired blob" into a re-fetch, given
-  that the replicate issuer is not a fetch issuer and the bus edge between them carries
-  announcements, not requests.
+Fan-out and blob lifetime, settled outside this repo: [the reference](content-replicate-issuer-reference.md#deliberately-open).
 
 ---
 
 ## Where the rest of the contract lives
 
 - [`content-replicate-issuer-reference.md`](content-replicate-issuer-reference.md) — **equally
-  normative**: the reasoning under the trust section, T3a, T4, T6 and the Charter check.
+  normative**: the reasoning under the trust section, T3a, T4 and T6; the escalation triggers; the
+  Charter check; and what is deliberately open.
 - [`content-fetch-issuer-contract.md`](content-fetch-issuer-contract.md) and its
   [request](content-fetch-issuer-reference.md) and
   [outcome](content-fetch-outcome-reference.md) references — **all normative here.** The frame, the

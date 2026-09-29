@@ -428,3 +428,44 @@ docs/SOCRATICODE.md :: **What the manifest registers.** `AGENTS.md`, the README,
 docs/SKILLS.md :: second case, which is why the rule in `AGENTS.md` → `## Code Exploration Notes (repo-specific)` is
 docs/SKILLS.md :: The skill replaces `docs/SOCRATICODE.md` between its `socraticode-doc` markers and the `AGENTS.md`
 docs/SKILLS.md :: silent-skip modes with its pointer into `docs/INFRASTRUCTURE.md` (#92) — and `AGENTS.md`'s under
+
+# ---- over-budget doc curation (after #119) ----
+# Each points at content that did not move: the replicate contract keeps T3a and MUST-7;
+# ENVIRONMENT.md keeps the notify pointer, the credentials_file rule and the alias variable;
+# COMMANDS.md keeps every command — only two explanatory paragraphs left it, for POLITENESS.md.
+docs/contracts/content-persist-issuer-contract.md :: blobs this command keeps. [`content-replicate-issuer-contract.md`]
+docs/FAILURE-NOTIFICATION.md :: [ENVIRONMENT.md](ENVIRONMENT.md).
+docs/FAILURE-NOTIFICATION.md :: All of them live in `/etc/replicator/.env` and are read by the `OnFailure=` handler **only**
+docs/INFRASTRUCTURE.md :: by the `credentials_file` of the `gcs-publication` alias
+docs/INFRASTRUCTURE.md :: The alias table, `REPLICATOR_REPLICATION_ALIASES_FILE` ([ENVIRONMENT.md](ENVIRONMENT.md)), on this host:
+docs/CONVENTIONS.md :: - **DLQ is a shipped seam, not a TODO:**
+docs/CONVENTIONS.md :: back or reaps a key early, and the `SCAN` in [COMMANDS.md](COMMANDS.md) is an
+docs/DEPLOYMENT.md :: SocratiCode server is in [COMMANDS.md](COMMANDS.md).
+docs/ENVIRONMENT.md :: `QDRANT_API_KEY` goes in `.claude/settings.local.json` alone.
+docs/POLITENESS.md :: Of the journal greps for this stream in [COMMANDS.md](COMMANDS.md#politeness--contentfetch-policy-19):
+docs/SKILLS.md :: `scripts/` hit at `docs/COMMANDS.md` (#93).
+docs/SKILLS.md :: | `socraticode-health.sh` | SessionStart |
+docs/SKILLS.md :: [COMMANDS.md](COMMANDS.md) is wrapped in a `systemd-run` memory cap, and
+docs/SKILLS.md :: 1 in the hook's resolution order, and the name every invocation in [COMMANDS.md](COMMANDS.md) uses.
+docs/SOCRATICODE.md :: anything that launches a server: [COMMANDS.md](COMMANDS.md).
+docs/SOCRATICODE.md :: uncapped; COMMANDS.md carries it capped, with `--probe src/worker/main.py`.
+docs/SOCRATICODE.md :: `validate-manifest` ([COMMANDS.md](COMMANDS.md)) checks each path resolves.
+docs/TESTING.md :: **The shared broker is not a `real_redis` target, twice over.**
+docs/contracts/content-fetch-outcome-reference.md :: Inspection commands live in [`docs/COMMANDS.md`](../COMMANDS.md).
+docs/reference/tailscale.md :: the capped driver ([COMMANDS.md](../COMMANDS.md#socraticode--the-shared-index-on-co-index)).
+# Pre-existing: the heading carried (#114) before this run, which renamed nothing.
+docs/INFRASTRUCTURE.md :: The permanent store, the publication bucket, and one writer each (#114)
+# Source references to COMMANDS.md for the SocratiCode caps and the doc-sections table; none moved.
+.socraticodecontextartifacts.json :: "path": "./docs/COMMANDS.md",
+deploy/replicator.service :: # belongs to whoever runs the launch (docs/COMMANDS.md); this half is the unit's.
+tests/core/test_logging.py :: "docs/COMMANDS.md",
+tests/test_doc_sections.py :: under `docs/` — so a `scripts/` hit never names `docs/COMMANDS.md`, the doc
+tests/test_doc_sections.py :: ("docs/COMMANDS.md: every script with its flags", "docs/COMMANDS.md"),
+tests/test_socraticode_config.py :: `docs/COMMANDS.md` caps the *manual* driver invocations, but this hook
+tests/test_socraticode_config.py :: `docs/SKILLS.md` says the hook runs at `docs/COMMANDS.md`'s ceiling, and
+tests/test_socraticode_config.py :: f"docs/COMMANDS.md caps at {sorted(map(sorted, manual))}, the hook at "
+# Manifest descriptions naming ENVIRONMENT.md for STORAGE's and DEPLOYMENT's variables — still true.
+.socraticodecontextartifacts.json :: "description": "The temp tier over the cluster's shared content-addressed store
+.socraticodecontextartifacts.json :: "description": "How the systemd unit runs and the guards it starts behind;
+# The POLITENESS description this run extended: ENVIRONMENT.md does index REPLICATOR_MIN_HOST_INTERVAL_SECONDS by name.
+.socraticodecontextartifacts.json :: "description": "Per-host politeness, the consumer-side mechanism;

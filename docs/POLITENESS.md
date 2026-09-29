@@ -89,6 +89,24 @@ replay gives up (the tail resumes from the same cursor) and the tail parks. The 
 rides the worker's stop event, because how long it runs is the producer's business: the
 charter asks the producer to `MAXLEN`, and Replicator cannot enforce it.
 
+### Reading the apply log
+
+Of the journal greps for this stream in [COMMANDS.md](COMMANDS.md#politeness--contentfetch-policy-19):
+
+**The last two greps are silent while nothing changes, by design (#85).** `applied a host fetch
+policy` and the `stricter than the fallback` warning beneath it both fire on a *change*, not on
+an apply: the producer republishes its whole set on a cron, so ungated they meant unchanging
+entries every five minutes forever and one per historical entry during the boot replay — 29,770
+of them, at ~31 lines/second, the day #85 was filed.
+
+That gating is right for an event and wrong for a **standing condition**, which is what "this
+host's policy is stricter than your fallback" is — it holds until an operator raises
+`REPLICATOR_MIN_HOST_INTERVAL_SECONDS` or the producer lowers the policy. So do not read an
+empty `stricter than the fallback` grep as "resolved": on a stream nobody has touched for a day
+the last warning has rotated out while the condition still holds. Read
+**`hosts_stricter_than_default`** on the replay summary instead — every boot re-asserts it, and
+non-zero is what says to run the warning grep unwindowed (no `--since`) to find out which hosts.
+
 ## Escalation on 429 and 503
 
 - **A 429 or a 503 escalates that host's spacing, and only those two (#25).** The
@@ -141,3 +159,7 @@ charter asks the producer to `MAXLEN`, and Replicator cannot enforce it.
     so `MAX_TRACKED_HOSTS` still governs it. `_prune` keeps an entry whose window
     is open even once its interval has elapsed: reclaiming it would honour a
     memory bound by becoming less polite.
+
+## Variables
+
+- `REPLICATOR_MIN_HOST_INTERVAL_SECONDS` — minimum spacing for a host with **no explicit policy**; default `1.0`. Since #19 this is the *fallback*, not the rule: the per-host numbers arrive on `content.fetch-policy` and an unknown, revoked, or not-yet-replayed host resolves here — never to unlimited, because a boot replay cannot tell a consumer whether the set it received is whole. 1.0 is Watcher's own `DEFAULT_MIN_INTERVAL`, chosen because it invents nothing. A wait ≤ `REPLICATOR_READ_BLOCK_MS` is slept through in the handler; a longer one raises `TransientFetchError` and parks the command, so the effective floor on a *parked* wait is `REPLICATOR_CLAIM_MIN_IDLE_MS`. **`0` no longer disables pacing outright** (#19 narrowed it): it is the fallback for unpublished hosts only, and a host with a policy is still paced by it — letting an env var veto a published value would invert the ownership split the charter settles. Capped at `3600`: past an hour the command parks and re-parks without ever dead-lettering (transient failures are exempt from the delivery ceiling) while the issuer's reaper concludes loss, so a fat-fingered extra zero should fail at startup rather than read as healthy. **It cannot be validated against what a producer might publish** — a published interval has no upper bound — so the strictness contract is enforced the only place it is knowable: a WARNING per host at apply time when a real policy turns out stricter than this number

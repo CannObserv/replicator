@@ -337,19 +337,9 @@ indefinitely, but since #98 it no longer stops the group reading.
 names a host whose real policy is stricter than the fallback that would replace it if the
 policy were revoked or missed on a replay.
 
-**The last two greps are silent while nothing changes, by design (#85).** `applied a host fetch
-policy` and the `stricter than the fallback` warning beneath it both fire on a *change*, not on
-an apply: the producer republishes its whole set on a cron, so ungated they meant unchanging
-entries every five minutes forever and one per historical entry during the boot replay — 29,770
-of them, at ~31 lines/second, the day #85 was filed.
-
-That gating is right for an event and wrong for a **standing condition**, which is what "this
-host's policy is stricter than your fallback" is — it holds until an operator raises
-`REPLICATOR_MIN_HOST_INTERVAL_SECONDS` or the producer lowers the policy. So do not read an
-empty `stricter than the fallback` grep as "resolved": on a stream nobody has touched for a day
-the last warning has rotated out while the condition still holds. Read
-**`hosts_stricter_than_default`** on the replay summary instead — every boot re-asserts it, and
-non-zero is what says to run the warning grep unwindowed (no `--since`) to find out which hosts.
+The last two greps fire on a *change*, not on every apply — so an empty one is not "resolved";
+read `hosts_stricter_than_default` on the replay summary instead. Why:
+[POLITENESS.md](POLITENESS.md#reading-the-apply-log).
 
 To confirm the map is populated rather than to watch it move, read `tracked_hosts` on the same
 line with `XLEN` beside it; `worker ready` follows the replay, so seeing it means the consume

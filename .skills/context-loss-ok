@@ -653,3 +653,15 @@ docs/DEPLOYMENT.md :: tighten :: only if you would rather not pay the handful of
 #   a broker at its cap". Its heading drops "(#94)" — provenance stays out of a
 #   moved heading's anchor, and the body already cites #94.
 docs/DEPLOYMENT.md :: rename :: ### Rehearsing reconnection (#94)
+
+# ---- over-budget doc curation (after #119) ----
+# The Charter check and Deliberately open moved from the replicate contract into its
+# reference; "this document" and "(above)" named the contract and would be false there.
+docs/contracts/content-replicate-issuer-contract.md :: retarget :: it carries the `info_item` token; why this document once predicted otherwise:
+docs/contracts/content-replicate-issuer-contract.md :: retarget :: mechanism behind it (above). What remains open is cluster-level
+# The "Where the rest" pointer now lists the three sections this change moved to the reference.
+docs/contracts/content-replicate-issuer-contract.md :: retarget :: normative**: the reasoning under the trust section, T3a, T4, T6 and the Charter check.
+# Both said "above" for sections ENVIRONMENT.md does not have; grep puts them in
+# INFRASTRUCTURE.md and DEPLOYMENT.md, and the lines now link there.
+docs/ENVIRONMENT.md :: disproven :: All four belong in the repo `.env` or the invoking shell
+docs/ENVIRONMENT.md :: disproven :: - `REPLICATOR_ALLOW_ANY_CHECKOUT` — bypasses the `main`-checkout guard
