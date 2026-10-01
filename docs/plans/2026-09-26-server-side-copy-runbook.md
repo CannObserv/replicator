@@ -95,12 +95,13 @@ The code ships only after phase B matches the table: merge the branch, push, the
 Real replications are rare, so this waits for one. The journal line names the method:
 
 ```bash
-journalctl -u replicator --since "2026-09-26" -o cat | grep '"replicated a blob"' | grep -o '"method": "[a-z]*"'
+journalctl -u replicator --since "2026-09-26" -o cat | grep '"replicated a blob"' | grep -oE '"(method|bucket)": "[a-z-]*"'
 ```
 
-Expect `"method": "copy"`. Then check that the object carries the stamp and not the temp tier's
-retention clock. The line's `key` field names the object; the bucket is public, so the read needs no
-key file. `gcloud` is not installed on this VM, hence the client library:
+Expect `"method": "copy"` and `"bucket": "co-gcs-publication"`. Then check that the object carries
+the stamp and not the temp tier's retention clock. The line's `bucket` and `key` fields name the
+object together (`bucket` since 2026-10-01; a key alone is ambiguous, because the cutover kept the
+rendered keys). The bucket is public, so the read needs no key file. `gcloud` is not installed on this VM, hence the client library:
 
 ```bash
 cd /home/exedev/replicator && uv run --no-sync python -c "
