@@ -1,7 +1,7 @@
 ---
 title: Operator runbook for Persist by digest, step 4 — the publication cutover
 date: 2026-09-25
-status: phases A–D done 2026-09-26; the first real replication into the new bucket is still to come
+status: phases A–D done 2026-09-26; the done condition met 2026-10-01
 plan: 2026-09-25-content-addressed-persist-and-storage-naming.md
 ---
 
@@ -179,6 +179,8 @@ the first runbook's phase E disables it. The probe object was deleted.
   holds only for a revision first replicated after the cutover. Rendered keys did not change, so a
   revision replicated under `primary` already has its key in `co-gcs-replication`: revision `01M2NSHT…`
   does, from 2026-09-16. For such a revision, the object in the old bucket must predate the cutover.
+  **Met 2026-10-01:** that revision, `01M3WF4M1KTYMSKNQ42V0JCKG5` at 19:30:26Z, has `bucket`
+  `co-gcs-publication`. The key is served there, and the old bucket's copy dates from 2026-09-16.
 
 **Done 2026-09-26.** Checked with the worker's key: `get` and `list` only on `co-gcs-replication`
 and on `co-gcs-publication`, and its own grants on the two private buckets. So neither public bucket

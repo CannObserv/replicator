@@ -1,7 +1,7 @@
 ---
 title: Operator runbook for #114 item 5 — the server-side copy's grant
 date: 2026-09-26
-status: phases A–B done 2026-09-26; phase C waits for the first real replicate after the deploy
+status: phases A–B done 2026-09-26; phase C done 2026-10-01
 plan: 2026-09-26-replicate-content-stamp-and-server-side-copy.md
 ---
 
@@ -115,6 +115,11 @@ print('custom_time:', blob.custom_time)
 
 Expect `metadata: {'co-content-sha256': '<digest>'}` and `custom_time: None`. Tried on 2026-09-26
 against an object in the legacy public bucket, which printed `None` for both.
+
+**Done 2026-10-01.** The first real replicate after the deploy (`01M3WF4M1KTYMSKNQ42V0JCKG5`,
+19:30:26Z) was also the first from the permanent store. It logged `"method": "copy"` and
+`"bucket": "co-gcs-publication"`, and its object printed
+`metadata: {'co-content-sha256': '908ffd540c66…'}` and `custom_time: None`.
 
 **Rollback.** Revert the merge and redeploy. The upload path needs no grant, and the extra read can
 stay or be removed with `remove-iam-policy-binding`.

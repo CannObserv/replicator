@@ -1,7 +1,7 @@
 ---
 title: Persist by digest — a content-addressed permanent store, hash as the address, and one naming scheme for buckets and identities
 date: 2026-09-25
-status: approved 2026-09-25
+status: approved 2026-09-25; done 2026-10-01
 issue: "#114 (items 2 and 3)"
 ---
 
@@ -135,6 +135,11 @@ Archiver's RepSpecs move to `gcs-publication` in the publication cutover.
    **Cut over 2026-09-25; the old bucket was closed to Replicator on 2026-09-26.** The CLI's
    `co-gcs-cli-writer` keeps its write access for now. The done condition waits on the next real
    replication.
+
+   **Done 2026-10-01.** Command `01M3WF4M1KTYMSKNQ42V0JCKG5` at 19:30:26Z: `replication_complete`,
+   with the journal's `bucket` field (added that day) naming `co-gcs-publication` and the object
+   served there. Writes to the old bucket have been refused since 2026-09-26, and `primary` was
+   retired on 2026-09-27.
 5. **Replicator code, test-first** (no wire change):
    - The alias `credentials_file`, with the T1 edit to the contract.
    - The alias naming rule enforced at load, with the `primary` allowlist and its expiry, plus the
@@ -147,7 +152,8 @@ Archiver's RepSpecs move to `gcs-publication` in the publication cutover.
 
    Done when CI's `gcs` job exercises a permanent-store source.
 
-   **Code landed 2026-09-25.** The `gcs` job replicates from `co-gcs-test-replicator` with an empty temp store. `primary`'s allowlist expiry is 2026-12-31.
+   **Code landed 2026-09-25.** The `gcs` job replicates from `co-gcs-test-replicator` with an empty temp store. The `primary` allowlist (expiry 2026-12-31) was removed with `primary`
+   itself on 2026-09-27.
 6. **Persist handler.** Once co-core ships the models, add the `content.persist` loop through the
    existing `run_loop` / `CommandSpec`, plus a new issuer contract under `docs/contracts/`. Done when
    the `gcs` job persists into `co-gcs-test-replicator` twice and the second is a no-op success.
@@ -178,6 +184,13 @@ Archiver's RepSpecs move to `gcs-publication` in the publication cutover.
    kept `6183927b…` at 16:01:01.98Z in 570.8 ms. The revision has no RepSpec, so the publish half
    waits on *Replicate now* for revision `01M2NSHT…` (Public Hearings, the only item with a
    RepSpec) once its persist lands (expected about 19:17Z).
+
+   **Done 2026-10-01.** `908ffd54…` (revision `01M2NSHT…`) persisted at 19:17:02Z in 545.4 ms. The
+   operator's *Replicate now* issued `01M3WF4M1KTYMSKNQ42V0JCKG5` with `blob_uri`
+   `gs://co-gcs-replicator/blobs/908ffd54….bin` (read off `content.replicate`). It ran at 19:30:26Z:
+   `outcome: wrote`, `method: copy`, `bucket: co-gcs-publication`, 546.8 ms. The object is 122630 bytes,
+   carries `co-content-sha256`, and has no `customTime`. Persist samples for broker's 300 s threshold
+   are 570.8, 545.4 and 264.9 ms.
 
 ## Decisions (2026-09-25)
 

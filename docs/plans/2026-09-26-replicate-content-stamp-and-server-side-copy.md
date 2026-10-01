@@ -1,7 +1,7 @@
 ---
 title: Stamp replicated objects with their digest, and copy GCS to GCS server-side (#114 items 4 and 5)
 date: 2026-09-26
-status: approved
+status: approved; done 2026-10-01 (first production copy, stamped)
 ---
 
 # Replicate: the content stamp and the server-side copy
