@@ -724,9 +724,9 @@ async def test_the_success_line_names_the_bucket_its_binding_resolved(store, blo
     """A key without its bucket names two objects once a cutover reuses it (#114).
 
     The `primary` → `gcs-publication` cutover kept the rendered keys and moved the
-    bucket, so a key logged on 2026-09-16 under `co-gcs-replication` reappears
-    under `co-gcs-publication`. Reading the old line as the new bucket predicted a
-    no-op for a write that was really a first ``wrote`` (archiver#283). The alias
+    bucket, so a key logged on 2026-09-16 under the old bucket reappears under the
+    new one. Reading the old line as the new bucket predicted a no-op for a write
+    that was really a first ``wrote`` (archiver#283). The alias
     cannot be logged to fix that, because it is a key and never a value (charter
     2b), but the bucket is host configuration that the alias resolved to.
 
