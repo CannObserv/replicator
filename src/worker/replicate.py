@@ -520,6 +520,11 @@ def build_replicate_handler(
                 # a bucket, or an `upload` from this host. The runbook's phase C
                 # reads it to confirm the copy is live.
                 "method": "upload" if bucket_source is None else "copy",
+                # The key below names an object only together with its bucket: a
+                # cutover that keeps rendered keys and moves the bucket repeats the
+                # key (archiver#283). The host's binding, never the alias, which
+                # is a key and not a value (charter 2b).
+                "bucket": binding.bucket,
                 # In full, deliberately (#87). This is the only place the journal
                 # records what was written as a *key*, and a truncated one is
                 # worse than useless: it cannot be pasted into `gcloud storage`,

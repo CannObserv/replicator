@@ -720,6 +720,39 @@ async def test_the_success_line_reports_how_long_the_handler_took(store, blob_ur
     assert 50 <= record.duration_ms < 5_000
 
 
+async def test_the_success_line_names_the_bucket_its_binding_resolved(store, blob_uri, caplog):
+    """A key without its bucket names two objects once a cutover reuses it (#114).
+
+    The `primary` → `gcs-publication` cutover kept the rendered keys and moved the
+    bucket, so a key logged on 2026-09-16 under the old bucket reappears under the
+    new one. Reading the old line as the new bucket predicted a no-op for a write
+    that was really a first ``wrote`` (archiver#283). The alias
+    cannot be logged to fix that, because it is a key and never a value (charter
+    2b), but the bucket is host configuration that the alias resolved to.
+
+    Two bindings, and the command names the one whose bucket differs from the one
+    in ``PUBLIC_URL``. That catches a bucket taken from the wrong binding, and
+    also one parsed out of the provider's URL instead of read from the host's
+    table.
+    """
+    public = AliasBinding(provider="gcs", bucket="example-replication-bucket")
+    private = AliasBinding(provider="gcs", bucket="example-internal-bucket")
+    handler = build_replicate_handler(
+        store=store,
+        aliases=AliasTable({"public": public, "private": private}),
+        writers={
+            "public": FakeGcs(result(GcsCreateOutcome.WROTE, public_url=PUBLIC_URL)),
+            "private": FakeGcs(result(GcsCreateOutcome.WROTE, public_url=PUBLIC_URL)),
+        },
+        complete=Completions(),
+    )
+    with caplog.at_level("INFO", logger="src.worker.replicate"):
+        await handler(command(blob_uri, credentials_alias="private"))
+
+    (record,) = [r for r in caplog.records if r.message == "replicated a blob"]
+    assert record.bucket == "example-internal-bucket"
+
+
 class ReadingGcs(FakeGcs):
     """A writer that keeps the bytes it was handed, read before the handler closes them."""
 

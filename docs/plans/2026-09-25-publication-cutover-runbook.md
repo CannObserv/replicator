@@ -174,8 +174,11 @@ the first runbook's phase E disables it. The probe object was deleted.
 - **The probe is gone.** The `curl` at the end of B3 should now print `404`.
 - **Tidy.** `rm /tmp/co-gcs-publication-writer.json` on the VM, and remove the workstation copy.
 - **The plan's done condition, whenever it comes.** The next `replicated a blob` line in the journal
-  names its `key`. Check that the key is served at `https://storage.googleapis.com/co-gcs-publication/<key>`
-  and is absent from the old bucket.
+  names its `bucket` (since 2026-10-01) and `key`. Expect `co-gcs-publication`, and check that the key
+  is served at `https://storage.googleapis.com/co-gcs-publication/<key>`. *Absent from the old bucket*
+  holds only for a revision first replicated after the cutover. Rendered keys did not change, so a
+  revision replicated under `primary` already has its key in `co-gcs-replication`: revision `01M2NSHT…`
+  does, from 2026-09-16. For such a revision, the object in the old bucket must predate the cutover.
 
 **Done 2026-09-26.** Checked with the worker's key: `get` and `list` only on `co-gcs-replication`
 and on `co-gcs-publication`, and its own grants on the two private buckets. So neither public bucket
