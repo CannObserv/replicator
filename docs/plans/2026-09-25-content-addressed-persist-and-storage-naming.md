@@ -155,7 +155,15 @@ Archiver's RepSpecs move to `gcs-publication` in the publication cutover.
    **Code landed 2026-09-26, off by default** (`REPLICATOR_PERSIST_ENABLED`) until broker#64 grants
    `content.persist`. Contract: [content-persist-issuer-contract.md](../contracts/content-persist-issuer-contract.md).
 7. **Archiver and Watcher changes land in their repos.** Done when one real revision is persisted,
-   then published from the permanent URI after its temp blob has expired.
+   then published from the permanent URI: a `content.replicate` naming
+   `gs://co-gcs-replicator/blobs/<digest>.bin` succeeds.
+
+   *Revised 2026-10-01:* the condition used to add "after its temp blob has expired". That has no
+   predictable date. The temp TTL runs from the last reference, so a page re-fetched with unchanged
+   bytes keeps its temp blob alive indefinitely. The expired case also adds no coverage:
+   `locate_blob` selects only the store whose own URI equals `blob_uri`, so a permanent URI never
+   reads the temp tier. A replicate after a temp blob expires remains an opportunistic confirmation,
+   not a gate.
 
    *Status 2026-09-27:* **Archiver's half is shipped** (archiver build `da36ee9`, archiver#276; issuance
    enabling moves to archiver#283). It issues on receipt, keeps a 6 h reaper capped at 3 re-issues per
@@ -164,6 +172,12 @@ Archiver's RepSpecs move to `gcs-publication` in the publication cutover.
    is live: persist has been on since 2026-09-26T21:38Z, and `primary` was retired on 2026-09-27. The
    done condition is observed here once the first `blob_persisted` lands, and so is the handler timing
    broker wants for its 300 s threshold.
+
+   *Status 2026-10-01:* watcher#329 deployed 2026-09-29T21:06:58Z, and archiver#283 turned issuance
+   on at 2026-10-01T15:35:09Z. **The first real persist** (Archiver command `01M3W3566GFYRGERM9FM8JJBP9`)
+   kept `6183927b…` at 16:01:01.98Z in 570.8 ms. The revision has no RepSpec, so the publish half
+   waits on *Replicate now* for revision `01M2NSHT…` (Public Hearings, the only item with a
+   RepSpec) once its persist lands (expected about 19:17Z).
 
 ## Decisions (2026-09-25)
 
