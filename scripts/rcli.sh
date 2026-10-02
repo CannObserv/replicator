@@ -22,12 +22,24 @@
 # password never reaches an argv of its own either.
 
 # _rcli_unquote VAR STRING [+] - percent-decode STRING into VAR; a third
-# argument `+` reads `+` as a space first, as a query string does. Backslashes
-# are doubled first so %b expands only the escapes this function wrote.
+# argument `+` reads `+` as a space first, as a query string does. Only a `%`
+# followed by two hex digits is an escape; any other `%` is kept, as urllib's
+# unquote keeps it, and nothing else in STRING is interpreted (#127 CR 2).
 _rcli_unquote() {
-  local s="${2//\\/\\\\}"
+  local s="$2" out="" byte
   [ "${3:-}" = "+" ] && s="${s//+/ }"
-  printf -v "$1" '%b' "${s//%/\\x}"
+  while [[ "${s}" == *%* ]]; do
+    out+="${s%%\%*}"
+    s="${s#*%}"
+    if [[ "${s:0:2}" == [0-9A-Fa-f][0-9A-Fa-f] ]]; then
+      printf -v byte "\\x${s:0:2}"
+      out+="${byte}"
+      s="${s:2}"
+    else
+      out+="%"
+    fi
+  done
+  printf -v "$1" '%s' "${out}${s}"
 }
 
 # rcli_command URL - set RCLI_CMD (the redis-cli argv, credential-free),
