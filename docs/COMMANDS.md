@@ -122,8 +122,9 @@ AGENTS.md), then source this once per shell from the repo root; the examples bel
 every local user can read from `/proc` while the call runs; this file's old `rcli` alias did
 exactly that. `rcli` strips the URL's userinfo, passes `--user`, and hands the password over in
 `REDISCLI_AUTH` (broker#47's rule) — the floor check uses the same helper.
-`tests/test_rcli.py` fails on any `redis-cli` given `-u`, `-a` or `--pass` in a script or
-runbook here.
+`tests/test_rcli.py` fails on any `redis-cli` in a script or runbook here that is given `-a`
+or `--pass`, or a `-u` whose argument is quoted, a variable, or a URL — prose naming the flag
+is fine.
 
 **And the credential cannot run everything `redis-cli` can (#85).** The `replicator` user is
 scoped to its own topics, permanently and by design, so the operator surface splits in two:
