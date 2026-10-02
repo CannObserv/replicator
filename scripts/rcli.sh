@@ -43,7 +43,10 @@ _rcli_unquote() {
 }
 
 # rcli_command URL - set RCLI_CMD (the redis-cli argv, credential-free),
-# RCLI_AUTH (the password) and RCLI_HAS_AUTH (1 iff there is one).
+# RCLI_AUTH (the password) and RCLI_HAS_AUTH (1 iff there is one). Returns 1,
+# building nothing, for a URL with no `scheme://`: there is no telling where its
+# credential ends, and redis-cli would refuse it only after starting with it in
+# argv (#127 CR 7). The message never quotes the URL.
 #
 # The query and fragment never reach `-u`: redis-cli ignores them (verified,
 # #127 CR 1), but redis-py reads any query argument as a connection kwarg, so
@@ -55,10 +58,10 @@ rcli_command() {
   RCLI_CMD=(redis-cli)
   RCLI_AUTH=""
   RCLI_HAS_AUTH=0
-  case "${url}" in
-    *://*) ;;
-    *) RCLI_CMD+=(-u "${url}"); return 0 ;;  # no scheme: redis-cli refuses it itself
-  esac
+  if [[ "${url}" != *://* ]]; then
+    echo "rcli: the Redis URL has no scheme (redis:// or rediss://) - refusing to run redis-cli" >&2
+    return 1
+  fi
   scheme="${url%%://*}"
   rest="${url#*://}"
   rest="${rest%%#*}"
@@ -118,6 +121,6 @@ rcli() {
     echo "rcli: REPLICATOR_REDIS_URL is unset - load the env first (Common Commands, AGENTS.md)" >&2
     return 2
   fi
-  rcli_command "${REPLICATOR_REDIS_URL}"
+  rcli_command "${REPLICATOR_REDIS_URL}" || return 2
   rcli_exec "${RCLI_CMD[@]}" "$@"
 }

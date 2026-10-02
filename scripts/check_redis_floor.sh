@@ -42,7 +42,10 @@ if ! . "${HERE}/rcli.sh" 2>/dev/null; then
   echo "check_redis_floor: — >=7.0 floor UNVERIFIED, not blocking start" >&2
   exit 0
 fi
-rcli_command "${URL}"
+if ! rcli_command "${URL}"; then
+  echo "check_redis_floor: — >=7.0 floor UNVERIFIED, not blocking start" >&2
+  exit 0
+fi
 
 if ! command -v redis-cli >/dev/null 2>&1; then
   echo "check_redis_floor: redis-cli not found — cannot verify floor, not blocking start" >&2
