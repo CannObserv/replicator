@@ -272,13 +272,29 @@ def _logical_lines(text: str) -> list[tuple[int, str]]:
     return joined
 
 
-def test_no_runbook_or_script_puts_a_credential_on_redis_cli_s_command_line() -> None:
-    """`docs/plans/` is excluded: dated design records, not instructions to run."""
-    roots = [REPO / "scripts", REPO / "deploy", REPO / ".claude" / "hooks"]
-    roots += [p for p in (REPO / "docs").rglob("*.md") if "plans" not in p.parts]
-    roots += sorted(REPO.glob("*.md"))
+def guarded_roots(repo: Path) -> list[Path]:
+    """Scripts, units, hooks and runbooks under ``repo``.
 
-    assert credential_flag_sites(*roots) == []
+    `docs/plans/` is excluded: dated design records, not instructions to run.
+    """
+    roots = [repo / "scripts", repo / "deploy", repo / ".claude" / "hooks"]
+    roots += [p for p in (repo / "docs").rglob("*.md") if "plans" not in p.relative_to(repo).parts]
+    return roots + sorted(repo.glob("*.md"))
+
+
+def test_no_runbook_or_script_puts_a_credential_on_redis_cli_s_command_line() -> None:
+    assert credential_flag_sites(*guarded_roots(REPO)) == []
+
+
+def test_a_checkout_under_a_plans_directory_still_guards_its_docs(tmp_path: Path) -> None:
+    """Only the repo's own `docs/plans/` is skipped, not every doc of a checkout
+    that happens to live under some directory called `plans` (#127 CR 10)."""
+    repo = tmp_path / "plans" / "replicator"
+    (repo / "docs" / "plans").mkdir(parents=True)
+    (repo / "docs" / "RUNBOOK.md").write_text("x\n")
+    (repo / "docs" / "plans" / "2026-01-01-design.md").write_text("x\n")
+
+    assert [p.name for p in guarded_roots(repo) if p.suffix == ".md"] == ["RUNBOOK.md"]
 
 
 @pytest.mark.parametrize(
