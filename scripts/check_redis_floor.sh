@@ -34,8 +34,14 @@ URL="${REPLICATOR_REDIS_URL:-redis://localhost:6379/0}"
 # Located by expansion, not `dirname`: this runs with whatever PATH the unit has.
 HERE="${BASH_SOURCE[0]%/*}"
 [ "${HERE}" = "${BASH_SOURCE[0]}" ] && HERE=.
+# Soft like every other cause of an unread version, but named: without it the
+# probe cannot run, and the fall-through would guess "timed out?" instead.
 # shellcheck source=scripts/rcli.sh
-. "${HERE}/rcli.sh"
+if ! . "${HERE}/rcli.sh" 2>/dev/null; then
+  echo "check_redis_floor: ${HERE}/rcli.sh is missing — cannot probe the broker" >&2
+  echo "check_redis_floor: — >=7.0 floor UNVERIFIED, not blocking start" >&2
+  exit 0
+fi
 rcli_command "${URL}"
 
 if ! command -v redis-cli >/dev/null 2>&1; then
