@@ -352,6 +352,26 @@ def test_a_missing_helper_is_named_not_guessed_at(tmp_path: Path) -> None:
     assert "timed out" not in result.stderr
 
 
+def test_a_helper_that_will_not_load_is_not_called_missing(tmp_path: Path) -> None:
+    """A syntax error is not an absence; bash's own message says which it was."""
+    lone = tmp_path / "lone"
+    lone.mkdir()
+    shutil.copy(SCRIPT, lone / SCRIPT.name)
+    (lone / "rcli.sh").write_text("rcli_command() {\n")
+    bindir = _stub_redis_cli(tmp_path, version="7.0.15")
+    result = subprocess.run(
+        ["bash", str(lone / SCRIPT.name)],
+        env={"PATH": f"{bindir}:/usr/bin:/bin", "REPLICATOR_REDIS_FLOOR_WAIT": "0", **_URL},
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0
+    assert "could not be loaded" in result.stderr
+    assert "syntax error" in result.stderr
+    assert "UNVERIFIED" in result.stderr
+
+
 def test_redis_cli_absent_is_soft(tmp_path: Path) -> None:
     """No redis-cli on PATH at all -> cannot verify, do not block.
 
