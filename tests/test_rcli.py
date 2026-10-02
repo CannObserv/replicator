@@ -124,6 +124,12 @@ def _auth(tmp_path: Path) -> str:
             id="userinfo-password-over-query",
         ),
         pytest.param(
+            "redis://broker:6379/0?password=a+b%2Bc",
+            ["-u", "redis://broker:6379/0"],
+            "a b+c",
+            id="query-plus-is-space",
+        ),
+        pytest.param(
             "rediss://broker:6380/0?ssl_cert_reqs=none#frag",
             ["-u", "rediss://broker:6380/0"],
             "unset",

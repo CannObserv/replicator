@@ -21,17 +21,25 @@
 # Every step is a builtin: decoding through `printf -v` forks nothing, so the
 # password never reaches an argv of its own either.
 
-# _rcli_unquote VAR STRING - percent-decode STRING into VAR. Backslashes are
-# doubled first so %b expands only the escapes this function wrote.
+# _rcli_unquote VAR STRING [+] - percent-decode STRING into VAR; a third
+# argument `+` reads `+` as a space first, as a query string does. Backslashes
+# are doubled first so %b expands only the escapes this function wrote.
 _rcli_unquote() {
   local s="${2//\\/\\\\}"
+  [ "${3:-}" = "+" ] && s="${s//+/ }"
   printf -v "$1" '%b' "${s//%/\\x}"
 }
 
 # rcli_command URL - set RCLI_CMD (the redis-cli argv, credential-free),
 # RCLI_AUTH (the password) and RCLI_HAS_AUTH (1 iff there is one).
+#
+# The query and fragment never reach `-u`: redis-cli ignores them (verified,
+# #127 CR 1), but redis-py reads any query argument as a connection kwarg, so
+# `?password=` authenticates the worker and would otherwise sit in argv here.
+# A `username` or `password` there fills only what the userinfo left empty,
+# which is redis-py's precedence too.
 rcli_command() {
-  local url="$1" scheme rest authority tail userinfo user="" pass=""
+  local url="$1" scheme rest query="" authority tail userinfo user="" pass="" pair key
   RCLI_CMD=(redis-cli)
   RCLI_AUTH=""
   RCLI_HAS_AUTH=0
@@ -41,7 +49,12 @@ rcli_command() {
   esac
   scheme="${url%%://*}"
   rest="${url#*://}"
-  authority="${rest%%[/?#]*}"
+  rest="${rest%%#*}"
+  if [[ "${rest}" == *\?* ]]; then
+    query="${rest#*\?}"
+    rest="${rest%%\?*}"
+  fi
+  authority="${rest%%/*}"
   tail="${rest:${#authority}}"
   if [[ "${authority}" == *@* ]]; then
     userinfo="${authority%@*}"
@@ -51,6 +64,17 @@ rcli_command() {
       _rcli_unquote pass "${userinfo#*:}"
     fi
   fi
+  while [ -n "${query}" ]; do
+    pair="${query%%&*}"
+    if [[ "${query}" == *\&* ]]; then query="${query#*&}"; else query=""; fi
+    [[ "${pair}" == *=* ]] || continue
+    key="${pair%%=*}"
+    # parse_qs reads `+` as a space before decoding; so does this.
+    case "${key}" in
+      username) [ -n "${user}" ] || _rcli_unquote user "${pair#*=}" "+" ;;
+      password) [ -n "${pass}" ] || _rcli_unquote pass "${pair#*=}" "+" ;;
+    esac
+  done
   if [ -n "${user}" ]; then
     RCLI_CMD+=(--user "${user}")
   fi
