@@ -228,10 +228,28 @@ def credential_flag_sites(*roots: Path) -> list[tuple[str, int, str]]:
                 text = path.read_text(encoding="utf-8")
             except (UnicodeDecodeError, OSError):  # pragma: no cover - none here today
                 continue
-            for number, line in enumerate(text.splitlines(), start=1):
+            for number, line in _logical_lines(text):
                 if _CREDENTIAL_FLAG.search(line):
-                    sites.append((relative, number, line.strip()))
+                    sites.append((relative, number, line))
     return sites
+
+
+def _logical_lines(text: str) -> list[tuple[int, str]]:
+    """Lines with shell `\\` continuations joined, each numbered where it starts."""
+    joined: list[tuple[int, str]] = []
+    start, parts = 0, []
+    for number, line in enumerate(text.splitlines(), start=1):
+        if not parts:
+            start = number
+        stripped = line.strip()
+        if stripped.endswith("\\"):
+            parts.append(stripped[:-1].strip())
+            continue
+        joined.append((start, " ".join([*parts, stripped])))
+        parts = []
+    if parts:
+        joined.append((start, " ".join(parts)))
+    return joined
 
 
 def test_no_runbook_or_script_puts_a_credential_on_redis_cli_s_command_line() -> None:
