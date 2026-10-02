@@ -257,3 +257,13 @@ def test_the_guard_sees_each_spelling(tmp_path: Path, line: str) -> None:
     (tmp_path / "runbook.md").write_text(f"```bash\n{line}\n```\n")
 
     assert [site[2] for site in credential_flag_sites(tmp_path)] == [line]
+
+
+def test_the_guard_sees_a_command_continued_across_lines(tmp_path: Path) -> None:
+    """Long runbook commands wrap; the flag on the second line is still the call's.
+    The finding names the line the command starts on."""
+    (tmp_path / "runbook.md").write_text(
+        '```bash\nredis-cli --no-auth-warning \\\n  -u "$REPLICATOR_REDIS_URL" PING\n```\n'
+    )
+
+    assert [site[1] for site in credential_flag_sites(tmp_path)] == [2]
