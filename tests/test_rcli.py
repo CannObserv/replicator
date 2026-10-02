@@ -189,6 +189,19 @@ def test_an_unset_url_is_refused_rather_than_defaulted(tmp_path: Path) -> None:
     assert not (tmp_path / "argv").exists()
 
 
+def test_a_url_with_no_scheme_is_refused_without_running_redis_cli(tmp_path: Path) -> None:
+    """redis-cli refuses it too, but only after starting with it in argv (#127 CR 7).
+    The refusal does not quote the URL, which may carry the password."""
+    result = _rcli(
+        tmp_path, {"REPLICATOR_REDIS_URL": f"replicator:{_SECRET}@broker:6379/0"}, "PING"
+    )
+
+    assert result.returncode == 2
+    assert "scheme" in result.stderr
+    assert _SECRET not in result.stderr
+    assert not (tmp_path / "argv").exists()
+
+
 def test_redis_cli_s_own_output_and_status_pass_through(tmp_path: Path) -> None:
     result = _rcli(tmp_path, {"REPLICATOR_REDIS_URL": "redis://localhost:6379/0"}, "PING")
 

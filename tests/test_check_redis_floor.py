@@ -312,6 +312,26 @@ def test_the_probe_keeps_the_password_off_argv(tmp_path: Path, with_timeout: boo
     assert (tmp_path / "auth").read_text() == _SECRET
 
 
+def test_a_url_with_no_scheme_is_named_and_never_probed(tmp_path: Path) -> None:
+    bindir = _recording_bindir(tmp_path, with_timeout=True)
+    result = subprocess.run(
+        ["bash", str(SCRIPT)],
+        env={
+            "PATH": str(bindir),
+            "REPLICATOR_REDIS_FLOOR_WAIT": "0",
+            "REPLICATOR_REDIS_URL": f"replicator:{_SECRET}@broker:6379/0",
+        },
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0
+    assert "scheme" in result.stderr
+    assert "UNVERIFIED" in result.stderr
+    assert _SECRET not in result.stderr
+    assert not (tmp_path / "argv").exists()
+
+
 def test_a_missing_helper_is_named_not_guessed_at(tmp_path: Path) -> None:
     """The probe cannot run without scripts/rcli.sh, and saying "timed out?"
     instead would be the wrong-cause guess archiver#195 removed. Still soft."""
