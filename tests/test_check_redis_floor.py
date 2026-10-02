@@ -312,6 +312,26 @@ def test_the_probe_keeps_the_password_off_argv(tmp_path: Path, with_timeout: boo
     assert (tmp_path / "auth").read_text() == _SECRET
 
 
+def test_a_missing_helper_is_named_not_guessed_at(tmp_path: Path) -> None:
+    """The probe cannot run without scripts/rcli.sh, and saying "timed out?"
+    instead would be the wrong-cause guess archiver#195 removed. Still soft."""
+    lone = tmp_path / "lone"
+    lone.mkdir()
+    shutil.copy(SCRIPT, lone / SCRIPT.name)
+    bindir = _stub_redis_cli(tmp_path, version="7.0.15")
+    result = subprocess.run(
+        ["bash", str(lone / SCRIPT.name)],
+        env={"PATH": f"{bindir}:/usr/bin:/bin", "REPLICATOR_REDIS_FLOOR_WAIT": "0", **_URL},
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0
+    assert "rcli.sh" in result.stderr
+    assert "UNVERIFIED" in result.stderr
+    assert "timed out" not in result.stderr
+
+
 def test_redis_cli_absent_is_soft(tmp_path: Path) -> None:
     """No redis-cli on PATH at all -> cannot verify, do not block.
 
