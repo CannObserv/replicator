@@ -27,10 +27,6 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_redis_floor.sh
 _WRONGPASS = "AUTH failed: WRONGPASS invalid username-password pair or user is disabled."
 _NOAUTH = "NOAUTH Authentication required."
 _REFUSED = "Could not connect to Redis at broker:6379: Connection refused"
-_CLI_PASSWORD_WARNING = (
-    "Warning: Using a password with '-a' or '-u' option on the command line "
-    "interface may not be safe."
-)
 
 
 def _stub_redis_cli(
@@ -139,14 +135,15 @@ def test_auth_failure_is_reported_as_authentication(tmp_path: Path, message: str
     assert "unreachable" not in result.stderr.lower()
 
 
-def test_auth_failure_names_the_empty_username_trap(tmp_path: Path) -> None:
-    """`redis://:pw@host` authenticates for redis-py and fails for redis-cli:
-    the latter sends a two-argument ``AUTH "" pw`` against a user that does not
-    exist. So the worker starts green while this probe cannot connect at all."""
+def test_auth_failure_sends_the_operator_to_the_credential(tmp_path: Path) -> None:
+    """Since #127 this probe authenticates exactly as the worker does, so a
+    refusal here is the worker's refusal too - not the old empty-username trap,
+    which the helper's `AUTH` construction removed."""
     bindir = _stub_redis_cli(tmp_path, version=None, stderr=_WRONGPASS, exit_code=1)
-    result = _run(bindir, {"REPLICATOR_REDIS_URL": "redis://:pw@broker:6379/0"})
+    result = _run(bindir, {"REPLICATOR_REDIS_URL": "redis://replicator:pw@broker:6379/0"})
 
-    assert "default:" in result.stderr
+    assert "REPLICATOR_REDIS_URL" in result.stderr
+    assert "default:" not in result.stderr
 
 
 def test_auth_failure_says_the_floor_is_unverified(tmp_path: Path) -> None:
@@ -162,11 +159,10 @@ def test_auth_failure_says_the_floor_is_unverified(tmp_path: Path) -> None:
 def test_auth_failure_does_not_block_the_start(tmp_path: Path) -> None:
     """Deliberately not blocking, against archiver#195's own suggestion.
 
-    That suggestion rests on "a probe that cannot authenticate is evidence the
-    service cannot either" - which is exactly what this bug disproves.
-    `redis://:pw@host` fails for redis-cli and **succeeds for redis-py**, so the
-    probe's verdict is not the worker's. Blocking on it would have converted a
-    latent trap into a total outage at the cutover, for a URL that worked.
+    The worker meets the same refusal and reports it in its own terms; this
+    guard asserts the version floor only. Blocking would spend the unit's start
+    budget on a credential problem - the shape of 2026-09-16, when three
+    ExecStartPre refusals burned StartLimitBurst in sixteen seconds.
     """
     bindir = _stub_redis_cli(tmp_path, version=None, stderr=_WRONGPASS, exit_code=1)
     result = _run(bindir, {"REPLICATOR_REDIS_URL": "redis://:pw@broker:6379/0"})
@@ -268,20 +264,52 @@ def test_silent_failure_claims_neither_cause(tmp_path: Path) -> None:
     assert "could not reach or authenticate" in result.stderr.lower()
 
 
-def test_broker_quote_excludes_the_cli_s_own_warning(tmp_path: Path) -> None:
-    """redis-cli prints that advisory on every `-u` call, so quoting it back
-    under "broker said:" buries the real error and blames the server for the
-    client's warning. Observed live against the authenticated broker."""
-    bindir = _stub_redis_cli(
-        tmp_path,
-        version=None,
-        stderr=f"{_CLI_PASSWORD_WARNING}\n{_WRONGPASS}",
-        exit_code=1,
-    )
-    result = _run(bindir, {"REPLICATOR_REDIS_URL": "redis://:pw@broker:6379/0"})
+# --- The credential stays off argv (#127) -------------------------------------
+#
+# This probe runs on every service start, and `/proc/<pid>/cmdline` is readable
+# by every local user while it does. `timeout` is in the argv chain too, which
+# is why both paths are covered: the stub sees what `timeout` was handed.
 
-    assert "may not be safe" not in result.stderr
-    assert "WRONGPASS" in result.stderr
+_SECRET = "s3cr3t"
+
+
+def _recording_bindir(tmp_path: Path, *, with_timeout: bool) -> Path:
+    """Only the tools the script needs, plus a `redis-cli` that records argv and auth."""
+    binder = tmp_path / "bin"
+    binder.mkdir()
+    for tool in ("bash", "sed", "tr", "grep", "mktemp", "cat", "rm", "sleep"):
+        (binder / tool).symlink_to(shutil.which(tool))
+    if with_timeout:
+        (binder / "timeout").symlink_to(shutil.which("timeout"))
+    (binder / "redis-cli").write_text(
+        "#!/usr/bin/env bash\n"
+        'if [[ "$1" == "--help" ]]; then printf "usage: redis-cli\\n  --tls\\n"; exit 0; fi\n'
+        f'printf "%s\\n" "$@" >> "{tmp_path}/argv"\n'
+        f'printf "%s" "${{REDISCLI_AUTH-unset}}" > "{tmp_path}/auth"\n'
+        'echo "redis_version:7.0.15"\n'
+    )
+    (binder / "redis-cli").chmod(0o755)
+    return binder
+
+
+@pytest.mark.parametrize("with_timeout", [True, False], ids=["timeout", "no-timeout"])
+def test_the_probe_keeps_the_password_off_argv(tmp_path: Path, with_timeout: bool) -> None:
+    bindir = _recording_bindir(tmp_path, with_timeout=with_timeout)
+    result = subprocess.run(
+        ["bash", str(SCRIPT)],
+        env={
+            "PATH": str(bindir),
+            "REPLICATOR_REDIS_FLOOR_WAIT": "0",
+            "REPLICATOR_REDIS_URL": f"redis://replicator:{_SECRET}@broker:6379/0",
+        },
+        text=True,
+        capture_output=True,
+    )
+
+    assert "meets the >=7.0 floor" in result.stdout, result.stderr
+    argv = (tmp_path / "argv").read_text().splitlines()
+    assert argv == ["--user", "replicator", "-u", "redis://broker:6379/0", "INFO", "server"]
+    assert (tmp_path / "auth").read_text() == _SECRET
 
 
 def test_redis_cli_absent_is_soft(tmp_path: Path) -> None:

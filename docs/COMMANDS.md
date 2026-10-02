@@ -112,11 +112,18 @@ blob_available` is one of Watcher's commands closing.
 
 **Every `redis-cli` in this file needs the credential** since broker#2's ACL cutover — a bare
 `redis-cli` answers `NOAUTH Authentication required`. Load the env first (Common Commands in
-AGENTS.md), then set this once per shell; the examples below assume it:
+AGENTS.md), then source this once per shell from the repo root; the examples below assume it:
 
 ```bash
-alias rcli='redis-cli --no-auth-warning -u "$REPLICATOR_REDIS_URL"'
+. scripts/rcli.sh   # defines rcli: redis-cli against $REPLICATOR_REDIS_URL
 ```
+
+**Never hand `$REPLICATOR_REDIS_URL` to `redis-cli -u` (#127).** That puts the password in argv, which
+every local user can read from `/proc` while the call runs; this file's old `rcli` alias did
+exactly that. `rcli` strips the URL's userinfo, passes `--user`, and hands the password over in
+`REDISCLI_AUTH` (broker#47's rule) — the floor check uses the same helper.
+`tests/test_rcli.py` fails on any `redis-cli` given `-u`, `-a` or `--pass` in a script or
+runbook here.
 
 **And the credential cannot run everything `redis-cli` can (#85).** The `replicator` user is
 scoped to its own topics, permanently and by design, so the operator surface splits in two:
@@ -257,7 +264,7 @@ uv run ty check          # non-gating, advisory only
 
 The broker is `co-broker`, operated from CannObserv/broker — inspect, don't administer.
 
-`rcli` is the alias defined under [Inspecting the consume path](#inspecting-the-consume-path).
+`rcli` is the function sourced under [Inspecting the consume path](#inspecting-the-consume-path).
 
 ```bash
 bash scripts/check_redis_floor.sh                       # assert the >=7.0 server floor

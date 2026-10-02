@@ -29,6 +29,15 @@ set -uo pipefail
 
 URL="${REPLICATOR_REDIS_URL:-redis://localhost:6379/0}"
 
+# The credential goes to redis-cli through REDISCLI_AUTH, never argv (#127):
+# this runs on every service start, and /proc/<pid>/cmdline is world-readable.
+# Located by expansion, not `dirname`: this runs with whatever PATH the unit has.
+HERE="${BASH_SOURCE[0]%/*}"
+[ "${HERE}" = "${BASH_SOURCE[0]}" ] && HERE=.
+# shellcheck source=scripts/rcli.sh
+. "${HERE}/rcli.sh"
+rcli_command "${URL}"
+
 if ! command -v redis-cli >/dev/null 2>&1; then
   echo "check_redis_floor: redis-cli not found — cannot verify floor, not blocking start" >&2
   exit 0
@@ -47,7 +56,8 @@ case "${URL}" in
     ;;
 esac
 
-# `-u` accepts redis:// and rediss:// URLs (TLS + auth). INFO server carries the
+# RCLI_CMD is `redis-cli [--user U] -u <URL without userinfo>`; `-u` still
+# carries the scheme, so rediss:// keeps TLS. INFO server carries the
 # `redis_version:MAJOR.MINOR.PATCH` line. Wrap in `timeout` so this ExecStartPre
 # can never hang worker startup: redis-cli has no connect-timeout flag, and a
 # rediss:// URL against a plaintext/unreachable endpoint blocks on the TLS
@@ -86,15 +96,11 @@ PROBE_OUT=""
 PROBE_ERR=""
 redis_probe() {
   if [ -n "${TIMEOUT_BIN}" ]; then
-    PROBE_OUT="$("${TIMEOUT_BIN}" "${TIMEOUT_SECS}" redis-cli -u "${URL}" "$@" 2>"${ERR_FILE}" | tr -d '\r')"
+    PROBE_OUT="$(rcli_exec "${TIMEOUT_BIN}" "${TIMEOUT_SECS}" "${RCLI_CMD[@]}" "$@" 2>"${ERR_FILE}" | tr -d '\r')"
   else
-    PROBE_OUT="$(redis-cli -u "${URL}" "$@" 2>"${ERR_FILE}" | tr -d '\r')"
+    PROBE_OUT="$(rcli_exec "${RCLI_CMD[@]}" "$@" 2>"${ERR_FILE}" | tr -d '\r')"
   fi
-  # Drop redis-cli's own advisory about passwords on the command line. It is
-  # printed on EVERY -u invocation, so quoting it back as "broker said:" both
-  # buries the actual error and misattributes the client's warning to the
-  # server.
-  PROBE_ERR="$(tr -d '\r' < "${ERR_FILE}" | grep -v "option on the command line interface may not be safe" || true)"
+  PROBE_ERR="$(tr -d '\r' < "${ERR_FILE}")"
 }
 
 # Three answers, because they want three different operator responses - and
@@ -140,12 +146,10 @@ if [ -z "${version}" ]; then
     auth)
       echo "check_redis_floor: reached the broker but could not authenticate — >=7.0 floor UNVERIFIED" >&2
       echo "check_redis_floor: broker said: ${PROBE_ERR}" >&2
-      echo "check_redis_floor: FIRST thing to check is the URL's username, not the password." >&2
-      echo "check_redis_floor: 'redis://:PASSWORD@host' authenticates for redis-py and FAILS here —" >&2
-      echo "check_redis_floor: redis-cli sends a two-argument AUTH \"\" PASSWORD against a user that" >&2
-      echo "check_redis_floor: does not exist. Write 'redis://default:PASSWORD@host'." >&2
-      echo "check_redis_floor: not blocking start — this client and the worker's disagree about" >&2
-      echo "check_redis_floor: exactly this URL form, so a refusal here is not evidence about it" >&2
+      echo "check_redis_floor: this probe authenticates as the worker does (#127), so expect the" >&2
+      echo "check_redis_floor: worker to be refused too — check REPLICATOR_REDIS_URL's user and" >&2
+      echo "check_redis_floor: password against broker's ACL. Not blocking start: the worker" >&2
+      echo "check_redis_floor: reports its own refusal, and this guard asserts the version only" >&2
       ;;
     unreachable)
       echo "check_redis_floor: broker unreachable after ${waited}s of retrying — >=7.0 floor UNVERIFIED, not blocking start" >&2
