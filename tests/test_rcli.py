@@ -90,6 +90,14 @@ def _auth(tmp_path: Path) -> str:
             id="percent-encoded",
         ),
         pytest.param(
+            # A `%` that starts no escape is kept, as urllib's unquote keeps it;
+            # so is a backslash, which must not become an escape of its own.
+            "redis://replicator:a%ZZb%4%41\\n@broker:6379/0",
+            ["--user", "replicator", "-u", "redis://broker:6379/0"],
+            "a%ZZb%4A\\n",
+            id="stray-percent-and-backslash",
+        ),
+        pytest.param(
             f"rediss://replicator:{_SECRET}@broker:6380/2",
             ["--user", "replicator", "-u", "rediss://broker:6380/2"],
             _SECRET,
@@ -143,6 +151,7 @@ def test_the_credential_reaches_redis_cli_through_the_environment(
     result = _rcli(tmp_path, {"REPLICATOR_REDIS_URL": url}, "PING")
 
     assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
     assert _argv(tmp_path) == [*argv, "PING"]
     assert _auth(tmp_path) == auth
 
