@@ -120,8 +120,9 @@ AGENTS.md), then source this once per shell from the repo root; the examples bel
 
 **Never hand `$REPLICATOR_REDIS_URL` to `redis-cli -u` (#127).** That puts the password in argv, which
 every local user can read from `/proc` while the call runs; this file's old `rcli` alias did
-exactly that. `rcli` strips the URL's userinfo, passes `--user`, and hands the password over in
-`REDISCLI_AUTH` (broker#47's rule) — the floor check uses the same helper.
+exactly that. `rcli` strips the URL's userinfo and query, passes `--user`, and hands the
+password over in `REDISCLI_AUTH` (broker#47's rule), wherever in the URL redis-py would have
+found it — the floor check uses the same helper.
 `tests/test_rcli.py` fails on any `redis-cli` in a script or runbook here that is given `-a`
 or `--pass`, or a `-u` whose argument is quoted, a variable, or a URL — prose naming the flag
 is fine.

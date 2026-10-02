@@ -6,8 +6,9 @@
 # `redis-cli -u redis://user:pw@host` puts the password in argv, and
 # /proc/<pid>/cmdline is readable by every local user while the call runs.
 # broker#47 set the rule: REDISCLI_AUTH plus --user, never the password on a
-# command line. So the URL's userinfo is stripped and the rest still goes to
-# `-u` - rediss:// (TLS), host, port and db stay redis-cli's own parsing.
+# command line. So the URL's userinfo and query are stripped - a credential in
+# either goes to REDISCLI_AUTH and --user - and the rest still goes to `-u`:
+# rediss:// (TLS), host, port and db stay redis-cli's own parsing.
 #
 # Verified against redis-cli 7.0.15 (#127), which is why only the userinfo, and
 # all of it, is removed: `-u redis://svc@host` sends `svc` as the *password*,
