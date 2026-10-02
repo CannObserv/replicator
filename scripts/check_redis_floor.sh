@@ -36,9 +36,10 @@ HERE="${BASH_SOURCE[0]%/*}"
 [ "${HERE}" = "${BASH_SOURCE[0]}" ] && HERE=.
 # Soft like every other cause of an unread version, but named: without it the
 # probe cannot run, and the fall-through would guess "timed out?" instead.
+# Bash's own message, kept on stderr, says whether it was absent or broken.
 # shellcheck source=scripts/rcli.sh
-if ! . "${HERE}/rcli.sh" 2>/dev/null; then
-  echo "check_redis_floor: ${HERE}/rcli.sh is missing — cannot probe the broker" >&2
+if ! . "${HERE}/rcli.sh"; then
+  echo "check_redis_floor: ${HERE}/rcli.sh could not be loaded — cannot probe the broker" >&2
   echo "check_redis_floor: — >=7.0 floor UNVERIFIED, not blocking start" >&2
   exit 0
 fi
