@@ -132,6 +132,13 @@ def _auth(tmp_path: Path) -> str:
             id="userinfo-password-over-query",
         ),
         pytest.param(
+            # redis-py lets a query `db` override the path's; -n after -u does too.
+            "redis://broker:6379/1?db=3",
+            ["-u", "redis://broker:6379/1", "-n", "3"],
+            "unset",
+            id="query-db-overrides-path",
+        ),
+        pytest.param(
             "redis://broker:6379/0?password=a+b%2Bc",
             ["-u", "redis://broker:6379/0"],
             "a b+c",
