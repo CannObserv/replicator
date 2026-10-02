@@ -52,9 +52,9 @@ _rcli_unquote() {
 # #127 CR 1), but redis-py reads any query argument as a connection kwarg, so
 # `?password=` authenticates the worker and would otherwise sit in argv here.
 # A `username` or `password` there fills only what the userinfo left empty,
-# which is redis-py's precedence too.
+# which is redis-py's precedence too; a `db` there overrides the path's.
 rcli_command() {
-  local url="$1" scheme rest query="" authority tail userinfo user="" pass="" pair key
+  local url="$1" scheme rest query="" authority tail userinfo user="" pass="" db="" pair key
   RCLI_CMD=(redis-cli)
   RCLI_AUTH=""
   RCLI_HAS_AUTH=0
@@ -88,12 +88,17 @@ rcli_command() {
     case "${key}" in
       username) [ -n "${user}" ] || _rcli_unquote user "${pair#*=}" "+" ;;
       password) [ -n "${pass}" ] || _rcli_unquote pass "${pair#*=}" "+" ;;
+      db) [ -n "${db}" ] || _rcli_unquote db "${pair#*=}" "+" ;;
     esac
   done
   if [ -n "${user}" ]; then
     RCLI_CMD+=(--user "${user}")
   fi
   RCLI_CMD+=(-u "${scheme}://${authority}${tail}")
+  # After -u, so it wins over the path's db - redis-py's precedence (CR 8).
+  if [ -n "${db}" ]; then
+    RCLI_CMD+=(-n "${db}")
+  fi
   if [ -n "${pass}" ]; then
     RCLI_AUTH="${pass}"
     RCLI_HAS_AUTH=1
