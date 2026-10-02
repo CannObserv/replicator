@@ -101,6 +101,34 @@ def _auth(tmp_path: Path) -> str:
             "unset",
             id="no-credential",
         ),
+        pytest.param(
+            # redis-py reads any query argument as a connection kwarg, password
+            # included; redis-cli ignores the query, so it is never passed on.
+            f"redis://broker:6379/0?password={_SECRET}",
+            ["-u", "redis://broker:6379/0"],
+            _SECRET,
+            id="query-password",
+        ),
+        pytest.param(
+            # The userinfo wins where it says something, as in redis-py's
+            # parse_url; the query fills only what it left out.
+            f"redis://replicator@broker:6379/0?username=other&password={_SECRET}",
+            ["--user", "replicator", "-u", "redis://broker:6379/0"],
+            _SECRET,
+            id="userinfo-over-query",
+        ),
+        pytest.param(
+            f"redis://:{_SECRET}@broker:6379/0?password=other",
+            ["-u", "redis://broker:6379/0"],
+            _SECRET,
+            id="userinfo-password-over-query",
+        ),
+        pytest.param(
+            "rediss://broker:6380/0?ssl_cert_reqs=none#frag",
+            ["-u", "rediss://broker:6380/0"],
+            "unset",
+            id="other-query-dropped",
+        ),
     ],
 )
 def test_the_credential_reaches_redis_cli_through_the_environment(
@@ -113,8 +141,13 @@ def test_the_credential_reaches_redis_cli_through_the_environment(
     assert _auth(tmp_path) == auth
 
 
-def test_the_password_is_never_on_the_command_line(tmp_path: Path) -> None:
-    _rcli(tmp_path, {"REPLICATOR_REDIS_URL": f"redis://replicator:{_SECRET}@broker/0"}, "PING")
+@pytest.mark.parametrize(
+    "url",
+    [f"redis://replicator:{_SECRET}@broker/0", f"redis://broker/0?password={_SECRET}"],
+    ids=["userinfo", "query"],
+)
+def test_the_password_is_never_on_the_command_line(tmp_path: Path, url: str) -> None:
+    _rcli(tmp_path, {"REPLICATOR_REDIS_URL": url}, "PING")
 
     assert not any(_SECRET in arg for arg in _argv(tmp_path))
 
