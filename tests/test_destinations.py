@@ -76,7 +76,8 @@ SCANNED = (REPO / "src", REPO / "tests")
 # identity is the one that matters, because a test pointed at the right bucket
 # with the wrong ADC is a state reachable today
 # — `AGENTS.md` tells us to `set -a; . /etc/replicator/.env` before shell work,
-# which puts that key into the environment `uv run pytest` inherits.
+# which puts the writer's key (`co-gcs-replicator-writer.json`) into the
+# environment `uv run pytest` inherits.
 #
 # Deliberately *not* forbidden: `co-pypi-reader.json`, the wheelhouse reader,
 # which `tests/worker/test_replicate_guards.py` names on purpose to prove the
