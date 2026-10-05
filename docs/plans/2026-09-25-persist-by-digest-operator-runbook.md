@@ -1,7 +1,7 @@
 ---
 title: Operator runbook for Persist by digest, steps 2 and 3 — identities and buckets
 date: 2026-09-25
-status: phases A–D done 2026-09-25; E (disable) done 2026-09-28; deleting the accounts and key files is due on or after 2026-10-05
+status: phases A–D done 2026-09-25; E done — disabled 2026-09-28, deleted 2026-10-05 (#123)
 plan: 2026-09-25-content-addressed-persist-and-storage-naming.md
 ---
 
@@ -199,5 +199,14 @@ Afterwards:
 - **The new identities are unaffected:** the worker's `test_iam_permissions` is unchanged, the service
   logged no warnings, and the real-bucket suite passed 16 of 16 as `co-gcs-test-replicator-writer`.
 
-**Still to do, on or after 2026-10-05, tracked as #123:** delete both accounts, remove their leftover
-`deleted:` bucket bindings, then remove the two key files from `/etc/replicator/`.
+**Deleted 2026-10-05 (#123).** Both were still disabled. Their unique IDs, the undelete handle until
+2026-11-04 (`gcloud iam service-accounts undelete <id> --project=co-gcs`): `co-gcs-replicator`
+`102618671453819352016`, `co-gcs-test-replicator` `116910321222821621682`.
+- **Bindings removed first,** as `serviceAccount:` members, so no `deleted:` member was left behind. A
+  listing over every bucket and the project policy found exactly four: `co-gcs-replicator` with
+  `replicatorTempBlobWriter` on `co-gcs-blobs` and `objectViewer` on `co-gcs-replication`;
+  `co-gcs-test-replicator` with `objectAdmin` on `co-gcs-test-blobs` and `co-gcs-test-replication`.
+- **The VM:** nothing named either key file except `/etc/replicator/.env.bak-pre-writer`, the pre-#114
+  rollback copy. It and both key files were shredded.
+- **Afterwards:** the worker restarted to `worker ready` with no warnings, and the real-bucket suite
+  passed 16 of 16.

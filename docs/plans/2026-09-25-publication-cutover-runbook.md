@@ -164,7 +164,8 @@ gcloud storage buckets get-iam-policy gs://co-gcs-replication --format="yaml(bin
 
 **Done 2026-09-26.** Both Replicator accounts lost `objectCreator`. `co-gcs-cli-writer` keeps
 `objectCreator` and `objectViewer`, and the retired `co-gcs-replicator` keeps `objectViewer` until
-the first runbook's phase E disables it. The probe object was deleted.
+the first runbook's phase E disables it (removed with the account on 2026-10-05, #123). The probe
+object was deleted.
 
 ## Phase D — verify (on `co-replicator`)
 

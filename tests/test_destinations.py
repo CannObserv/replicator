@@ -67,9 +67,9 @@ SCANNED = (REPO / "src", REPO / "tests")
 # `scripts/sync_wheelhouse.py`'s docstring, neither of which is scanned; nowhere
 # a runtime value can come from.
 #
-# `co-gcs-replicator` — the writer SA, which is also its key file's basename
-# (`/etc/replicator/co-gcs-replicator.json`) and the local part of its email. One
-# substring covers the names #114 adds too: the split writer
+# `co-gcs-replicator` — the old writer SA (deleted 2026-10-05, #123), which was
+# also its key file's basename and the local part of its email. The substring
+# stays because it covers the names #114 added: the split writer
 # `co-gcs-replicator-writer` and the permanent store `gs://co-gcs-replicator`,
 # while their test twins (`co-gcs-test-replicator-writer`, `co-gcs-test-replicator`)
 # stay legal because `test` is infixed. The bucket name is the fast check; the
