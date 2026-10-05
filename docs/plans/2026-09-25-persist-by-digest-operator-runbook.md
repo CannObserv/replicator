@@ -184,10 +184,11 @@ gcloud iam service-accounts disable co-gcs-test-replicator@co-gcs.iam.gserviceac
 ```
 
 Disabling is reversible; deleting is reversible for 30 days, by unique ID, and restores no binding.
-Delete a week later: record each account's unique ID and remove every
-binding it holds **first**, because a deletion leaves its bindings behind as `deleted:` members (the
-record below has the listing). Then remove `/etc/replicator/co-gcs-replicator.json` and
-`/etc/replicator/co-gcs-test-replicator.json` from the VM. The interim `objectCreator` on `co-gcs-replication` is removed in the step 4 cutover, not here.
+Delete a week later: record each account's unique ID and remove every binding it holds **first**,
+because a deletion leaves its bindings behind as `deleted:` members (the record below has the
+listing). Then remove `/etc/replicator/co-gcs-replicator.json` and
+`/etc/replicator/co-gcs-test-replicator.json` from the VM. The interim `objectCreator` on
+`co-gcs-replication` is removed in the step 4 cutover, not here.
 
 **Disabled 2026-09-28.** The conditions, as checked that day:
 - **A new object under the new identity:** the first temp blob created since the 15:50 UTC switch landed in
