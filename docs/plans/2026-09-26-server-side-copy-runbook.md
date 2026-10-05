@@ -47,7 +47,7 @@ buckets. On `co-gcs-blobs` it sits beside `co-gcs-blob-reader`, an existing read
 `co-gcs-replicator` beside `co-gcs-replicator-writer`. The policies also show the retired
 `co-gcs-replicator` account still holding the temp role on `co-gcs-blobs`. That is expected: it is
 disabled in phase E of the [persist-by-digest runbook](2026-09-25-persist-by-digest-operator-runbook.md),
-not here. (Removed with the account on 2026-10-05, #123.)
+not here. (Removed 2026-10-05, before the account was deleted, #123.)
 
 ## Phase B — check the grant with the writer's key (on `co-replicator`)
 
