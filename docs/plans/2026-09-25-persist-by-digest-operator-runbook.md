@@ -207,6 +207,10 @@ Afterwards:
   listing over every bucket and the project policy found exactly four: `co-gcs-replicator` with
   `replicatorTempBlobWriter` on `co-gcs-blobs` and `objectViewer` on `co-gcs-replication`;
   `co-gcs-test-replicator` with `objectAdmin` on `co-gcs-test-blobs` and `co-gcs-test-replication`.
+- **Checked after the deletion:** the same listing printed 0 rows. Its pattern is unanchored, so it
+  also matches `deleted:serviceAccount:…`, and a binding left behind would have shown. `gcloud iam
+  service-accounts list` names neither account, though it lists disabled ones too. A `describe` is no
+  check here: for an absent account IAM answers `IAM_PERMISSION_DENIED`, not `NOT_FOUND`.
 - **The VM:** nothing named either key file except `/etc/replicator/.env.bak-pre-writer`, the pre-#114
   rollback copy. It and both key files were shredded.
 - **Afterwards:** the worker restarted to `worker ready` with no warnings, and the real-bucket suite
