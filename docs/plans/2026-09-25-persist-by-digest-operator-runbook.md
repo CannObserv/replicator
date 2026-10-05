@@ -183,7 +183,8 @@ gcloud iam service-accounts disable co-gcs-replicator@co-gcs.iam.gserviceaccount
 gcloud iam service-accounts disable co-gcs-test-replicator@co-gcs.iam.gserviceaccount.com --project=$PROJECT
 ```
 
-Disabling is reversible, and deleting is not. Delete a week later, then remove
+Disabling is reversible; deleting is reversible for 30 days, by unique ID, and restores no binding.
+Delete a week later, then remove
 `/etc/replicator/co-gcs-replicator.json` and `/etc/replicator/co-gcs-test-replicator.json` from the
 VM. The interim `objectCreator` on `co-gcs-replication` is removed in the step 4 cutover, not here.
 
