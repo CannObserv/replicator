@@ -146,8 +146,12 @@ def test_no_module_names_a_production_destination():
         pytest.param('AliasBinding(bucket="co-gcs-replication")', id="a-keyword-argument"),
         pytest.param('{"public": {"bucket": "co-gcs-replication"}}', id="a-dict-value"),
         pytest.param('URL = "https://storage.googleapis.com/co-gcs-replication/x"', id="a-url"),
-        pytest.param('KEY = "/etc/replicator/co-gcs-replicator.json"', id="the-writer-key-path"),
-        pytest.param('SA = "co-gcs-replicator@co-gcs.iam.gserviceaccount.com"', id="the-sa-email"),
+        pytest.param(
+            'KEY = "/etc/replicator/co-gcs-replicator.json"', id="the-old-writer-key-path"
+        ),
+        pytest.param(
+            'SA = "co-gcs-replicator@co-gcs.iam.gserviceaccount.com"', id="the-old-sa-email"
+        ),
         pytest.param(
             'KEY = "/etc/replicator/co-gcs-replicator-writer.json"', id="the-split-writer-key-path"
         ),
