@@ -89,8 +89,8 @@ the worker identity had `create, get, list, update` on `co-gcs-blobs` and `creat
 on both test buckets and no write on production. The worker restarted at 15:50 UTC as
 `co-gcs-replicator-writer` (checked in `/proc/<pid>/environ`), and its boot preflight listed
 `co-gcs-blobs`. The prior `.env` was at `/etc/replicator/.env.bak-pre-writer` (shredded 2026-10-05 in
-phase E, #123). CI's `gcs` job passed on
-the new identity (run 36157674876). It now also runs the 7 temp-store rows that had skipped since #7.
+phase E, #123). CI's `gcs` job passed on the new identity (run 36157674876). It now also runs the 7
+temp-store rows that had skipped since #7.
 
 ## Phase C — buckets (workstation)
 
