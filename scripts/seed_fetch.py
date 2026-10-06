@@ -239,9 +239,10 @@ def guard_production_target(
         )
     if watch:
         raise ProductionTargetError(
-            f"--watch on {topic} on db {db} reads {streams.CONTENT_BLOBS}, which Watcher's "
-            f"identity cannot read (broker#43). Publish without --watch, then read the "
-            f"outcome as replicator: rcli XRANGE {streams.CONTENT_BLOBS} <entry_id> +, "
+            f"--watch is refused alongside {topic} on db {db}: its first read is XREVRANGE, "
+            f"which no identity on the broker holds, and Watcher's identity cannot read "
+            f"{streams.CONTENT_BLOBS} at all (broker#43). Publish without --watch, then read "
+            f"the outcome as replicator: rcli XRANGE {streams.CONTENT_BLOBS} <entry_id> +, "
             f"where <entry_id> is the published command's (a server-clock time, so its "
             f"fact sorts after it)"
         )

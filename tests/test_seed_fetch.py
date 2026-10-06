@@ -299,8 +299,11 @@ def test_a_refused_watch_names_the_read_that_still_works(capsys):
         ]
     )
 
+    err = capsys.readouterr().err
     assert code == 2
-    assert f"XRANGE {streams.CONTENT_BLOBS}" in capsys.readouterr().err
+    # The reason that holds whatever --blobs-topic names (CR 2), then the way round it.
+    assert "XREVRANGE" in err
+    assert f"rcli XRANGE {streams.CONTENT_BLOBS}" in err
 
 
 def test_the_production_flag_says_whose_identity_it_takes():
