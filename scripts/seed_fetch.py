@@ -25,8 +25,9 @@ The flag is a guard, not a grant (#90). A frame there is a command Watcher never
 issued — an operator act under Watcher's identity, never this host's
 ``replicator`` credential, whose ``XADD`` there the broker refuses
 (CannObserv/broker#14). Nothing in this repo documents that target as an
-example. ``--watch`` is refused on it (replicator#129): Watcher's identity
-cannot read ``content.blobs`` (CannObserv/broker#43).
+example. ``--watch`` is refused on it (replicator#129): its first read,
+``XREVRANGE``, is held by no identity, and Watcher's cannot read
+``content.blobs`` at all (CannObserv/broker#43).
 
 Every command carries an ``info_source_id``, required on the wire since co-core
 0.8.0 and echoed onto both facts (#28). It defaults to a placeholder no issuer's
