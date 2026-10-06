@@ -105,7 +105,8 @@ commands and key patterns separately: `+set` and `+exists` among the commands,
 `~replicator:cmd:*` among the key patterns. Neither is scoped by the other —
 `+set` is a grant to run `SET` on *any* key the user's patterns already reach —
 so a pattern list written to this service's real footprint is what keeps the
-command grants narrow in effect.
+command grants narrow in effect. Since broker#43 (#129) the two share one
+selector, `(+exists +set ~replicator:cmd:*)`, so each is scoped by the other.
 
 **What a cold start does without them: re-work, never loss.** The
 set-after-success ordering is what makes that true — the key can only ever
