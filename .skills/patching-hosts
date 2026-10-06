@@ -1,0 +1,39 @@
+# patching-hosts knob (#131): what only this repo's owner knows about patching
+# co-replicator. Grammar: skills/patching-hosts/references/knob.md. Times UTC.
+
+class production
+posture scheduled
+
+# Largely pre-production (owner, 2026-10-06): any day, all day. Narrow these
+# once a consumer depends on fetch latency. No quiet range: no timer on the
+# host does work a step could overlap, and the bus queues across a restart.
+window Mon 00:00-23:59
+window Tue 00:00-23:59
+window Wed 00:00-23:59
+window Thu 00:00-23:59
+window Fri 00:00-23:59
+window Sat 00:00-23:59
+window Sun 00:00-23:59
+
+# This worker's own unacked commands across the groups it consumes; fails
+# closed. scripts/inflight.py says why it reads this consumer, not the group.
+inflight cd /home/exedev/replicator && .venv/bin/python -m scripts.inflight
+
+service replicator.service
+health systemctl is-active --quiet replicator.service
+# The broker round-trip: the same read exits non-zero when co-broker is unreachable.
+health cd /home/exedev/replicator && .venv/bin/python -m scripts.inflight >/dev/null
+
+# No restarter: Restart=on-failure is the unit's own, and OnFailure= only
+# notifies (FAILURE-NOTIFICATION.md). No caller: producers reach this host
+# through the bus, which holds their commands while the worker is down.
+# No datastore and no backup: the state is on the broker and in object storage.
+
+# Tailscale, followed and scoped by deploy/apt/preferences.d/tailscale.pref.
+# Its postinst restarts tailscaled, so it is its own approved step. The worker
+# orders After=tailscaled.service only, so that restart costs a tailnet blip,
+# not a worker restart.
+origin pkgs.tailscale.com follow
+hold tailscale tailscale
+
+records CannObserv/replicator

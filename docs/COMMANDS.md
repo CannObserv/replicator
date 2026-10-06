@@ -108,6 +108,17 @@ worth knowing before seeding a local test server. The full list is in
 Watch the live side with `sudo journalctl -u replicator -f`: each `stored a blob and published
 blob_available` is one of Watcher's commands closing.
 
+### The patching gate's in-flight count (#131)
+
+```bash
+.venv/bin/python -m scripts.inflight     # from the repo root; prints this worker's unacked commands
+```
+
+The `patching-hosts` knob (`.skills/patching-hosts`) runs it as `inflight` before each apply step
+and inside the reboot chain, and as a `health` line for the broker round-trip. It reads
+`/etc/replicator/.env` itself (`--env-file` to override), counts only this host's consumer names,
+and on any failure prints nothing and exits 1 — the gate never reads a failed read as `0`.
+
 ### Inspecting the consume path
 
 **Every `redis-cli` in this file needs the credential** since broker#2's ACL cutover — a bare
@@ -458,6 +469,7 @@ diff '/etc/systemd/system/replicator-failure-notify@.service' 'deploy/replicator
 diff /etc/systemd/system/tailscaled.service.d/memory.conf deploy/tailscaled.service.d/memory.conf
 diff /etc/systemd/system/system.slice.d/replicator-memory.conf deploy/system.slice.d/replicator-memory.conf
 diff /etc/needrestart/conf.d/replicator.conf deploy/needrestart.conf.d/replicator.conf
+diff /etc/apt/preferences.d/tailscale.pref deploy/apt/preferences.d/tailscale.pref
 
 sudo journalctl -u replicator -f
 journalctl -t replicator-failure                        # what the OnFailure= handler reported
