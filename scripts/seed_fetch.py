@@ -49,10 +49,10 @@ Exit codes: ``0`` published (and, under ``--watch``, every command produced a
 blob) · ``1`` the run did not complete — publishing failed, watching failed, a
 command was closed by a ``fetch_failed``, or no fact ever arrived · ``2`` the
 target was refused — a missing ``--production`` opt-in, or a placeholder or blank
-``info_source_id`` alongside one. Commands are reported on stdout as they land,
-so a non-zero exit never hides a command it saw land; a connection lost between
-the ``XADD`` and its reply is the one gap, and the "N of M" count on stderr is
-what marks that boundary as fuzzy.
+``info_source_id`` or ``--watch`` alongside one. Commands are reported on stdout
+as they land, so a non-zero exit never hides a command it saw land; a connection
+lost between the ``XADD`` and its reply is the one gap, and the "N of M" count on
+stderr is what marks that boundary as fuzzy.
 """
 
 import argparse
