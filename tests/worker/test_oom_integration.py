@@ -1220,8 +1220,9 @@ async def test_a_frame_that_will_not_decode_is_dead_lettered_under_the_productio
     broker#43 kept ``+xrange`` in the consume selector on this repo's answer that
     the re-read issues it there. Like the ceiling's ``XPENDING``, it runs only on
     a rare path, so no ``MONITOR`` capture of ordinary traffic would show it — the
-    way #103 went unseen. The frame's fields reaching the queue is the proof the
-    re-read was admitted: refused, the entry would be dead-lettered empty.
+    way #103 went unseen. Refused, the re-read raises ``NOPERM`` out of the poll
+    and the frame stays pending (seen with ``+xrange`` dropped from the copy); the
+    frame's fields reaching the queue is the proof it was admitted.
     """
     await broker.client.xadd(topic, {"event_type": "content_fetch", "payload": "not json"})
 
