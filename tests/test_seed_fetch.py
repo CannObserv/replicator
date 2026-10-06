@@ -542,9 +542,10 @@ async def test_a_run_publishes_and_closes_the_client_it_opened(fake_redis, owned
 async def test_a_refused_target_publishes_nothing_and_still_closes(fake_redis, owned_client, argv):
     """The guard fires before the first XADD, not after a partial run.
 
-    Parametrized over all three refusal causes (CR #18) because the guard grew a
-    fourth argument, and the wiring from ``args.info_source_id`` into the call is
-    exactly the plumbing a unit test of the guard alone cannot see.
+    Parametrized over all four refusal causes (CR #18, #129) because the guard
+    grew a fourth argument and then a fifth, and the wiring from
+    ``args.info_source_id`` and ``args.watch`` into the call is exactly the
+    plumbing a unit test of the guard alone cannot see.
     """
     code = await run(seed_args(*argv, URL))
 
