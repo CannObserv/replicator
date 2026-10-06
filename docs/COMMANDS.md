@@ -143,7 +143,7 @@ scoped to its own topics, permanently and by design, so the operator surface spl
 
 | Runnable here | Denied — ask the broker operator |
 |---|---|
-| `XPENDING`, `XRANGE`, `XINFO STREAM` on the three command streams; `XLEN`, `XRANGE` on both fact streams, the three `.dlq` streams and `content.fetch-policy`; `XDEL` on the three `.dlq` streams; `INFO` | `SCAN`, `XINFO GROUPS`, `XINFO CONSUMERS`, `CLIENT LIST`, `ACL LOG`, `SELECT`, `XREVRANGE`, `MEMORY USAGE`; any read not on its row's keys, e.g. `XLEN content.fetch` |
+| `XPENDING`, `XRANGE`, `XINFO STREAM` on the three command streams; `XLEN`, `XRANGE` on both fact streams, the three `.dlq` streams and `content.fetch-policy`; `XDEL` on the three `.dlq` streams; `INFO` | `SCAN`, `XINFO GROUPS`, `XINFO CONSUMERS`, `CLIENT LIST`, `ACL LOG`, `SELECT`, `XREVRANGE`, `MEMORY USAGE`; any command on a key its row doesn't name, e.g. `XLEN content.fetch` |
 
 **Every read is per key since broker#43 (2026-10-06, #129)**: command and key must both match.
 Anything not shown in this file, check against broker's `deploy/redis-acl.conf` first.
