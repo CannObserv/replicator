@@ -239,9 +239,9 @@ def test_the_handle_scan_sees_a_redis_parameter_under_another_name(tmp_path: Pat
 
 # --- Nothing here trims a stream (#106) -------------------------------------
 #
-# The broker grants `+xtrim` on content.blobs, content.artifacts and both
-# dead-letter queues, and narrows that grant on the strength of #106's answer:
-# nothing in this repo issues XTRIM, and nothing trims through XADD either.
+# The broker withdrew `+xtrim` on 2026-10-06 (CannObserv/broker#41) on the
+# strength of #106's answer: nothing in this repo issues XTRIM, and nothing
+# trims through XADD either.
 # Trimming a fact stream past a group's position deletes facts that group has
 # not been delivered, and the broker's probe can only report that afterwards.
 # So the answer is held here, as the keyspace claims above are.

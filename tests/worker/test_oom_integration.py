@@ -605,17 +605,20 @@ async def test_an_acl_denial_is_retried_like_a_cap(
 def production_grant(topic: str, blobs_topic: str, *, xpending: bool = True) -> list[str]:
     """The ``replicator`` user's production ACL, moved onto this test's keys (#103).
 
-    Copied from CannObserv/broker ``deploy/redis-acl.conf`` at 7203b7a — the root
-    command list and the three selectors, in its order — with each production key
-    swapped for the scratch one playing its part: ``topic`` for the command stream,
+    Copied from CannObserv/broker ``deploy/redis-acl.conf`` at 5068909 — the root
+    and the selectors, in its order — with each production key swapped for the
+    scratch one playing its part: ``topic`` for the command stream,
     ``blobs_topic`` for the fact stream, and the dedupe namespace unchanged, since
     ``DEDUPE_KEY_PREFIX`` is a constant. The streams this loop never touches drop
-    out, because a pattern naming nothing grants nothing.
+    out, because a pattern naming nothing grants nothing — ``content.fetch-policy``'s
+    selector among them.
 
-    **Less one command: ``+xtrim``.** The production selector is ``(+xadd +xtrim
-    …)``, and #106 answered that nothing here trims — so what runs below is the
-    grant CannObserv/broker#41 narrows it to, and passing is the evidence that
-    the narrowed grant is enough for everything this loop does.
+    **The shape since broker#43 (#129).** The root holds ``+info +ping`` and no
+    key; every read is a selector. The consume selector names only the command
+    stream and carries, beside the four group commands, the two reads the loop
+    issues there on rare paths: ``XPENDING`` for the delivery ceiling and
+    ``XRANGE`` by id for a poison frame. Passing below is the evidence that the
+    cut is enough for everything this loop does.
 
     **A copy, and what it can and cannot catch.** It fails when the loop starts
     needing a command the production grant does not hold — which is how #103
@@ -626,31 +629,25 @@ def production_grant(topic: str, blobs_topic: str, *, xpending: bool = True) -> 
 
     ``xpending=False`` is the grant as it stood before broker#39.
     """
-    commands = [
-        "+xread",
+    dlq = dlq_name(topic)
+    consume = [
         "+xreadgroup",
         "+xack",
         "+xautoclaim",
         "+xgroup|create",
-        "+xlen",
-        "+xrange",
         *(["+xpending"] if xpending else []),
+        "+xrange",
         "+xinfo|stream",
-        "+exists",
-        "+info",
-        "+ping",
-        "+config|get",
     ]
     return [
         "resetchannels",
-        f"~{topic}",
-        f"~{dlq_name(topic)}",
-        f"~{blobs_topic}",
-        f"~{DEDUPE_KEY_PREFIX}*",
-        *commands,
-        f"(+xadd ~{blobs_topic} ~{dlq_name(topic)})",
-        f"(+set ~{DEDUPE_KEY_PREFIX}*)",
-        f"(+xdel ~{dlq_name(topic)})",
+        "+info",
+        "+ping",
+        f"({' '.join(consume)} ~{topic})",
+        f"(+xlen +xrange ~{blobs_topic} ~{dlq})",
+        f"(+exists +set ~{DEDUPE_KEY_PREFIX}*)",
+        f"(+xadd ~{blobs_topic} ~{dlq})",
+        f"(+xdel ~{dlq})",
     ]
 
 
@@ -1212,6 +1209,29 @@ async def test_a_frame_that_will_not_decode_is_dead_lettered_by_the_same_two_com
     assert any(line.startswith(f"XRANGE {topic} ") for line in observed), observed
     assert any(line.startswith(f"XADD {topic}.dlq * ") for line in observed), observed
     assert any(line.startswith(f"XACK {topic} {GROUP} ") for line in observed), observed
+    assert await pending_count(broker.client, topic) == 0
+
+
+async def test_a_frame_that_will_not_decode_is_dead_lettered_under_the_production_grant(
+    broker, topic, blobs_topic, oom_settings
+):
+    """#129: the poison route's ``XRANGE`` re-read, run as the scoped user.
+
+    broker#43 kept ``+xrange`` in the consume selector on this repo's answer that
+    the re-read issues it there. Like the ceiling's ``XPENDING``, it runs only on
+    a rare path, so no ``MONITOR`` capture of ordinary traffic would show it — the
+    way #103 went unseen. The frame's fields reaching the queue is the proof the
+    re-read was admitted: refused, the entry would be dead-lettered empty.
+    """
+    await broker.client.xadd(topic, {"event_type": "content_fetch", "payload": "not json"})
+
+    async with granted_client(broker, production_grant(topic, blobs_topic)) as client:
+        consumer = AsyncBusConsumer(client, topic=topic, group=GROUP, consumer=CONSUMER)
+        await consumer.ensure_group(start_id="0")
+        assert await poll_once(client, consumer, oom_settings, group=GROUP) == []
+
+    ((_id, fields),) = await broker.client.xrange(dlq_name(topic))
+    assert fields[b"payload"] == b"not json"
     assert await pending_count(broker.client, topic) == 0
 
 

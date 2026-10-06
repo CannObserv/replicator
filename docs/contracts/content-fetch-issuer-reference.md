@@ -128,9 +128,11 @@ loopback bind.
 The broker runs on its own node (`co-broker`, CannObserv/broker#1) and Replicator on another
 (`co-replicator`, #88), so what holds the line is **per-service Redis ACL users** — who may `XADD`
 to `content.fetch` is a broker grant (CannObserv/broker#2) — and the **Tailscale ACL**, which admits
-only the bus participants to the broker at all. **That grant is wider than declared today** (#90):
-`replicator` can `XADD` the stream too — its read pattern meeting the `+xadd` its fact streams need
-— a gap CannObserv/broker#14 closes, not a second issuer. This section named "the moment the bus
+only the bus participants to the broker at all. **That grant was wider than declared until
+2026-09-18** (#90): `replicator` could `XADD` the stream too — its read pattern meeting the `+xadd`
+its fact streams need — a gap CannObserv/broker#14 closed with per-service selectors, not a second
+issuer. CannObserv/broker#43 closed the mirror image on 2026-10-06: no producer can take delivery
+in, or `XACK` out of, its consumer's group. This section named "the moment the bus
 spans hosts" as the point where message signing or a URL allowlist becomes the conversation. That
 moment passed, the conversation was #89, and it concluded in **neither of those**:
 

@@ -61,17 +61,20 @@ uv run python -m scripts.seed_fetch \
 **Never `--redis-url "$REPLICATOR_REDIS_URL"` (#90).** That is the worker's credential, and every
 key it can write is production — `replicator.itest.*` is not among its patterns — while the
 script's guard knows only `content.fetch`: `--topic content.blobs` would put a command on a fact
-stream other services consume, and nothing would refuse it. `content.fetch` itself it reaches only
-through a gap in the broker's ACL — the key pattern its inbox needs meeting the `+xadd` its fact
-streams need — which CannObserv/broker#14 closes with a selector. Until then a frame there is
-fetched for real on a command Watcher never issued; afterwards it is `NOPERM`, and the script exits
-1 on the first attempt rather than retrying. `--production` still guards db 0 +
+stream other services consume, and nothing would refuse it. `content.fetch` itself the broker
+refuses: `+xadd` is a selector naming only replicator's fact streams and queues
+(CannObserv/broker#14), so the `XADD` is `NOPERM` and the script exits 1 on the first attempt
+rather than retrying. `--production` still guards db 0 +
 `content.fetch`, but using it is an operator act under Watcher's identity, not an example. A
 scratch topic on the broker itself takes `citest`, whose only keys are `probe.*` and
 `replicator.itest.*`, so it cannot name a production topic — not provisioned on this VM.
 
 `--watch` reads `content.blobs` for `content.fetch` and `<topic>.blobs` otherwise, so a scratch
-seed never watches production's facts; `--blobs-topic` overrides that. One stream, both outcomes:
+seed never watches production's facts; `--blobs-topic` overrides that. **On the live target
+`--watch` is refused, exit 2 (#129)**: Watcher's identity cannot read `content.blobs`
+(broker#43), and the cursor read is `XREVRANGE`, which no identity holds — so the broker would
+refuse it before anything was published, as an `ACL LOG` entry. Publish without it and read the
+outcome as replicator: `rcli XRANGE content.blobs <entry_id> +`, from the command's entry id. One stream, both outcomes:
 an issuer needs a single consumer group to see whether its command produced bytes or a reason.
 **A fact arrives only from a consumer built on that topic**, though — `test_loop_integration.py`
 builds one, and a `uv run` worker never does, because its topics are defaulted arguments rather
@@ -143,7 +146,13 @@ scoped to its own topics, permanently and by design, so the operator surface spl
 
 | Runnable here | Denied — ask the broker operator |
 |---|---|
-| `XLEN`, `XRANGE`, `XINFO STREAM`, `XPENDING`, `INFO`, `XDEL` on the two `.dlq` streams | `SCAN`, `XINFO GROUPS`, `XINFO CONSUMERS`, `CLIENT LIST`, `ACL LOG`, `SELECT`, `XDEL` anywhere else |
+| `XPENDING`, `XRANGE`, `XINFO STREAM` on the three command streams; `XLEN`, `XRANGE` on both fact streams, the three `.dlq` streams and `content.fetch-policy`; `XDEL` on the three `.dlq` streams; `INFO` | `SCAN`, `XINFO GROUPS`, `XINFO CONSUMERS`, `CLIENT LIST`, `ACL LOG`, `SELECT`, `XREVRANGE`, `MEMORY USAGE`; any read not on its row's keys, e.g. `XLEN content.fetch` |
+
+**Every read is per key since broker#43 (2026-10-06T20:35:15Z, #129).** The root holds `+info
++ping` and nothing else; each read is a selector naming the streams this repo's call sites issue
+it on. So the command and the key both have to match a row — `XINFO STREAM content.fetch` works
+and `XINFO STREAM content.blobs` does not. Check `broker`'s `deploy/redis-acl.conf`, the `user
+replicator` line, before reaching for anything not shown in this file.
 
 **`XPENDING` moved columns on 2026-09-22 (broker#39, #103, #107)**, and not as a diagnostic
 courtesy: the loop's delivery ceiling reads it, so until the grant landed
@@ -172,9 +181,9 @@ selector's shape without deleting something. The grant adds `+xdel` and nothing 
 per-id deletion as the only disposal available, which is the point of a selector anyway:
 precise, never a queue wipe.
 
-**`XTRIM` is not for these queues, or anything else, from here (#106).** The broker grants it —
-one selector served both it and `+xadd` — and nothing here issues it, which is the answer
-CannObserv/broker#41 withdraws the grant on and `tests/test_broker_keyspace.py` keeps true.
+**`XTRIM` is not for these queues, or anything else, from here (#106).** The broker withdrew it
+on 2026-10-06 (CannObserv/broker#41) on the answer that nothing here issues it, which
+`tests/test_broker_keyspace.py` keeps true.
 Trimming a fact stream past a group's position deletes facts that group has not been delivered,
 so a drain wanting to go faster than one `XDEL` at a time is a broker issue, not a command to
 reach for.
