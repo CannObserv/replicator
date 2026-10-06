@@ -23,7 +23,7 @@ usable non-interactively.
 
 The flag is a guard, not a grant (#90). A frame there is a command Watcher never
 issued — an operator act under Watcher's identity, never this host's
-``replicator`` credential, which the broker refuses ``XADD`` there
+``replicator`` credential, whose ``XADD`` there the broker refuses
 (CannObserv/broker#14). Nothing in this repo documents that target as an
 example. ``--watch`` is refused on it (replicator#129): Watcher's identity
 cannot read ``content.blobs`` (CannObserv/broker#43).

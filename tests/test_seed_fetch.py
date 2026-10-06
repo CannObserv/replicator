@@ -271,7 +271,7 @@ def test_a_refused_target_names_whose_stream_it_is(capsys):
 
     Watcher issues ``content.fetch``, so a seeded frame there is a command Watcher
     never issued — an operator act under Watcher's identity, not this host's
-    ``replicator`` credential, which the broker refuses ``XADD`` there
+    ``replicator`` credential, whose ``XADD`` there the broker refuses
     (CannObserv/broker#14). The refusal is where an operator stands when
     they need to hear whose identity that takes, so the assertion pins that
     half rather than the bare name (CR 1).
