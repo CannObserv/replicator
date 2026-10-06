@@ -61,21 +61,18 @@ uv run python -m scripts.seed_fetch \
 **Never `--redis-url "$REPLICATOR_REDIS_URL"` (#90).** That is the worker's credential, and every
 key it can write is production — `replicator.itest.*` is not among its patterns — while the
 script's guard knows only `content.fetch`: `--topic content.blobs` would put a command on a fact
-stream other services consume, and nothing would refuse it. `content.fetch` itself the broker
-refuses: `+xadd` is a selector naming only replicator's fact streams and queues
-(CannObserv/broker#14), so the `XADD` is `NOPERM` and the script exits 1 on the first attempt
-rather than retrying. `--production` still guards db 0 +
-`content.fetch`, but using it is an operator act under Watcher's identity, not an example. A
-scratch topic on the broker itself takes `citest`, whose only keys are `probe.*` and
-`replicator.itest.*`, so it cannot name a production topic — not provisioned on this VM.
+stream other services consume, and nothing would refuse it. `content.fetch` itself is `NOPERM`
+since CannObserv/broker#14, and the script exits 1 on the first attempt rather than retrying.
+`--production` still guards db 0 + `content.fetch`, but using it is an operator act under
+Watcher's identity, not an example. A scratch topic on the broker itself takes `citest`, whose
+only keys are `probe.*` and `replicator.itest.*`, so it cannot name a production topic — not
+provisioned on this VM.
 
 `--watch` reads `content.blobs` for `content.fetch` and `<topic>.blobs` otherwise, so a scratch
-seed never watches production's facts; `--blobs-topic` overrides that. **On the live target
-`--watch` is refused, exit 2 (#129)**: Watcher's identity cannot read `content.blobs`
-(broker#43), and the cursor read is `XREVRANGE`, which no identity holds — so the broker would
-refuse it before anything was published, as an `ACL LOG` entry. Publish without it and read the
-outcome as replicator: `rcli XRANGE content.blobs <entry_id> +`, from the command's entry id. One stream, both outcomes:
-an issuer needs a single consumer group to see whether its command produced bytes or a reason.
+seed never watches production's facts; `--blobs-topic` overrides that. **On the live target it
+is refused, exit 2** — why is in [STREAMS.md](STREAMS.md) (#129); read the outcome as replicator
+with `rcli XRANGE content.blobs <entry_id> +`. One stream, both outcomes: an issuer needs a
+single consumer group to see whether its command produced bytes or a reason.
 **A fact arrives only from a consumer built on that topic**, though — `test_loop_integration.py`
 builds one, and a `uv run` worker never does, because its topics are defaulted arguments rather
 than settings — so from the command line a scratch `--watch` waits out `--watch-timeout` and
@@ -148,11 +145,8 @@ scoped to its own topics, permanently and by design, so the operator surface spl
 |---|---|
 | `XPENDING`, `XRANGE`, `XINFO STREAM` on the three command streams; `XLEN`, `XRANGE` on both fact streams, the three `.dlq` streams and `content.fetch-policy`; `XDEL` on the three `.dlq` streams; `INFO` | `SCAN`, `XINFO GROUPS`, `XINFO CONSUMERS`, `CLIENT LIST`, `ACL LOG`, `SELECT`, `XREVRANGE`, `MEMORY USAGE`; any read not on its row's keys, e.g. `XLEN content.fetch` |
 
-**Every read is per key since broker#43 (2026-10-06T20:35:15Z, #129).** The root holds `+info
-+ping` and nothing else; each read is a selector naming the streams this repo's call sites issue
-it on. So the command and the key both have to match a row — `XINFO STREAM content.fetch` works
-and `XINFO STREAM content.blobs` does not. Check `broker`'s `deploy/redis-acl.conf`, the `user
-replicator` line, before reaching for anything not shown in this file.
+**Every read is per key since broker#43 (2026-10-06, #129)**: command and key must both match.
+Anything not shown in this file, check against broker's `deploy/redis-acl.conf` first.
 
 **`XPENDING` moved columns on 2026-09-22 (broker#39, #103, #107)**, and not as a diagnostic
 courtesy: the loop's delivery ceiling reads it, so until the grant landed
