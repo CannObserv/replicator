@@ -627,7 +627,7 @@ def production_grant(topic: str, blobs_topic: str, *, xpending: bool = True) -> 
     and #82's test grants ``+@all``. It cannot notice the broker's file changing;
     that is the broker's own test's job, and the line to re-copy from is cited.
 
-    ``xpending=False`` is the grant as it stood before broker#39.
+    ``xpending=False`` is today's grant less ``+xpending``: the read broker#39 added.
     """
     dlq = dlq_name(topic)
     consume = [
