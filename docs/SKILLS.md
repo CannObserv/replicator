@@ -47,6 +47,7 @@ Every override's `SKILL.md` must declare `overrides:` and `override-reason:` in 
 | `init-socraticode` | Installs and indexes SocratiCode semantic code search |
 | `managing-skills` | Adds/updates/removes skill submodules and symlinks |
 | `orchestrating-issue-backlog` | Prioritizes an open issue backlog; analyzes conflicts and dependencies |
+| `patching-hosts` | Gated, owner-approved OS patch run against the `.skills/patching-hosts` knob (`patch the host`, `OS updates`) |
 | `reviewing-architecture` | High-level structural and design-principle review |
 | `reviewing-code-python-fastapi` | Structured code review for uv + ruff + pytest + Pydantic v2 projects |
 | `shipping-work-python-fastapi` | Finalizes work: gates, commits, PR |
@@ -64,6 +65,10 @@ per-skill symlinks, so linking a newly published skill stays a manual step (#13)
 
 `using-mayfly-chat` (#120) needs Node ≥ 18. **Never commit a channel URL** — no test here guards
 it; run its `references/security.md` leak check first.
+
+`patching-hosts` (#131) reads the committed knob `.skills/patching-hosts`; its `inflight` and
+`health` commands are this repo's (`scripts/inflight.sh`). Never write into the vendored copy:
+problems and the run's process-log entry go upstream as `gregoryfoster/skills` issues.
 
 **The table lists what is linked, which is a subset of what is vendored.** The `3fc7b71` → `2e1cf28`
 bump (#41) published skills this repo has not evaluated — `vendoring-openapi-client` is the one with
