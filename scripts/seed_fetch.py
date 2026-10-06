@@ -440,7 +440,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--watch",
         action="store_true",
         help="tail the fact stream until every command has an outcome "
-        "(blob_available or fetch_failed)",
+        "(blob_available or fetch_failed); refused on the live target (#129)",
     )
     parser.add_argument(
         "--blobs-topic",
