@@ -194,9 +194,9 @@ def test_a_blank_domain_key_is_refused_on_the_live_target(value):
 
 
 def test_a_watch_on_the_live_target_is_refused():
-    """replicator#129: no identity holding the ``content.fetch`` publish can read
-    ``content.blobs`` (broker#43), and the cursor read is ``XREVRANGE``, which no
-    identity holds at all. The broker would refuse the watch's first read, as an
+    """replicator#129: the cursor read is ``XREVRANGE``, which no identity holds,
+    and the one holding the ``content.fetch`` publish reads ``content.blobs`` only
+    in its own group (broker#43). The broker would refuse the watch's first read, as an
     ``ACL LOG`` entry its operator has to attribute, so it is refused here instead.
     """
     with pytest.raises(ProductionTargetError):
