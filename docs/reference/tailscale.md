@@ -15,7 +15,7 @@ on 2026-09-11; the move's design is
 | Addresses | `100.114.136.20`, `fd7a:115c:a1e0::d430:8815` |
 | Node ID | `ndzdyptvG421CNTRL` |
 | Tags | `tag:replicator` — single tag, `KeyExpiry: null` (tagged nodes do not expire) |
-| Prefs | `CorpDNS: true`, `RunSSH: true` |
+| Prefs | `CorpDNS: true`, `RunSSH: true`, `AutoUpdate.Apply: false` — off since #131, so the client updates only in a `patching-hosts` maintenance-lane step; `tailscale debug prefs` reads it |
 
 The exe.dev name has the cohort's `co-` prefix (`co-broker`, `co-registrar`); the
 tailnet name stays bare, so every broker URL and ACL rule reads naturally.

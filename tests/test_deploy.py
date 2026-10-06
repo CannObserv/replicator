@@ -893,3 +893,58 @@ class TestNeedrestartListsNeverRestarts:
         if not NEEDRESTART_INSTALLED.exists():
             pytest.skip(f"{NEEDRESTART_INSTALLED} not installed yet")
         assert _needrestart_mode(NEEDRESTART_MAIN) == "l"
+
+
+TAILSCALE_PINS = REPO_ROOT / "deploy" / "apt" / "preferences.d" / "tailscale.pref"
+TAILSCALE_PINS_INSTALLED = Path("/etc/apt/preferences.d/tailscale.pref")
+TAILSCALE_SITE = "pkgs.tailscale.com"
+# What the origin was added for: the client and the key that signs its archive.
+TAILSCALE_PACKAGES = {"tailscale", "tailscale-archive-keyring"}
+
+
+def _pin_stanzas(path: Path) -> list[dict[str, str]]:
+    """apt_preferences(5): blank-line-separated stanzas of ``Field: value``."""
+    stanzas = []
+    for block in path.read_text().split("\n\n"):
+        fields = {}
+        for line in block.splitlines():
+            if line.strip() and not line.lstrip().startswith("#"):
+                key, _, value = line.partition(":")
+                fields[key.strip()] = value.strip()
+        if fields:
+            stanzas.append(fields)
+    return stanzas
+
+
+class TestTailscaleOriginIsScoped:
+    """The Tailscale origin is *follow*, scoped by apt pins (#131).
+
+    The ``patching-hosts`` maintenance lane takes a followed origin by its site,
+    and at apt's default 500 the site ties Ubuntu: any package it served under an
+    Ubuntu name at a higher version would replace Ubuntu's. So everything from the
+    site sits below 500, and only what the origin was added for sits above it.
+    Without both, the probe reports ``unscoped:pkgs.tailscale.com`` and
+    ``unpinned:<package>`` (the skill's policy.md, "Two lanes").
+    """
+
+    def test_the_file_name_is_one_apt_reads(self) -> None:
+        """apt ignores a ``preferences.d`` file with any extension but ``.pref``."""
+        assert TAILSCALE_PINS.suffix == ".pref"
+
+    def test_the_site_sits_below_ubuntu(self) -> None:
+        (catch_all,) = [s for s in _pin_stanzas(TAILSCALE_PINS) if s["Package"] == "*"]
+        assert catch_all["Pin"] == f"origin {TAILSCALE_SITE}"
+        assert int(catch_all["Pin-Priority"]) < 500
+
+    def test_each_package_it_was_added_for_sits_above(self) -> None:
+        named = {s["Package"]: s for s in _pin_stanzas(TAILSCALE_PINS) if s["Package"] != "*"}
+        assert set(named) == TAILSCALE_PACKAGES
+        for stanza in named.values():
+            assert stanza["Pin"] == f"origin {TAILSCALE_SITE}"
+            assert int(stanza["Pin-Priority"]) > 500
+
+    @on_the_host
+    def test_the_installed_copy_matches_the_tracked_one(self) -> None:
+        if not TAILSCALE_PINS_INSTALLED.exists():
+            pytest.skip(f"{TAILSCALE_PINS_INSTALLED} not installed yet")
+        assert TAILSCALE_PINS_INSTALLED.read_text() == TAILSCALE_PINS.read_text()

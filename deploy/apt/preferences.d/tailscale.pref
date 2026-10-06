@@ -1,0 +1,21 @@
+# #131: the Tailscale origin is *follow*, scoped to what it was added for.
+#
+# patching-hosts' maintenance lane takes a followed origin by its site, and at
+# apt's default 500 the site ties Ubuntu: a package it served under an Ubuntu
+# name at a higher version would replace Ubuntu's. So the whole site sits at
+# 100, and the client and its archive keyring at 600. Shape from the skill's
+# policy.md ("Two lanes") and CannObserv/processor#344's NodeSource pins.
+#
+# A .pref extension or none: apt ignores any other file in preferences.d.
+
+Package: *
+Pin: origin pkgs.tailscale.com
+Pin-Priority: 100
+
+Package: tailscale
+Pin: origin pkgs.tailscale.com
+Pin-Priority: 600
+
+Package: tailscale-archive-keyring
+Pin: origin pkgs.tailscale.com
+Pin-Priority: 600
