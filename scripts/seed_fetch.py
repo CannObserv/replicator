@@ -23,9 +23,10 @@ usable non-interactively.
 
 The flag is a guard, not a grant (#90). A frame there is a command Watcher never
 issued — an operator act under Watcher's identity, never this host's
-``replicator`` credential, which reaches ``content.fetch`` only through an ACL gap
-CannObserv/broker#14 closes. Nothing in this repo documents that target as an
-example.
+``replicator`` credential, which the broker refuses ``XADD`` there
+(CannObserv/broker#14). Nothing in this repo documents that target as an
+example. ``--watch`` is refused on it (replicator#129): Watcher's identity
+cannot read ``content.blobs`` (CannObserv/broker#43).
 
 Every command carries an ``info_source_id``, required on the wire since co-core
 0.8.0 and echoed onto both facts (#28). It defaults to a placeholder no issuer's
@@ -201,7 +202,9 @@ def resolve_db(client: Redis) -> int:
     return int(client.connection_pool.connection_kwargs.get("db") or 0)
 
 
-def guard_production_target(topic: str, *, db: int, production: bool, info_source_id: str) -> None:
+def guard_production_target(
+    topic: str, *, db: int, production: bool, info_source_id: str, watch: bool = False
+) -> None:
     """Refuse the live command stream unless the caller opted in, and meant it twice.
 
     The gate is the *conjunction*, because that is what determines reach:
@@ -219,6 +222,12 @@ def guard_production_target(topic: str, *, db: int, production: bool, info_sourc
 
     Both checks sit inside the same conjunction on purpose: a scratch run reaches
     no consumer, so inventing an id there is exactly what the placeholder is for.
+
+    ``--watch`` is refused on the live target too (replicator#129). Since
+    CannObserv/broker#43 no identity that may publish ``content.fetch`` can read
+    ``content.blobs``, and the cursor read is ``XREVRANGE``, which no identity
+    holds at all. Left to the broker, the watch fails before anything is
+    published, as an ``ACL LOG`` entry its operator has to attribute.
     """
     if not (db == 0 and topic == streams.CONTENT_FETCH):
         return
@@ -227,6 +236,14 @@ def guard_production_target(topic: str, *, db: int, production: bool, info_sourc
             f"{topic} on db {db} is the live command stream, and Watcher is its issuer: the "
             f"running worker will fetch these URLs for real, on a command Watcher never "
             f"issued. Pass --production to mean it, as an operator act under Watcher's identity."
+        )
+    if watch:
+        raise ProductionTargetError(
+            f"--watch on {topic} on db {db} reads {streams.CONTENT_BLOBS}, which Watcher's "
+            f"identity cannot read (broker#43). Publish without --watch, then read the "
+            f"outcome as replicator: rcli XRANGE {streams.CONTENT_BLOBS} <entry_id> +, "
+            f"where <entry_id> is the published command's (a server-clock time, so its "
+            f"fact sorts after it)"
         )
     if info_source_id == SEED_INFO_SOURCE_ID:
         raise ProductionTargetError(
@@ -527,6 +544,7 @@ async def _seed(client: Redis, args: argparse.Namespace) -> int:
             db=resolve_db(client),
             production=args.production,
             info_source_id=args.info_source_id,
+            watch=args.watch,
         )
     except ProductionTargetError as exc:
         print(f"error: {exc}", file=sys.stderr)

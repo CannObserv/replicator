@@ -193,6 +193,25 @@ def test_a_blank_domain_key_is_refused_on_the_live_target(value):
         guard_production_target(streams.CONTENT_FETCH, db=0, production=True, info_source_id=value)
 
 
+def test_a_watch_on_the_live_target_is_refused():
+    """replicator#129: no identity holding the ``content.fetch`` publish can read
+    ``content.blobs`` (broker#43), and the cursor read is ``XREVRANGE``, which no
+    identity holds at all. The broker would refuse the watch's first read, as an
+    ``ACL LOG`` entry its operator has to attribute, so it is refused here instead.
+    """
+    with pytest.raises(ProductionTargetError):
+        guard_production_target(
+            streams.CONTENT_FETCH, db=0, production=True, info_source_id="isrc-real", watch=True
+        )
+
+
+def test_a_watch_is_fine_anywhere_the_guard_does_not_bite():
+    """A scratch run has no ACL in front of it, so its watch still closes the loop."""
+    guard_production_target(
+        streams.CONTENT_FETCH, db=15, production=False, info_source_id="isrc-real", watch=True
+    )
+
+
 def test_the_placeholder_is_fine_anywhere_the_guard_does_not_bite():
     """Same conjunction as the target guard: a scratch run reaches no consumer,
     so inventing an id there is exactly what the placeholder is for."""
@@ -252,8 +271,8 @@ def test_a_refused_target_names_whose_stream_it_is(capsys):
 
     Watcher issues ``content.fetch``, so a seeded frame there is a command Watcher
     never issued — an operator act under Watcher's identity, not this host's
-    ``replicator`` credential, whose reach to the stream is an ACL gap
-    CannObserv/broker#14 closes. The refusal is where an operator stands when
+    ``replicator`` credential, which the broker refuses ``XADD`` there
+    (CannObserv/broker#14). The refusal is where an operator stands when
     they need to hear whose identity that takes, so the assertion pins that
     half rather than the bare name (CR 1).
     """
@@ -261,6 +280,27 @@ def test_a_refused_target_names_whose_stream_it_is(capsys):
 
     assert code == 2
     assert "Watcher's identity" in capsys.readouterr().err
+
+
+def test_a_refused_watch_names_the_read_that_still_works(capsys):
+    """Refused before the client is opened (the port is unroutable), and the
+    operator is pointed at the read their own credential does hold."""
+    code = main(
+        [
+            "--redis-url",
+            "redis://localhost:1/0",
+            "--topic",
+            streams.CONTENT_FETCH,
+            "--production",
+            "--info-source-id",
+            "isrc-real",
+            "--watch",
+            URL,
+        ]
+    )
+
+    assert code == 2
+    assert f"XRANGE {streams.CONTENT_BLOBS}" in capsys.readouterr().err
 
 
 def test_the_production_flag_says_whose_identity_it_takes():
@@ -482,6 +522,17 @@ async def test_a_run_publishes_and_closes_the_client_it_opened(fake_redis, owned
         pytest.param(
             ["--topic", streams.CONTENT_FETCH, "--production", "--info-source-id", " "],
             id="blank-domain-key",
+        ),
+        pytest.param(
+            [
+                "--topic",
+                streams.CONTENT_FETCH,
+                "--production",
+                "--info-source-id",
+                "isrc-real",
+                "--watch",
+            ],
+            id="watch",
         ),
     ],
 )
