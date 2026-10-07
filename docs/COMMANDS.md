@@ -64,9 +64,7 @@ script's guard knows only `content.fetch`: `--topic content.blobs` would put a c
 stream other services consume, and nothing would refuse it. `content.fetch` itself is `NOPERM`
 since CannObserv/broker#14, and the script exits 1 on the first attempt rather than retrying.
 `--production` still guards db 0 + `content.fetch`, but using it is an operator act under
-Watcher's identity, not an example. A scratch topic on the broker itself takes `citest`, whose
-only keys are `probe.*` and `replicator.itest.*`, so it cannot name a production topic — not
-provisioned on this VM.
+Watcher's identity, not an example.
 
 `--watch` reads `content.blobs` for `content.fetch` and `<topic>.blobs` otherwise, so a scratch
 seed never watches production's facts; `--blobs-topic` overrides that. **On the live target it
