@@ -8,6 +8,7 @@ entries list plus content-addressed blobs on disk, so there is no engine,
 session, or savepoint machinery here.
 """
 
+import ipaddress
 import logging
 import os
 from collections.abc import AsyncGenerator, Mapping
@@ -16,7 +17,7 @@ import pytest
 from co_core_aio.gcs import AsyncGcsDriver
 from co_core_sync.drivers.blobstore import GcsBlobStore
 from httpx import ASGITransport, AsyncClient
-from redis.asyncio import Redis
+from redis.asyncio import ConnectionPool, Redis
 from redis.exceptions import AuthenticationError, AuthorizationError
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
@@ -27,6 +28,11 @@ from src.core.config import get_settings
 # database since broker#5, so db 15 does not exist there and db 0 is the one
 # real_redis refuses (#90).
 DEFAULT_TEST_REDIS_URL = "redis://localhost:6379/15"
+
+# By name, never by resolution: resolving would itself be a network act, and an
+# answer is only as good as whoever gave it. IP literals go to `is_loopback`
+# instead, which is all of 127.0.0.0/8 and ::1 (#132).
+LOOPBACK_HOSTNAMES = frozenset({"localhost"})
 
 # Keys a crashed run left behind get a TTL rather than an immediate delete: long
 # enough that a concurrent run's stream is never pulled out from under it. Sized
@@ -65,7 +71,8 @@ PRODUCTION_ENV = (
 # means "use whatever the code would have picked" — which on a worker configured
 # for production is the production bucket. `REPLICATOR_TEST_REDIS_URL` may
 # default because localhost is never the broker, the broker has no db 15, and
-# `real_redis` refuses db 0 outright; no bucket name has that property.
+# `real_redis` refuses db 0 and any non-loopback host outright; no bucket name
+# has that property.
 TEST_BUCKET_ENV = "REPLICATOR_TEST_GCS_BUCKET"
 TEST_CREDENTIALS_ENV = "REPLICATOR_TEST_GCS_CREDENTIALS"
 
@@ -400,6 +407,47 @@ def _faithful_xautoclaim(client):
     return xautoclaim
 
 
+def redis_target_refusal(url: str) -> str | None:
+    """Why ``real_redis`` must not open ``url``, or ``None`` when it may.
+
+    Two refusals, both read from what redis-py *resolved* rather than the URL's
+    text — a ``?db=`` query parameter overrides the path, and a unix-socket URL
+    has neither host nor path to inspect (CR #1). Building the pool dials nothing.
+
+    **A host that is not loopback** (#132). The db-0 refusal alone admitted
+    ``broker:6379/15``, which connected and authenticated before ``SELECT 15``
+    failed: a client in co-broker's ``CLIENT LIST`` and, for ``replicator``,
+    which holds no ``+select``, a ``NOPERM`` entry in the ``ACL LOG`` its operator
+    reads as evidence (CannObserv/broker#48). A unix socket is on this host by
+    construction. A non-loopback scratch server, if one is ever wanted, is a
+    separate opt-in under its own name that cannot be co-broker — not a widening
+    of this one.
+
+    **db 0.** It carries the live ``content.fetch`` stream on any server shaped
+    like the broker. Missing means 0 — redis-py's own default.
+
+    Neither message echoes the URL: the one most likely refused is the one
+    carrying a broker password.
+    """
+    kwargs = ConnectionPool.from_url(url).connection_kwargs
+    host = kwargs.get("host")
+    if host is not None and not _is_loopback(host):
+        return f"REPLICATOR_TEST_REDIS_URL host {host!r} is not loopback (#132)"
+    db = kwargs.get("db", 0)
+    if db == 0:
+        return f"REPLICATOR_TEST_REDIS_URL must not target db 0 (resolved db {db}, #90)"
+    return None
+
+
+def _is_loopback(host: str) -> bool:
+    if host.lower() in LOOPBACK_HOSTNAMES:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 @pytest.fixture(scope="session")
 async def real_redis() -> AsyncGenerator:
     """A live Redis client on a scratch database — ``@pytest.mark.integration`` only.
@@ -410,16 +458,11 @@ async def real_redis() -> AsyncGenerator:
     these tests (CannObserv/broker#2) and its only database is the one refused
     below (CannObserv/broker#5).
 
-    **Never db 0.** That database carries the live ``content.fetch`` stream the
-    running ``replicator.service`` is consuming, so a test frame written there
-    would be fetched for real. Tests using this fixture confine themselves to
-    scratch stream keys as well — the database guard is the backstop, not the
-    plan. Point ``REPLICATOR_TEST_REDIS_URL`` elsewhere to use another server.
-
-    The guard reads the db redis-py *resolved*, not the one the URL path
-    implies: a ``?db=0`` query parameter overrides the path, and a unix-socket
-    URL has no path to inspect at all (CR #1). Missing means 0 — redis-py's own
-    default.
+    **Never db 0, and never off this host** — ``redis_target_refusal`` says why
+    for each, before anything is dialled (#90, #132). Tests using this fixture
+    confine themselves to scratch stream keys as well — the guards are the
+    backstop, not the plan. Point ``REPLICATOR_TEST_REDIS_URL`` elsewhere to use
+    another loopback server.
 
     Skips rather than fails when no broker answers, so ``-m integration`` stays
     runnable off the VM — but an *authentication* failure is a misconfiguration,
@@ -431,12 +474,10 @@ async def real_redis() -> AsyncGenerator:
     so no connection is opened when the marker is deselected.
     """
     url = os.environ.get("REPLICATOR_TEST_REDIS_URL", DEFAULT_TEST_REDIS_URL)
+    refusal = redis_target_refusal(url)
+    if refusal:
+        pytest.fail(refusal)
     client = Redis.from_url(url)
-
-    db = client.connection_pool.connection_kwargs.get("db", 0)
-    if db == 0:
-        await client.aclose()
-        pytest.fail(f"REPLICATOR_TEST_REDIS_URL must not target db 0 (got {url} -> db {db})")
 
     try:
         # execute_command rather than ping(): redis-py types ping()'s return as

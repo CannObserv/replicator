@@ -38,8 +38,8 @@ Redis acts, or about a reply shape the fake never produces:
 
 Everything runs on ``replicator.itest.*`` scratch streams. The ``real_redis``
 fixture refuses db 0 outright — the database that carries the live
-``content.fetch`` the running service consumes — but that guard is the backstop,
-not the plan.
+``content.fetch`` the running service consumes — and any non-loopback host (#132),
+but those guards are the backstop, not the plan.
 """
 
 import asyncio

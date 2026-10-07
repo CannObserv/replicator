@@ -41,6 +41,8 @@ whose first tripper is an English sentence gets deleted rather than heeded.
 
 import ast
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -48,11 +50,13 @@ from co_core_aio.gcs import AsyncGcsDriver
 from co_core_sync.drivers.blobstore import GcsBlobStore
 
 from tests.conftest import (
+    DEFAULT_TEST_REDIS_URL,
     PRODUCTION_ENV,
     TEST_BLOB_BUCKET_ENV,
     TEST_BUCKET_ENV,
     TEST_CREDENTIALS_ENV,
     guarded_init,
+    redis_target_refusal,
     resolve_test_blob_bucket,
     resolve_test_bucket,
 )
@@ -257,7 +261,7 @@ def test_the_test_bucket_variable_has_no_fallback():
     which on a worker configured for production is the production one. Compare
     `REPLICATOR_TEST_REDIS_URL`, which *does* default — to db 15 on localhost,
     a destination that cannot be the live one because `real_redis` refuses db 0
-    outright. There is no equivalent safe default for a bucket.
+    and any non-loopback host outright. There is no equivalent safe default for a bucket.
     """
     assert resolve_test_bucket({}) is None
     assert resolve_test_bucket({TEST_BUCKET_ENV: "some-bucket"}) == "some-bucket"
@@ -437,3 +441,101 @@ def test_the_injected_client_carve_out_does_not_reach_a_marked_test():
 
     with pytest.raises(AssertionError, match="may only reach"):
         guarded(object(), "some-other-bucket", client=object())
+
+
+# --- The Redis half: `real_redis` refuses a host as well as a database (#132) ---
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        DEFAULT_TEST_REDIS_URL,
+        "redis://127.0.0.1:6379/15",
+        "redis://127.0.0.2:6379/15",
+        "redis://[::1]:6379/15",
+        "redis://LocalHost:6379/15",
+        "unix:///run/redis/scratch.sock?db=15",
+    ],
+)
+def test_a_scratch_server_on_this_host_is_admitted(url):
+    assert redis_target_refusal(url) is None
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "redis://broker:6379/15",
+        "redis://replicator:hunter2@broker:6379/15",
+        "rediss://broker.example.ts.net:6379/15",
+        "redis://100.64.0.1:6379/15",
+        "redis://10.0.0.5:6379/15",
+        "redis://localhost.example.com:6379/15",
+    ],
+)
+def test_a_host_off_this_machine_is_refused(url):
+    """#132: the db-0 refusal alone let `broker:6379/15` connect and authenticate.
+
+    `SELECT 15` then failed, but only after a client in the broker's `CLIENT LIST`
+    and, for `replicator`, which holds no `+select`, a `NOPERM` entry in its
+    `ACL LOG`, which the broker's operator reads as evidence (broker#48). The
+    host is refused from the URL, so nothing is resolved or dialled.
+    """
+    refusal = redis_target_refusal(url)
+
+    assert refusal is not None and "loopback" in refusal
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "redis://localhost:6379/0",
+        "redis://localhost:6379",
+        "redis://localhost:6379/15?db=0",
+        "unix:///run/redis/scratch.sock",
+    ],
+)
+def test_db_0_is_refused_on_this_host_too(url):
+    """The live `content.fetch` stream's database, read as redis-py resolves it (CR #1)."""
+    refusal = redis_target_refusal(url)
+
+    assert refusal is not None and "db 0" in refusal
+
+
+@pytest.mark.parametrize(
+    "url", ["redis://replicator:hunter2@broker:6379/15", "redis://:hunter2@localhost/0"]
+)
+def test_a_refusal_never_echoes_the_password(url):
+    """The URL most likely to be refused is the one carrying a broker credential."""
+    refusal = redis_target_refusal(url)
+
+    assert refusal is not None and "hunter2" not in refusal
+
+
+def test_real_redis_refuses_a_remote_host_before_connecting():
+    """The wiring: the fixture asks before it dials, and fails rather than skips.
+
+    `.invalid` never resolves (RFC 6761), so without the refusal the fixture's
+    connect fails and the test *skips*, exit 0. With it, the fixture fails first.
+    """
+    env = {**os.environ, "REPLICATOR_TEST_REDIS_URL": "redis://broker.invalid:6379/15"}
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--no-cov",
+            "-p",
+            "no:cacheprovider",
+            "-m",
+            "integration",
+            "tests/test_inflight.py::test_redis_answers_nogroup",
+        ],
+        cwd=REPO,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "not loopback" in result.stdout
