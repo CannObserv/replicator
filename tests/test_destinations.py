@@ -567,7 +567,7 @@ def test_real_redis_refuses_a_remote_host_before_connecting():
 
 
 def test_the_unavailable_skip_never_echoes_the_password():
-    """CR 2: the skip names where it looked, not the credential it looked with.
+    """#132 CR #2: the skip names where it looked, not the credential it looked with.
 
     Port 1 on loopback refuses the connection, so the fixture takes its skip path.
     """

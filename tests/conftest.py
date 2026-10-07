@@ -443,7 +443,7 @@ def redis_target_refusal(url: str) -> str | None:
 
 
 def _redis_target_label(client: Redis) -> str:
-    """Where ``client`` points, without the credential the URL may carry (CR 2)."""
+    """Where ``client`` points, without the credential the URL may carry (#132 CR #2)."""
     kwargs = client.connection_pool.connection_kwargs
     if kwargs.get("path"):
         return kwargs["path"]
