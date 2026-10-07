@@ -511,14 +511,10 @@ def test_a_refusal_never_echoes_the_password(url):
     assert refusal is not None and "hunter2" not in refusal
 
 
-def test_real_redis_refuses_a_remote_host_before_connecting():
-    """The wiring: the fixture asks before it dials, and fails rather than skips.
-
-    `.invalid` never resolves (RFC 6761), so without the refusal the fixture's
-    connect fails and the test *skips*, exit 0. With it, the fixture fails first.
-    """
-    env = {**os.environ, "REPLICATOR_TEST_REDIS_URL": "redis://broker.invalid:6379/15"}
-    result = subprocess.run(
+def _run_a_real_redis_test(url: str) -> subprocess.CompletedProcess[str]:
+    """One `real_redis` test in a child pytest, pointed at ``url``, skip reasons shown."""
+    env = {**os.environ, "REPLICATOR_TEST_REDIS_URL": url}
+    return subprocess.run(
         [
             sys.executable,
             "-m",
@@ -526,6 +522,7 @@ def test_real_redis_refuses_a_remote_host_before_connecting():
             "--no-cov",
             "-p",
             "no:cacheprovider",
+            "-rs",
             "-m",
             "integration",
             "tests/test_inflight.py::test_redis_answers_nogroup",
@@ -537,5 +534,26 @@ def test_real_redis_refuses_a_remote_host_before_connecting():
         timeout=120,
     )
 
+
+def test_real_redis_refuses_a_remote_host_before_connecting():
+    """The wiring: the fixture asks before it dials, and fails rather than skips.
+
+    `.invalid` never resolves (RFC 6761), so without the refusal the fixture's
+    connect fails and the test *skips*, exit 0. With it, the fixture fails first.
+    """
+    result = _run_a_real_redis_test("redis://broker.invalid:6379/15")
+
     assert result.returncode == 1, result.stdout + result.stderr
     assert "not loopback" in result.stdout
+
+
+def test_the_unavailable_skip_never_echoes_the_password():
+    """CR 2: the skip names where it looked, not the credential it looked with.
+
+    Port 1 on loopback refuses the connection, so the fixture takes its skip path.
+    """
+    result = _run_a_real_redis_test("redis://:hunter2@localhost:1/15")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "live Redis unavailable at localhost:1" in result.stdout
+    assert "hunter2" not in result.stdout + result.stderr

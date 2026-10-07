@@ -426,8 +426,8 @@ def redis_target_refusal(url: str) -> str | None:
     **db 0.** It carries the live ``content.fetch`` stream on any server shaped
     like the broker. Missing means 0 — redis-py's own default.
 
-    Neither message echoes the URL: the one most likely refused is the one
-    carrying a broker password.
+    Neither message echoes the URL, and nor does the fixture's skip: the one
+    most likely refused is the one carrying a broker password.
     """
     kwargs = ConnectionPool.from_url(url).connection_kwargs
     host = kwargs.get("host")
@@ -437,6 +437,14 @@ def redis_target_refusal(url: str) -> str | None:
     if db == 0:
         return f"REPLICATOR_TEST_REDIS_URL must not target db 0 (resolved db {db}, #90)"
     return None
+
+
+def _redis_target_label(client: Redis) -> str:
+    """Where ``client`` points, without the credential the URL may carry (CR 2)."""
+    kwargs = client.connection_pool.connection_kwargs
+    if kwargs.get("path"):
+        return kwargs["path"]
+    return f"{kwargs.get('host') or 'localhost'}:{kwargs.get('port', 6379)}"
 
 
 def _is_loopback(host: str) -> bool:
@@ -490,7 +498,7 @@ async def real_redis() -> AsyncGenerator:
         raise
     except (RedisConnectionError, RedisTimeoutError, OSError) as exc:
         await client.aclose()
-        pytest.skip(f"live Redis unavailable at {url}: {exc}")
+        pytest.skip(f"live Redis unavailable at {_redis_target_label(client)}: {exc}")
 
     try:
         await _expire_leftovers(client)
