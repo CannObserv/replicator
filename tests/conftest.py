@@ -438,7 +438,7 @@ def redis_target_refusal(url: str) -> str | None:
         )
     db = kwargs.get("db", 0)
     if db == 0:
-        return f"REPLICATOR_TEST_REDIS_URL must not target db 0 (resolved db {db}, #90)"
+        return "REPLICATOR_TEST_REDIS_URL resolves to db 0, the live stream's database (#90)"
     return None
 
 
