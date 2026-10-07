@@ -40,6 +40,7 @@ whose first tripper is an English sentence gets deleted rather than heeded.
 """
 
 import ast
+import ipaddress
 import os
 import subprocess
 import sys
@@ -512,6 +513,23 @@ def test_a_refusal_never_echoes_the_password(url):
     assert refusal is not None and "hunter2" not in refusal
 
 
+@pytest.mark.integration
+async def test_real_redis_reaches_a_server_on_this_host(real_redis):
+    """What the guard promised, asked of the server: it accepted us on loopback.
+
+    Also the child run's probe below (#132 CR #6), so the wiring tests depend on
+    nothing outside this file. ``laddr`` is the server's end of the connection —
+    ``host:port``, ``[v6]:port``, or ``/socket/path:0``.
+    """
+    info = await real_redis.execute_command("CLIENT INFO")
+    laddr = info["laddr"]
+
+    assert (
+        laddr.startswith("/")
+        or ipaddress.ip_address(laddr.rsplit(":", 1)[0].strip("[]")).is_loopback
+    )
+
+
 def _run_a_real_redis_test(url: str) -> subprocess.CompletedProcess[str]:
     """One `real_redis` test in a child pytest, pointed at ``url``, skip reasons shown."""
     env = {**os.environ, "REPLICATOR_TEST_REDIS_URL": url}
@@ -526,7 +544,7 @@ def _run_a_real_redis_test(url: str) -> subprocess.CompletedProcess[str]:
             "-rs",
             "-m",
             "integration",
-            "tests/test_inflight.py::test_redis_answers_nogroup",
+            "tests/test_destinations.py::test_real_redis_reaches_a_server_on_this_host",
         ],
         cwd=REPO,
         env=env,
