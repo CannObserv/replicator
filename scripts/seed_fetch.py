@@ -26,8 +26,9 @@ issued — an operator act under Watcher's identity, never this host's
 ``replicator`` credential, whose ``XADD`` there the broker refuses
 (CannObserv/broker#14). Nothing in this repo documents that target as an
 example. ``--watch`` is refused on it (replicator#129): its first read,
-``XREVRANGE``, is held by no production identity, and Watcher reads ``content.blobs`` only
-in its own group, with no groupless read since CannObserv/broker#43.
+``XREVRANGE``, is held by no identity (CannObserv/broker#53), and Watcher reads
+``content.blobs`` only in its own group, with no groupless read since
+CannObserv/broker#43.
 
 Every command carries an ``info_source_id``, required on the wire since co-core
 0.8.0 and echoed onto both facts (#28). It defaults to a placeholder no issuer's
@@ -225,7 +226,7 @@ def guard_production_target(
     no consumer, so inventing an id there is exactly what the placeholder is for.
 
     ``--watch`` is refused on the live target too (replicator#129). Its cursor
-    read is ``XREVRANGE``, which no production identity holds, and the identity that may
+    read is ``XREVRANGE``, which no identity holds, and the identity that may
     publish ``content.fetch`` reads ``content.blobs`` only in its own group,
     ``watcher.blobs`` — with no groupless read since CannObserv/broker#43. Joining
     that group instead would take delivery of Watcher's facts, the hole broker#43
@@ -243,7 +244,7 @@ def guard_production_target(
     if watch:
         raise ProductionTargetError(
             f"--watch is refused alongside {topic} on db {db}: its first read is XREVRANGE, "
-            f"which no production identity holds, and Watcher's identity has no groupless "
+            f"which no identity on the broker holds, and Watcher's identity has no groupless "
             f"read on {streams.CONTENT_BLOBS} (broker#43). Publish without --watch, then read "
             f"the outcome as replicator: rcli XRANGE {streams.CONTENT_BLOBS} <entry_id> +, "
             f"where <entry_id> is the published command's (a server-clock time, so its "
