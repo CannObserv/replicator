@@ -432,7 +432,10 @@ def redis_target_refusal(url: str) -> str | None:
     kwargs = ConnectionPool.from_url(url).connection_kwargs
     host = kwargs.get("host")
     if host is not None and not _is_loopback(host):
-        return f"REPLICATOR_TEST_REDIS_URL host {host!r} is not loopback (#132)"
+        return (
+            f"REPLICATOR_TEST_REDIS_URL host {host!r} is not loopback (#132) — "
+            f"run a scratch redis-server on localhost (docs/TESTING.md)"
+        )
     db = kwargs.get("db", 0)
     if db == 0:
         return f"REPLICATOR_TEST_REDIS_URL must not target db 0 (resolved db {db}, #90)"

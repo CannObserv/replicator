@@ -483,6 +483,7 @@ def test_a_host_off_this_machine_is_refused(url):
     refusal = redis_target_refusal(url)
 
     assert refusal is not None and "loopback" in refusal
+    assert "docs/TESTING.md" in refusal
 
 
 @pytest.mark.parametrize(
