@@ -142,10 +142,10 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
   `OutOfMemoryError` and `NoPermissionError`, the two `ResponseError` subclasses
   in `_TRANSIENT_ERRORS`, are exempt from the delivery ceiling: an OOM is a
   *publishing* incident, a wrong grant backs off instead of closing valid
-  commands. Boot rides out an outage like the loop (#133), but its
-  `XGROUP CREATE … MKSTREAM` ACL refusal does **not** retry. Cap a broker the
-  tests spawn, **never the shared one**; never answer an OOM with a
-  client-level retry, which republishes an `XADD` the broker already applied.
+  commands. Boot retries outages (#133), **never** its `XGROUP CREATE` ACL
+  refusal. Cap a broker the tests spawn, **never the shared one**; never
+  answer an OOM with a client-level retry, which republishes an `XADD` the
+  broker already applied.
   Each classification's cost: [docs/CONVENTIONS.md](docs/CONVENTIONS.md).
 - **The `replicator:cmd:*` keys are the only non-stream keys on the broker (#80)** —
   per-stream dedupe, `EXISTS` before the handler, `SET NX EX` after a *completing*
