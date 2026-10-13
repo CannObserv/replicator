@@ -145,7 +145,7 @@ def test_the_unit_absorbs_the_worst_outage_this_cluster_has_had():
 
     A *lower* bound, because survival is a claim about the worst case (#134).
     Until #134 this multiplied ``StartLimitBurst`` by ``worst_case_outage_seconds``,
-    an upper bound, and passed at six starts while the floor was ~56 min against
+    an upper bound, and passed at six starts while the floor was ~48 min against
     the 58 pinned. The floor is ``StartLimitBurst`` starts *including the one
     already running*: systemd counts every start against the burst, a deploy's
     or a manual restart's as well, so a unit started within the window before
