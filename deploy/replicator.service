@@ -31,23 +31,26 @@ After=network.target tailscaled.service
 # REPLICATOR_MAX_CONSECUTIVE_CYCLE_FAILURES cycles (~10 min) before exiting, so a
 # permanently unreachable Redis produces one exit every ~10 minutes. A 5-minute
 # window never sees two of those and the unit would read as active (running)
-# forever, with the failure buried in the journal. Six strikes catches that case
-# and still catches a fast crash loop within seconds (6 x RestartSec=5 = 30s).
+# forever, with the failure buried in the journal. Seven strikes catches that case
+# and still catches a fast crash loop within seconds (7 x RestartSec=5 = 35s).
 #
-# SIX, NOT THREE, AND TWO HOURS, NOT ONE (#94). Three starts absorbed 30 minutes
-# of broker outage. On 2026-09-16 the broker was away for 58 — nearly twice the
-# budget — and the only reason this unit was not asked to survive the whole of it
-# was an accident of timing: the network degraded from ~14:28 but the worker's
-# cycles did not fail *continuously* until ~15:00. Six starts absorb an hour, and
-# tests/test_deploy.py now pins that against the worst outage this cluster has
-# actually had rather than against internal consistency alone.
+# SEVEN, NOT THREE, AND TWO HOURS, NOT ONE (#94, #134). Three starts absorbed 30
+# minutes of broker outage. On 2026-09-16 the broker was away for 58 — nearly
+# twice the budget — and the only reason this unit was not asked to survive the
+# whole of it was an accident of timing: the network degraded from ~14:28 but the
+# worker's cycles did not fail *continuously* until ~15:00. #94 raised it to six,
+# sized at ~10 min a start; that is the upper bound. Against a broker that
+# refuses instantly a start absorbs ~7.5 min, plus ~35 s between starts, so six
+# covered ~56 min (#134). Seven cover ~64 at that floor, and tests/test_deploy.py
+# pins the floor, not the ceiling, against the worst outage this cluster has
+# actually had. The window still fits seven slow exits (7 x 600 s = 4200 s).
 #
 # Widening tolerance is safer than it was, because the other half finally exists:
 # until #94 there was no OnFailure=, so a unit that gave up was discovered by
 # whoever next looked. A longer fuse on a failure nobody is told about would be
 # the wrong trade; a longer fuse on one that pages is the right one.
 StartLimitIntervalSec=7200
-StartLimitBurst=6
+StartLimitBurst=7
 
 # The other half of "stay failed": tell someone. The comment above claimed this
 # directive existed for months while the ini file carried no OnFailure= at all,

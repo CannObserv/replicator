@@ -32,6 +32,7 @@ import pytest
 
 from src.core.config import Settings
 from src.worker.egress import RESOLVE_TIMEOUT_SECONDS
+from src.worker.loop import error_backoff_seconds
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 UNIT = REPO_ROOT / "deploy" / "replicator.service"
@@ -110,11 +111,31 @@ def test_the_start_limit_window_fits_a_burst_of_slow_exits():
 WORST_OBSERVED_CLUSTER_OUTAGE_SECONDS = 58 * 60
 
 
+def _floor_of_one_start(settings: Settings) -> float:
+    """The least wall-clock one start spends waiting out a broker that stays down.
+
+    The waits before the ceiling, never ``worst_case_outage_seconds``: the
+    attempt that reaches ``max_consecutive_cycle_failures`` raises without
+    waiting, and the first few back off less than the cap. Each attempt itself
+    is counted as free — a broker that refuses instantly (a restarting
+    redis-server) costs nothing per attempt, where an unreachable one costs a
+    connect timeout (#134).
+    """
+    return sum(
+        error_backoff_seconds(
+            failures,
+            base=settings.error_backoff_base_seconds,
+            maximum=settings.error_backoff_max_seconds,
+        )
+        for failures in range(1, settings.max_consecutive_cycle_failures)
+    )
+
+
 def test_the_unit_absorbs_the_worst_outage_this_cluster_has_had():
     """Surviving a *real* outage unaided, not merely tripping the limiter coherently.
 
     The test above is internal consistency — the window fits the exits. This one
-    is the external fact #94 was filed about: `burst` exits have to add up to more
+    is the external fact #94 was filed about: the starts have to add up to more
     wall-clock than the broker has ever actually been away, or the unit stays
     `failed` while the broker is still coming back and an operator is required.
 
@@ -122,20 +143,24 @@ def test_the_unit_absorbs_the_worst_outage_this_cluster_has_had():
     nearly twice the budget, and survived only by the accident of when continuous
     failure began — the worker did not start failing until ~15:00.
 
-    The multiplication assumes every start waits an outage out, which held for
-    the first start only until #133: later ones booted into the down broker and
-    exited on their first ``ensure_group``, so six starts absorbed ~12 min.
-    ``retry_at_boot`` gives every start the shape the product assumes, but the
-    product sums ``worst_case_outage_seconds``, an *upper* bound. Against a broker
-    refusing instantly, the floor is ~57 min, just under the pinned 58 (#134).
+    A *lower* bound, because survival is a claim about the worst case (#134).
+    Until #134 this multiplied ``StartLimitBurst`` by ``worst_case_outage_seconds``,
+    an upper bound, and passed at six starts while the floor was ~56 min against
+    the 58 pinned. The floor is the start already running when the outage
+    begins, then ``StartLimitBurst`` restarts, each preceded by ``RestartSec``
+    and the floor check's wait — which a refusing broker spends in full, being
+    an 'unreachable' probe. The guard, the wheelhouse sync and interpreter start
+    are left out: real, unmeasured, and only ever additions to a floor.
     """
     settings = Settings()
     burst = int(_directive("StartLimitBurst"))
-    absorbed = burst * settings.worst_case_outage_seconds
+    per_start = _floor_of_one_start(settings)
+    between_starts = float(_directive("RestartSec")) + _floor_default("REPLICATOR_REDIS_FLOOR_WAIT")
+    absorbed = per_start + burst * (between_starts + per_start)
 
     assert absorbed >= WORST_OBSERVED_CLUSTER_OUTAGE_SECONDS, (
-        f"the unit absorbs {absorbed / 60:.0f} min across {burst} starts, but this "
-        f"cluster has had a {WORST_OBSERVED_CLUSTER_OUTAGE_SECONDS / 60:.0f} min "
+        f"the unit absorbs as little as {absorbed / 60:.1f} min across {burst} restarts, "
+        f"but this cluster has had a {WORST_OBSERVED_CLUSTER_OUTAGE_SECONDS / 60:.0f} min "
         "outage — it would have needed an operator"
     )
 

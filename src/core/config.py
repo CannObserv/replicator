@@ -624,7 +624,8 @@ class Settings(BaseSettings):
         its first ``ensure_group``.
 
         An upper bound, not the exact figure — the first few cycles back off
-        less than the cap.
+        less than the cap. Whether the unit survives an outage is pinned on the
+        floor instead (#134): ``tests/test_deploy.py`` sums the waits themselves.
         """
         return self.max_consecutive_cycle_failures * self.error_backoff_max_seconds
 
