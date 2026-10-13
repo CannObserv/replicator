@@ -40,7 +40,7 @@ from co_core.pure.models.changes import ContentFetchCommand
 from redis.asyncio import Redis
 
 from src.core.config import Settings, get_settings
-from src.worker.loop import FETCH_SPEC, run_loop
+from src.worker.loop import FETCH_SPEC, retry_at_boot, run_loop
 from src.worker.main import build_consumer
 from tests.worker.conftest import GROUP, TOPIC, collected_reports, make_command, noop_handler
 
@@ -326,6 +326,45 @@ async def test_a_sustained_outage_exits_so_the_unit_can_restart(outage_broker):
     # `Restart=on-failure` fire.
     assert not isinstance(caught.value, TimeoutError), "the loop hung instead of exiting"
     await client.aclose()
+
+
+async def test_a_worker_booting_into_a_down_broker_waits_for_it(outage_broker):
+    """#133: the start *after* the exit, booting while the broker is still away.
+
+    Its first broker call is `ensure_group`, and an uncaught refusal there spent
+    a start in seconds. Asserted against a socket that really refuses, because
+    the retry classifies by exception type and only the real stack says which
+    type a dead broker produces.
+    """
+    settings = _settings(RIDE_OUT_CEILING)
+    client = Redis.from_url(outage_broker.url)
+    consumer = build_consumer(client, settings)
+    await outage_broker.stop()
+
+    stop = asyncio.Event()
+    task = asyncio.ensure_future(
+        retry_at_boot(
+            lambda: consumer.ensure_group(start_id="0"),
+            what="ensure_group",
+            settings=settings,
+            stop=stop,
+        )
+    )
+    try:
+        await asyncio.sleep(SURVIVABLE_OUTAGE_SECONDS)
+        assert not task.done(), f"boot gave up during a survivable outage: {task}"
+
+        await outage_broker.start()
+        async with asyncio.timeout(10):
+            assert await task is True
+
+        groups = await client.xinfo_groups(TOPIC)
+        assert [g["name"] for g in groups] == [GROUP.encode()]
+    finally:
+        stop.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await client.aclose()
 
 
 async def test_a_restarted_worker_resumes_with_no_human_step(outage_broker, consumed_commands):

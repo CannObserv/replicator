@@ -13,6 +13,12 @@
 # seconds, and the unit was `failed` sixteen minutes before redis came back. No
 # pytest models that, so this script does.
 #
+# AND A SECOND START INTO A BROKER STILL DOWN (#133). Checking the unit right
+# after the first exit missed that every later start booted into the outage and
+# exited on its first `ensure_group`, spending the budget in seconds per start
+# rather than a cycle ceiling each. The broker now stays down across two starts,
+# and the second must leave through the boot retry's own ceiling.
+#
 # WHAT IT REFUSES TO TOUCH. It never stops `co-broker` — that would take down
 # three services — and it never touches `replicator.service`. It spawns its own
 # `redis-server` on a loopback port it owns, and drives a scratch unit under
@@ -139,6 +145,9 @@ TimeoutStopSec=30
 EOF
 
 systemctl daemon-reload
+# The journal is read from here on, so a previous rehearsal's lines cannot pass
+# an assertion for this one.
+SINCE="$(date '+%Y-%m-%d %H:%M:%S')"
 systemctl start "${UNIT}.service" || die "the scratch unit would not start"
 
 # 1. Healthy first — otherwise a later success proves only that it ever worked.
@@ -147,7 +156,7 @@ for _ in $(seq 1 100); do
   sleep 0.2
 done
 [ "$(active)" = "active" ] || fail "the worker never reached active against a healthy broker"
-say "PASS 1/4 — worker active against a healthy broker"
+say "PASS 1/5 — worker active against a healthy broker"
 
 BEFORE="$(nrestarts)"
 
@@ -162,14 +171,30 @@ for _ in $(seq 1 200); do
   sleep 0.2
 done
 [ "${EXITED}" = "1" ] || fail "the worker never exited during the outage (NRestarts stuck at ${BEFORE}) — it would look alive to systemd while consuming nothing"
-say "PASS 2/4 — worker exited and systemd restarted it (NRestarts ${BEFORE} -> $(nrestarts))"
+say "PASS 2/5 — worker exited and systemd restarted it (NRestarts ${BEFORE} -> $(nrestarts))"
 
-# 3. The budget must survive the outage. This is the assertion #94 turns on: on
+# 3. The broker stays down through the restarted worker's boot (#133). It must
+#    ride the outage out at boot for the same ceiling the loop uses, then exit
+#    through that ceiling — not on an uncaught ConnectionError from its first
+#    ensure_group, which spent a start in seconds rather than a cycle ceiling.
+SECOND=0
+for _ in $(seq 1 200); do
+  [ "$(nrestarts)" -ge "$((BEFORE + 2))" ] && { SECOND=1; break; }
+  [ "$(active)" = "failed" ] && break
+  sleep 0.2
+done
+[ "${SECOND}" = "1" ] || fail "the restarted worker never exited while the broker was down (NRestarts $(nrestarts), unit $(active))"
+journalctl -u "${UNIT}.service" --since "${SINCE}" 2>/dev/null \
+  | grep -q 'broker unreachable at boot .* exiting so the unit restarts' \
+  || fail "a start that booted into the down broker exited without riding it out — boot spends a start in seconds, so the budget covers minutes of outage, not the hour #94 sized it for (#133)"
+say "PASS 3/5 — a start that booted into the outage rode it out to the ceiling (NRestarts $(nrestarts))"
+
+# 4. The budget must survive the outage. This is the assertion #94 turns on: on
 #    2026-09-16 the unit was `failed` sixteen minutes before the broker returned.
 [ "$(active)" != "failed" ] || fail "the unit hit its start limit while the broker was still down — an operator would be required, which is precisely the #94 outage"
-say "PASS 3/4 — start budget survived the outage (unit is $(active))"
+say "PASS 4/5 — start budget survived the outage (unit is $(active))"
 
-# 4. The broker returns, and consumption resumes with nobody typing anything.
+# 5. The broker returns, and consumption resumes with nobody typing anything.
 start_broker
 say "broker back; waiting for the worker to reconnect"
 RECOVERED=0
@@ -186,6 +211,6 @@ for _ in $(seq 1 300); do
 done
 [ "${RECOVERED}" = "1" ] || fail "the worker did not come back after the broker returned (unit is $(active))"
 
-say "PASS 4/4 — worker reconnected with no human step"
+say "PASS 5/5 — worker reconnected with no human step"
 say "OK — the handoff systemd owns works: exit, restart, guards pass, consumption resumes"
 exit 0

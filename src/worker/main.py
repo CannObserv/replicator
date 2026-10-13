@@ -14,6 +14,7 @@ and closes it on the way out.
 """
 
 import asyncio
+import functools
 import signal
 import stat
 from collections.abc import Coroutine
@@ -38,7 +39,7 @@ from src.worker.aliases import AliasTable, load_alias_table
 from src.worker.checkout import checkout_refusal
 from src.worker.egress import BodyCeilingTransport, GuardedTransport, blocked_networks
 from src.worker.handler import build_handler
-from src.worker.loop import FETCH_SPEC, PERSIST_SPEC, REPLICATE_SPEC, run_loop
+from src.worker.loop import FETCH_SPEC, PERSIST_SPEC, REPLICATE_SPEC, retry_at_boot, run_loop
 from src.worker.persist import build_persist_handler
 from src.worker.persist_reporter import build_persist_reporter, build_persisted_publisher
 from src.worker.policy import (
@@ -760,10 +761,27 @@ async def run(
         # broker, Watcher's commands published before the first boot are skipped;
         # they close no fact, which is the silence the issuer's reaper re-issues
         # through (issuer contract MUST-6), so "$" stands with a live issuer too.
-        await consumer.ensure_group(start_id=settings.consumer_start_id)
-        await replicate_consumer.ensure_group(start_id=settings.consumer_start_id)
-        if persist_consumer is not None:
-            await persist_consumer.ensure_group(start_id=settings.consumer_start_id)
+        #
+        # Each through `retry_at_boot` (#133): a start that boots into a broker
+        # still down rides it out for the loop's own window instead of exiting
+        # on the first call, so every start — not only the one already in the
+        # loop — absorbs `worst_case_outage_seconds`. A `NoPermissionError` here
+        # still exits at once (broker#64). A `stop` during the backoff skips the
+        # remaining groups; the loops below see the same event and never read.
+        for boot_consumer, boot_group in (
+            (consumer, settings.consumer_group),
+            (replicate_consumer, settings.replicate_consumer_group),
+            (persist_consumer, settings.persist_consumer_group),
+        ):
+            if boot_consumer is None:
+                continue
+            if not await retry_at_boot(
+                functools.partial(boot_consumer.ensure_group, start_id=settings.consumer_start_id),
+                what=f"ensure_group {boot_group}",
+                settings=settings,
+                stop=stop,
+            ):
+                break
         # One instance, deliberately shared: the sweep measures the tree and the
         # byte path adds to it between sweeps. Wired to two objects both halves
         # would be individually correct and the ceiling would never fire, with

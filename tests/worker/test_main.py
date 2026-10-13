@@ -25,6 +25,8 @@ from co_core.pure.adapters.bus.envelope import to_wire
 from co_core.pure.models.changes import FetchPolicyState
 from co_core.pure.util.hashing import sha256
 from co_core_sync.drivers.blobstore import LocalBlobStore
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import NoPermissionError
 
 import src.worker.main
 from src.core.config import Settings, get_settings
@@ -288,6 +290,81 @@ async def test_run_creates_the_group_and_closes_its_client(monkeypatch, fake_red
 
     groups = await fake_redis.xinfo_groups(streams.CONTENT_FETCH)
     assert [g["name"] for g in groups] == [b"replicator.fetch"]
+
+
+def _broker_down_at_boot(monkeypatch, fake_redis, *errors: Exception) -> list[str]:
+    """Make the first ``len(errors)`` group creations raise; return every attempt's stream."""
+    remaining = list(errors)
+    attempts: list[str] = []
+    real_create = fake_redis.xgroup_create
+
+    async def flaky_create(name, *args, **kwargs):
+        attempts.append(name)
+        if remaining:
+            raise remaining.pop(0)
+        return await real_create(name, *args, **kwargs)
+
+    monkeypatch.setattr(fake_redis, "xgroup_create", flaky_create)
+    monkeypatch.setenv("REPLICATOR_ERROR_BACKOFF_BASE_SECONDS", "0.001")
+    monkeypatch.setenv("REPLICATOR_ERROR_BACKOFF_MAX_SECONDS", "0.001")
+    get_settings.cache_clear()
+    return attempts
+
+
+async def test_run_rides_out_a_broker_that_is_down_at_boot(monkeypatch, fake_redis, tmp_path):
+    """#133: a start that boots into a down broker must not exit on its first call.
+
+    Each group's creation fails before it succeeds, so every ``ensure_group`` in
+    ``run()`` is wired through the retry, not only the first.
+    """
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setenv("REPLICATOR_PERSIST_ENABLED", "true")
+    monkeypatch.setenv("REPLICATOR_PERMANENT_BUCKET", "co-gcs-test-permanent")
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    monkeypatch.setattr("src.worker.main.build_permanent_stores", lambda settings: (object(),))
+    refused = RedisConnectionError("Error 111 connecting to co-broker:6379. Connection refused.")
+    attempts = _broker_down_at_boot(monkeypatch, fake_redis, *(refused for _ in range(6)))
+
+    await run(_ended_by_the_loop(monkeypatch))
+
+    for topic in (streams.CONTENT_FETCH, streams.CONTENT_REPLICATE, streams.CONTENT_PERSIST):
+        assert len(await fake_redis.xinfo_groups(topic)) == 1
+    assert len(attempts) == 9
+
+
+async def test_a_sigterm_during_the_boot_backoff_ends_run_cleanly(
+    monkeypatch, fake_redis, tmp_path
+):
+    """A stop while boot waits for the broker is a shutdown, not a boot failure.
+
+    The remaining groups are not attempted: the loops see the same event and
+    never read, so creating them would be a broker call for nothing.
+    """
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    attempts = _broker_down_at_boot(monkeypatch, fake_redis, RedisConnectionError("refused"))
+
+    async def sigterm_while_parked(event: asyncio.Event, seconds: float) -> None:
+        event.set()
+
+    monkeypatch.setattr("src.worker.loop.park", sigterm_while_parked)
+
+    await run(asyncio.Event())
+
+    assert attempts == [streams.CONTENT_FETCH]
+
+
+async def test_run_still_fails_fast_on_an_ungranted_stream(monkeypatch, fake_redis, tmp_path):
+    """broker#64: boot's ``XGROUP CREATE … MKSTREAM`` refusal is not an outage."""
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    attempts = _broker_down_at_boot(
+        monkeypatch, fake_redis, NoPermissionError("No permissions to access a key")
+    )
+
+    with pytest.raises(NoPermissionError):
+        await run(_ended_by_the_loop(monkeypatch))
+    assert attempts == [streams.CONTENT_FETCH]
 
 
 async def test_run_creates_the_blob_dir(monkeypatch, fake_redis, tmp_path):

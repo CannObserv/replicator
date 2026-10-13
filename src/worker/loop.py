@@ -1398,6 +1398,70 @@ async def run_loop[C: Command, R: Report](
             await park(stop, IDLE_SLEEP_SECONDS)
 
 
+async def retry_at_boot(
+    call: Callable[[], Awaitable[object]],
+    *,
+    what: str,
+    settings: Settings,
+    stop: asyncio.Event,
+) -> bool:
+    """Run one of boot's broker calls, riding out an outage as ``run_loop`` does (#133).
+
+    Without this, a start that boots *into* a down broker exits on its first
+    call, ~45 s after the last one, and six starts absorb ~12 min of outage
+    rather than the hour #94 sized the unit for. Same backoff and same ceiling
+    as the loop, so ``worst_case_outage_seconds`` describes every start.
+
+    Narrower than the loop in what it retries: ``_TRANSIENT_ERRORS`` only, and
+    never ``NoPermissionError``. Boot's ``XGROUP CREATE … MKSTREAM`` on an
+    ungranted stream is a refusal no wait will fix (broker#64), and anything
+    unclassified at boot is a configuration fault an exit reports faster.
+
+    Attempted once even if ``stop`` is already set — a pre-set event is how a
+    test runs ``run()`` to its startup work. Returns False when ``stop`` ended
+    the backoff before the call succeeded.
+    """
+    consecutive_failures = 0
+    while True:
+        try:
+            await call()
+        except NoPermissionError:
+            raise
+        except _TRANSIENT_ERRORS as exc:
+            consecutive_failures += 1
+            fields = {
+                "call": what,
+                "consecutive_failures": consecutive_failures,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            if consecutive_failures >= settings.max_consecutive_cycle_failures:
+                logger.error(
+                    "broker unreachable at boot — exiting so the unit restarts",
+                    extra=fields,
+                    exc_info=exc,
+                )
+                raise
+            if consecutive_failures == 1 or consecutive_failures % ERROR_LOG_EVERY == 0:
+                logger.error("broker unreachable at boot — backing off", extra=fields)
+            await park(
+                stop,
+                error_backoff_seconds(
+                    consecutive_failures,
+                    base=settings.error_backoff_base_seconds,
+                    maximum=settings.error_backoff_max_seconds,
+                ),
+            )
+            if stop.is_set():
+                return False
+            continue
+        if consecutive_failures:
+            logger.info(
+                "broker reachable at boot",
+                extra={"call": what, "after_failures": consecutive_failures},
+            )
+        return True
+
+
 def error_backoff_seconds(consecutive_failures: int, *, base: float, maximum: float) -> float:
     """Exponential backoff (``base * 2**(n-1)``) capped at ``maximum``.
 

@@ -616,6 +616,11 @@ class Settings(BaseSettings):
         limiter and the unit reads as ``active (running)`` forever. Logged at
         startup so the value is in the journal rather than only in two comments.
 
+        It bounds **every** start, not only the one already consuming (#133):
+        boot's broker calls retry with the same backoff and ceiling, so a start
+        that boots into a down broker absorbs this too rather than exiting on
+        its first ``ensure_group``.
+
         An upper bound, not the exact figure — the first few cycles back off
         less than the cap.
         """
