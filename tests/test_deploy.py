@@ -158,7 +158,10 @@ def test_the_unit_absorbs_the_worst_outage_this_cluster_has_had():
     settings = Settings()
     burst = int(_directive("StartLimitBurst"))
     per_start = _floor_of_one_start(settings)
-    between_starts = float(_directive("RestartSec")) + _floor_default("REPLICATOR_REDIS_FLOOR_WAIT")
+    # Less one second: the floor check times its wait on bash's whole-second
+    # SECONDS, so it can stop as much as a second short of the full value.
+    floor_wait = _floor_default("REPLICATOR_REDIS_FLOOR_WAIT") - 1
+    between_starts = float(_directive("RestartSec")) + floor_wait
     absorbed = burst * per_start + (burst - 1) * between_starts
 
     assert absorbed >= WORST_OBSERVED_CLUSTER_OUTAGE_SECONDS, (
