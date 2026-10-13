@@ -185,7 +185,7 @@ for _ in $(seq 1 200); do
 done
 [ "${SECOND}" = "1" ] || fail "the restarted worker never exited while the broker was down (NRestarts $(nrestarts), unit $(active))"
 journalctl -u "${UNIT}.service" --since "${SINCE}" 2>/dev/null \
-  | grep -q 'broker unreachable at boot .* exiting so the unit restarts' \
+  | grep -q 'broker unavailable at boot .* exiting so the unit restarts' \
   || fail "a start that booted into the down broker exited without riding it out — boot spends a start in seconds, so the budget covers minutes of outage, not the hour #94 sized it for (#133)"
 say "PASS 3/5 — a start that booted into the outage rode it out to the ceiling (NRestarts $(nrestarts))"
 

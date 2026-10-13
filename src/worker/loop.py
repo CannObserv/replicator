@@ -1436,13 +1436,13 @@ async def retry_at_boot(
             }
             if consecutive_failures >= settings.max_consecutive_cycle_failures:
                 logger.error(
-                    "broker unreachable at boot — exiting so the unit restarts",
+                    "broker unavailable at boot — exiting so the unit restarts",
                     extra=fields,
                     exc_info=exc,
                 )
                 raise
             if consecutive_failures == 1 or consecutive_failures % ERROR_LOG_EVERY == 0:
-                logger.error("broker unreachable at boot — backing off", extra=fields)
+                logger.error("broker unavailable at boot — backing off", extra=fields)
             await park(
                 stop,
                 error_backoff_seconds(
@@ -1456,7 +1456,7 @@ async def retry_at_boot(
             continue
         if consecutive_failures:
             logger.info(
-                "broker reachable at boot",
+                "broker available at boot",
                 extra={"call": what, "after_failures": consecutive_failures},
             )
         return True

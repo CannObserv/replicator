@@ -140,3 +140,15 @@ async def test_a_call_made_after_a_stop_is_still_attempted_once(settings):
 
     assert await _retry(call, settings, stop) is True
     assert call.attempts == 1
+
+
+async def test_a_refusing_broker_is_not_logged_as_unreachable(settings, caplog):
+    """CR 4: a capped or loading broker answered — the line must not say otherwise."""
+    call = _Flaky(OutOfMemoryError("command not allowed when used memory > 'maxmemory'"))
+
+    with caplog.at_level("INFO", logger="src.worker.loop"):
+        await _retry(call, _brisk(settings))
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert messages
+    assert not any("unreachable" in message for message in messages), messages
