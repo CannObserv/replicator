@@ -763,9 +763,9 @@ async def run(
         # through (issuer contract MUST-6), so "$" stands with a live issuer too.
         #
         # Each through `retry_at_boot` (#133): a start that boots into a broker
-        # still down rides it out for the loop's own window instead of exiting
-        # on the first call, so every start — not only the one already in the
-        # loop — absorbs `worst_case_outage_seconds`. A `NoPermissionError` here
+        # still down waits it out with the loop's backoff and ceiling instead of
+        # exiting on the first call, so `worst_case_outage_seconds` bounds every
+        # start, not only the one already in the loop. A `NoPermissionError` here
         # still exits at once (broker#64). A `stop` during the backoff ends the
         # run here, before the replay: past this point every step either reads
         # nothing or logs a summary of work it never did (#133 CR 1).
