@@ -354,6 +354,31 @@ async def test_a_sigterm_during_the_boot_backoff_ends_run_cleanly(
     assert attempts == [streams.CONTENT_FETCH]
 
 
+async def test_a_sigterm_during_the_boot_backoff_claims_no_replay(
+    monkeypatch, fake_redis, tmp_path, capsys
+):
+    """CR 1: a replay that never ran must not log a summary of an empty map."""
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    _broker_down_at_boot(monkeypatch, fake_redis, RedisConnectionError("refused"))
+
+    async def sigterm_while_parked(event: asyncio.Event, seconds: float) -> None:
+        event.set()
+
+    monkeypatch.setattr("src.worker.loop.park", sigterm_while_parked)
+
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    try:
+        await run(asyncio.Event())
+        out = capsys.readouterr().out
+    finally:
+        root.handlers, root.level = saved_handlers, saved_level
+
+    assert "fetch policy" not in out
+    assert "worker stopped" in out
+
+
 async def test_run_still_fails_fast_on_an_ungranted_stream(monkeypatch, fake_redis, tmp_path):
     """broker#64: boot's ``XGROUP CREATE … MKSTREAM`` refusal is not an outage."""
     monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))

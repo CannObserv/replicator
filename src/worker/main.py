@@ -766,8 +766,9 @@ async def run(
         # still down rides it out for the loop's own window instead of exiting
         # on the first call, so every start — not only the one already in the
         # loop — absorbs `worst_case_outage_seconds`. A `NoPermissionError` here
-        # still exits at once (broker#64). A `stop` during the backoff skips the
-        # remaining groups; the loops below see the same event and never read.
+        # still exits at once (broker#64). A `stop` during the backoff ends the
+        # run here, before the replay: past this point every step either reads
+        # nothing or logs a summary of work it never did (#133 CR 1).
         for boot_consumer, boot_group in (
             (consumer, settings.consumer_group),
             (replicate_consumer, settings.replicate_consumer_group),
@@ -781,7 +782,11 @@ async def run(
                 settings=settings,
                 stop=stop,
             ):
-                break
+                logger.info(
+                    "worker stopped",
+                    extra={"before": "ready", "while": f"ensure_group {boot_group}"},
+                )
+                return
         # One instance, deliberately shared: the sweep measures the tree and the
         # byte path adds to it between sweeps. Wired to two objects both halves
         # would be individually correct and the ceiling would never fire, with
