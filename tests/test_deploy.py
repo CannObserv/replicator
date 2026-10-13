@@ -122,11 +122,12 @@ def test_the_unit_absorbs_the_worst_outage_this_cluster_has_had():
     nearly twice the budget, and survived only by the accident of when continuous
     failure began — the worker did not start failing until ~15:00.
 
-    The multiplication assumes every start rides out ``worst_case_outage_seconds``,
-    which held for the first start only until #133: later ones booted into the
-    down broker and exited on their first ``ensure_group``, so six starts absorbed
-    ~12 min. ``retry_at_boot`` is what makes ``burst *`` honest, and
-    ``tests/worker/test_loop_boot.py`` pins it.
+    The multiplication assumes every start waits an outage out, which held for
+    the first start only until #133: later ones booted into the down broker and
+    exited on their first ``ensure_group``, so six starts absorbed ~12 min.
+    ``retry_at_boot`` gives every start the shape the product assumes, but the
+    product sums ``worst_case_outage_seconds``, an *upper* bound. Against a broker
+    refusing instantly, the floor is ~57 min, just under the pinned 58 (#134).
     """
     settings = Settings()
     burst = int(_directive("StartLimitBurst"))
