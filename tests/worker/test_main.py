@@ -333,34 +333,17 @@ async def test_run_rides_out_a_broker_that_is_down_at_boot(monkeypatch, fake_red
 
 
 async def test_a_sigterm_during_the_boot_backoff_ends_run_cleanly(
-    monkeypatch, fake_redis, tmp_path
+    monkeypatch, fake_redis, tmp_path, capsys
 ):
     """A stop while boot waits for the broker is a shutdown, not a boot failure.
 
     The remaining groups are not attempted: the loops see the same event and
-    never read, so creating them would be a broker call for nothing.
+    never read, so creating them would be a broker call for nothing. Nor is the
+    replay, whose summary would report an empty map it never rebuilt (#133 CR 1).
     """
     monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
     monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
     attempts = _broker_down_at_boot(monkeypatch, fake_redis, RedisConnectionError("refused"))
-
-    async def sigterm_while_parked(event: asyncio.Event, seconds: float) -> None:
-        event.set()
-
-    monkeypatch.setattr("src.worker.loop.park", sigterm_while_parked)
-
-    await run(asyncio.Event())
-
-    assert attempts == [streams.CONTENT_FETCH]
-
-
-async def test_a_sigterm_during_the_boot_backoff_claims_no_replay(
-    monkeypatch, fake_redis, tmp_path, capsys
-):
-    """CR 1: a replay that never ran must not log a summary of an empty map."""
-    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
-    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
-    _broker_down_at_boot(monkeypatch, fake_redis, RedisConnectionError("refused"))
 
     async def sigterm_while_parked(event: asyncio.Event, seconds: float) -> None:
         event.set()
@@ -375,6 +358,7 @@ async def test_a_sigterm_during_the_boot_backoff_claims_no_replay(
     finally:
         root.handlers, root.level = saved_handlers, saved_level
 
+    assert attempts == [streams.CONTENT_FETCH]
     assert "fetch policy" not in out
     assert "worker stopped" in out
 
