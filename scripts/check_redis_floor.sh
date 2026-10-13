@@ -21,6 +21,12 @@
 #   - version read, < 7.0 -> a real downgrade, block the worker  -> exit 1
 #   - version read, >=7.0 -> ok                                  -> exit 0
 #
+# UNVERIFIED now outlives the start it was reported in (#133 CR 5). Boot waits a
+# down broker out (`retry_at_boot`) instead of exiting at its first call, so a
+# start that soft-passed here can consume once the broker returns without this
+# check ever reading its version. The same exposure the consume loop's in-place
+# reconnect already had; it bites only a broker downgraded during an outage.
+#
 # Unlike archiver's copy there is no "URL unset -> skip" branch: an unset
 # REPLICATOR_REDIS_URL means the worker falls back to the same localhost default
 # used below (see src/core/config.py), so skipping would leave the real
