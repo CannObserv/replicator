@@ -109,6 +109,14 @@ stop_broker() {
 }
 
 nrestarts() { systemctl show "${UNIT}.service" -p NRestarts --value 2>/dev/null; }
+# Read whole, then searched (#133 CR 7). `journalctl | grep -q` under pipefail
+# fails on a match: grep exits at the first hit, journalctl dies of SIGPIPE, and
+# the pipeline reports 141 — so the check passes only while the journal is small.
+journal_has() {
+  local journal
+  journal="$(journalctl -u "${UNIT}.service" --since "$1" 2>/dev/null)"
+  grep -q -- "$2" <<<"${journal}"
+}
 active()    { systemctl is-active "${UNIT}.service" 2>/dev/null; }
 
 say "scratch broker on ${PORT}, scratch unit ${UNIT}.service, repo ${REPO}"
@@ -184,8 +192,7 @@ for _ in $(seq 1 200); do
   sleep 0.2
 done
 [ "${SECOND}" = "1" ] || fail "the restarted worker never exited while the broker was down (NRestarts $(nrestarts), unit $(active))"
-journalctl -u "${UNIT}.service" --since "${SINCE}" 2>/dev/null \
-  | grep -q 'broker unavailable at boot .* exiting so the unit restarts' \
+journal_has "${SINCE}" 'broker unavailable at boot .* exiting so the unit restarts' \
   || fail "a start that booted into the down broker exited without riding it out — boot spends a start in seconds, so the budget covers minutes of outage, not the hour #94 sized it for (#133)"
 say "PASS 3/5 — a start that booted into the outage rode it out to the ceiling (NRestarts $(nrestarts))"
 
@@ -202,7 +209,7 @@ for _ in $(seq 1 300); do
   if [ "$(active)" = "active" ] && redis-cli -u "${URL}" PING 2>/dev/null | grep -q PONG; then
     # `worker ready` after the broker returned is the reconnection: the unit's
     # whole ExecStartPre chain passed on the way back in.
-    if journalctl -u "${UNIT}.service" --since "-2min" 2>/dev/null | grep -q '"message": "worker ready"'; then
+    if journal_has "-2min" '"message": "worker ready"'; then
       RECOVERED=1
       break
     fi
