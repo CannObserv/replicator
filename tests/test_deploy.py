@@ -146,20 +146,23 @@ def test_the_unit_absorbs_the_worst_outage_this_cluster_has_had():
     A *lower* bound, because survival is a claim about the worst case (#134).
     Until #134 this multiplied ``StartLimitBurst`` by ``worst_case_outage_seconds``,
     an upper bound, and passed at six starts while the floor was ~56 min against
-    the 58 pinned. The floor is the start already running when the outage
-    begins, then ``StartLimitBurst`` restarts, each preceded by ``RestartSec``
-    and the floor check's wait — which a refusing broker spends in full, being
-    an 'unreachable' probe. The guard, the wheelhouse sync and interpreter start
-    are left out: real, unmeasured, and only ever additions to a floor.
+    the 58 pinned. The floor is ``StartLimitBurst`` starts *including the one
+    already running*: systemd counts every start against the burst, a deploy's
+    or a manual restart's as well, so a unit started within the window before
+    the outage has one restart fewer to spend (#134 CR 1). Each restart is
+    preceded by ``RestartSec`` and the floor check's wait — which a refusing
+    broker spends in full, being an 'unreachable' probe. The guard, the
+    wheelhouse sync and interpreter start are left out: real, unmeasured, and
+    only ever additions to a floor.
     """
     settings = Settings()
     burst = int(_directive("StartLimitBurst"))
     per_start = _floor_of_one_start(settings)
     between_starts = float(_directive("RestartSec")) + _floor_default("REPLICATOR_REDIS_FLOOR_WAIT")
-    absorbed = per_start + burst * (between_starts + per_start)
+    absorbed = burst * per_start + (burst - 1) * between_starts
 
     assert absorbed >= WORST_OBSERVED_CLUSTER_OUTAGE_SECONDS, (
-        f"the unit absorbs as little as {absorbed / 60:.1f} min across {burst} restarts, "
+        f"the unit absorbs as little as {absorbed / 60:.1f} min across {burst} starts, "
         f"but this cluster has had a {WORST_OBSERVED_CLUSTER_OUTAGE_SECONDS / 60:.0f} min "
         "outage — it would have needed an operator"
     )
