@@ -351,8 +351,9 @@ class Settings(BaseSettings):
         default=5, validation_alias="REPLICATOR_MAX_DELIVERY_ATTEMPTS"
     )
 
-    # Backoff for a poll cycle that raised — a broker outage, not a bad message.
-    # Escalates base * 2**(n-1) to the cap so a down Redis is not hammered.
+    # Backoff for a poll cycle that raised — a broker outage, not a bad message —
+    # and, since #133, for boot's broker calls (`retry_at_boot`). Escalates
+    # base * 2**(n-1) to the cap so a down Redis is not hammered.
     error_backoff_base_seconds: float = Field(
         default=1.0, validation_alias="REPLICATOR_ERROR_BACKOFF_BASE_SECONDS"
     )
@@ -360,7 +361,8 @@ class Settings(BaseSettings):
         default=30.0, validation_alias="REPLICATOR_ERROR_BACKOFF_MAX_SECONDS"
     )
 
-    # Consecutive failed cycles before the loop stops absorbing and re-raises.
+    # Consecutive failed cycles before the loop stops absorbing and re-raises;
+    # boot's broker calls give up at the same count (#133).
     # The backoff must not turn "dies on every blip" into "never dies at all": a
     # worker that cannot reach Redis looks alive to systemd (nothing exits, so
     # Restart=on-failure never fires) while doing no work, and a permanently
