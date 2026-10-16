@@ -41,6 +41,7 @@ Every override's `SKILL.md` must declare `overrides:` and `override-reason:` in 
 
 | Skill | Purpose |
 |---|---|
+| `coordinating-epics` | Serial, operator-paced epic burn-down: verifies each child from evidence, hands off the next (`coordinate the epic`, `check-in`, `next issue`) |
 | `curating-context` | Curates `AGENTS.md` and its live reference docs against a token budget |
 | `enforcing-architecture` | Turns an accepted architecture finding into an executable fitness function |
 | `init-project-fastapi` | Bootstraps a CannObserv FastAPI service (this repo's own foundation) |
