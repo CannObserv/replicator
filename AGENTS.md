@@ -131,6 +131,8 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
 - **Store, then publish — never the reverse.** A fact pointing at absent bytes is
   unrepairable by the consumer; stored bytes with no fact repair themselves on the
   reclaim.
+- **Every `BlobStore` call from a coroutine goes through `asyncio.to_thread`** —
+  [docs/STORAGE.md](docs/STORAGE.md) is the authority for either store.
 - **Read `count=1`.** `AsyncBusConsumer.read(count>1)` raises on a malformed frame
   *before* returning the well-formed ones. Recovery claims at `count=1` too — for
   the #98 turn bound, not poison (#109).
