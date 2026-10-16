@@ -469,3 +469,12 @@ tests/test_socraticode_config.py :: f"docs/COMMANDS.md caps at {sorted(map(sorte
 .socraticodecontextartifacts.json :: "description": "How the systemd unit runs and the guards it starts behind;
 # The POLITENESS description this run extended: ENVIRONMENT.md does index REPLICATOR_MIN_HOST_INTERVAL_SECONDS by name.
 .socraticodecontextartifacts.json :: "description": "Per-host politeness, the consumer-side mechanism;
+# 2026-10-16 curation: back-references to sections that stayed inline.
+# Common Commands still carries the env-load line COMMANDS.md points at.
+docs/COMMANDS.md :: AGENTS.md), then source this once per shell from the repo root; the examples below assume it:
+# Design Preferences stays in AGENTS.md; both SKILLS.md lines point at it by name.
+docs/SKILLS.md :: None — `brainstorming` runs upstream's, under AGENTS.md's **Design Preferences**.
+docs/SKILLS.md :: | `brainstorming` | Intent and design before building; this repo's overrides are AGENTS.md's Design Preferences |
+# Provenance heading from #131, not this run's; nothing links its anchor (grep "in-flight-count"),
+# so the slug is not load-bearing. Rename it with the next COMMANDS.md edit rather than widen this one.
+docs/COMMANDS.md :: The patching gate's in-flight count (#131)

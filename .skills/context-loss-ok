@@ -703,3 +703,25 @@ AGENTS.md :: tighten :: - [CONVENTIONS.md](docs/CONVENTIONS.md) — the rules co
 AGENTS.md :: tighten :: - [INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) — VM topology, ports, the broker, and the buckets
 AGENTS.md :: tighten :: - [TESTING.md](docs/TESTING.md) — fakeredis's divergences, the keys an integration run may create
 AGENTS.md :: tighten :: - [content-persist-issuer-contract.md](docs/contracts/content-persist-issuer-contract.md) — keeping a blob in the permanent store by digest: obligations, the refusal registry
+
+# Judged losses from the 2026-10-16 curation (AGENTS.md 6199 -> under 6000).
+# Three Bus Conventions bullets whose every fact the destination already states
+# at length; a verbatim move would sit a near-duplicate beside the canonical
+# treatment, which Phase 5 forbids. Each read against its destination:
+#   blob backends  -> docs/STORAGE.md ## Two backends, one seam: REPLICATOR_BLOB_BACKEND
+#                     (#7), the file:// / gs:// table row, "local is the default and stays
+#                     the default", the bold to_thread rule; STORAGE.md is indexed.
+#   replicate gcs  -> docs/CONVENTIONS.md (create-if-absent, "never resolved as a path",
+#                     line 45) and docs/STREAMS.md's content.replicate bullet (#29).
+#   Watcher issues -> docs/STREAMS.md's "Watcher alone issues content.fetch" bullet: #90,
+#                     seed_fetch.py seeds scratch streams, --production, Watcher's identity.
+AGENTS.md :: duplicate :: - **Two blob backends, one seam.** `REPLICATOR_BLOB_BACKEND` selects them: `local`
+AGENTS.md :: duplicate :: announces `file://` and `gcs` announces `gs://`, and `local` stays the
+AGENTS.md :: duplicate :: compiled-in default deliberately (#7). Every `BlobStore` call from a coroutine
+AGENTS.md :: duplicate :: goes through `asyncio.to_thread`.
+AGENTS.md :: duplicate :: [docs/STORAGE.md](docs/STORAGE.md) is the authority for either store.
+AGENTS.md :: duplicate :: - **The replicate loop writes for `gcs` (#29)** — create-if-absent, and `blob_uri` is
+AGENTS.md :: duplicate :: never resolved as a path. Read [docs/CONVENTIONS.md](docs/CONVENTIONS.md) first.
+AGENTS.md :: duplicate :: - **Watcher alone issues `content.fetch` (#90).** `scripts/seed_fetch.py` seeds
+AGENTS.md :: duplicate :: scratch streams; the live one takes `--production` and Watcher's identity, never
+AGENTS.md :: duplicate :: `replicator`'s.

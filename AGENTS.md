@@ -128,11 +128,6 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
   `command_id:occurred_at`). `info_source_id` and replicate's
   `info_item_rep_spec_id` are **echoed, never read** — a `test_boundaries.py`
   carve-out is one field wide, and adding one edits the charter (#28, #29).
-- **Two blob backends, one seam.** `REPLICATOR_BLOB_BACKEND` selects them: `local`
-  announces `file://` and `gcs` announces `gs://`, and `local` stays the
-  compiled-in default deliberately (#7). Every `BlobStore` call from a coroutine
-  goes through `asyncio.to_thread`.
-  [docs/STORAGE.md](docs/STORAGE.md) is the authority for either store.
 - **Store, then publish — never the reverse.** A fact pointing at absent bytes is
   unrepairable by the consumer; stored bytes with no fact repair themselves on the
   reclaim.
@@ -169,12 +164,7 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
   default); `content.blobs` carries both fetch outcomes and `content.artifacts`
   both outcomes of replicate and of persist; `content.fetch-policy` is read
   **groupless** — no group, no ack, no DLQ.
-- **The replicate loop writes for `gcs` (#29)** — create-if-absent, and `blob_uri` is
-  never resolved as a path. Read [docs/CONVENTIONS.md](docs/CONVENTIONS.md) first.
 - **A fetch may not reach loopback, RFC 1918, or the tailnet (#89, #95).** Per redirect hop.
-- **Watcher alone issues `content.fetch` (#90).** `scripts/seed_fetch.py` seeds
-  scratch streams; the live one takes `--production` and Watcher's identity, never
-  `replicator`'s.
 - **The `docs/contracts/` documents are normative**, indexed below.
   `tests/test_boundaries.py` enforces the charter in CI; change a charter and its
   tests together.
