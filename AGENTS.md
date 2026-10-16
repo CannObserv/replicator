@@ -14,6 +14,16 @@ The command → fact flow: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 TDD required: no production code without a failing test first.
 
+## Design Preferences
+
+Override vendored `brainstorming`'s defaults:
+
+- Design docs: `docs/plans/YYYY-MM-DD-<topic>-design.md`.
+- Contract changes (`docs/contracts/`, a cross-repo payload, stream semantics) always get one.
+- Approval opens a GitHub issue; the doc commits as `#<n> docs: add design doc for <topic>`.
+- Multi-step work → a worktree (`using-git-worktrees`).
+- A plan is optional; `writing-plans` is the local one, not `superpowers:`.
+
 ## Environment & Tooling
 
 Python ≥3.12, uv, pytest, ruff. `ty` (`uv run ty check`) is a **non-gating** type checker — no pre-commit or CI gate.

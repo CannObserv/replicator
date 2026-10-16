@@ -30,9 +30,7 @@ Managed by the [`managing-skills`](../skills/managing-skills/) skill.
 
 ### Local overrides
 
-| Skill | Overrides | Why |
-|---|---|---|
-| `brainstorming` | `obra-superpowers/brainstorming` | Project conventions: `docs/plans/` path, `#<n> [type]: desc` commit convention, a GitHub issue at design approval and `using-git-worktrees` after it, `writing-plans` optional not mandatory, FastAPI stack context. Omits upstream's visual companion, dot graph, spec self-review and user review gate — the architectural gate ends at in-chat design approval and the doc is reviewed in its commit. `override-reason:` is the full list |
+None — `brainstorming` runs upstream's, under AGENTS.md's **Design Preferences**.
 
 Every override's `SKILL.md` must declare `overrides:` and `override-reason:` in its frontmatter
 `metadata` block. A local directory is a **complete replacement**, not a partial merge.
@@ -83,6 +81,7 @@ that hold has ended — see [The curating-context v1.2 hold (ended)](#the-curati
 
 | Skill | Purpose |
 |---|---|
+| `brainstorming` | Intent and design before building; this repo's overrides are AGENTS.md's Design Preferences |
 | `dispatching-parallel-agents` | 2+ independent tasks with no shared state |
 | `executing-plans` | Execute a written plan in a separate session with review checkpoints |
 | `finishing-a-development-branch` | Decide how to integrate completed work |
