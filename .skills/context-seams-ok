@@ -478,3 +478,13 @@ docs/SKILLS.md :: | `brainstorming` | Intent and design before building; this re
 # Provenance heading from #131, not this run's; nothing links its anchor (grep "in-flight-count"),
 # so the slug is not load-bearing. Rename it with the next COMMANDS.md edit rather than widen this one.
 docs/COMMANDS.md :: The patching gate's in-flight count (#131)
+
+# --- #140 curation: Memory protection split out of DEPLOYMENT.md ----------
+# Judged one by one; each points at content that STAYED in DEPLOYMENT.md or
+# is the new doc's own split note. ENVIRONMENT.md's two name the start budget
+# (#134) and the checkout guard, neither of which moved.
+docs/ENVIRONMENT.md :: `REPLICATOR_MAX_CONSECUTIVE_CYCLE_FAILURES` — consecutive failed cycles
+docs/ENVIRONMENT.md :: `REPLICATOR_ALLOW_ANY_CHECKOUT` — bypasses the `main`-checkout guard
+docs/MEMORY-PROTECTION.md :: [DEPLOYMENT.md](DEPLOYMENT.md) (#140), which keeps the unit's lifecycle and the
+docs/MEMORY-PROTECTION.md :: from [DEPLOYMENT.md](DEPLOYMENT.md#server-lifecycle)'s table
+.socraticodecontextartifacts.json :: "description": "Memory protection for co-replicator, split out of docs/DEPLOYMENT.md (#140).

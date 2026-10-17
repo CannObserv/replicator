@@ -725,3 +725,12 @@ AGENTS.md :: duplicate :: never resolved as a path. Read [docs/CONVENTIONS.md](d
 AGENTS.md :: duplicate :: - **Watcher alone issues `content.fetch` (#90).** `scripts/seed_fetch.py` seeds
 AGENTS.md :: duplicate :: scratch streams; the live one takes `--production` and Watcher's identity, never
 AGENTS.md :: duplicate :: `replicator`'s.
+
+# ---- #140 curation: Memory protection demoted out of docs/DEPLOYMENT.md ----
+# Each read against its replacement. The memory section moved whole to
+# docs/MEMORY-PROTECTION.md; these four lines pointed at it or at the table it
+# left behind, so the same change that moved it retargets them.
+AGENTS.md :: retarget :: - [DEPLOYMENT.md](docs/DEPLOYMENT.md) — the unit's lifecycle, its start guards, the co-core pin, the host's memory tunables
+docs/DEPLOYMENT.md :: retarget :: The systemd unit's lifecycle, the guards it starts behind, the host's memory
+docs/DEPLOYMENT.md :: retarget :: tunables, and the co-core pin. What it reports when it *fails* is in
+docs/DEPLOYMENT.md :: retarget :: from the table above — `daemon-reload` alone silently keeps the old values, and

@@ -461,7 +461,7 @@ def test_the_production_units_outrank_dev_tooling_for_the_oom_killer(unit: Path)
     start at 0 (``TestTheSessionPremise``), so the comparison this test is named
     for is a real one.
 
-    Two things that rank does not buy, both recorded in docs/DEPLOYMENT.md so
+    Two things that rank does not buy, both recorded in docs/MEMORY-PROTECTION.md so
     the doc and this test say the same thing. It is no substitute for capping
     whatever launches a SocratiCode server — the cap bounds the launch before
     any killer has to act. And the worker's rank protects nothing if the kernel
