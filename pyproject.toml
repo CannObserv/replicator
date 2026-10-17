@@ -7,7 +7,42 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
-    # Floor is 0.19.6, for the `content.persist` contract (cannobserv#493, #114
+    # **Seventeen minors (0.19 -> 0.36), and the floor carries no new feature**
+    # (#140). The jump comes ahead of the release #136 needs, which carries
+    # `FetchPolicyState.generation` (cannobserv#568). Then #136 is a patch bump
+    # alongside its rule, rather than this diff landing with a behaviour change.
+    # Floor is 0.36.0, the minor's only release, and the ceiling stays at the
+    # minor. Both `co-core-aio` and `co-core-sync` 0.36.0 require
+    # `co-core>=0.36,<0.37`, so the three can't drift apart.
+    #
+    # **Diffing the wheels covered the whole import closure**, not just the
+    # modules named here: 56 files at 0.19.6 and 57 at 0.36.0, compared by AST
+    # with docstrings removed. The models and the util and bus modules are
+    # identical bar docstrings: `pure/models/changes.py`, `pure/util/{blobstore,gcs}.py`
+    # and `pure/adapters/bus/streams.py`. So no payload field moved under
+    # `extra="ignore"`, and `FetchPolicyState`'s fields, defaults and config are
+    # unchanged. The rest of `pure/adapters/bus/*`, `effects/{bus,fetch,gcs}.py`,
+    # `pure/util/hashing.py` and all of `co_core_aio` are byte-identical, bar
+    # `__version__`. Two changes are additive, and neither is called here:
+    #
+    # - `co_core_sync.drivers.blobstore.gcs` adds the pointer reconciler's verbs:
+    #   `PointerEntry`, `list_pointer_entries` and `delete_pointer`
+    #   (cannobserv#496).
+    # - `pure/extract/*` adds XML extraction and `UnsupportedExtractionError`
+    #   (cannobserv#523). It loads only because `changes.py` imports
+    #   `extract.canonical`.
+    #
+    # Requires-Dist and the extras are unchanged bar the self-pins. Every Breaking
+    # entry in the CHANGELOG across the range falls in one of three places: the
+    # domain models (information, information set, jurisdiction, address,
+    # event), their WordPress and co/v1 adapters, or `extraction_config_from_spec`.
+    # Replicator imports or calls none of them. That includes cannobserv#549's
+    # aware-only datetimes, which cover those domain models and the wp/v2
+    # formatters, not the change-bus payloads.
+    #
+    # Previously:
+    #
+    # Floor was 0.19.6, for the `content.persist` contract (cannobserv#493, #114
     # step 6): `ContentPersistCommand`, `BlobPersistedEvent` / `PersistFailedEvent`
     # and their Emit twins, and the `CONTENT_PERSIST` stream constant. On 0.19.5 the
     # worker fails at import. The same release makes both blob stores hash what they
@@ -119,9 +154,9 @@ dependencies = [
     # at module load, so a skew cannot reach a running worker at all. Additive over
     # 0.8.0 for everything the fetch path uses — no field on ContentFetchCommand,
     # BlobAvailableEvent or FetchFailedEvent moved between the two.
-    "co-core[extract]>=0.19.6,<0.20",
-    "co-core-aio[bus,gcs]>=0.19.6,<0.20",
-    "co-core-sync[gcs]>=0.19.6,<0.20",
+    "co-core[extract]>=0.36.0,<0.37",
+    "co-core-aio[bus,gcs]>=0.36.0,<0.37",
+    "co-core-sync[gcs]>=0.36.0,<0.37",
     "fastapi>=0.126.0,<1",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.5.0,<3",
