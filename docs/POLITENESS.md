@@ -63,9 +63,21 @@ Four consumer-side rules that came out of building it, each one a way to be wron
   raises.
 - **Arrival order is not publication order.** The producer republishes its whole set
   periodically; a republish assembled from a snapshot taken before a change that already
-  shipped would revert it, silently and in the loosening direction. The map holds the last
-  applied `occurred_at` per host and applies on `>=` — `>=` rather than `>` so a full set
-  stamped with one instant does not lose every host after the first.
+  shipped would revert it, silently and in the loosening direction. After F1 the producer is
+  Archiver, whose outbox can also publish a retried row behind the next one. The map holds the
+  last applied **frame** per host, tombstones included, and orders the next one through
+  co-core's `fetch_policy_supersedes` (#136):
+  - **With a `generation`:** a higher one applies. An equal one is a republish repeating its
+    delta, so it is skipped, with no log line.
+  - **Without one** (all of Watcher's frames): the rule from before #136. The frame applies on
+    `>=` against the held `occurred_at`, `>=` rather than `>` so a full set stamped with one
+    instant does not lose every host after the first.
+  - **Mixed, a ratchet:** an ordered frame claims an unordered slot whatever the two stamps
+    say, since the producers' clocks are not comparable. An unordered frame never overwrites an
+    ordered slot.
+
+  The tombstone keeps its frame. A map that forgot it would let a stale unordered frame
+  resurrect the host.
 
 And two that are about the frame rather than the policy:
 
@@ -106,6 +118,14 @@ empty `stricter than the fallback` grep as "resolved": on a stream nobody has to
 the last warning has rotated out while the condition still holds. Read
 **`hosts_stricter_than_default`** on the replay summary instead — every boot re-asserts it, and
 non-zero is what says to run the warning grep unwindowed (no `--since`) to find out which hosts.
+
+**Two `ignoring a fetch policy` lines name an ordering refusal (#136), and an equal-generation
+skip names none** — that skip is every republish after F1. `older than the one already applied`
+carries `generation` and `held_generation` when an outbox reorder was the reason, and the stamp
+pair when it was an unordered frame's `occurred_at`. `without a generation for a host that holds
+one` is a Watcher still publishing after F1, or an Archiver frame built without its
+`generation`. Either way the ratchet drops the frame, which `FetchPolicyState`'s docstring calls
+silent, and this line is what keeps it from being silent.
 
 ## Escalation on 429 and 503
 

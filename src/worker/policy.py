@@ -5,9 +5,25 @@ policy: Replicator enforces a per-host rate because it is the only process that
 can see an origin's tolerance across commands, and the issuer decides the
 numbers because they are operator policy. #12 shipped the mechanism with a
 single env default standing in for the numbers; this module is the other half —
-Watcher publishes a `FetchPolicyState` per host, every worker replays the stream
-from `0-0` at boot and tails it thereafter, and the map that results is what
-`HostPacer` consults.
+the producer publishes a `FetchPolicyState` per host, every worker replays the
+stream from `0-0` at boot and tails it thereafter, and the map that results is
+what `HostPacer` consults.
+
+**The producer moves at the headless-Watcher flip F1.** Watcher publishes until
+then, from its `Domain` table, with no `generation`; Archiver publishes after,
+through an outbox that can reorder a retried row behind the next one, so every
+frame it sends carries a per-host `generation` (cannobserv#566, #136). Nothing
+here branches on which producer sent a frame — only on whether it is ordered:
+
+* **Ordered** frames apply iff co-core's `fetch_policy_supersedes` says so: a
+  higher `generation` than the held frame's. Equal is a republish repeating its
+  delta, and skipped.
+* **Unordered** frames keep the rule this map had before #136: arrival order,
+  guarded by `occurred_at` (`>=`) against a stale republish.
+* **Mixed, a ratchet.** An ordered frame claims a slot holding an unordered one,
+  whatever the two stamps say — the producers' clocks are not comparable. An
+  unordered frame never overwrites an ordered slot. A replay across F1 holds
+  Watcher's frames ahead of Archiver's, so the two rules agree on it.
 
 Two pieces, split because only one of them needs a broker:
 
@@ -29,12 +45,15 @@ bounded by the producer's host count, and rebuilt by replay on every boot.
 
 import asyncio
 import time
-from datetime import datetime
 from typing import Protocol
 
 from co_core.pure.adapters.bus.envelope import BusMessage
 from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
-from co_core.pure.models.changes import ChangeEventPayload, FetchPolicyState
+from co_core.pure.models.changes import (
+    ChangeEventPayload,
+    FetchPolicyState,
+    fetch_policy_supersedes,
+)
 from co_core_aio.bus import AsyncBusTailReader
 from redis.asyncio import Redis
 
@@ -119,17 +138,17 @@ class FetchPolicyMap:
 
     def __init__(self, default_interval_seconds: float) -> None:
         self._default = default_interval_seconds
-        self._intervals: dict[str, float] = {}
-        # Last applied stamp per host, live values and tombstones alike. Arrival
-        # order is not publication order: the producer periodically republishes
-        # its whole set, and a republish assembled from a snapshot taken before a
-        # change that already shipped would otherwise revert it.
+        # The last frame applied per host, live values and tombstones alike — the
+        # frame and not just its number, because ordering the next one needs its
+        # `generation` and, for an unordered frame, its `occurred_at` (#136).
+        # Arrival order is not publication order: the producer periodically
+        # republishes its whole set, and Archiver's outbox can reorder a retry.
         #
-        # A revoked host keeps its stamp even though _intervals drops it, so this
-        # map outgrows tracked_hosts. Deliberate: forgetting the stamp on
-        # revocation would let the stale *live* policy that the tombstone
-        # superseded resurrect the host on the next republish (CR #10).
-        self._applied_at: dict[str, datetime] = {}
+        # A revoked host keeps its frame, so this outgrows tracked_hosts.
+        # Deliberate: forgetting the tombstone would let the stale *live* policy
+        # it superseded resurrect the host on the next republish (CR #10) — and
+        # would forget its `generation`, which is what the ratchet stands on.
+        self._held: dict[str, FetchPolicyState] = {}
 
     @property
     def tracked_hosts(self) -> int:
@@ -139,7 +158,7 @@ class FetchPolicyMap:
         otherwise indistinguishable from outside — which is the failure mode the
         replay-from-``0-0`` rule exists to prevent, restated as a log line.
         """
-        return len(self._intervals)
+        return sum(1 for held in self._held.values() if not held.revoked)
 
     @property
     def hosts_stricter_than_default(self) -> int:
@@ -159,7 +178,11 @@ class FetchPolicyMap:
         Strictly greater, the same comparison the warning fires on: a policy
         equal to the fallback loses nothing when the fallback replaces it.
         """
-        return sum(1 for interval in self._intervals.values() if interval > self._default)
+        return sum(
+            1
+            for interval in map(_interval_of, self._held.values())
+            if interval is not None and interval > self._default
+        )
 
     def interval_for(self, host: str) -> float | None:
         """This host's published spacing, or ``None`` when it has no policy.
@@ -169,7 +192,8 @@ class FetchPolicyMap:
         policy that happens to equal the default" the same answer at the one
         place worth telling them apart.
         """
-        return self._intervals.get(host)
+        held = self._held.get(host)
+        return None if held is None else _interval_of(held)
 
     def apply(self, payload: ChangeEventPayload) -> None:
         """Fold one decoded message into the map.
@@ -195,43 +219,59 @@ class FetchPolicyMap:
                 extra={"schema_version": payload.schema_version},
             )
             return
-        if not self._is_current(payload):
+        held = self._held.get(payload.host)
+        if not self._is_current(payload, held):
             return
-        self._applied_at[payload.host] = payload.occurred_at
+        previous = None if held is None else _interval_of(held)
         # revoked first. `min_interval_seconds` is None on a tombstone by
         # design — a consumer that reached for it here would store a None and
         # hand it to the pacer as though it were a number.
         if payload.revoked:
-            self._revoke(payload.host)
+            self._revoke(payload, previous)
             return
-        self._store(payload.host, payload.min_interval_seconds)
+        self._store(payload, previous)
 
-    def _is_current(self, payload: FetchPolicyState) -> bool:
-        """Whether this message is at least as new as the one already applied.
+    def _is_current(self, payload: FetchPolicyState, held: FetchPolicyState | None) -> bool:
+        """Whether this message supersedes the one already applied for its host.
 
-        ``>=`` rather than ``>``: a producer is free to stamp an entire full-set
-        republish with one ``occurred_at``, and a strict comparison would apply
-        the first host and drop every other one.
+        The ratchet is co-core's (``fetch_policy_supersedes``), called rather
+        than re-derived. What it leaves out is the ``occurred_at`` guard this map
+        applied before ``generation`` existed: between two unordered frames it
+        answers "stream order", and the map still drops an unordered frame
+        stamped older than the one it holds, so Watcher's frames behave exactly
+        as they did before #136. Once either frame is ordered, the stamp is not
+        consulted — an outbox retry can stamp row N+1 earlier than row N.
+
+        ``>=`` rather than ``>`` on the stamp: a producer is free to stamp an
+        entire full-set republish with one ``occurred_at``, and a strict
+        comparison would apply the first host and drop every other one.
 
         Tombstones are guarded exactly as live values are. Exempting them would
         make the single message that *erases* state the single message that
         ignores ordering.
+
+        Indexed by ``payload.host``, so the helper's mismatched-host
+        ``ValueError`` cannot fire here.
         """
-        applied_at = self._applied_at.get(payload.host)
-        if applied_at is None or payload.occurred_at >= applied_at:
+        if held is None:
+            return True
+        if not fetch_policy_supersedes(payload, held):
+            _log_out_of_order(payload, held)
+            return False
+        if payload.generation is not None or payload.occurred_at >= held.occurred_at:
             return True
         logger.info(
             "ignoring a fetch policy older than the one already applied",
             extra={
                 "host": payload.host,
                 "occurred_at": payload.occurred_at.isoformat(),
-                "applied_at": applied_at.isoformat(),
+                "applied_at": held.occurred_at.isoformat(),
             },
         )
         return False
 
-    def _revoke(self, host: str) -> None:
-        """Drop the host: "no explicit policy", **not** "no limit".
+    def _revoke(self, payload: FetchPolicyState, previous: float | None) -> None:
+        """Hold the tombstone: "no explicit policy", **not** "no limit".
 
         It resolves to ``None`` from here on, so the pacer falls back to the
         conservative env default. Whether that fallback is stricter than the
@@ -244,21 +284,22 @@ class FetchPolicyMap:
         the producer's cron like any other entry, and a host the worker never
         held is revoked once per republish for the whole history of the stream.
         """
-        if self._intervals.pop(host, None) is None:
+        self._held[payload.host] = payload
+        if previous is None:
             return
         logger.info(
             "revoked a host fetch policy — falling back to the default",
-            extra={"host": host, "default_interval_seconds": self._default},
+            extra={"host": payload.host, "default_interval_seconds": self._default},
         )
 
-    def _store(self, host: str, min_interval_seconds: float | None) -> None:
+    def _store(self, payload: FetchPolicyState, previous: float | None) -> None:
+        host, min_interval_seconds = payload.host, payload.min_interval_seconds
         if min_interval_seconds is None:  # pragma: no cover - the model forbids it
             # Belt and braces: FetchPolicyState's own validator rejects a live
             # policy with no interval, so this is unreachable through from_wire.
             logger.warning("ignoring a live fetch policy with no interval", extra={"host": host})
             return
-        previous = self._intervals.get(host)
-        self._intervals[host] = min_interval_seconds
+        self._held[host] = payload
         # Only a *change* is news (#85). The producer republishes its whole set
         # on a cron and the boot replay walks every republish it ever made, so
         # logging each apply made the journal a function of the stream's length
@@ -301,6 +342,46 @@ class FetchPolicyMap:
                     ),
                 },
             )
+
+
+def _interval_of(held: FetchPolicyState) -> float | None:
+    """A held frame's spacing, ``None`` for a tombstone — read ``revoked`` first."""
+    return None if held.revoked else held.min_interval_seconds
+
+
+def _log_out_of_order(payload: FetchPolicyState, held: FetchPolicyState) -> None:
+    """Say why the ratchet refused a frame — except when nothing is wrong.
+
+    An **equal** ``generation`` is the steady state, not an anomaly: every full-set
+    republish repeats each host's generation and a boot replay walks all of them,
+    so a line per skip is the #85 volume back. The other two refusals each mean
+    something moved out of order, so each gets the generation pair that decided
+    it.
+    """
+    if payload.generation is None:
+        # After F1 this is a Watcher that did not stop, or an Archiver frame built
+        # without its generation. FetchPolicyState's docstring calls both drops
+        # silent; this line is what makes them not.
+        logger.info(
+            "ignoring a fetch policy without a generation for a host that holds one",
+            extra={
+                "host": payload.host,
+                "occurred_at": payload.occurred_at.isoformat(),
+                "held_generation": held.generation,
+            },
+        )
+        return
+    if payload.generation == held.generation:
+        return
+    logger.info(
+        "ignoring a fetch policy older than the one already applied",
+        extra={
+            "host": payload.host,
+            "generation": payload.generation,
+            "held_generation": held.generation,
+            "occurred_at": payload.occurred_at.isoformat(),
+        },
+    )
 
 
 def build_policy_reader(client: Redis, *, topic: str) -> AsyncBusTailReader:

@@ -11,6 +11,8 @@ attest to is the live broker's own behaviour on a real stream, which is
 """
 
 import asyncio
+import json
+from datetime import timedelta
 
 import pytest
 from co_core.pure.adapters.bus.envelope import to_wire
@@ -266,7 +268,7 @@ async def test_a_failed_read_backs_off_instead_of_taking_the_worker_down(
 async def test_an_outage_leaves_the_last_known_policies_in_place(policies, fast_settings):
     """The map is state, not a cache of the last read."""
     reader = BrokenReader()
-    policies._intervals["slow.test"] = 30.0
+    policies.apply(FetchPolicyState(occurred_at=now(), host="slow.test", min_interval_seconds=30.0))
     stop = asyncio.Event()
 
     task = asyncio.create_task(
@@ -569,3 +571,87 @@ async def test_the_tail_still_reads_one_at_a_time(fake_redis, policies, fast_set
         await task
 
     assert set(reader.counts) == {READ_COUNT}
+
+
+# --------------------------------------------------------------------------- #
+# The replay across F1 (#136): Watcher's frames, then Archiver's.
+# --------------------------------------------------------------------------- #
+
+
+async def publish_frame(client, frame: FetchPolicyState, *, pre_generation: bool = False) -> None:
+    """XADD one frame; ``pre_generation`` sends it as a co-core < 0.37 producer
+    would, with no ``generation`` key in the payload at all."""
+    fields = to_wire(frame)
+    if pre_generation:
+        payload = json.loads(fields["payload"])
+        del payload["generation"]
+        fields["payload"] = json.dumps(payload)
+    await client.xadd(TOPIC, fields)
+
+
+async def test_a_replay_across_the_producer_handover_lands_on_archivers_state(
+    fake_redis, policies, caplog
+):
+    """The boot replay from ``0-0`` after F1, end to end through the broker.
+
+    Watcher's frames come first and carry no ``generation``, so they keep
+    today's ``occurred_at`` rule — a full set sharing one stamp applies to
+    every host. Archiver's follow, ordered, through an outbox that reorders,
+    on a clock not comparable with Watcher's. A Watcher that did not stop
+    publishes once more at the end.
+    """
+    t0 = now()
+
+    def frame(host, interval=None, *, at, generation=None, revoked=False):
+        return FetchPolicyState(
+            occurred_at=t0 + timedelta(seconds=at),
+            host=host,
+            min_interval_seconds=interval,
+            revoked=revoked,
+            generation=generation,
+        )
+
+    watcher = [
+        frame("a.test", 30.0, at=0),
+        frame("b.test", 5.0, at=0),  # one stamp for the whole set
+        frame("a.test", 30.0, at=300),
+        frame("b.test", 5.0, at=300),
+        frame("a.test", 20.0, at=310),
+        frame("a.test", 99.0, at=200),  # a stale Watcher republish, by stamp
+    ]
+    for item in watcher:
+        await publish_frame(fake_redis, item, pre_generation=True)
+    archiver = [
+        # Archiver's first full set, stamped before Watcher's last frame.
+        frame("a.test", 20.0, at=100, generation=4),
+        frame("b.test", 5.0, at=100, generation=7),
+        # b's next two edits, published out of order by an outbox retry.
+        frame("b.test", 12.0, at=400, generation=9),
+        frame("b.test", 10.0, at=390, generation=8),
+        # a is revoked; then the snapshot republish it superseded lands late.
+        frame("a.test", at=410, generation=5, revoked=True),
+        frame("a.test", 20.0, at=420, generation=4),
+        # The next full set repeats every generation.
+        frame("b.test", 12.0, at=700, generation=9),
+        frame("a.test", at=700, generation=5, revoked=True),
+    ]
+    for item in archiver:
+        await publish_frame(fake_redis, item)
+    # A Watcher that did not stop at F1, with the newest stamp on the stream.
+    await publish_frame(fake_redis, frame("a.test", 30.0, at=900), pre_generation=True)
+    await publish_frame(fake_redis, frame("b.test", 5.0, at=900), pre_generation=True)
+
+    with caplog.at_level("INFO"):
+        await replay_policies(
+            build_policy_reader(fake_redis, topic=TOPIC), policies, stop=asyncio.Event()
+        )
+
+    assert policies.interval_for("a.test") is None
+    assert policies.interval_for("b.test") == 12.0
+    assert policies.tracked_hosts == 1
+    ignored = [r for r in caplog.records if r.message.startswith("ignoring a fetch policy")]
+    # One each for: Watcher's stale stamp, b's reordered gen 8, a's late gen 4,
+    # and the two post-F1 Watcher frames. The full-set repeats say nothing.
+    assert len(ignored) == 5
+    summary = next(r for r in caplog.records if r.message == "fetch policy replay complete")
+    assert summary.messages == len(watcher) + len(archiver) + 2

@@ -5,10 +5,12 @@ The map only. Reading the stream — replay, tail, poison recovery — is
 ``tests/worker/test_handler_pacing.py``.
 """
 
+import json
 import logging
 from datetime import timedelta
 
 import pytest
+from co_core.pure.adapters.bus.envelope import from_wire, to_wire
 from co_core.pure.models.changes import BlobAvailableEvent, FetchPolicyState
 
 from src.worker.policy import FetchPolicyMap
@@ -24,6 +26,7 @@ def policy(
     revoked: bool = False,
     occurred_at=None,
     schema_version: int = 1,
+    generation: int | None = None,
 ) -> FetchPolicyState:
     return FetchPolicyState(
         schema_version=schema_version,
@@ -31,6 +34,7 @@ def policy(
         host=host,
         min_interval_seconds=min_interval_seconds,
         revoked=revoked,
+        generation=generation,
     )
 
 
@@ -424,3 +428,241 @@ def test_a_revoked_host_stops_counting_against_the_default():
     )
 
     assert policies.hosts_stricter_than_default == 0
+
+
+# --------------------------------------------------------------------------- #
+# Ordering by `generation` (#136).
+#
+# Archiver publishes through an outbox that can reorder under retry, so its
+# frames carry a per-host `generation`. The rule is co-core's
+# `fetch_policy_supersedes`; the map keeps today's `occurred_at` guard only for
+# frames that carry none (the operator's decision on #136).
+# --------------------------------------------------------------------------- #
+
+
+def decoded(payload: dict) -> FetchPolicyState:
+    """A policy as a producer on any co-core version would put it on the wire."""
+    fields = to_wire(policy())
+    fields["payload"] = json.dumps(payload)
+    message = from_wire(fields, topic="content.fetch-policy")
+    assert isinstance(message.payload, FetchPolicyState)
+    return message.payload
+
+
+def test_a_newer_generation_replaces_an_older_one():
+    policies = FetchPolicyMap(DEFAULT)
+    stamp = now()
+    policies.apply(policy(min_interval_seconds=30.0, generation=1, occurred_at=stamp))
+
+    policies.apply(policy(min_interval_seconds=5.0, generation=2, occurred_at=stamp))
+
+    assert policies.interval_for("slow.test") == 5.0
+
+
+def test_a_generation_decides_alone_over_an_older_stamp():
+    """Once both frames are ordered, ``occurred_at`` is not consulted.
+
+    An outbox retry can publish row N+1 with an earlier stamp than row N's
+    eventual publish, so the stamp is exactly what the generation replaces.
+    """
+    policies = FetchPolicyMap(DEFAULT)
+    first = now()
+    policies.apply(policy(min_interval_seconds=30.0, generation=1, occurred_at=first))
+
+    policies.apply(
+        policy(min_interval_seconds=5.0, generation=2, occurred_at=first - timedelta(seconds=5))
+    )
+
+    assert policies.interval_for("slow.test") == 5.0
+
+
+def test_a_lower_generation_is_ignored_even_with_a_newer_stamp(caplog):
+    """The outbox reorder itself: row N lands after N+1 and must not win."""
+    policies = FetchPolicyMap(DEFAULT)
+    first = now()
+    policies.apply(policy(min_interval_seconds=30.0, generation=5, occurred_at=first))
+
+    with caplog.at_level(logging.INFO):
+        policies.apply(
+            policy(min_interval_seconds=2.0, generation=4, occurred_at=first + timedelta(seconds=5))
+        )
+
+    assert policies.interval_for("slow.test") == 30.0
+    record = next(
+        r
+        for r in caplog.records
+        if r.message == "ignoring a fetch policy older than the one already applied"
+    )
+    # The generation pair, because it is the reason, not the stamps (#136).
+    assert record.generation == 4
+    assert record.held_generation == 5
+
+
+def test_an_equal_generation_is_skipped_and_not_logged(caplog):
+    """A republish repeats its delta's generation, so equal means "seen".
+
+    And it is the steady state, not an anomaly: every Archiver full-set
+    republish repeats every host's generation, and a boot replay walks all of
+    them. A line per skip is the #85 volume back again.
+    """
+    policies = FetchPolicyMap(DEFAULT)
+    first = now()
+    policies.apply(policy(min_interval_seconds=30.0, generation=3, occurred_at=first))
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        policies.apply(
+            policy(min_interval_seconds=5.0, generation=3, occurred_at=first + timedelta(seconds=1))
+        )
+
+    assert policies.interval_for("slow.test") == 30.0
+    assert caplog.records == []
+
+
+def test_a_frame_with_a_generation_claims_a_slot_without_one_despite_an_older_stamp():
+    """The ratchet's upward half: Archiver takes over a host Watcher held.
+
+    The two producers' clocks are not comparable, so an ordered frame must not
+    lose to the unordered one on ``occurred_at``.
+    """
+    policies = FetchPolicyMap(DEFAULT)
+    first = now()
+    policies.apply(policy(min_interval_seconds=30.0, occurred_at=first))
+
+    policies.apply(
+        policy(min_interval_seconds=5.0, generation=0, occurred_at=first - timedelta(seconds=60))
+    )
+
+    assert policies.interval_for("slow.test") == 5.0
+
+
+def test_a_frame_without_a_generation_never_overwrites_one_with(caplog):
+    """The ratchet's other half: a Watcher that did not stop at F1 cannot fight
+    the new owner, however new its stamp. Logged, because the docstring's
+    "drops just as silently" is the failure mode worth a line."""
+    policies = FetchPolicyMap(DEFAULT)
+    first = now()
+    policies.apply(policy(min_interval_seconds=30.0, generation=2, occurred_at=first))
+
+    with caplog.at_level(logging.INFO):
+        policies.apply(policy(min_interval_seconds=2.0, occurred_at=first + timedelta(minutes=5)))
+
+    assert policies.interval_for("slow.test") == 30.0
+    record = next(
+        r
+        for r in caplog.records
+        if r.message == "ignoring a fetch policy without a generation for a host that holds one"
+    )
+    assert record.host == "slow.test"
+    assert record.held_generation == 2
+
+
+def test_a_tombstone_with_a_generation_is_ordered_like_a_live_frame():
+    policies = FetchPolicyMap(DEFAULT)
+    stamp = now()
+    policies.apply(policy(min_interval_seconds=30.0, generation=1, occurred_at=stamp))
+
+    policies.apply(policy(min_interval_seconds=None, revoked=True, generation=2, occurred_at=stamp))
+    # The live frame the tombstone superseded, retried late by the outbox.
+    policies.apply(
+        policy(min_interval_seconds=30.0, generation=1, occurred_at=stamp + timedelta(seconds=9))
+    )
+
+    assert policies.interval_for("slow.test") is None
+    assert policies.tracked_hosts == 0
+
+
+def test_a_stale_tombstone_does_not_drop_a_newer_generation():
+    policies = FetchPolicyMap(DEFAULT)
+    stamp = now()
+    policies.apply(policy(min_interval_seconds=30.0, generation=4, occurred_at=stamp))
+
+    policies.apply(
+        policy(
+            min_interval_seconds=None,
+            revoked=True,
+            generation=3,
+            occurred_at=stamp + timedelta(seconds=9),
+        )
+    )
+
+    assert policies.interval_for("slow.test") == 30.0
+
+
+def test_a_revoked_host_keeps_its_generation():
+    """The hazard the held frame exists for (#136 hazard 2).
+
+    A map that forgot the tombstone's slot would treat the host as empty, and
+    a stale live frame without a generation would claim it — resurrecting a
+    revoked host on the next Watcher republish.
+    """
+    policies = FetchPolicyMap(DEFAULT)
+    first = now()
+    policies.apply(policy(min_interval_seconds=30.0, occurred_at=first))
+    policies.apply(
+        policy(
+            min_interval_seconds=None,
+            revoked=True,
+            generation=5,
+            occurred_at=first - timedelta(seconds=30),
+        )
+    )
+
+    policies.apply(policy(min_interval_seconds=30.0, occurred_at=first + timedelta(minutes=5)))
+
+    assert policies.interval_for("slow.test") is None
+
+
+def test_a_tombstone_for_an_unknown_host_still_claims_its_slot():
+    """A booting worker meets tombstones for hosts it never held — they are
+    still ordered, or a later unordered frame would resurrect them."""
+    policies = FetchPolicyMap(DEFAULT)
+    first = now()
+    policies.apply(
+        policy(
+            host="never.test",
+            min_interval_seconds=None,
+            revoked=True,
+            generation=1,
+            occurred_at=first,
+        )
+    )
+
+    policies.apply(
+        policy(host="never.test", min_interval_seconds=9.0, occurred_at=first + timedelta(hours=1))
+    )
+
+    assert policies.interval_for("never.test") is None
+
+
+@pytest.mark.parametrize(
+    "generation_field",
+    [{}, {"generation": None}],
+    ids=["key-missing", "null"],
+)
+def test_a_missing_or_null_generation_on_the_wire_is_absent(generation_field):
+    """``null`` means absent (cannobserv#565's convention), and so does the key a
+    pre-0.37 producer never sends. Built through ``from_wire``: a Python
+    ``generation=None`` exercises only the default, not the decode."""
+    stamp = now()
+    frame = {
+        "schema_version": 1,
+        "event_type": "fetch_policy",
+        "occurred_at": stamp.isoformat(),
+        "host": "slow.test",
+        "min_interval_seconds": 5.0,
+        "revoked": False,
+        **generation_field,
+    }
+    unordered = FetchPolicyMap(DEFAULT)
+    unordered.apply(policy(min_interval_seconds=30.0, occurred_at=stamp))
+    ordered = FetchPolicyMap(DEFAULT)
+    ordered.apply(policy(min_interval_seconds=30.0, generation=0, occurred_at=stamp))
+
+    unordered.apply(decoded(frame))
+    ordered.apply(decoded(frame))
+
+    # Stream order (with the >= stamp guard) over an unordered slot...
+    assert unordered.interval_for("slow.test") == 5.0
+    # ...and never over an ordered one.
+    assert ordered.interval_for("slow.test") == 30.0
