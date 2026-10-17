@@ -139,12 +139,12 @@ jobs:
         run: uv sync --frozen --group dev
 
       # Validates the wheelhouse end to end: the extras the loop depends on
-      # ([bus] for the Redis Streams driver, co-core-aio's [gcs] for T4, and
-      # co-core-sync's [gcs] for the shared blob store, #114) must import, not
-      # merely resolve. GcsBlobStore resolves lazily, so it is named explicitly:
-      # importing the package alone would pass without the extra. `simhash` needs
-      # no extra — only hashlib and re — so co-core takes none (#142): its
-      # [extract] brought parsers nothing here imports.
+      # ([bus] for the Redis Streams driver, and co-core-sync's [gcs] for the
+      # shared blob store, #114) must import, not merely resolve. GcsBlobStore
+      # resolves lazily, so it is named explicitly: importing the package alone
+      # would pass without the extra. `simhash` needs no extra — only hashlib and
+      # re — so co-core takes none (#142): its [extract] brought parsers nothing
+      # here imports.
       - name: co-core import smoke (bus and gcs extras wired)
         run: |
           uv run python -c "
