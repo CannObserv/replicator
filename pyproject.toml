@@ -7,12 +7,44 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
-    # **Seventeen minors (0.19 -> 0.36), and the floor carries no new feature**
-    # (#140). The jump comes ahead of the release #136 needs, which carries
-    # `FetchPolicyState.generation` (cannobserv#568). Then #136 is a patch bump
-    # alongside its rule, rather than this diff landing with a behaviour change.
-    # Floor is 0.36.0, the minor's only release, and the ceiling stays at the
-    # minor. Both `co-core-aio` and `co-core-sync` 0.36.0 require
+    # Floor is 0.37.0, for `FetchPolicyState.generation` and
+    # `fetch_policy_supersedes` (cannobserv#566, #568; #136). `FetchPolicyMap`
+    # applies every policy frame through the helper, so on 0.36.0 the worker fails
+    # at import. The field alone would fail silently instead: under
+    # `extra="ignore"` a 0.36 wheel drops `generation`, and every Archiver frame
+    # applies in stream order — the outbox reorder the field exists to stop. 0.37
+    # is a minor, but every entry in it is additive; the owner chose the minor to
+    # mark the headless-Watcher contract set. `co-core-aio` and `co-core-sync`
+    # 0.37.0 require `co-core>=0.37,<0.38`, so the three move together.
+    #
+    # **No `[extract]` extra since #142.** It pulled in five parsers —
+    # beautifulsoup4, html5lib, lxml, openpyxl and pypdf, with et-xmlfile,
+    # soupsieve and webencodings under them — and nothing here imports one. The
+    # closure reaches `pure/extract/__init__` only through `changes.py`'s import of
+    # `extract.canonical`, and none of the modules that loads imports a parser. For
+    # a fetcher of arbitrary public URLs an unused HTML/PDF/XLSX parser is CVE
+    # surface and nothing else.
+    #
+    # **Diffing the wheels covered the whole import closure**: 57 files at both
+    # 0.36.0 and 0.37.0, compared by AST with docstrings removed. Six changed:
+    #
+    # - the three `__init__`s, `__version__` only;
+    # - `pure/models/changes.py`: the field and the helper, plus Watcher models,
+    #   three `WatchStatusState` fields and a `ProcessingFailureReason` value,
+    #   none imported here;
+    # - `pure/adapters/bus/envelope.py`: the global `from_wire` table gains five
+    #   Watcher types (cannobserv#563, #564). They decode cleanly on any stream and
+    #   fall to the `isinstance` guards every consume path already has;
+    # - `pure/adapters/bus/streams.py`: two stream constants.
+    #
+    # Requires-Dist is unchanged bar the self-pins.
+    #
+    # Previously:
+    #
+    # Floor was 0.36.0, and it carried no new feature: **seventeen minors (0.19 ->
+    # 0.36)** taken as a catch-up (#140), ahead of the release #136 needed, so
+    # that this diff did not land with a behaviour change. 0.36.0 was the minor's
+    # only release. Both `co-core-aio` and `co-core-sync` 0.36.0 require
     # `co-core>=0.36,<0.37`, so the three can't drift apart.
     #
     # **Diffing the wheels covered the whole import closure**, not just the
@@ -154,9 +186,9 @@ dependencies = [
     # at module load, so a skew cannot reach a running worker at all. Additive over
     # 0.8.0 for everything the fetch path uses — no field on ContentFetchCommand,
     # BlobAvailableEvent or FetchFailedEvent moved between the two.
-    "co-core[extract]>=0.36.0,<0.37",
-    "co-core-aio[bus,gcs]>=0.36.0,<0.37",
-    "co-core-sync[gcs]>=0.36.0,<0.37",
+    "co-core>=0.37.0,<0.38",
+    "co-core-aio[bus,gcs]>=0.37.0,<0.38",
+    "co-core-sync[gcs]>=0.37.0,<0.38",
     "fastapi>=0.126.0,<1",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.5.0,<3",
