@@ -12,6 +12,7 @@ attest to is the live broker's own behaviour on a real stream, which is
 
 import asyncio
 import json
+from collections import Counter
 from datetime import timedelta
 
 import pytest
@@ -649,9 +650,15 @@ async def test_a_replay_across_the_producer_handover_lands_on_archivers_state(
     assert policies.interval_for("a.test") is None
     assert policies.interval_for("b.test") == 12.0
     assert policies.tracked_hosts == 1
-    ignored = [r for r in caplog.records if r.message.startswith("ignoring a fetch policy")]
-    # One each for: Watcher's stale stamp, b's reordered gen 8, a's late gen 4,
-    # and the two post-F1 Watcher frames. The full-set repeats say nothing.
-    assert len(ignored) == 5
+    ignored = Counter(
+        r.message for r in caplog.records if r.message.startswith("ignoring a fetch policy")
+    )
+    # Watcher's stale stamp, b's reordered gen 8 and a's late gen 4 are each
+    # "older"; the two post-F1 Watcher frames each lack a generation. The
+    # full-set repeats say nothing.
+    assert ignored == {
+        "ignoring a fetch policy older than the one already applied": 3,
+        "ignoring a fetch policy without a generation for a host that holds one": 2,
+    }
     summary = next(r for r in caplog.records if r.message == "fetch policy replay complete")
     assert summary.messages == len(watcher) + len(archiver) + 2
