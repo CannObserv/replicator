@@ -1,7 +1,11 @@
 # Replicator boundaries charter
 
-**Status:** normative. **Home:** this file, in the Replicator repo — the invariants are
-about this repo's code and are enforced by
+**Status:** normative, as the Replicator annex to the cohort charter, CannObserv/cannobserv
+[`docs/BOUNDARIES.md`](https://github.com/CannObserv/cannobserv/blob/main/docs/BOUNDARIES.md).
+The cohort-wide rules — which service owns what, which channel carries what — live and change
+there; this file applies them to Replicator.
+**Home:** this file, in the Replicator repo, for what is its own — the three tests and the
+invariants, which are about this repo's code and are enforced by
 [`tests/test_boundaries.py`](../../tests/test_boundaries.py). Sibling repos link here rather
 than copying.
 
@@ -62,9 +66,11 @@ mechanism/policy split is what finishes the job.
 | 3 — expressible without domain vocabulary? | **Yes.** A hostname is a network fact, not an InfoSource. |
 
 Test 2 fires alone, but a naive reading of it — "politeness is Replicator's, done" — would
-move the *numbers* here too, and the numbers are operator policy that lives in Watcher's
-`Domain` table today. The resolution is the split: Replicator **enforces**, the issuer
-**decides**, and the decision travels over the bus (see **The policy stream**).
+move the *numbers* here too, and the numbers are operator policy: in Watcher's `Domain` table
+until the flip F1 ([CannObserv/watcher#374](https://github.com/CannObserv/watcher/issues/374)),
+in Archiver after it, which owns all operator intent under the cohort charter. The resolution is
+the split: Replicator **enforces**, the issuer **decides**, and the decision travels over the bus
+(see **The policy stream**).
 
 A reader who only skims the easy case below learns the pattern and misses the rule.
 
@@ -136,7 +142,8 @@ groupless replay-then-tail driver whose absence this section previously recorded
 this document used to name collides with the `<topic>.dlq` derivation of the command stream.
 Use the constant, never the literal.
 
-Last-write-wins per host key. Replicator replays it from `0-0` at boot into memory and tails
+Last-write-wins per host key, ordered as [applying a policy](../POLITENESS.md#applying-a-policy)
+states (#136). Replicator replays it from `0-0` at boot into memory and tails
 it thereafter. No DB, rebuildable, no inbound calls, and the data stays owned by its producer.
 `src/worker/policy.py`.
 
@@ -162,10 +169,15 @@ because it has no `schema_version`, no co-core model, and it couples Replicator 
 another service writes instead of to a payload contract. The stream keeps the same validation
 posture as every other wire input.
 
-**Producer:** Watcher for Phase 4 (the numbers live in its `Domain` table today). Because it
-is bus-delivered, the producer can later move to Archiver — the natural home if a second
-issuer ever exists — with no Replicator change at all. That portability is the reason for the
-indirection.
+**Producer:** Watcher, from its `Domain` table, until the headless-Watcher flip F1
+([CannObserv/watcher#374](https://github.com/CannObserv/watcher/issues/374)); Archiver after
+it. The payload is unchanged but for an optional `generation`, which Archiver sets because its
+outbox can reorder frames ([CannObserv/cannobserv#566](https://github.com/CannObserv/cannobserv/issues/566)).
+Replicator applies it through co-core's `fetch_policy_supersedes`; the rule is
+[POLITENESS.md](../POLITENESS.md#applying-a-policy)'s and the code of record
+[`src/worker/policy.py`](../../src/worker/policy.py). Nothing there branches on which producer
+sent a frame — #136 ordered frames, it did not switch producers. That portability is the reason
+for the indirection.
 
 ### The fallback default (was the interim, #12 → #19)
 
@@ -387,8 +399,11 @@ files passes forever while enforcing nothing — worse than no test, because thi
 - #7 — object-store blob backend (the tracked violation)
 - #9, #10, #11 — the Phase 4 contract additions
 - #12 — this charter
+- [CannObserv/cannobserv `docs/BOUNDARIES.md`](https://github.com/CannObserv/cannobserv/blob/main/docs/BOUNDARIES.md) — the cohort charter this applies
 - #19 — the policy stream's consumer half
+- #136 — `generation` ordering on the policy stream ([CannObserv/cannobserv#566](https://github.com/CannObserv/cannobserv/issues/566))
 - [CannObserv/cannobserv#285](https://github.com/CannObserv/cannobserv/issues/285) — the policy stream contract (co-core v0.7.7)
 - [CannObserv/watcher#241](https://github.com/CannObserv/watcher/issues/241) — Phase 4 issuer
 - [CannObserv/watcher#245](https://github.com/CannObserv/watcher/issues/245) — the politeness gap at cutover
+- [CannObserv/watcher#374](https://github.com/CannObserv/watcher/issues/374) — F1, the policy stream's producer moves to Archiver
 - [CannObserv/archiver#72](https://github.com/CannObserv/archiver/issues/72) — cluster integration strategy
