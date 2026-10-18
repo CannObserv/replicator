@@ -754,3 +754,7 @@ AGENTS.md :: tighten :: # Mirror the private index first — command under Envir
 AGENTS.md :: tighten :: # Run a subset of tests (skip the coverage gate, which measures all of src/)
 AGENTS.md :: tighten :: Entry points only: `configure_logging()` is called once inside the FastAPI `lifespan` or the worker's `run()`. Never in library modules.
 AGENTS.md :: tighten :: - [STREAMS.md](docs/STREAMS.md) — what each stream carries, one bullet per rule `AGENTS.md` states in a line
+# #137 CR 2: the charter line nests under the boundaries line, so "its parent"
+#   names the line above structurally; the one token the indent costs comes
+#   off the integration-tests comment.
+AGENTS.md :: tighten :: # Integration tests (a scratch redis-server, or one the test spawns; --no-cov again)

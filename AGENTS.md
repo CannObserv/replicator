@@ -186,7 +186,7 @@ uv run pytest
 # Run a subset of tests (--no-cov: the coverage gate measures all of src/)
 uv run pytest --no-cov tests/path/to/test.py
 
-# Integration tests (a scratch redis-server, or one the test spawns; --no-cov again)
+# Integration tests (a scratch redis-server or one the test spawns; --no-cov)
 uv run pytest --no-cov -m integration
 
 # Run linter
@@ -247,7 +247,7 @@ source — with rationale and ruff gates: [docs/STYLE.md](docs/STYLE.md).
 - [content-fetch-issuer-reference.md](docs/contracts/content-fetch-issuer-reference.md) — its lookup half, request side: refusal list, trust posture, envelope keys
 - [content-fetch-outcome-reference.md](docs/contracts/content-fetch-outcome-reference.md) — its result side: both facts field by field, failure taxonomy, silent conditions, the DLQ
 - [replicator-boundaries.md](docs/contracts/replicator-boundaries.md) — what Replicator may become; run its three tests against any proposed capability
-- [cohort charter](https://github.com/CannObserv/cannobserv/blob/main/docs/BOUNDARIES.md) — its parent
+  - [cohort charter](https://github.com/CannObserv/cannobserv/blob/main/docs/BOUNDARIES.md) — its parent
 - [content-replicate-issuer-contract.md](docs/contracts/content-replicate-issuer-contract.md) — the replicate trust model and issuer obligations (#34)
 - [content-replicate-issuer-reference.md](docs/contracts/content-replicate-issuer-reference.md) — the why behind trust, T3a, T4, T6; triggers, Charter check, open questions
 - [content-persist-issuer-contract.md](docs/contracts/content-persist-issuer-contract.md) — keeping a blob in the permanent store by digest: obligations, refusal registry, enabling it on a host (#114)
