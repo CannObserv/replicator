@@ -734,3 +734,23 @@ AGENTS.md :: retarget :: - [DEPLOYMENT.md](docs/DEPLOYMENT.md) — the unit's li
 docs/DEPLOYMENT.md :: retarget :: The systemd unit's lifecycle, the guards it starts behind, the host's memory
 docs/DEPLOYMENT.md :: retarget :: tunables, and the co-core pin. What it reports when it *fails* is in
 docs/DEPLOYMENT.md :: retarget :: from the table above — `daemon-reload` alone silently keeps the old values, and
+# ---- #137: AGENTS.md headroom for the cohort charter link (5991 -> 5989) ----
+# A new Detail Docs line links cannobserv's docs/BOUNDARIES.md, the parent of
+#   replicator-boundaries.md since cannobserv#562 — the charter asks each
+#   sibling to link it from AGENTS.md. It costs ~16 tokens against 9 of
+#   headroom, so nine lines are tightened in place to pay for it. (Extending
+#   the boundaries line instead fails `index`: the check counts only docs in
+#   this repo, and the URL is cannobserv's.) Each was read against its replacement; --claims passes with no atom
+#   dropped. The two judged by meaning rather than wording:
+#   "Consumers must be idempotent" is the first Bus Conventions bullet's
+#   "At-least-once ⇒ idempotent"; "the dev-server invocation" is Common
+#   Commands' uvicorn line, inline in this file.
+AGENTS.md :: tighten :: **Cap anything that launches a SocratiCode server** — uncapped, one cost this cluster 58 min of bus (#94). Invocations in [docs/COMMANDS.md](docs/COMMANDS.md). A green `codebase_search` is also not evidence every linked sibling answered: the silent-skip modes, and which sibling is in one, are in [docs/SOCRATICODE.md](docs/SOCRATICODE.md).
+AGENTS.md :: tighten :: Two that bite, each symptomless until it matters:
+AGENTS.md :: tighten :: Every deploy situation, the guard's verdict table, and the dev-server invocation:
+AGENTS.md :: tighten :: Every variable, which file carries it, and each default's reasoning:
+AGENTS.md :: tighten :: - **Consumers must be idempotent; producers own the outbox.** No DB here — the durable
+AGENTS.md :: tighten :: # Mirror the private index first — command under Environment & Tooling
+AGENTS.md :: tighten :: # Run a subset of tests (skip the coverage gate, which measures all of src/)
+AGENTS.md :: tighten :: Entry points only: `configure_logging()` is called once inside the FastAPI `lifespan` or the worker's `run()`. Never in library modules.
+AGENTS.md :: tighten :: - [STREAMS.md](docs/STREAMS.md) — what each stream carries, one bullet per rule `AGENTS.md` states in a line

@@ -65,12 +65,12 @@ Full tool table, prefetch hook, per-tool guidance: [`docs/SOCRATICODE.md`](docs/
 
 **The manifest is a source, not the artifact.** Nothing re-embeds it — run `codebase_update` in the same change as a `description` edit, or the stalest answer carries the most authority (#19 CR #17).
 
-**Cap anything that launches a SocratiCode server** — uncapped, one cost this cluster 58 min of bus (#94). Invocations in [docs/COMMANDS.md](docs/COMMANDS.md). A green `codebase_search` is also not evidence every linked sibling answered: the silent-skip modes, and which sibling is in one, are in [docs/SOCRATICODE.md](docs/SOCRATICODE.md).
+**Cap anything that launches a SocratiCode server** — uncapped, one cost this cluster 58 min of bus (#94). Invocations in [docs/COMMANDS.md](docs/COMMANDS.md). A green `codebase_search` doesn't prove every linked sibling answered: the silent-skip modes, and which sibling is in one, are in [docs/SOCRATICODE.md](docs/SOCRATICODE.md).
 
 ## Project Layout
 
 `src/worker/` is the bus consumer; `tests/` mirrors `src/`. Each module's job, its
-seams, and the file map: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+seams and the file map: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Infrastructure
 
@@ -88,7 +88,7 @@ critical, guarded by `scripts/check_redis_floor.sh`. Why, ports, redis-py pin:
 && uv sync --frozen && sudo systemctl restart replicator` — `git push` instead of the
 pull when the merge happened here.
 
-Two that bite, each symptomless until it matters:
+Two that bite, silently until they matter:
 
 - **The service refuses to start off `main`, or off unpushed commits** (#37, #48).
   `REPLICATOR_ALLOW_ANY_CHECKOUT=1` overrides; a dev worker asks the same question
@@ -99,7 +99,7 @@ Two that bite, each symptomless until it matters:
   `OnFailure=` handler's missed `cp` is invisible until the first failure; read
   what it recorded with `journalctl -t replicator-failure`, never `-u`.
 
-Every deploy situation, the guard's verdict table, and the dev-server invocation:
+Every deploy situation and the guard's verdict table:
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Environment Variables
@@ -116,7 +116,7 @@ radius. Anything the service needs goes in `/etc/replicator/.env`.
 New settings take the `REPLICATOR_` prefix (cohort convention). `BUILD_ID` is the
 one deliberate exception, stamped generically by the unit.
 
-Every variable, which file carries it, and each default's reasoning:
+Every variable and each default's reasoning:
 [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md).
 
 ## Bus Conventions
@@ -158,7 +158,7 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
   per-stream dedupe, `EXISTS` before the handler, `SET NX EX` after a *completing*
   close; losing them costs one TTL window of re-fetches, never correctness:
   [docs/CONVENTIONS.md](docs/CONVENTIONS.md#the-replicatorcmd-keys).
-- **Consumers must be idempotent; producers own the outbox.** No DB here — the durable
+- **Producers own the outbox.** No DB here — the durable
   record of intent is the group's PEL; never add a Postgres outbox to the consume path.
 - **Three stream kinds, three sets of rules.** `content.fetch`,
   `content.replicate` and `content.persist` are command streams (one group each,
@@ -174,7 +174,7 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
 ## Common Commands
 
 ```bash
-# Mirror the private index first — command under Environment & Tooling
+# Mirror the private index first (Environment & Tooling)
 uv sync
 
 # Load environment — dev only (required before the worker, gh, or rcli)
@@ -183,7 +183,7 @@ set -a; . /etc/replicator/.env 2>/dev/null; . .env 2>/dev/null; set +a; . script
 # Run tests
 uv run pytest
 
-# Run a subset of tests (skip the coverage gate, which measures all of src/)
+# Run a subset of tests (--no-cov: the coverage gate measures all of src/)
 uv run pytest --no-cov tests/path/to/test.py
 
 # Integration tests (a scratch redis-server, or one the test spawns; --no-cov again)
@@ -215,7 +215,7 @@ Skills in `skills/` (agentskills.io) and `.claude/skills/` (Claude Code). Refere
 Types: feat, fix, refactor, docs, test, chore
 
 **Logging:** `from src.core.logging import get_logger`, then `logger = get_logger(__name__)`.
-Entry points only: `configure_logging()` is called once inside the FastAPI `lifespan` or the worker's `run()`. Never in library modules.
+`configure_logging()` runs once, in the FastAPI `lifespan` or the worker's `run()` — never in library modules.
 The stack itself: [docs/STYLE.md](docs/STYLE.md).
 
 **Date & Time:**
@@ -223,12 +223,12 @@ The stack itself: [docs/STYLE.md](docs/STYLE.md).
 - ISO 8601: `YYYY-MM-DDTHH:MM:SS.ffffffZ` (timestamps), `YYYY-MM-DD` (dates)
 
 **General:** house style — imports, docstrings, function size, tests mirroring
-source — each with its rationale and ruff gate in [docs/STYLE.md](docs/STYLE.md).
+source — with rationale and ruff gates: [docs/STYLE.md](docs/STYLE.md).
 
 ## Detail Docs
 
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) — founding design, the command → fact flow, module by module; read before changing one
-- [STREAMS.md](docs/STREAMS.md) — what each stream carries, one bullet per rule `AGENTS.md` states in a line
+- [STREAMS.md](docs/STREAMS.md) — what each stream carries; Bus Conventions in full
 - [POLITENESS.md](docs/POLITENESS.md) — per-host pacing: the policy stream, sleep vs park, 429/503 escalation
 - [CONVENTIONS.md](docs/CONVENTIONS.md) — rules common to every stream: idempotency, validation, DLQ, `claim_stale`, the `replicator:cmd:*` keys (#80)
 - [STORAGE.md](docs/STORAGE.md) — blob paths and modes, the populations under `REPLICATOR_BLOB_DIR`, TTL and ceilings
@@ -247,6 +247,7 @@ source — each with its rationale and ruff gate in [docs/STYLE.md](docs/STYLE.m
 - [content-fetch-issuer-reference.md](docs/contracts/content-fetch-issuer-reference.md) — its lookup half, request side: refusal list, trust posture, envelope keys
 - [content-fetch-outcome-reference.md](docs/contracts/content-fetch-outcome-reference.md) — its result side: both facts field by field, failure taxonomy, silent conditions, the DLQ
 - [replicator-boundaries.md](docs/contracts/replicator-boundaries.md) — what Replicator may become; run its three tests against any proposed capability
+- [cohort charter](https://github.com/CannObserv/cannobserv/blob/main/docs/BOUNDARIES.md) — its parent
 - [content-replicate-issuer-contract.md](docs/contracts/content-replicate-issuer-contract.md) — the replicate trust model and issuer obligations (#34)
 - [content-replicate-issuer-reference.md](docs/contracts/content-replicate-issuer-reference.md) — the why behind trust, T3a, T4, T6; triggers, Charter check, open questions
 - [content-persist-issuer-contract.md](docs/contracts/content-persist-issuer-contract.md) — keeping a blob in the permanent store by digest: obligations, refusal registry, enabling it on a host (#114)
