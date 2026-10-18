@@ -67,10 +67,9 @@ mechanism/policy split is what finishes the job.
 
 Test 2 fires alone, but a naive reading of it — "politeness is Replicator's, done" — would
 move the *numbers* here too, and the numbers are operator policy: in Watcher's `Domain` table
-until the flip F1 ([CannObserv/watcher#374](https://github.com/CannObserv/watcher/issues/374)),
-in Archiver after it, which owns all operator intent under the cohort charter. The resolution is
-the split: Replicator **enforces**, the issuer **decides**, and the decision travels over the bus
-(see **The policy stream**).
+until the flip F1, in Archiver after it, which owns all operator intent under the cohort charter.
+The resolution is the split: Replicator **enforces**, the issuer **decides**, and the decision
+travels over the bus (see **The policy stream**).
 
 A reader who only skims the easy case below learns the pattern and misses the rule.
 
@@ -401,7 +400,7 @@ files passes forever while enforcing nothing — worse than no test, because thi
 - #12 — this charter
 - [CannObserv/cannobserv `docs/BOUNDARIES.md`](https://github.com/CannObserv/cannobserv/blob/main/docs/BOUNDARIES.md) — the cohort charter this applies
 - #19 — the policy stream's consumer half
-- #136 — `generation` ordering on the policy stream ([CannObserv/cannobserv#566](https://github.com/CannObserv/cannobserv/issues/566))
+- #136 — `generation` ordering on the policy stream (cannobserv#566)
 - [CannObserv/cannobserv#285](https://github.com/CannObserv/cannobserv/issues/285) — the policy stream contract (co-core v0.7.7)
 - [CannObserv/watcher#241](https://github.com/CannObserv/watcher/issues/241) — Phase 4 issuer
 - [CannObserv/watcher#245](https://github.com/CannObserv/watcher/issues/245) — the politeness gap at cutover
