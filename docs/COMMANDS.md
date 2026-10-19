@@ -309,7 +309,7 @@ things to know before asking (#85):
 ### Politeness — `content.fetch-policy` (#19)
 
 The stream's inspection commands — what the producer published, one host's policy, and the
-worker's journal view of the replay — are in
+worker's journal view of the replay and of each apply — are in
 [POLITENESS.md](POLITENESS.md#inspecting-the-stream), beside the mechanism they inspect (#146).
 
 ### How long a handler holds its group
