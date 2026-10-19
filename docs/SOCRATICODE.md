@@ -215,3 +215,45 @@ So a green `codebase_search` is never evidence that every sibling answered. Whic
 sibling is in which state on this VM — and the drift a real checkout is exposed
 to that a one-file stub is not — is in
 [INFRASTRUCTURE.md](INFRASTRUCTURE.md#the-semantic-index-is-co-index--a-store-this-repo-is-a-client-of).
+
+### The plugin and its hooks
+
+**The SocratiCode plugin is installed, and its launch is pinned (since 2026-09-23).**
+From #92 until then it was deliberately absent — its launch was an uncapped
+`npx -y --prefer-online socraticode@latest` on a 3.9 GB host with no swap — so the
+prefetch `socraticode-reminder.sh` prints answered "No matching deferred tools found".
+The plugin parameterises its spec, so `SOCRATICODE_SPEC` in `.claude/settings.json`
+pins it to a literal version; both launch paths and their pins are
+[above](#two-launch-paths-pinned-separately). The driver stays fenced: every invocation in
+[COMMANDS.md](COMMANDS.md) is wrapped in a `systemd-run` memory cap, and
+`validate-store`, `validate-manifest` and `resolve` need no server at all.
+
+**The health hook used to lie in two situations, and both looked like a healthy report.** Both are
+fixed upstream (closed 2026-08-17). `mcp-driver.mjs` dispatched only when `process.argv[1]` was its
+own module path, so through the `skills/` symlink it **exited 0 having printed nothing**
+([gregoryfoster/skills#177](https://github.com/gregoryfoster/skills/issues/177)); it now compares
+realpaths. And the hook measured `.`, so every worktree session reported `graph is not READY`
+against a healthy index ([gregoryfoster/skills#180](https://github.com/gregoryfoster/skills/issues/180));
+it now measures the main checkout. `SOCRATICODE_DRIVER` in `.claude/settings.json` stays — candidate
+1 in the hook's resolution order, and the name every invocation in [COMMANDS.md](COMMANDS.md) uses.
+And since [skills#226](https://github.com/gregoryfoster/skills/issues/226) the driver itself resolves a
+relative path (`.` included) from a worktree to the main checkout, and says so on stderr — only an
+absolute worktree path measures the worktree.
+
+### After an `init-socraticode` re-run
+
+The skill replaces `docs/SOCRATICODE.md` between its `socraticode-doc` markers and the `AGENTS.md`
+policy block between its own, and keeps what follows each `END`. The doc had no markers until #117,
+so a re-run used to overwrite it wholesale and this list was three things to re-apply by hand. Check
+these before committing its output:
+
+| Check | Why it matters |
+|---|---|
+| `.claude/hooks/socraticode-health.sh` is still a symlink | skills#179; `install-hook.sh` copies only where there is no `skills-vendor/`, and `tests/test_skills_hook.py` fails on a copy |
+| The doc's tool table names this repo's artifacts in its context and schema rows | the template's rows are generic, and the schema row's is a database; here it names the contracts that list each stream's `reason` values, because an unfiltered context search ranks the dated design plans with them (skills#315) |
+| `codebase_update` | `AGENTS.md` and every doc here are registered artifacts; nothing re-embeds them |
+
+Repo-specific *prose* needs no re-applying. The doc's lives under `## Repo-specific notes` below its
+`END` marker — the external store, both launch pins, and the Cross-repo search section's three
+silent-skip modes with its pointer into `docs/INFRASTRUCTURE.md` (#92) — and `AGENTS.md`'s under
+`## Code Exploration Notes (repo-specific)`, outside the policy markers.

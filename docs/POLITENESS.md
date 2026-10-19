@@ -101,9 +101,58 @@ replay gives up (the tail resumes from the same cursor) and the tail parks. The 
 rides the worker's stop event, because how long it runs is the producer's business: the
 charter asks the producer to `MAXLEN`, and Replicator cannot enforce it.
 
+### Inspecting the stream
+
+`rcli` is the function sourced under
+[COMMANDS.md → Inspecting the consume path](COMMANDS.md#inspecting-the-consume-path).
+
+Where to start when a host is being fetched more or less often than expected. The stream is
+config/state: last-write-wins per host, read **without a consumer group**, replayed from the
+beginning at every worker boot.
+
+```bash
+# Has the producer published anything at all? An empty stream is not an error —
+# it means every host resolves to REPLICATOR_MIN_HOST_INTERVAL_SECONDS — but it
+# is the first thing to rule out, and it looks identical to a working consumer.
+rcli XLEN content.fetch-policy
+rcli XRANGE content.fetch-policy - + COUNT 10
+
+# What one host is actually paced at. `revoked: true` is a tombstone meaning
+# "no explicit policy", not "no limit" — it falls back to the env default.
+rcli XRANGE content.fetch-policy - + COUNT 500 | grep '"host":"example.test"'
+
+# Expected EMPTY. A group here is a bug: every worker needs every message, so a
+# group would compete for them and grow a PEL nothing acks or drains. Denied to
+# the `replicator` user (#85) — ask the broker operator, or infer it the way
+# tests/worker/test_policy_integration.py does, from the absence of a PEL.
+rcli XINFO GROUPS content.fetch-policy   # NOPERM as replicator
+```
+
+The worker's own view, from the journal — what it rebuilt at boot and what it has applied since:
+
+```bash
+sudo journalctl -u replicator | grep 'replaying the fetch policy stream'  # the boot replay started
+sudo journalctl -u replicator | grep 'fetch policy replay complete'   # tracked_hosts, messages, hosts_stricter_than_default, duration_ms
+sudo journalctl -u replicator -f | grep 'applied a host fetch policy' # host, min_interval, and the default beside it
+sudo journalctl -u replicator | grep 'stricter than the fallback'     # raise REPLICATOR_MIN_HOST_INTERVAL_SECONDS
+```
+
+`tracked_hosts: 0` with a non-empty `XLEN` means messages arrived and none applied — check for
+`ignoring a ...` warnings on the same boot. The last grep is the one that needs acting on: it
+names a host whose real policy is stricter than the fallback that would replace it if the
+policy were revoked or missed on a replay.
+
+`applied a host fetch policy` and `stricter than the fallback` fire on a *change*, not on every apply — so an empty grep is not "resolved";
+read `hosts_stricter_than_default` on the replay summary instead. Why:
+[below](#reading-the-apply-log).
+
+To confirm the map is populated rather than to watch it move, read `tracked_hosts` on the same
+line with `XLEN` beside it; `worker ready` follows the replay, so seeing it means the consume
+loops are about to make their first read.
+
 ### Reading the apply log
 
-Of the journal greps for this stream in [COMMANDS.md](COMMANDS.md#politeness--contentfetch-policy-19):
+Of the journal greps for this stream [above](#inspecting-the-stream):
 
 **The last two greps are silent while nothing changes, by design (#85).** `applied a host fetch
 policy` and the `stricter than the fallback` warning beneath it both fire on a *change*, not on

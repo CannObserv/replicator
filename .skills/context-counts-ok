@@ -40,3 +40,8 @@ docs/DEPLOYMENT.md :: stable :: `XAUTOCLAIM`'s three-element reply
 # The two _TRANSIENT_ERRORS members — src/worker/loop.py:80, imported and
 # asserted by tests/worker/test_oom_integration.py against a live broker.
 AGENTS.md :: gated :: `OutOfMemoryError` and `NoPermissionError`, the two `ResponseError` subclasses
+# #146: the 'two' is the anchor slug of SOCRATICODE.md's own "### Two launch
+# paths, pinned separately" heading, which the moved plugin paragraph now links
+# in-doc. It cannot drift from the heading without a dead anchor, which
+# measure-context.sh's links.dead_anchors reports.
+docs/SOCRATICODE.md :: stable :: both launch paths and their pins are [above](#two-launch-paths-pinned-separately).

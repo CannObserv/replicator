@@ -95,7 +95,7 @@ not buy the floor check. Offsets are from tailscaled starting:
 `After=` orders only against tailscaled starting, and the second boot proved an
 address wait guards the wrong thing, since the address was local while the name
 still failed. So the check retries the dependency itself, for
-`REPLICATOR_REDIS_FLOOR_WAIT` ([ENVIRONMENT.md](../ENVIRONMENT.md)). It is
+`REPLICATOR_REDIS_FLOOR_WAIT` ([DEPLOYMENT.md](../DEPLOYMENT.md#environment-variables)). It is
 notifier#43's R1 on the name side: that reboot measured a 2.4 s margin for a
 bind and warned it could invert; this one was ~0.2 s for a lookup, and did. The
 worker itself was never affected — its backoff absorbs a slow tailnet.

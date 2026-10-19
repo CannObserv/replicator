@@ -763,3 +763,27 @@ AGENTS.md :: tighten :: # Integration tests (a scratch redis-server, or one the 
 #   opens "Each rule `AGENTS.md` states in one line, with the reasoning". This
 #   rewording carries that claim; `AGENTS.md` stays an atom of the file.
 AGENTS.md :: tighten :: - [STREAMS.md](docs/STREAMS.md) — what each stream carries, one bullet per rule `AGENTS.md` states in a line
+
+# ---- #146: the three over-budget reference docs ------------------------------
+# Every entry is a pointer this run retargeted because the same change moved
+# what it points at; each read against its replacement.
+# COMMANDS.md's politeness block moved into POLITENESS.md, so its "Why:" link
+# into POLITENESS.md is now a same-doc anchor ([below](#reading-the-apply-log)).
+docs/COMMANDS.md :: retarget :: [POLITENESS.md](POLITENESS.md#reading-the-apply-log).
+# POLITENESS.md's lead-in pointed at that block's COMMANDS.md anchor; the greps
+# now sit directly above it ([above](#inspecting-the-stream)).
+docs/POLITENESS.md :: retarget :: Of the journal greps for this stream in [COMMANDS.md](COMMANDS.md#politeness--contentfetch-policy-19):
+# SKILLS.md's plugin paragraph moved into SOCRATICODE.md, so "are in
+# [SOCRATICODE.md]" became "are [above](#two-launch-paths-pinned-separately)".
+docs/SKILLS.md :: retarget :: pins it to a literal version; both launch paths and their pins are in
+docs/SKILLS.md :: retarget :: [SOCRATICODE.md](SOCRATICODE.md). The driver stays fenced: every invocation in
+# ENVIRONMENT.md's preamble lists where variable reasoning lives outside it; the
+# start-guard variables moved to DEPLOYMENT.md, so the list gains that pointer.
+docs/ENVIRONMENT.md :: retarget :: fallback host interval in [POLITENESS.md](POLITENESS.md#variables), and the
+docs/ENVIRONMENT.md :: retarget :: `OnFailure=` handler's in [FAILURE-NOTIFICATION.md](FAILURE-NOTIFICATION.md). Two env
+# The `(#131)` provenance heading the seams ack asked to rename with the next
+# COMMANDS.md edit; the issue number moved into a lead-in line beneath it.
+docs/COMMANDS.md :: rename :: ### The patching gate's in-flight count (#131)
+# tailscale.md pointed REPLICATOR_REDIS_FLOOR_WAIT at ENVIRONMENT.md; the
+# variable's entry moved to DEPLOYMENT.md in this change.
+docs/reference/tailscale.md :: retarget :: `REPLICATOR_REDIS_FLOOR_WAIT` ([ENVIRONMENT.md](../ENVIRONMENT.md)). It is

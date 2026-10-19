@@ -38,3 +38,7 @@ docs/SKILLS.md :: disproven :: skills/init-socraticode
 docs/contracts/content-fetch-outcome-reference.md :: disproven :: replicator:cmd:
 docs/contracts/content-fetch-issuer-contract.md :: disproven :: replicator:cmd:
 docs/contracts/content-fetch-issuer-contract.md :: disproven :: replicator:cmd:<command_id>
+# ---- #146: link targets of the pointers retargeted above (context-loss-ok) ----
+docs/COMMANDS.md :: retarget :: POLITENESS.md#reading-the-apply-log
+docs/POLITENESS.md :: retarget :: COMMANDS.md#politeness--contentfetch-policy-19
+docs/SKILLS.md :: retarget :: SOCRATICODE.md
