@@ -396,7 +396,7 @@ def build_report(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n", 1)[0])  # -OO: None
     parser.add_argument("old", help="the version pinned now, e.g. 0.36.0")
     parser.add_argument("new", help="the version to move to, e.g. 0.37.0")
     parser.add_argument("--root", action="append", help=f"repeatable; default {DEFAULT_ROOTS}")
