@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from scripts.co_core_closure_diff import (
+    Edge,
     MissingWheelError,
     build_report,
     closure,
@@ -137,9 +138,10 @@ def _closure(repo: Path, version: str):
 
 def test_root_imports_are_absolute_names_only(repo):
     seeds = root_imports([repo / "src"])
-    assert "co_core.models" in seeds
-    assert "co_core.bus.streams" in seeds  # from co_core.bus import streams
-    assert not any(s.startswith("sibling") or s.startswith(".") for s in seeds)
+    assert Edge("co_core.models") in seeds
+    # `from co_core.bus import streams`: a module only if the wheel has one.
+    assert Edge("co_core.bus.streams", definite=False) in seeds
+    assert not any(e.name.startswith(("sibling", ".")) for e in seeds)
 
 
 def test_every_parent_init_is_in_the_closure(repo):
@@ -201,6 +203,18 @@ def test_a_file_that_does_not_parse_is_listed(repo):
     wheels = {**files, **_aio("1.0.0")}
     c = closure({k: v.encode() for k, v in wheels.items()}, PACKAGES, root_imports([repo / "src"]))
     assert "co_core/util/hashing.py" in c.unparsed
+
+
+def test_an_import_of_a_module_the_wheel_lacks_is_unresolved(repo):
+    files = {k: v.encode() for k, v in {**_core("1.0.0", v2=False), **_aio("1.0.0")}.items()}
+    del files["co_core/extract/canonical.py"]
+    seeds = [Edge("co_core.models.changes"), Edge("co_core.gone")]
+    c = closure(files, PACKAGES, [*seeds, Edge("co_core.bus.CONST", definite=False)])
+    assert c.unresolved == frozenset({"co_core.extract.canonical", "co_core.gone"})
+
+
+def test_nothing_is_unresolved_when_every_module_exists(repo):
+    assert _closure(repo, "1.0.0").unresolved == frozenset()
 
 
 # --- verdicts -----------------------------------------------------------------
@@ -269,6 +283,19 @@ def test_the_report_gives_the_requires_dist_delta_per_package(repo):
     report = _report(repo)
     assert "- co_core: added `httpx<1`" in report
     assert "- co_core_aio: removed `co-core<1.1,>=1.0`; added `co-core<1.2,>=1.1`" in report
+
+
+def test_the_report_names_unresolved_and_unparsed_only_when_there_are_any(repo):
+    assert "Unresolved" not in _report(repo) and "Not parsed" not in _report(repo)
+    wh = repo / ".wheelhouse"
+    files = _core("1.2.0", v2=True)
+    del files["co_core/extract/canonical.py"]
+    files["co_core/util/hashing.py"] = "def digest(:\n"
+    _wheel(wh, "co_core", "1.2.0", files)
+    _wheel(wh, "co_core_aio", "1.2.0", _aio("1.2.0"))
+    report = build_report("1.1.0", "1.2.0", roots=[repo / "src"], packages=PACKAGES, wheelhouse=wh)
+    assert "**Unresolved imports** (at 1.2.0): `co_core.extract.canonical`." in report
+    assert "**Not parsed, imports not followed** (at 1.2.0): `co_core/util/hashing.py`." in report
 
 
 def test_the_report_lists_third_party_and_dynamic_imports(repo):

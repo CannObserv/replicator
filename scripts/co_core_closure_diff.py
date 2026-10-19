@@ -69,6 +69,19 @@ class Wheels:
 
 
 @dataclass(frozen=True)
+class Edge:
+    """A dotted name an import may load.
+
+    ``definite`` is False for ``pkg.name`` out of ``from pkg import name``: a
+    module only if the wheel has one, an attribute otherwise. A definite name
+    with no file in the wheel is an import that fails.
+    """
+
+    name: str
+    definite: bool = True
+
+
+@dataclass(frozen=True)
 class Closure:
     """The files one version's walk reached, and where the walk stopped."""
 
@@ -76,6 +89,7 @@ class Closure:
     third_party: frozenset[str]
     dynamic: tuple[tuple[str, int, str], ...]  # (path, line, call)
     unparsed: frozenset[str] = frozenset()  # in the closure, imports not followed
+    unresolved: frozenset[str] = frozenset()  # definite imports with no file
 
 
 def _normalize(package: str) -> str:
@@ -119,17 +133,20 @@ def _parse(source: bytes) -> ast.Module | None:
         return None
 
 
-def _imported_names(tree: ast.AST, module: str, is_package: bool) -> list[str]:
-    """Every dotted name an import in ``tree`` might load, relative ones resolved.
+def _from_import(target: str, node: ast.ImportFrom) -> list[Edge]:
+    """``from target import a, b``: ``target`` for sure, each name maybe."""
+    return [Edge(target)] + [
+        Edge(f"{target}.{a.name}", definite=False) for a in node.names if a.name != "*"
+    ]
 
-    ``from pkg import name`` yields both ``pkg`` and ``pkg.name``; the walk keeps
-    the second only if it's a module in the wheel.
-    """
-    names: list[str] = []
+
+def _imported_names(tree: ast.AST, module: str, is_package: bool) -> list[Edge]:
+    """Every dotted name an import in ``tree`` might load, relative ones resolved."""
+    names: list[Edge] = []
     package = module.split(".") if is_package else module.split(".")[:-1]
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            names.extend(alias.name for alias in node.names)
+            names.extend(Edge(alias.name) for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             if node.level:
                 if node.level - 1 > len(package):
@@ -141,17 +158,16 @@ def _imported_names(tree: ast.AST, module: str, is_package: bool) -> list[str]:
                 target = ".".join(parts)
             else:
                 target = node.module or ""
-            names.append(target)
-            names.extend(f"{target}.{a.name}" for a in node.names if a.name != "*")
+            names.extend(_from_import(target, node))
     return names
 
 
-def root_imports(roots: Iterable[Path]) -> list[str]:
+def root_imports(roots: Iterable[Path]) -> list[Edge]:
     """The absolute imports of every ``.py`` under the roots: the walk's seeds.
 
     A root's relative imports name the root's own modules, never a package's.
     """
-    seeds: list[str] = []
+    seeds: list[Edge] = []
     for root in roots:
         for path in sorted(Path(root).rglob("*.py")):
             tree = _parse(path.read_bytes())
@@ -159,10 +175,9 @@ def root_imports(roots: Iterable[Path]) -> list[str]:
                 continue
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
-                    seeds.extend(alias.name for alias in node.names)
+                    seeds.extend(Edge(alias.name) for alias in node.names)
                 elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
-                    seeds.append(node.module)
-                    seeds.extend(f"{node.module}.{a.name}" for a in node.names if a.name != "*")
+                    seeds.extend(_from_import(node.module, node))
     return seeds
 
 
@@ -189,19 +204,22 @@ def _dynamic_calls(tree: ast.AST, path: str, source: bytes) -> list[tuple[str, i
     return found
 
 
-def closure(files: dict[str, bytes], packages: Sequence[str], seeds: Iterable[str]) -> Closure:
+def closure(files: dict[str, bytes], packages: Sequence[str], seeds: Iterable[Edge]) -> Closure:
     """Walk from the seeds through every module of ``packages`` they reach."""
     tops = {_normalize(p) for p in packages}
     seen: set[str] = set()
     third_party: set[str] = set()
     dynamic: list[tuple[str, int, str]] = []
     unparsed: set[str] = set()
+    unresolved: set[str] = set()
     todo = list(seeds)
     while todo:
-        name = todo.pop()
-        if name.split(".")[0] not in tops:
+        edge = todo.pop()
+        if edge.name.split(".")[0] not in tops:
             continue
-        parts = name.split(".")
+        if edge.definite and _module_file(files, edge.name) is None:
+            unresolved.add(edge.name)
+        parts = edge.name.split(".")
         for depth in range(1, len(parts) + 1):
             module = ".".join(parts[:depth])
             path = _module_file(files, module)
@@ -217,12 +235,16 @@ def closure(files: dict[str, bytes], packages: Sequence[str], seeds: Iterable[st
             # Only a package file's imports are the closure's; a root's aren't.
             third_party.update(
                 top
-                for top in (n.split(".")[0] for n in imported)
+                for top in (e.name.split(".")[0] for e in imported)
                 if top and top not in tops and top not in sys.stdlib_module_names
             )
             todo.extend(imported)
     return Closure(
-        frozenset(seen), frozenset(third_party), tuple(sorted(dynamic)), frozenset(unparsed)
+        frozenset(seen),
+        frozenset(third_party),
+        tuple(sorted(dynamic)),
+        frozenset(unparsed),
+        frozenset(unresolved),
     )
 
 
@@ -338,6 +360,8 @@ def build_report(
         out.append(f"- {package}: {'; '.join(parts) or 'unchanged'}")
 
     for version, c in ((old_version, old_c), (new_version, new_c)):
+        if c.unresolved:
+            out.append(f"\n**Unresolved imports** (at {version}): {_ticked(c.unresolved)}.")
         if c.unparsed:
             out.append(
                 f"\n**Not parsed, imports not followed** (at {version}): {_ticked(c.unparsed)}."
