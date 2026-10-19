@@ -149,7 +149,7 @@ def _imported_names(tree: ast.AST, module: str, is_package: bool) -> list[Edge]:
             names.extend(Edge(alias.name) for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             if node.level:
-                if node.level - 1 > len(package):
+                if node.level - 1 >= len(package):  # past the top: Python raises
                     continue
                 base = package[: len(package) - (node.level - 1)]
                 parts = base + ([node.module] if node.module else [])

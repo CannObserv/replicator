@@ -217,6 +217,11 @@ def test_nothing_is_unresolved_when_every_module_exists(repo):
     assert _closure(repo, "1.0.0").unresolved == frozenset()
 
 
+def test_a_relative_import_past_the_top_level_resolves_to_nothing():
+    files = {"co_core/__init__.py": b"", "co_core/x.py": b"from ..pydantic import BaseModel\n"}
+    assert closure(files, PACKAGES, [Edge("co_core.x")]).third_party == frozenset()
+
+
 # --- verdicts -----------------------------------------------------------------
 
 
