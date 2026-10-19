@@ -7,6 +7,7 @@
 # fresh clone and after any co-core version bump — co-core / co-core-aio / co-core-sync resolve
 # from that directory via [tool.uv] find-links, not from PyPI.
 uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
+uv run python scripts/co_core_closure_diff.py OLD NEW   # every pin move: DEPLOYMENT.md, the co-core pin
 
 uv sync
 uv run pre-commit install

@@ -787,3 +787,7 @@ docs/COMMANDS.md :: rename :: ### The patching gate's in-flight count (#131)
 # tailscale.md pointed REPLICATOR_REDIS_FLOOR_WAIT at ENVIRONMENT.md; the
 # variable's entry moved to DEPLOYMENT.md in this change.
 docs/reference/tailscale.md :: retarget :: `REPLICATOR_REDIS_FLOOR_WAIT` ([ENVIRONMENT.md](../ENVIRONMENT.md)). It is
+# #145: the #77 paragraph, rewritten in place. The two closure rules become one
+# ("every pin move", not "multi-minor") pointing at scripts/co_core_closure_diff.py;
+# --claims carries every atom, `diff -rq` and `.wheelhouse/` kept as #77's history.
+docs/DEPLOYMENT.md :: tighten :: **The 0.10 → 0.13 jump (#77) was the first departure from "pin the current minor"
