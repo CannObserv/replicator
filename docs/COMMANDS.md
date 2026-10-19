@@ -312,6 +312,8 @@ The stream's inspection commands — what the producer published, one host's pol
 worker's journal view of the replay — are in
 [POLITENESS.md](POLITENESS.md#inspecting-the-stream), beside the mechanism they inspect (#146).
 
+### How long a handler holds its group
+
 How long a handler holds its group — the number CannObserv/broker#20 sizes its
 undelivered-age warning from, because this consume path reads nothing while a handler runs:
 

@@ -136,9 +136,10 @@ including an empty namespace after a flush:
 Every variable either env file carries, with the reasoning behind each default,
 and the boundary between them: [ENVIRONMENT.md](ENVIRONMENT.md).
 
-The variables the unit's start guards read are kept here, beside the guards they set — the
-Redis floor check's timeout and wait, and the checkout guard's override. They live in `/etc/replicator/.env`
-like the rest (#146):
+The variables the unit's start guards read are the exception, kept here with the unit they gate
+and indexed there by name (#146): the Redis floor check's timeout and wait — the floor itself is
+[INFRASTRUCTURE.md](INFRASTRUCTURE.md#the-broker-is-co-broker--replicator-connects-it-does-not-run-one)'s
+— and the checkout guard's override. They live in `/etc/replicator/.env` like the rest:
 
 - `REPLICATOR_REDIS_FLOOR_TIMEOUT` — seconds one `check_redis_floor.sh` probe may run before it is killed; default `5`. Read by the unit's `ExecStartPre` only, never by the worker. Exists because `redis-cli` has no connect timeout, and a `rediss://` URL against a plaintext endpoint hangs on the TLS handshake
 - `REPLICATOR_REDIS_FLOOR_WAIT` — how long `check_redis_floor.sh` keeps retrying a broker it cannot reach before reporting the floor `UNVERIFIED`; default `30`, and `0` probes once. Exists because on a cold boot MagicDNS answers `broker` with no address for a moment after tailscaled starts, which `After=tailscaled.service` cannot see (#88; a wait for the tailnet *address* was tried and did not help). Only `unreachable` is retried — an auth refusal is an answer, and a silent failure has already spent the timeout. `WAIT + TIMEOUT` is held to half the unit's 90 s start budget by `tests/test_deploy.py`, because every `ExecStartPre` shares it. A non-integer is named at start and the default used
