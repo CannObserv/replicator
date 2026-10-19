@@ -7,7 +7,7 @@ line here names. So this walks the closure from the roots instead, through every
 module of the named packages it reaches, and compares the two versions file by
 file::
 
-    uv run python scripts/co_core_closure_diff.py 0.36.0 0.37.0 [--diff]
+    uv run --no-project python scripts/co_core_closure_diff.py 0.36.0 0.37.0 [--diff]
 
 The output is Markdown for the ``pyproject.toml`` pin comment: the file count at
 each version, one line per file that isn't ``identical``, the Requires-Dist delta,
