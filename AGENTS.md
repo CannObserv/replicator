@@ -228,7 +228,7 @@ source — with rationale and ruff gates: [docs/STYLE.md](docs/STYLE.md).
 ## Detail Docs
 
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) — founding design, the command → fact flow, module by module; read before changing one
-- [STREAMS.md](docs/STREAMS.md) — what each stream carries; Bus Conventions in full
+- [STREAMS.md](docs/STREAMS.md) — what each stream carries, and why each one-liner here holds
 - [POLITENESS.md](docs/POLITENESS.md) — per-host pacing: the policy stream, sleep vs park, 429/503 escalation
 - [CONVENTIONS.md](docs/CONVENTIONS.md) — rules common to every stream: idempotency, validation, DLQ, `claim_stale`, the `replicator:cmd:*` keys (#80)
 - [STORAGE.md](docs/STORAGE.md) — blob paths and modes, the populations under `REPLICATOR_BLOB_DIR`, TTL and ceilings
