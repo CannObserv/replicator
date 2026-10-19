@@ -10,6 +10,7 @@ themselves are in [ENVIRONMENT.md](ENVIRONMENT.md), which indexes every one and
 sends the blob and temp-store settings on to [STORAGE.md](STORAGE.md); the VM,
 broker and bucket topology this unit runs on is in
 [INFRASTRUCTURE.md](INFRASTRUCTURE.md).
+The start guards' own variables are the exception, kept [below](#environment-variables) (#146).
 
 ## Server Lifecycle
 
