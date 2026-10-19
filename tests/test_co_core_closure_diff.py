@@ -195,6 +195,14 @@ def test_dynamic_imports_are_listed_not_followed(repo):
     assert call.startswith("import_module(")
 
 
+def test_a_file_that_does_not_parse_is_listed(repo):
+    files = _core("1.0.0", v2=False)
+    files["co_core/util/hashing.py"] = "def digest(:\n"
+    wheels = {**files, **_aio("1.0.0")}
+    c = closure({k: v.encode() for k, v in wheels.items()}, PACKAGES, root_imports([repo / "src"]))
+    assert "co_core/util/hashing.py" in c.unparsed
+
+
 # --- verdicts -----------------------------------------------------------------
 
 

@@ -75,6 +75,7 @@ class Closure:
     files: frozenset[str]
     third_party: frozenset[str]
     dynamic: tuple[tuple[str, int, str], ...]  # (path, line, call)
+    unparsed: frozenset[str] = frozenset()  # in the closure, imports not followed
 
 
 def _normalize(package: str) -> str:
@@ -194,6 +195,7 @@ def closure(files: dict[str, bytes], packages: Sequence[str], seeds: Iterable[st
     seen: set[str] = set()
     third_party: set[str] = set()
     dynamic: list[tuple[str, int, str]] = []
+    unparsed: set[str] = set()
     todo = list(seeds)
     while todo:
         name = todo.pop()
@@ -208,6 +210,7 @@ def closure(files: dict[str, bytes], packages: Sequence[str], seeds: Iterable[st
             seen.add(path)
             tree = _parse(files[path])
             if tree is None:
+                unparsed.add(path)
                 continue
             dynamic.extend(_dynamic_calls(tree, path, files[path]))
             imported = _imported_names(tree, module, path.endswith("/__init__.py"))
@@ -218,7 +221,9 @@ def closure(files: dict[str, bytes], packages: Sequence[str], seeds: Iterable[st
                 if top and top not in tops and top not in sys.stdlib_module_names
             )
             todo.extend(imported)
-    return Closure(frozenset(seen), frozenset(third_party), tuple(sorted(dynamic)))
+    return Closure(
+        frozenset(seen), frozenset(third_party), tuple(sorted(dynamic)), frozenset(unparsed)
+    )
 
 
 class _Mask(ast.NodeTransformer):
@@ -331,6 +336,12 @@ def build_report(
         parts = [f"removed {_ticked(removed)}"] if removed else []
         parts += [f"added {_ticked(added)}"] if added else []
         out.append(f"- {package}: {'; '.join(parts) or 'unchanged'}")
+
+    for version, c in ((old_version, old_c), (new_version, new_c)):
+        if c.unparsed:
+            out.append(
+                f"\n**Not parsed, imports not followed** (at {version}): {_ticked(c.unparsed)}."
+            )
 
     out += ["", f"**Third-party imports** (at {new_version}): {_ticked(new_c.third_party)}."]
     if old_c.third_party != new_c.third_party:
