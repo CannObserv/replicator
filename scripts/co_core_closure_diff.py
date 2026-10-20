@@ -36,7 +36,7 @@ place with ``zipfile`` and installs nothing, and it's standard library only, so
 the wheel that's read, never the sdist.
 
 Exit codes: ``0`` a report was written, whatever it found · ``2`` a usage error,
-a missing root, or a wheel missing from the wheelhouse.
+a missing root, or a wheel missing from the wheelhouse or unreadable in it.
 """
 
 from __future__ import annotations
@@ -112,7 +112,15 @@ def load_wheels(wheelhouse: Path, packages: Sequence[str], version: str) -> Whee
     files: dict[str, bytes] = {}
     requires: dict[str, frozenset[str]] = {}
     for package in packages:
-        with zipfile.ZipFile(wheel_path(wheelhouse, package, version)) as z:
+        path = wheel_path(wheelhouse, package, version)
+        try:
+            z = zipfile.ZipFile(path)
+        except zipfile.BadZipFile as exc:
+            # The sync re-downloads any file whose size doesn't match the index's.
+            raise MissingWheelError(
+                f"not a readable wheel: {path}. Run scripts/sync_wheelhouse.py again."
+            ) from exc
+        with z:
             for name in z.namelist():
                 if name.endswith(".py") and ".dist-info/" not in name:
                     files[name] = z.read(name)

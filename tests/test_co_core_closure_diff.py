@@ -380,6 +380,14 @@ def test_main_exits_two_on_a_missing_wheel(repo, capsys):
     assert "scripts/sync_wheelhouse.py" in captured.err
 
 
+def test_main_exits_two_on_a_corrupt_wheel(repo, capsys):
+    (repo / ".wheelhouse" / "co_core-1.1.0-py3-none-any.whl").write_bytes(b"truncated")
+    assert _main(repo, "1.0.0", "1.1.0") == 2
+    err = capsys.readouterr().err
+    assert "co_core-1.1.0-py3-none-any.whl" in err
+    assert "scripts/sync_wheelhouse.py" in err
+
+
 def test_main_exits_two_on_a_missing_root(repo, capsys):
     rc = main(["1.0.0", "1.1.0", "--root", str(repo / "nope")])
     assert rc == 2
