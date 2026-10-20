@@ -11,7 +11,9 @@ file::
 
 The output is Markdown for the ``pyproject.toml`` pin comment: the file count at
 each version, one line per file that isn't ``identical``, the Requires-Dist delta,
-the closure's third-party imports and any dynamic import it can't follow.
+any import of a module the wheel lacks (it fails at import) and any file it
+couldn't parse, the closure's third-party imports and any dynamic import it
+can't follow. The two failure lists print only when they have something in them.
 
 **The walk.** Each version is walked on its own, so a module that joins or leaves
 the closure shows as ``added`` or ``removed``, not ``changed``. Importing
