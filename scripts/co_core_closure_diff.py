@@ -218,7 +218,10 @@ def closure(files: dict[str, bytes], packages: Sequence[str], seeds: Iterable[Ed
         if edge.name.split(".")[0] not in tops:
             continue
         if edge.definite and _module_file(files, edge.name) is None:
-            unresolved.add(edge.name)
+            # A namespace package (PEP 420) is a directory with no file to read.
+            stem = edge.name.replace(".", "/") + "/"
+            if not any(path.startswith(stem) for path in files):
+                unresolved.add(edge.name)
         parts = edge.name.split(".")
         for depth in range(1, len(parts) + 1):
             module = ".".join(parts[:depth])

@@ -217,6 +217,13 @@ def test_nothing_is_unresolved_when_every_module_exists(repo):
     assert _closure(repo, "1.0.0").unresolved == frozenset()
 
 
+def test_a_namespace_package_is_not_unresolved():
+    files = {"co_core/__init__.py": b"", "co_core/ns/mod.py": b""}  # ns/ has no __init__
+    c = closure(files, PACKAGES, [Edge("co_core.ns"), Edge("co_core.ns.mod")])
+    assert c.unresolved == frozenset()
+    assert c.files == frozenset({"co_core/__init__.py", "co_core/ns/mod.py"})
+
+
 def test_a_relative_import_past_the_top_level_resolves_to_nothing():
     files = {"co_core/__init__.py": b"", "co_core/x.py": b"from ..pydantic import BaseModel\n"}
     assert closure(files, PACKAGES, [Edge("co_core.x")]).third_party == frozenset()
