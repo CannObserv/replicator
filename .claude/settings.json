@@ -50,7 +50,7 @@
     ]
   },
   "env": {
-    "SOCRATICODE_SPEC": "socraticode@1.14.0",
+    "SOCRATICODE_SPEC": "socraticode@1.16.1",
     "SOCRATICODE_DRIVER": "skills-vendor/gregoryfoster-skills/skills/init-socraticode/scripts/mcp-driver.mjs",
     "SOCRATICODE_PROBE_FILE": "src/worker/main.py",
     "CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT": "3600000",
