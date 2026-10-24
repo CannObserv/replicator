@@ -383,6 +383,29 @@ systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=10
 both hold here (`loginctl show-user exedev -p Linger`,
 `/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/cgroup.controllers`).
 
+**Re-pinning the server (#152).** Five sites move together, as a decision —
+the order, and why each matters, are in
+[SOCRATICODE.md](SOCRATICODE.md#two-launch-paths-pinned-separately);
+`tests/test_socraticode_pin.py` fails until they agree. Neither command below
+starts a server, but both install — the expensive half — so both take the
+same ceiling as the hook (`test_the_hook_cap_is_the_manual_ceiling`):
+
+```bash
+npm view socraticode version     # pick a literal; never @latest
+# Then: SOCRATICODE_SPEC in .claude/settings.json, the version SOCRATICODE.md
+# names, and claudeCode.environmentVariables in
+# ~/.vscode-server/data/Machine/settings.json.
+systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% \
+  -- npm install --prefix ~/.socraticode/pin socraticode@<version>   # the driver's pre-install
+systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% \
+  -- npx -y -p socraticode@<version> -- node -e 0                    # warm the session's npx entry
+
+# After a full VS Code reconnect, from the session's Bash tool ($PPID is its
+# claude) — the only evidence of what the session launched:
+ps -o pid,args --ppid "$PPID" | grep '[n]pm exec socraticode'
+tr '\0' '\n' < "/proc/$PPID/environ" | grep SOCRATICODE_SPEC
+```
+
 **Installing the Qdrant API key.** Not runnable from this VM: exe.dev VMs are
 isolated from each other, and notifier#57 D13's `tag:index:22` edge was retired after the
 soak. It runs from an operator machine, the only host that reaches both ends.

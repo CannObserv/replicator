@@ -221,11 +221,11 @@ schedule — nothing reports an upstream release, so check
 
 1. `SOCRATICODE_SPEC` in `.claude/settings.json`, and the version named above.
 2. The driver's pre-install, capped:
-   `systemd-run --user --scope -p MemoryHigh=700M -p MemoryMax=1000M -- npm install --prefix ~/.socraticode/pin socraticode@<version>`
+   `systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% -- npm install --prefix ~/.socraticode/pin socraticode@<version>`
 3. The VS Code machine setting's `SOCRATICODE_SPEC`.
 4. **The session's npx entry, warmed under the same cap** — skipped, the cold
    install moves to the next session start:
-   `systemd-run --user --scope -p MemoryHigh=700M -p MemoryMax=1000M -- npx -y -p socraticode@<version> -- node -e 0`.
+   `systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% -- npx -y -p socraticode@<version> -- node -e 0`.
    `-p` keys the same `~/.npm/_npx/<hash>` as the plugin's spelling (checked in
    #152: a plugin-style launch afterwards created no new entry).
 5. After a full VS Code reconnect: confirm from the process table, then
