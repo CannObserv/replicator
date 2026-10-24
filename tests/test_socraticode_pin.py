@@ -89,16 +89,12 @@ def vscode_launch_spec() -> str | None:
 
 
 @pytest.fixture(scope="module")
-def session_spec() -> str:
-    """The declared spec; its literal shape is `TestServerLaunchCost`'s to pin."""
-    spec = json.loads(SETTINGS.read_text()).get("env", {}).get(SPEC_VARIABLE)
-    assert spec is not None and EXACT_SPEC.fullmatch(spec), (
-        f"{SPEC_VARIABLE}={spec!r} in {SETTINGS.name} is not socraticode@<major>.<minor>.<patch>"
-    )
-    return spec
+def session_spec() -> str | None:
+    """The declared spec, raw; its literal shape is `TestServerLaunchCost`'s to pin."""
+    return json.loads(SETTINGS.read_text()).get("env", {}).get(SPEC_VARIABLE)
 
 
-def test_session_spec_matches_the_driver_pin(session_spec: str) -> None:
+def test_session_spec_matches_the_driver_pin(session_spec: str | None) -> None:
     """One build per host: the session and the driver write the same shared store."""
     pinned = pinned_install_version()
     if pinned is None:
@@ -109,7 +105,7 @@ def test_session_spec_matches_the_driver_pin(session_spec: str) -> None:
     )
 
 
-def test_session_spec_is_warm_in_the_npx_cache(session_spec: str) -> None:
+def test_session_spec_is_warm_in_the_npx_cache(session_spec: str | None) -> None:
     """The plugin's `npx -y --prefer-online <spec>` must find its entry, not install it.
 
     Skips where there is no pre-install, as in CI: a host without one is not
@@ -117,7 +113,9 @@ def test_session_spec_is_warm_in_the_npx_cache(session_spec: str) -> None:
     """
     if pinned_install_version() is None:
         pytest.skip("no SocratiCode pre-install on this machine")
-    version = EXACT_SPEC.fullmatch(session_spec).group(1)
+    match = EXACT_SPEC.fullmatch(session_spec or "")
+    assert match, f"{SPEC_VARIABLE}={session_spec!r} names no release to look for"
+    version = match.group(1)
     cached = npx_cached_versions()
     assert version in cached, (
         f"no npx cache entry holds socraticode {version} (cached: {sorted(cached)}); "
@@ -125,7 +123,7 @@ def test_session_spec_is_warm_in_the_npx_cache(session_spec: str) -> None:
     )
 
 
-def test_socraticode_doc_names_only_the_session_spec(session_spec: str) -> None:
+def test_socraticode_doc_names_only_the_session_spec(session_spec: str | None) -> None:
     """The doc says what the session launches; a re-pin that skips it leaves it lying.
 
     Every literal spec in it, not one: a re-pin that updates the first mention
@@ -138,7 +136,7 @@ def test_socraticode_doc_names_only_the_session_spec(session_spec: str) -> None:
     )
 
 
-def test_vscode_launches_claude_with_the_session_spec(session_spec: str) -> None:
+def test_vscode_launches_claude_with_the_session_spec(session_spec: str | None) -> None:
     """The block declares the pin; this is what delivers it (gregoryfoster/skills#332).
 
     VM-local: skips only where no VS Code server is installed, as in CI — on
