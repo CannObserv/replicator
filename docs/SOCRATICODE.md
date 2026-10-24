@@ -161,20 +161,45 @@ manifest is a source, not the artifact: see
 ### Two launch paths, pinned separately
 
 A server reaches this repo two ways, and **each needs its own pin** — setting
-one does nothing for the other. Keep them at the same version.
+one does nothing for the other. Both are at **`socraticode@1.16.1`** (#152).
 
 | Path | Resolves via | Pinned by |
 |---|---|---|
-| The plugin (what serves `codebase_*` in a session) | `npx -y --prefer-online ${SOCRATICODE_SPEC:-socraticode@latest}` | `SOCRATICODE_SPEC` in `.claude/settings.json` |
+| The plugin (what serves `codebase_*` in a session) | `npx -y --prefer-online ${SOCRATICODE_SPEC:-socraticode@latest}` | `SOCRATICODE_SPEC` in `claude`'s environment at startup — see below |
 | `mcp-driver.mjs` (the health hook, manual commands) | `~/.socraticode/pin`, else the npx cache | `npm install --prefix ~/.socraticode/pin socraticode@<version>` |
 
-**`SOCRATICODE_SPEC` is the whole of the control over the plugin's launch.**
-Claude Code cannot override a plugin's MCP *command*, which is what #99's "Known
-limitation" says — but this plugin parameterises the *spec*, so the variable
-reaches it. Confirm by reading the spawned args, never by reading the manifest:
-`claude mcp list` prints the resolved command, and the repo-root `mcp.json` is an
-unreferenced duplicate that hardcodes `@latest` (`plugin.json` selects
-`.claude-plugin/mcp.json`).
+**The settings block declares the spec; it does not deliver it.** Claude Code
+cannot override a plugin's MCP *command* (#99's "Known limitation"), but this
+plugin parameterises the *spec* — and Claude Code expands the plugin's args
+**before** it merges the settings `env` block, so the block alone never reaches
+the launch ([gregoryfoster/skills#332](https://github.com/gregoryfoster/skills/issues/332),
+measured on co-watcher and co-notifier, extension 2.1.280). Until #152 that was
+this host's state: the running session's `claude` (2.1.301) carried no
+`SOCRATICODE_SPEC`, so its plugin launched `@latest`. The spec lives in two places:
+
+| Where | Role |
+|---|---|
+| `.claude/settings.json` `env` | **Declares** it — the value the driver, preflight and the tests read |
+| `claudeCode.environmentVariables` in `~/.vscode-server/data/Machine/settings.json` | **Delivers** it — the extension sets it in `claude`'s environment at startup. Machine-scoped: VM-local, never committed, reaches every VS Code session on this host |
+
+A new value reaches only sessions started after a **full VS Code reconnect**. A
+terminal `claude` gets neither unless its shell exports the variable.
+
+**A reading of the variable is not a reading of the launch.** The settings
+block reaches every *child* of a session — the Bash tool, hooks, the driver —
+whether or not it reached the plugin. So `claude mcp list`, preflight's
+*"Plugin session launches socraticode …"* line, and `health-check`'s
+`sessionServer` "inferred from this process's environment" all report the pin
+while the session runs `@latest`; so did #152's first verification, from a shell
+that had exported the block itself. Nor is a manifest evidence: the repo-root
+`mcp.json` hardcodes `@latest` (`plugin.json` selects `.claude-plugin/mcp.json`).
+**The process table is the only evidence** — from the agent's Bash tool, whose
+`$PPID` is the session's `claude`:
+
+```bash
+ps -o pid,args --ppid "$PPID" | grep '[n]pm exec socraticode'  # the pinned spec, never @latest
+tr '\0' '\n' < "/proc/$PPID/environ" | grep SOCRATICODE_SPEC    # in claude's env from its start
+```
 
 Pin a **literal version**. Only an exact version is already in the npx cache and
 resolves without an install, and the install — not the server — is the expensive
@@ -182,8 +207,30 @@ half: 1.2 G cold against 75 MB pinned, where all 126 `MemoryHigh` throttle event
 landed on broker. `--prefer-online` revalidates every launch, so a warm cache is
 not a warm path on any day the package moved.
 
+**Re-pinning changes five things together**, as a decision rather than on a
+schedule — nothing reports an upstream release, so check
+`npm view socraticode version` when deciding whether to move:
+
+1. `SOCRATICODE_SPEC` in `.claude/settings.json`, and the version named above.
+2. The driver's pre-install, capped:
+   `systemd-run --user --scope -p MemoryHigh=700M -p MemoryMax=1000M -- npm install --prefix ~/.socraticode/pin socraticode@<version>`
+3. The VS Code machine setting's `SOCRATICODE_SPEC`.
+4. **The session's npx entry, warmed under the same cap** — skipped, the cold
+   install moves to the next session start:
+   `systemd-run --user --scope -p MemoryHigh=700M -p MemoryMax=1000M -- npx -y -p socraticode@<version> -- node -e 0`.
+   `-p` keys the same `~/.npm/_npx/<hash>` as the plugin's spelling (checked in
+   #152: a plugin-style launch afterwards created no new entry).
+5. After a full VS Code reconnect: confirm from the process table, then
+   `codebase_graph_build` so `socraticode_metadata` records the new
+   `builtByVersion`, then `codebase_update`. A session still running the old
+   server re-stamps the old version on its next build (notifier#134).
+
+A release whose embedding text is unchanged needs no re-index of the shared
+store (CannObserv/index#13). Leave `SOCRATICODE_AUTO_CLEANUP` unset.
+
 `tests/test_socraticode_config.py::TestServerLaunchCost` pins the spec's shape
-and the hook's cap.
+and the hook's cap; `tests/test_socraticode_pin.py` fails until all five sites
+agree — the pre-install, machine setting and npx entry are VM-local and skip in CI.
 
 ### Cross-repo search
 
@@ -222,9 +269,9 @@ to that a one-file stub is not — is in
 From #92 until then it was deliberately absent — its launch was an uncapped
 `npx -y --prefer-online socraticode@latest` on a 3.9 GB host with no swap — so the
 prefetch `socraticode-reminder.sh` prints answered "No matching deferred tools found".
-The plugin parameterises its spec, so `SOCRATICODE_SPEC` in `.claude/settings.json`
-pins it to a literal version; both launch paths and their pins are
-[above](#two-launch-paths-pinned-separately). The driver stays fenced: every invocation in
+The plugin parameterises its spec, so `SOCRATICODE_SPEC` pins it to a literal
+version — delivered by VS Code's machine setting, not the settings block (#152);
+both launch paths and their pins are [above](#two-launch-paths-pinned-separately). The driver stays fenced: every invocation in
 [COMMANDS.md](COMMANDS.md) is wrapped in a `systemd-run` memory cap, and
 `validate-store`, `validate-manifest` and `resolve` need no server at all.
 

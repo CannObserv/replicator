@@ -383,12 +383,6 @@ class TestContextManifestCoversTheDetailDocs:
 # cache without an install, which is the property being pinned. A range is not.
 PINNED_SPEC = re.compile(r"^socraticode@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
 
-# The oldest server this repo launches (#152): the release the cohort verified
-# against co-index — embedding text byte-identical to 1.14.0, every client call
-# tested on Qdrant 1.20.0. Below it: no wait on its own collection create
-# (1.15.0) and no retry on a closed Qdrant connection in the symbol graph (1.16.1).
-MIN_SPEC_VERSION = (1, 16, 1)
-
 # The SessionStart entry that runs the daily health check, found by its marker.
 HEALTH_HOOK = "socraticode-health"
 HEALTH_SCRIPT = REPO_ROOT / ".claude" / "hooks" / f"{HEALTH_HOOK}.sh"
@@ -458,22 +452,6 @@ class TestServerLaunchCost:
         assert PINNED_SPEC.match(spec), (
             f"SOCRATICODE_SPEC is {spec!r} — pin a literal version, since only an "
             "exact version is already in the npx cache and resolves without an install"
-        )
-
-    def test_the_plugin_spec_is_at_least_the_cohort_floor(self, settings_env: dict) -> None:
-        """A downgrade below the store-verified release is a choice, not drift (#152).
-
-        broker, observo and processor build on 1.16.x; a lower pin here records
-        `builtByVersion` below theirs in the shared `socraticode_metadata` and
-        drops the 1.15.0 create-then-read wait against the shared store.
-        """
-        spec = settings_env.get("SOCRATICODE_SPEC", "")
-        match = re.match(r"^socraticode@(\d+)\.(\d+)\.(\d+)", spec)
-        assert match, f"SOCRATICODE_SPEC is {spec!r} — not a literal version"
-        version = tuple(int(part) for part in match.groups())
-        floor = ".".join(map(str, MIN_SPEC_VERSION))
-        assert version >= MIN_SPEC_VERSION, (
-            f"SOCRATICODE_SPEC is {spec!r} — below the cohort floor {floor} (#152)"
         )
 
     def test_the_health_hook_caps_its_own_launch(self) -> None:
