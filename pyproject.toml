@@ -56,8 +56,8 @@ dependencies = [
     # Read by hand, the `changed` files:
     #
     # - `pure/models/changes.py`: the capture models and their Emit twins, added.
-    #   Every model this service consumes or emits has the same fields at both
-    #   ends;
+    #   Every class that exists at 0.37.0 is AST-identical at 0.39.1 bar
+    #   docstrings, so no field, default or config moved under `extra="ignore"`;
     # - `pure/adapters/bus/envelope.py`: `from_wire`'s global table gains
     #   `content_capture`, `capture_stored` and `capture_failed`. On 0.37.0 one of
     #   those on a stream read here raised `BusMessageUnknownEventTypeError`; now
@@ -73,8 +73,8 @@ dependencies = [
     #
     # The new Requires-Dist is gated on `extra == 'extract'`, which isn't
     # installed. 0.39.0's co/v1 lookup refusals and 0.39.1's CRM-model
-    # datetimes fall outside the closure. `co_core_aio`, `bus` and `fetch`
-    # included, is identical bar `__version__`. The two dynamic imports are the
+    # datetimes fall outside the closure. All of `co_core_aio`, `bus` and `fetch`
+    # with it, is identical bar `__version__`. The two dynamic imports are the
     # same two as at 0.37.0, each target named again under `TYPE_CHECKING`.
     #
     # Previously:
