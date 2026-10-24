@@ -15,8 +15,9 @@ plugin launched ``@latest``, and every check reading the variable from its own
 environment called it pinned.
 
 A spec that floats installs at session start on any day the package moves —
-the 1.2 G cold-install peak `TestServerLaunchCost` exists to keep off a 3.9 GB
-no-swap host running the worker. A spec that differs from the pre-install puts
+the 1.2 G cold-install peak `TestServerLaunchCost` exists to keep off this host,
+whose 8 GiB and 4 G of swap since #99 are headroom rather than immunity: the
+worker runs beside every session (docs/COMMANDS.md). A spec that differs from the pre-install puts
 two builds on one shared store. And a pinned spec whose npx entry is cold moves
 that same install to the next session start.
 
