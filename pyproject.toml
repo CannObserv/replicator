@@ -61,7 +61,10 @@ dependencies = [
     # - `pure/adapters/bus/envelope.py`: `from_wire`'s global table gains
     #   `content_capture`, `capture_stored` and `capture_failed`. On 0.37.0 one of
     #   those on a stream read here raised `BusMessageUnknownEventTypeError`; now
-    #   it decodes and falls to the `isinstance` guards every consume path has.
+    #   it decodes and falls to the `isinstance` guards. A command stream still
+    #   dead-letters it, under "payload is not a ... command" instead of a poison
+    #   frame; `content.fetch-policy` skips it with a wrong-type warning instead
+    #   of a poison skip.
     #   `idempotency_key` adds `occurred_at` to `InfoItemPrimaryChangedEvent`'s key,
     #   a type Replicator never publishes;
     # - `pure/adapters/bus/streams.py`: `CONTENT_CAPTURE`, a command stream;
