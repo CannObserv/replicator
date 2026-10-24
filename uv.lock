@@ -285,28 +285,28 @@ wheels = [
 
 [[package]]
 name = "co-core"
-version = "0.37.0"
+version = "0.39.1"
 source = { registry = ".wheelhouse" }
 dependencies = [
     { name = "dateparser" },
     { name = "pydantic" },
 ]
-sdist = { path = "co_core-0.37.0.tar.gz" }
+sdist = { path = "co_core-0.39.1.tar.gz" }
 wheels = [
-    { path = "co_core-0.37.0-py3-none-any.whl" },
+    { path = "co_core-0.39.1-py3-none-any.whl" },
 ]
 
 [[package]]
 name = "co-core-aio"
-version = "0.37.0"
+version = "0.39.1"
 source = { registry = ".wheelhouse" }
 dependencies = [
     { name = "co-core" },
     { name = "httpx" },
 ]
-sdist = { path = "co_core_aio-0.37.0.tar.gz" }
+sdist = { path = "co_core_aio-0.39.1.tar.gz" }
 wheels = [
-    { path = "co_core_aio-0.37.0-py3-none-any.whl" },
+    { path = "co_core_aio-0.39.1-py3-none-any.whl" },
 ]
 
 [package.optional-dependencies]
@@ -320,16 +320,16 @@ gcs = [
 
 [[package]]
 name = "co-core-sync"
-version = "0.37.0"
+version = "0.39.1"
 source = { registry = ".wheelhouse" }
 dependencies = [
     { name = "co-core" },
     { name = "requests" },
     { name = "urllib3" },
 ]
-sdist = { path = "co_core_sync-0.37.0.tar.gz" }
+sdist = { path = "co_core_sync-0.39.1.tar.gz" }
 wheels = [
-    { path = "co_core_sync-0.37.0-py3-none-any.whl" },
+    { path = "co_core_sync-0.39.1-py3-none-any.whl" },
 ]
 
 [package.optional-dependencies]
@@ -1247,9 +1247,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "co-core", specifier = ">=0.37.0,<0.38" },
-    { name = "co-core-aio", extras = ["bus", "gcs"], specifier = ">=0.37.0,<0.38" },
-    { name = "co-core-sync", extras = ["gcs"], specifier = ">=0.37.0,<0.38" },
+    { name = "co-core", specifier = ">=0.39.0,<0.40" },
+    { name = "co-core-aio", extras = ["bus", "gcs"], specifier = ">=0.39.0,<0.40" },
+    { name = "co-core-sync", extras = ["gcs"], specifier = ">=0.39.0,<0.40" },
     { name = "fastapi", specifier = ">=0.126.0,<1" },
     { name = "pydantic", specifier = ">=2.9,<3" },
     { name = "pydantic-settings", specifier = ">=2.5.0,<3" },

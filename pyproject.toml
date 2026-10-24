@@ -7,7 +7,79 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
-    # Floor is 0.37.0, for `FetchPolicyState.generation` and
+    # Floor is 0.39.0, and it carries no new feature: **two minors (0.37 -> 0.39)**
+    # taken as a catch-up (#153), ahead of the capture consumer (#138), so that
+    # this diff does not land with a behaviour change. #138's types
+    # (`ContentCaptureCommand`, `CaptureStoredEmit` / `CaptureFailedEmit`, the
+    # `CONTENT_CAPTURE` constant) arrived in 0.37.1 (cannobserv#571), so every
+    # 0.39 release has them. The floor is 0.39.0, not 0.39.1: 0.39.1's diff over
+    # 0.39.0 is `__version__` in the three `__init__`s and nothing else, and the
+    # lock resolves 0.39.1. Both `co-core-aio` and `co-core-sync` 0.39.0 and
+    # 0.39.1 require `co-core>=0.39,<0.40`, so the three move together.
+    #
+    # **`scripts/co_core_closure_diff.py 0.37.0 0.39.1`** (#145), verbatim:
+    #
+    # ## Import closure, 0.37.0 → 0.39.1
+    #
+    # Roots `src`, `scripts`; packages `co_core`, `co_core_aio`, `co_core_sync`.
+    #
+    # 57 files at 0.37.0, 58 at 0.39.1. 14 not identical:
+    #
+    # - `version-only` co_core/__init__.py
+    # - `changed` co_core/pure/adapters/bus/envelope.py
+    # - `changed` co_core/pure/adapters/bus/streams.py
+    # - `changed` co_core/pure/extract/__init__.py
+    # - `added` co_core/pure/extract/_canonical_json.py
+    # - `docstrings-only` co_core/pure/extract/base.py
+    # - `changed` co_core/pure/extract/config.py
+    # - `changed` co_core/pure/extract/errors.py
+    # - `changed` co_core/pure/extract/extraction_defaults.py
+    # - `changed` co_core/pure/extract/media_type.py
+    # - `changed` co_core/pure/extract/spec_fingerprint.py
+    # - `changed` co_core/pure/models/changes.py
+    # - `version-only` co_core_aio/__init__.py
+    # - `version-only` co_core_sync/__init__.py
+    #
+    # **Requires-Dist:**
+    #
+    # - co_core: added `python-jsonpath<3,>=2.2; extra == 'extract'`, `soupsieve<3,>=2.0; extra == 'extract'`
+    # - co_core_aio: removed `co-core<0.38,>=0.37`; added `co-core<0.40,>=0.39`
+    # - co_core_sync: removed `co-core<0.38,>=0.37`; added `co-core<0.40,>=0.39`
+    #
+    # **Third-party imports** (at 0.39.1): `google`, `google_auth_oauthlib`, `googleapiclient`, `httpx`, `pydantic`, `redis`, `requests`, `urllib3`.
+    #
+    # **Dynamic imports, not followed:**
+    #
+    # - co_core_sync/drivers/__init__.py:89 `import_module(f"{__name__}.{module}")`
+    # - co_core_sync/drivers/blobstore/__init__.py:32 `import_module(f"{__name__}.{module}")`
+    #
+    # Read by hand, the `changed` files:
+    #
+    # - `pure/models/changes.py`: the capture models and their Emit twins, added.
+    #   Every model this service consumes or emits has the same fields at both
+    #   ends;
+    # - `pure/adapters/bus/envelope.py`: `from_wire`'s global table gains
+    #   `content_capture`, `capture_stored` and `capture_failed`. On 0.37.0 one of
+    #   those on a stream read here raised `BusMessageUnknownEventTypeError`; now
+    #   it decodes and falls to the `isinstance` guards every consume path has.
+    #   `idempotency_key` adds `occurred_at` to `InfoItemPrimaryChangedEvent`'s key,
+    #   a type Replicator never publishes;
+    # - `pure/adapters/bus/streams.py`: `CONTENT_CAPTURE`, a command stream;
+    # - `pure/extract/*`: 0.38.0's JSON extractor and `ignore_selectors`, and
+    #   `spec_fingerprint` routed through the added `_canonical_json.py`. They load
+    #   only because `changes.py` imports `extract.canonical`; nothing here imports
+    #   the package or calls `spec_fingerprint`, `extraction_config_from_spec` or
+    #   `refuse_unhonoured`.
+    #
+    # The new Requires-Dist is gated on `extra == 'extract'`, which isn't
+    # installed. 0.39.0's co/v1 lookup refusals and 0.39.1's CRM-model
+    # datetimes fall outside the closure. `co_core_aio`, `bus` and `fetch`
+    # included, is identical bar `__version__`. The two dynamic imports are the
+    # same two as at 0.37.0, each target named again under `TYPE_CHECKING`.
+    #
+    # Previously:
+    #
+    # Floor was 0.37.0, for `FetchPolicyState.generation` and
     # `fetch_policy_supersedes` (cannobserv#566, #568; #136). `FetchPolicyMap`
     # applies every policy frame through the helper, so on 0.36.0 the worker fails
     # at import. The field alone would fail silently instead: under
@@ -186,9 +258,9 @@ dependencies = [
     # at module load, so a skew cannot reach a running worker at all. Additive over
     # 0.8.0 for everything the fetch path uses — no field on ContentFetchCommand,
     # BlobAvailableEvent or FetchFailedEvent moved between the two.
-    "co-core>=0.37.0,<0.38",
-    "co-core-aio[bus,gcs]>=0.37.0,<0.38",
-    "co-core-sync[gcs]>=0.37.0,<0.38",
+    "co-core>=0.39.0,<0.40",
+    "co-core-aio[bus,gcs]>=0.39.0,<0.40",
+    "co-core-sync[gcs]>=0.39.0,<0.40",
     "fastapi>=0.126.0,<1",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.5.0,<3",
