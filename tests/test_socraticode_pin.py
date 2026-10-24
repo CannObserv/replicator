@@ -10,9 +10,9 @@ Claude Code expands the plugin's args before it merges the block
 (gregoryfoster/skills#332, measured on co-watcher and co-notifier). VS Code's
 machine-scoped ``claudeCode.environmentVariables`` *delivers* it, being in
 ``claude``'s environment from the start. Before #152 this repo had only the
-block: the running session's ``claude`` carried no ``SOCRATICODE_SPEC``, so its
-plugin launched ``@latest``, and every check reading the variable from its own
-environment called it pinned.
+block: the running session's ``claude`` carried no ``SOCRATICODE_SPEC`` — the
+state #332 measured launching ``@latest`` — while every check reading the
+variable from its own environment called it pinned.
 
 A spec that floats installs at session start on any day the package moves —
 the 1.2 G cold-install peak `TestServerLaunchCost` exists to keep off this host,

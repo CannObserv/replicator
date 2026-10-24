@@ -175,7 +175,9 @@ plugin parameterises the *spec* — and Claude Code expands the plugin's args
 the launch ([gregoryfoster/skills#332](https://github.com/gregoryfoster/skills/issues/332),
 measured on co-watcher and co-notifier, extension 2.1.280). Until #152 that was
 this host's state: the running session's `claude` (2.1.301) carried no
-`SOCRATICODE_SPEC`, so its plugin launched `@latest`. The spec lives in two places:
+`SOCRATICODE_SPEC` in its own environment — the state #332 measured launching
+`@latest`. Inferred, not observed: no server was running to read. The spec lives
+in two places:
 
 | Where | Role |
 |---|---|
