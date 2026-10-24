@@ -166,7 +166,7 @@ one does nothing for the other. Both are at **`socraticode@1.16.1`** (#152).
 | Path | Resolves via | Pinned by |
 |---|---|---|
 | The plugin (what serves `codebase_*` in a session) | `npx -y --prefer-online ${SOCRATICODE_SPEC:-socraticode@latest}` | `SOCRATICODE_SPEC` in `claude`'s environment at startup — see below |
-| `mcp-driver.mjs` (the health hook, manual commands) | `~/.socraticode/pin`, else the npx cache | `npm install --prefix ~/.socraticode/pin socraticode@<version>` |
+| `mcp-driver.mjs` (the health hook, manual commands) | `~/.socraticode/pin`, else the npx cache | The pre-install — a capped `npm install --prefix`, re-pin step 2 below |
 
 **The settings block declares the spec; it does not deliver it.** Claude Code
 cannot override a plugin's MCP *command* (#99's "Known limitation"), but this
