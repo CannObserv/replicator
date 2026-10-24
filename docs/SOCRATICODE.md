@@ -184,6 +184,12 @@ in two places:
 | `.claude/settings.json` `env` | **Declares** it — the value the driver, preflight and the tests read |
 | `claudeCode.environmentVariables` in `~/.vscode-server/data/Machine/settings.json` | **Delivers** it — the extension sets it in `claude`'s environment at startup. Machine-scoped: VM-local, never committed, reaches every VS Code session on this host |
 
+**Verified 2026-10-24** after a full reconnect with the machine setting: the
+session's `claude` carried `SOCRATICODE_SPEC=socraticode@1.16.1` from its start,
+its child was `npm exec socraticode@1.16.1`, and `~/.npm/_npx/` gained no entry
+— the launch installed nothing. The extension moved from 2.1.301 to 2.1.309 in
+the same reconnect, so whether 2.1.309 honours the block alone is not measured.
+
 A new value reaches only sessions started after a **full VS Code reconnect**. A
 terminal `claude` gets neither unless its shell exports the variable.
 
