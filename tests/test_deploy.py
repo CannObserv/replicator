@@ -689,6 +689,49 @@ def test_the_live_slice_covers_every_child_on_the_host():
     )
 
 
+# --- The browser cgroup (#138) ------------------------------------------------
+#
+# Delegation moves the worker into <unit>/worker, where the unit's MemoryLow=
+# no longer reaches it on this host (no memory_recursiveprot): the worker
+# re-claims it at boot (src/worker/browser_cgroup.py). These pin the unit half
+# and, on the host, that the claim landed.
+
+BROWSER_EXEC = REPO_ROOT / "scripts" / "browser_exec.sh"
+INSTALLED_UNIT = Path("/etc/systemd/system/replicator.service")
+
+
+def test_the_unit_delegates_memory_and_pids_to_a_worker_leaf():
+    assert set(_directive("Delegate").split()) == {"memory", "pids"}
+    assert _directive("DelegateSubgroup") == "worker"
+    assert _section_of(UNIT, "Delegate") == "Service"
+    assert _section_of(UNIT, "DelegateSubgroup") == "Service"
+
+
+def test_the_browser_launcher_is_executable_and_joins_the_cgroup_before_exec():
+    assert os.access(BROWSER_EXEC, os.X_OK), f"{BROWSER_EXEC.name} is not executable"
+    text = BROWSER_EXEC.read_text()
+    assert "set -euo pipefail" in text, "a launch that cannot join the cgroup must fail"
+    join = 'echo "$$" > "$REPLICATOR_BROWSER_CGROUP_PROCS"'
+    assert text.index(join) < text.index('exec "$exe"'), (
+        "the launcher must join the browser cgroup before it becomes the browser"
+    )
+    assert "echo 500 > /proc/self/oom_score_adj" in text
+
+
+@on_the_host
+def test_the_worker_leaf_holds_the_units_reservation():
+    """After a #138 deploy: <unit>/worker carries what systemd wrote on <unit>."""
+    if "DelegateSubgroup=worker" not in INSTALLED_UNIT.read_text():
+        pytest.skip(f"{INSTALLED_UNIT} predates #138 — the post-merge steps install it")
+    service = _cgroup("replicator.service")
+    leaf = service / "worker"
+    assert leaf.is_dir(), f"{leaf} is missing — restart replicator after daemon-reload"
+    assert _live_memory_low(leaf) == _live_memory_low(service), (
+        f"{leaf} holds memory.low {_live_memory_low(leaf)}, the unit {_live_memory_low(service)} "
+        "— the worker's boot claim did not land; read `worker ready` in the journal"
+    )
+
+
 SYSCTL = REPO_ROOT / "deploy" / "99-co-replicator-memory.conf"
 
 # Low enough that swap stays a safety net rather than a routine paging path for

@@ -133,3 +133,19 @@ def test_a_missing_scratch_broker_fails_ci_rather_than_skipping():
     # `exit 1`s — the WIF-provider assertions — so a bare "does the file contain
     # exit 1" would pass a guard that only warned.
     assert guard, "nothing in CI fails the job when redis-server did not resolve"
+
+
+def test_the_browser_suite_runs_in_ci_inside_a_delegated_scope():
+    """#138: `-m browser` is deselected by default, so this job is its only run.
+
+    A delegated scope because the OOM test needs a cgroup the runner owns, and
+    the sandbox test needs the AppArmor userns restriction lifted. Either missing
+    is a red job (the fixtures fail, never skip), but deleting the step is a green
+    workflow with the renderer's confinements unproven.
+    """
+    text = WORKFLOW.read_text()
+
+    assert "-m browser" in text, "no CI step runs the browser suite"
+    assert "systemd-run --user --scope -q -p Delegate=yes" in text
+    assert "kernel.apparmor_restrict_unprivileged_userns=0" in text
+    assert "playwright install --with-deps chromium-headless-shell" in text

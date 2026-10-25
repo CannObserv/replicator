@@ -113,6 +113,17 @@ OOMScoreAdjust=-900
 # tailscaled's; tests/test_deploy.py checks the sum. Nothing for *atomic*
 # allocations — vm.min_free_kbytes covers those.
 MemoryLow=128M
+# Viewport capture's browser cgroup (#138). systemd starts every process of the
+# unit in <unit>/worker and hands the unit's cgroup to User=, so the worker can
+# make the sibling <unit>/browser with its own memory.max, memory.oom.group and
+# pids.max (src/worker/browser_cgroup.py): a runaway render is group-killed at
+# its cap instead of costing the worker. Two knock-ons, both handled in code:
+# without memory_recursiveprot the MemoryLow= above stops at <unit>, so the
+# worker copies it onto <unit>/worker at every boot; and a browser left behind by
+# a crash is killed when the next one is prepared. Applies with capture off too:
+# the worker moves into the leaf either way. systemd >= 254 for DelegateSubgroup=.
+Delegate=memory pids
+DelegateSubgroup=worker
 # Creates /var/lib/replicator (REPLICATOR_BLOB_DIR's parent) owned by User=.
 StateDirectory=replicator
 

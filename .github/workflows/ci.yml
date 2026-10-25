@@ -225,6 +225,74 @@ jobs:
   # variable from every test and re-point it, per test, from
   # REPLICATOR_TEST_GCS_CREDENTIALS — so the path is threaded explicitly rather
   # than inherited, and an unmarked test cannot reach the identity at all.
+  browser:
+    # The renderer against the pinned shell (#138): the egress canaries, the
+    # sandbox, and an OOM group-kill in a delegated cgroup. `-m browser` is
+    # deselected from the default suite, so this is the only place it runs in CI,
+    # and every precondition is asserted here rather than left to skip.
+    name: browser (the renderer's confinements, pinned headless shell)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Authenticate to Google Cloud (WIF, read-only)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: co-pypi-reader@co-gcs.iam.gserviceaccount.com
+
+      - name: Sync cannobserv wheelhouse
+        run: uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
+
+      - name: uv sync
+        run: uv sync --frozen --group dev
+
+      # The revision is the one uv.lock's Playwright pins; --with-deps pulls the
+      # shared libraries a bare runner lacks.
+      - name: Install the pinned headless shell
+        run: |
+          PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/ms-playwright" \
+            uv run playwright install --with-deps chromium-headless-shell
+
+      # Ubuntu 24.04 runners refuse unprivileged user namespaces through
+      # AppArmor, which is the renderer sandbox's mechanism. The production host
+      # has no such restriction; the sandbox test must run, not be carved out.
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      # A delegated cgroup the runner user owns, as DelegateSubgroup= gives the
+      # unit: the user manager's scope, started by lingering. A system scope
+      # would stay root-owned under --uid.
+      - name: Start the runner's user manager
+        run: |
+          sudo loginctl enable-linger "$USER"
+          for _ in $(seq 1 30); do
+            [ -S "/run/user/$(id -u)/bus" ] && exit 0
+            sleep 1
+          done
+          echo "::error::no user manager bus for $USER: the browser suite needs a delegated scope"
+          exit 1
+
+      - name: pytest -m browser (inside a delegated scope)
+        env:
+          REPLICATOR_PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/ms-playwright
+        run: |
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          systemd-run --user --scope -q -p Delegate=yes \
+            -E PATH -E HOME -E REPLICATOR_PLAYWRIGHT_BROWSERS_PATH \
+            -- uv run pytest --no-cov -m browser -rs
+
   gcs:
     name: gcs (T4 against the test bucket)
     runs-on: ubuntu-latest
