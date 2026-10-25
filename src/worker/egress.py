@@ -125,46 +125,48 @@ async def _getaddrinfo(host: str, port: int) -> Sequence[str]:
     return [str(info[4][0]) for info in infos]
 
 
-class GuardedTransport(httpx.AsyncBaseTransport):
-    """Refuse a request whose destination resolves into a blocked range.
+class DestinationGuard:
+    """The destination check, for every caller that opens a connection for an issuer (#138).
 
-    Composition rather than a subclass of ``AsyncHTTPTransport``: the inner
-    transport is what a test replaces to assert the refusal happened *before*
-    anything left the host, which is the promise the issuer contract makes about
-    every other guard on this path.
+    Two callers since #138: :class:`GuardedTransport`, once per fetch hop, and the
+    browser's SOCKS guard (``src/worker/browser_egress.py``), once per connection a
+    rendered page opens. One check rather than two copies, because the copy that
+    drifts is the one nobody tests against a redirect.
+
+    :meth:`vet` **returns the addresses it checked**, so a caller that opens the
+    socket itself can connect to exactly those. The SOCKS guard does, which closes
+    the rebinding window this module names as its residual for that caller; the
+    httpx transport hands the *name* on and keeps the residual.
     """
 
     def __init__(
         self,
-        inner: httpx.AsyncBaseTransport,
         *,
         blocked: tuple[Network, ...],
         resolve: Resolver = _getaddrinfo,
         resolve_timeout: float = RESOLVE_TIMEOUT_SECONDS,
     ) -> None:
-        self._inner = inner
         self._blocked = blocked
         self._resolve = resolve
         self._resolve_timeout = resolve_timeout
 
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        await self._refuse_blocked_destination(request.url)
-        return await self._inner.handle_async_request(request)
+    async def vet(self, host: str, port: int, *, label: str | None = None) -> list[Address]:
+        """Every address ``host`` answers with, or the refusal for the first blocked one.
 
-    async def aclose(self) -> None:
-        await self._inner.aclose()
-
-    async def _refuse_blocked_destination(self, url: httpx.URL) -> None:
-        host = url.host
-        for address in await self._addresses(host, url.port or _default_port(url)):
+        ``label`` is what the refusal names: the URL for a fetch hop, the
+        ``host:port`` a page asked for when the caller has no URL.
+        """
+        addresses = await self._addresses(host, port)
+        for address in addresses:
             network = _containing(address, self._blocked)
             if network is not None:
                 raise PermanentFetchError(
-                    f"{url} resolves to {address}, inside the refused range {network} — "
-                    f"Replicator does not fetch its own host, its private network, or the "
-                    f"tailnet",
+                    f"{label or f'{host}:{port}'} resolves to {address}, inside the refused "
+                    f"range {network} — Replicator does not fetch its own host, its private "
+                    f"network, or the tailnet",
                     reason=FailureReason.DESTINATION_REFUSED,
                 )
+        return addresses
 
     async def _addresses(self, host: str, port: int) -> list[Address]:
         """The addresses to check — the literal itself when the URL names one.
@@ -226,6 +228,37 @@ class GuardedTransport(httpx.AsyncBaseTransport):
                 reason=FailureReason.NOT_FETCHABLE,
             ) from exc
         return _checkable(host, answer)
+
+
+class GuardedTransport(httpx.AsyncBaseTransport):
+    """Refuse a request whose destination resolves into a blocked range.
+
+    Composition rather than a subclass of ``AsyncHTTPTransport``: the inner
+    transport is what a test replaces to assert the refusal happened *before*
+    anything left the host, which is the promise the issuer contract makes about
+    every other guard on this path. The check is :class:`DestinationGuard`'s.
+    """
+
+    def __init__(
+        self,
+        inner: httpx.AsyncBaseTransport,
+        *,
+        blocked: tuple[Network, ...],
+        resolve: Resolver = _getaddrinfo,
+        resolve_timeout: float = RESOLVE_TIMEOUT_SECONDS,
+    ) -> None:
+        self._inner = inner
+        self._guard = DestinationGuard(
+            blocked=blocked, resolve=resolve, resolve_timeout=resolve_timeout
+        )
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        url = request.url
+        await self._guard.vet(url.host, url.port or _default_port(url), label=str(url))
+        return await self._inner.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
 
 
 class BodyCeilingTransport(httpx.AsyncBaseTransport):

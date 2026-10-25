@@ -1586,7 +1586,7 @@ def test_the_operators_ranges_reach_the_worker_guard(monkeypatch):
 
     client = build_fetch_client(Settings())
 
-    assert [str(net) for net in client._transport._blocked] == ["10.0.0.0/8"]
+    assert [str(net) for net in client._transport._guard._blocked] == ["10.0.0.0/8"]
 
 
 def test_the_worker_guard_resolves_under_the_budgeted_cap(monkeypatch):
@@ -1602,7 +1602,7 @@ def test_the_worker_guard_resolves_under_the_budgeted_cap(monkeypatch):
 
     client = build_fetch_client(Settings())
 
-    assert client._transport._resolve_timeout == RESOLVE_TIMEOUT_SECONDS
+    assert client._transport._guard._resolve_timeout == RESOLVE_TIMEOUT_SECONDS
 
 
 def test_the_worker_stops_reading_a_body_at_the_blob_ceiling(monkeypatch):
