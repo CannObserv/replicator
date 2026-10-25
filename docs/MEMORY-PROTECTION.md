@@ -90,6 +90,24 @@ share here needs it added. `tests/test_deploy.py` checks the sum, and on this
 host reads every claim under the slice back from `/sys/fs/cgroup`, as
 `init-socraticode`'s `preflight.sh --check` does.
 
+**Delegation since #138: the worker leaf re-claims it.** `Delegate=memory pids` and
+`DelegateSubgroup=worker` start the worker in `replicator.service/worker`, so that viewport
+capture can put each browser in a sibling `replicator.service/browser` with a hard cap. Without
+`memory_recursiveprot` the unit's 128M stops at `replicator.service`. So the worker copies the
+unit's `memory.low` onto its own leaf at every boot (`src/worker/browser_cgroup.py`), and
+`worker ready` reports it as `worker_memory_low`. The slice grant is unchanged, because the
+claim moves down a level rather than adding a second one. The browser leaf claims nothing:
+
+- `memory.max` = `REPLICATOR_CAPTURE_MEMORY_MAX` (1536M; the spike's longest page took 768 MiB);
+- `memory.swap.max=0`;
+- `memory.oom.group=1` (a runaway render is group-killed, and the worker sees `TargetClosedError`);
+- `pids.max=512`.
+
+`scripts/browser_exec.sh` sets the browser to adj 500, and Chromium ranks its own children from
+200 up, all far above the worker's -900. Playwright's Node driver stays in the worker leaf.
+`tests/test_deploy.py` reads the leaf's claim back on this host once the installed unit
+delegates.
+
 What this is not:
 
 - **Not a substitute for capping the launch.** The cap bounds a SocratiCode

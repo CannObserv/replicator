@@ -40,7 +40,9 @@ Closing it means connecting to the pinned address with the ``Host`` header
 preserved and certificate verification still keyed to the name, which is
 materially more machinery than the threat justifies today: rebinding needs a
 hostile origin *and* a bus writer the broker granted aiming a command at it, and
-CannObserv/broker#14 bounds the second.
+CannObserv/broker#14 bounds the second. The browser's SOCKS guard (#138) shares
+:class:`DestinationGuard` and *does* dial the addresses it checked, so the residual
+is fetch's alone.
 
 **And how much a fetch may bring back (#104).** :class:`BodyCeilingTransport`
 sits inside the guard on the same client, for the same reason it is a transport:

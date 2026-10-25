@@ -24,6 +24,32 @@ Third, and for any credential: **the broker has one database** since 2026-09-10 
 
 **One namespace the sweeper cannot reach.** `process_message` writes `replicator:cmd:<stream>:<command_id>` (`replicator:cmd:fetch:…` for an end-to-end fetch run — segmented since #29, and the only non-stream key this service writes anywhere: [CONVENTIONS.md](CONVENTIONS.md#the-replicatorcmd-keys)), a constant prefix outside `replicator.itest.*`, so an end-to-end test deletes its own keys via the `dedupe_keys` fixture and shortens their TTL. `test_an_end_to_end_run_only_creates_predictable_keys` asserts the whole promise: every key a run creates is either an itest stream or a dedupe key.
 
+## Testing the browser (#138)
+
+`-m browser` (`tests/worker/test_browser_real.py`) launches the pinned
+`chromium-headless-shell`. It's deselected by default and **never skips**: a missing runtime or
+an undelegated cgroup fails it, because a green run that launched nothing is the result that
+hides a confinement gone missing. It needs two things:
+
+- the shell, at `REPLICATOR_PLAYWRIGHT_BROWSERS_PATH` (default
+  `/var/lib/replicator/ms-playwright`, installed by the runbook);
+- a cgroup this user owns, which the fixture splits into `worker/` and `browser/` the way
+  `DelegateSubgroup=` does for the unit.
+
+```bash
+REPLICATOR_PLAYWRIGHT_BROWSERS_PATH=/var/lib/replicator/ms-playwright \
+  systemd-run --user --scope -q -p Delegate=yes -E PATH -E REPLICATOR_PLAYWRIGHT_BROWSERS_PATH \
+  -- uv run pytest --no-cov -m browser -rs
+```
+
+A system scope (`sudo systemd-run --scope --uid=`) stays root-owned, so it won't do. CI uses
+the user manager too, started by lingering, and lifts the runner's AppArmor userns restriction
+for the sandbox test. The page server is `127.0.0.1` and the guard's table is narrowed to the
+canary at `127.0.0.2/32`. Each egress vector must leave the canary at zero *and* fail the render
+`destination_refused`. WebRTC is the exception: it's UDP, the flag stops it, and the render
+succeeds. Everything else about the renderer is `tests/worker/test_browser.py`, against a fake
+Playwright.
+
 ## Testing the write path
 
 **Production `co-gcs-replication` is not a test target, and cannot become one.**
