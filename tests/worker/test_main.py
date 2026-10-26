@@ -1586,7 +1586,7 @@ def test_the_operators_ranges_reach_the_worker_guard(monkeypatch):
 
     client = build_fetch_client(Settings())
 
-    assert [str(net) for net in client._transport._blocked] == ["10.0.0.0/8"]
+    assert [str(net) for net in client._transport._guard._blocked] == ["10.0.0.0/8"]
 
 
 def test_the_worker_guard_resolves_under_the_budgeted_cap(monkeypatch):
@@ -1602,7 +1602,7 @@ def test_the_worker_guard_resolves_under_the_budgeted_cap(monkeypatch):
 
     client = build_fetch_client(Settings())
 
-    assert client._transport._resolve_timeout == RESOLVE_TIMEOUT_SECONDS
+    assert client._transport._guard._resolve_timeout == RESOLVE_TIMEOUT_SECONDS
 
 
 def test_the_worker_stops_reading_a_body_at_the_blob_ceiling(monkeypatch):
@@ -1721,3 +1721,55 @@ async def test_an_unreachable_permanent_bucket_fails_the_boot_and_names_it(
     lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
     named = [line for line in lines if "a-permanent-bucket" in json.dumps(line)]
     assert any("permanent blob bucket is not usable" in line.get("message", "") for line in named)
+
+
+async def _ready_record(monkeypatch, fake_redis, tmp_path, capsys) -> tuple[dict, list[dict]]:
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    stop = _ended_by_the_loop(monkeypatch)
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    try:
+        await run(stop)
+        lines = [
+            json.loads(ln) for ln in capsys.readouterr().out.splitlines() if ln.startswith("{")
+        ]
+    finally:
+        root.handlers, root.level = saved_handlers, saved_level
+    return next(r for r in lines if r.get("message") == "worker ready"), lines
+
+
+async def test_boot_reclaims_the_units_reservation_on_the_worker_leaf(
+    monkeypatch, fake_redis, tmp_path, capsys
+):
+    """#138: delegation moves the worker into <unit>/worker, out of MemoryLow='s reach."""
+    monkeypatch.setattr("src.worker.main.claim_worker_memory_low", lambda: 134217728)
+
+    record, _ = await _ready_record(monkeypatch, fake_redis, tmp_path, capsys)
+
+    assert record["worker_memory_low"] == 134217728
+
+
+async def test_an_undelegated_worker_says_so_at_ready(monkeypatch, fake_redis, tmp_path, capsys):
+    monkeypatch.setattr("src.worker.main.claim_worker_memory_low", lambda: None)
+
+    record, _ = await _ready_record(monkeypatch, fake_redis, tmp_path, capsys)
+
+    assert record["worker_memory_low"] == "not delegated"
+
+
+async def test_a_failed_reservation_claim_is_loud_and_not_fatal(
+    monkeypatch, fake_redis, tmp_path, capsys
+):
+    """Losing the reservation costs protection, not the bus: boot carries on, at ERROR."""
+
+    def refuse():
+        raise PermissionError(13, "Permission denied", "/sys/fs/cgroup/x/worker/memory.low")
+
+    monkeypatch.setattr("src.worker.main.claim_worker_memory_low", refuse)
+
+    record, lines = await _ready_record(monkeypatch, fake_redis, tmp_path, capsys)
+
+    assert record["worker_memory_low"] == "claim failed"
+    errors = [r for r in lines if r.get("level") == "ERROR"]
+    assert any("memory.low" in r["message"] for r in errors), errors

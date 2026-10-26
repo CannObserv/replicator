@@ -213,6 +213,97 @@ jobs:
       - name: pytest (broker OOM, ACL denial, and dead-letter command forms)
         run: uv run pytest --no-cov -m integration tests/worker/test_oom_integration.py -rs
 
+  browser:
+    # The renderer against the pinned shell (#138): the egress canaries, the
+    # sandbox, and an OOM group-kill in a delegated cgroup. `-m browser` is
+    # deselected from the default suite, so this is the only place it runs in CI,
+    # and every precondition is asserted here rather than left to skip.
+    name: browser (the renderer's confinements, pinned headless shell)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Authenticate to Google Cloud (WIF, read-only)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: co-pypi-reader@co-gcs.iam.gserviceaccount.com
+
+      - name: Sync cannobserv wheelhouse
+        run: uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
+
+      - name: uv sync
+        run: uv sync --frozen --group dev
+
+      # The revision is the one uv.lock's Playwright pins. Not --with-deps: that
+      # runs `apt-get update && apt-get install` itself, so a broken third-party
+      # index (the redis step's Hash Sum mismatch) would fail this job (#138 CR 24).
+      # The update is tolerant, the package list is the dry run's, and ldd decides.
+      - name: Install the pinned headless shell and its libraries
+        run: |
+          sudo apt-get update \
+            || echo "::warning::apt-get update reported errors (usually a third-party index); continuing — the install and the ldd check below decide"
+          # Stdout only: a failure's stack trace (to the log) must not parse as packages.
+          dry=$(uv run playwright install-deps --dry-run chromium-headless-shell || true)
+          if ! grep -qE 'Missing system dependencies|All system dependencies are installed' <<<"$dry"; then
+            echo "::warning::the dependency dry run reported neither a list nor 'all installed' (its error is above); installing nothing, ldd decides"
+          fi
+          deps=$(sed -n 's/^  //p' <<<"$dry")
+          # Fonts included, deliberately: these tests assert confinement, not pixels.
+          # Production installs none (the runbook: fonts are their own decision).
+          if [ -n "$deps" ]; then
+            sudo apt-get install -y --no-install-recommends $deps \
+              || echo "::warning::the dependency install reported errors; continuing — ldd decides"
+          fi
+          PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/ms-playwright" \
+            uv run playwright install chromium-headless-shell
+          shell=$(uv run python -c "from pathlib import Path; from src.worker.browser import pinned_shell; print(pinned_shell(Path('$RUNNER_TEMP/ms-playwright')))")
+          # Captured first: with no pipefail, `ldd x | grep` is green when ldd fails.
+          libs=$(ldd "$shell")
+          if grep 'not found' <<<"$libs"; then
+            echo "::error::the pinned shell is missing shared libraries"
+            exit 1
+          fi
+
+      # Ubuntu 24.04 runners refuse unprivileged user namespaces through
+      # AppArmor, which is the renderer sandbox's mechanism. The production host
+      # has no such restriction; the sandbox test must run, not be carved out.
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      # A delegated cgroup the runner user owns, as DelegateSubgroup= gives the
+      # unit: the user manager's scope, started by lingering. A system scope
+      # would stay root-owned under --uid.
+      - name: Start the runner's user manager
+        run: |
+          sudo loginctl enable-linger "$USER"
+          for _ in $(seq 1 30); do
+            [ -S "/run/user/$(id -u)/bus" ] && exit 0
+            sleep 1
+          done
+          echo "::error::no user manager bus for $USER: the browser suite needs a delegated scope"
+          exit 1
+
+      - name: pytest -m browser (inside a delegated scope)
+        env:
+          REPLICATOR_PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/ms-playwright
+        run: |
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          systemd-run --user --scope -q -p Delegate=yes \
+            -E PATH -E HOME -E REPLICATOR_PLAYWRIGHT_BROWSERS_PATH \
+            -- uv run pytest --no-cov -m browser -rs
+
   # The only job in this workflow that holds a delete-capable identity, and it is
   # a separate job for exactly that reason (#53). The `test` job authenticates as
   # `co-pypi-reader` — read on the package index and nothing else — and giving it

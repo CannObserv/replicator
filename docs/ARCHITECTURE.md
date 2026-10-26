@@ -37,6 +37,9 @@ src/worker/main.py   — Entry point: client lifetime, consumer group, signals, 
 src/worker/loop.py   — The consume path: poll → dispatch → ack, DLQ, dedupe, recovery; one loop per command stream, parameterized by CommandSpec
 src/worker/handler.py — The byte path behind the Handler seam: fetch → fingerprint → store → publish
 src/worker/egress.py — The destination guard: a transport refusing loopback, private and tailnet addresses per redirect hop (#95); an answer it cannot check retries, never passes (#100). Beside it, the body ceiling: every hop's body counted on the wire and not read past `REPLICATOR_MAX_BLOB_BYTES` (#104)
+src/worker/browser.py — The renderer behind the Renderer seam: one pinned headless Chromium per render, sandboxed, scrubbed env, waits and screenshot; says what happened to the page, never the wire reason (#138; #63 reuses it)
+src/worker/browser_egress.py — The browser's egress guard: a per-render SOCKS5 listener vetting every connection a page opens with egress.py's DestinationGuard, dialling the address it checked (#138)
+src/worker/browser_cgroup.py — The delegated browser/ cgroup (cap, swap 0, group-kill, pids) and the worker leaf's memory.low re-claim (#138)
 src/worker/reporter.py — The failure fact behind the FailureReporter seam: fetch_failed on content.blobs
 src/worker/retention.py — The sweep task: cadence, usage accounting, ceiling reporting
 src/worker/pacing.py — Per-host request spacing; the mechanism half of politeness (#12, escalating on 429 since #25)
@@ -56,7 +59,7 @@ src/worker/checkout.py — Is this checkout main's code? Asked before a write id
 src/core/logging.py  — build_json_formatter() + ColorMessageFilter + configure_logging() + get_logger()
 src/core/log_config.json — uvicorn --log-config; routes uvicorn's own loggers through that formatter
 src/core/config.py   — Settings / env access (see Environment Variables)
-scripts/        — sync_wheelhouse.py, co_core_closure_diff.py, check_redis_floor.sh, rcli.sh, check_main_checkout.sh, notify_failure.sh, seed_fetch.py, inflight.py, rehearse_reconnect.sh
+scripts/        — sync_wheelhouse.py, co_core_closure_diff.py, check_redis_floor.sh, rcli.sh, check_main_checkout.sh, notify_failure.sh, browser_exec.sh, seed_fetch.py, inflight.py, rehearse_reconnect.sh
 scripts/rcli.sh  — sourced: redis-cli with the URL's credential in REDISCLI_AUTH, never argv (#127)
 scripts/notify_failure.sh — the OnFailure= handler's body: records the incident, dispatches it when configured (#94)
 scripts/seed_fetch.py — the seed harness; publishes content.fetch to scratch streams, --watch tails the facts

@@ -269,6 +269,14 @@ dependencies = [
     "pydantic-settings>=2.5.0,<3",
     "python-json-logger>=4.0.0,<5",
     "python-ulid>=3.1.0,<4",
+    # Viewport capture's renderer (#138). **Pinned exact, not a range**: each
+    # Playwright release pins one Chromium revision, and the worker launches the
+    # `chromium-headless-shell` that `playwright install` put under
+    # REPLICATOR_PLAYWRIGHT_BROWSERS_PATH for *this* version. A patch bump moves
+    # the revision too, so a bump is a lock change plus the runbook's install
+    # step on every host (docs/plans/2026-10-25-viewport-capture-runbook.md).
+    # Bundles its own Node (the driver): an outside-apt runtime for patching.
+    "playwright==1.64.1",
     "uvicorn[standard]>=0.34.0,<1",
 ]
 
@@ -304,7 +312,7 @@ testpaths = ["tests"]
 # --strict-markers: an unregistered marker is an error, not a warning. A typo'd
 # `@pytest.mark.gsc` would otherwise leave a test that never runs under any
 # selector and never reports why (CR #9).
-addopts = "-v --tb=short --strict-markers -m 'not integration and not gcs' --cov=src --cov-report=term-missing"
+addopts = "-v --tb=short --strict-markers -m 'not integration and not gcs and not browser' --cov=src --cov-report=term-missing"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
@@ -315,6 +323,7 @@ timeout = 300
 timeout_method = "thread"
 markers = [
     "integration: marks tests that hit live external services or a real Redis broker; excluded by default (run with -m integration)",
+    "browser: marks tests that launch the pinned headless Chromium; excluded by default (run with -m browser). A missing runtime fails them, never skips — see docs/TESTING.md",
     "gcs: marks tests that write to the provisioned GCS test bucket; excluded by default (run with -m gcs). Deliberately not `integration` — see docs/TESTING.md",
 ]
 filterwarnings = [

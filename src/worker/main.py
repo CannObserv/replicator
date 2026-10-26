@@ -36,6 +36,7 @@ from src.core.config import Settings, get_settings
 from src.core.logging import configure_logging, get_logger
 from src.storage.sweeper import BlobUsage
 from src.worker.aliases import AliasTable, load_alias_table
+from src.worker.browser_cgroup import CgroupUnavailableError, claim_worker_memory_low
 from src.worker.checkout import checkout_refusal
 from src.worker.egress import BodyCeilingTransport, GuardedTransport, blocked_networks
 from src.worker.handler import build_handler
@@ -623,6 +624,23 @@ def _prepare_storage(settings: Settings) -> tuple[BlobStore, Path | None]:
     return LocalBlobStore(blob_dir, touch_on_rereference=True), blob_dir
 
 
+def _claim_worker_reservation() -> int | str:
+    """Copy the unit's ``MemoryLow=`` onto the worker leaf; what ``worker ready`` says (#138).
+
+    ``DelegateSubgroup=worker`` starts the worker in ``<unit>/worker``, and on a host
+    without ``memory_recursiveprot`` the unit's reservation stops at ``<unit>``. A
+    failed claim costs the worker its protection from reclaim, not the bus, so it is
+    logged at ERROR and boot carries on: failing the boot would trade a degraded
+    protection for an outage.
+    """
+    try:
+        claimed = claim_worker_memory_low()
+    except (OSError, CgroupUnavailableError):
+        logger.exception("could not copy the unit's memory.low onto the worker leaf")
+        return "claim failed"
+    return "not delegated" if claimed is None else claimed
+
+
 async def run(
     stop: asyncio.Event | None = None,
     *,
@@ -641,6 +659,7 @@ async def run(
     """
     settings = get_settings()
     configure_logging(settings.log_level)
+    worker_memory_low = _claim_worker_reservation()
 
     # systemd's StateDirectory= creates the parent only, so the leaf is ours to
     # make. Doing it at startup rather than at first write means a
@@ -844,6 +863,10 @@ async def run(
                     # fetches SIGKILLed on every deploy that lands during one.
                     # Nothing else says it at boot (CR 7).
                     "max_fetch_seconds": settings.max_fetch_seconds,
+                    # The worker leaf's memory.low (#138): the unit's MemoryLow=,
+                    # re-claimed under delegation. Not the unit's value on a host
+                    # whose unit predates #138, or on a dev run.
+                    "worker_memory_low": worker_memory_low,
                     # What this host will accept a replicate command for. Empty is
                     # the expected value today and says so plainly, rather than
                     # leaving an operator to infer it from a stream of refusals.
