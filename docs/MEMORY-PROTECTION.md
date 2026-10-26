@@ -98,7 +98,7 @@ unit's `memory.low` onto its own leaf at every boot (`src/worker/browser_cgroup.
 `worker ready` reports it as `worker_memory_low`. The slice grant is unchanged, because the
 claim moves down a level rather than adding a second one. The browser leaf claims nothing:
 
-- `memory.max` = `REPLICATOR_CAPTURE_MEMORY_MAX` (1536M; the spike's longest page took 768 MiB);
+- `memory.max` = `REPLICATOR_CAPTURE_MEMORY_MAX_BYTES` (1536 MiB; the spike's longest page took 768 MiB);
 - `memory.swap.max=0`;
 - `memory.oom.group=1` (a runaway render is group-killed, and the worker sees `TargetClosedError`);
 - `pids.max=512`.

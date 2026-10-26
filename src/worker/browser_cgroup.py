@@ -6,7 +6,7 @@ unit's cgroup to ``exedev``. This module makes the sibling ``<unit>/browser`` an
 its limits; ``scripts/browser_exec.sh`` moves each launched browser into it before
 ``exec``, so every Chromium child is born there.
 
-- ``memory.max`` — ``REPLICATOR_CAPTURE_MEMORY_MAX``. The spike's longest page peaked at
+- ``memory.max`` — ``REPLICATOR_CAPTURE_MEMORY_MAX_BYTES``. The spike's longest page peaked at
   768 MiB of browser; the default is twice that.
 - ``memory.swap.max=0`` — a browser over its cap is killed, never paged out to make room.
 - ``memory.oom.group=1`` — the kernel kills the whole browser tree at once. Measured: six
