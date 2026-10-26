@@ -125,6 +125,8 @@ _SCROLL_HEIGHT_JS = (
     "Math.max(document.documentElement ? document.documentElement.scrollHeight : 0,"
     " document.body ? document.body.scrollHeight : 0)"
 )
+# And its width: a full page is as wide as its overflow (CR 18).
+_SCROLL_WIDTH_JS = _SCROLL_HEIGHT_JS.replace("Height", "Width")
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
@@ -361,6 +363,9 @@ class PlaywrightRenderer:
             height = int(await page.evaluate(_SCROLL_HEIGHT_JS))
             if height > request.max_height:
                 raise PageTooTallError(height, request.max_height)
+            width = int(await page.evaluate(_SCROLL_WIDTH_JS))
+            if width > request.max_width:
+                raise PageTooWideError(width, request.max_width)
         # No screenshot timeout: the caller's whole-render deadline bounds it. A long page
         # took 31 s here, past Playwright's 30 s default.
         png = await page.screenshot(type="png", full_page=request.full_page, timeout=0)

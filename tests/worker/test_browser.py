@@ -78,6 +78,7 @@ class FakePage:
         self.log = log
         self.url = "https://example.org/landed"
         self.scroll_height = 2000
+        self.scroll_width = 1366
         # What the screenshot comes out as, when the page changed after it was measured.
         self.shot_size: tuple[int, int] | None = None
         self.goto_hook = None
@@ -107,7 +108,7 @@ class FakePage:
 
     async def evaluate(self, script):
         self.log.append("evaluate")
-        return self.scroll_height
+        return self.scroll_width if "Width" in script else self.scroll_height
 
     async def screenshot(self, **kwargs):
         self.log.append("screenshot")
@@ -547,6 +548,17 @@ async def test_a_page_wider_than_the_limit_is_refused(rig):
         await rig.renderer.render(_request(full_page=True, max_width=4096))
 
     assert (refused.value.width, refused.value.limit) == (9000, 4096)
+
+
+async def test_an_over_wide_full_page_is_refused_before_the_shot(rig):
+    """CR 18: the cheap exit CR 2 kept for height, for width too."""
+    rig.page.scroll_width = 1_000_000
+
+    with pytest.raises(PageTooWideError) as refused:
+        await rig.renderer.render(_request(full_page=True, max_width=4096))
+
+    assert (refused.value.width, refused.value.limit) == (1_000_000, 4096)
+    assert "screenshot" not in rig.log
 
 
 async def test_a_viewport_shot_does_not_measure_the_page(rig):
