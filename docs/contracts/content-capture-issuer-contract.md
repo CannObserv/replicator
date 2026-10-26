@@ -118,8 +118,10 @@ disk ceiling, are retried with no fact, exempt from the delivery ceiling, as for
   loop after one test launch. A launch that fails leaves the group in place and the loop off:
   `CRITICAL` names the runbook, and fetch, replicate and persist keep running.
 - Settings construction refuses `3 × REPLICATOR_CAPTURE_MAX_WAIT_SECONDS + 30` over
-  `REPLICATOR_MAX_FETCH_SECONDS`, so a slow page closes as `wait_timeout`, not as the deadline's
-  `handler_error`.
+  `REPLICATOR_MAX_FETCH_SECONDS`, so each wait can run to its bound inside the deadline and a slow
+  page usually closes as `wait_timeout`. Launch and the screenshot share the 30 s, so a page that
+  uses all three waits *and* takes a long screenshot (31 s measured for a 28108 px page) can still
+  overrun into the deadline's `handler_error`.
 - `worker ready` reports `capture: enabled` with its group and consumer, `capture: unavailable`, or
   `capture: disabled`.
 
