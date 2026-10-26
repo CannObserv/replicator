@@ -277,7 +277,7 @@ class CaptureReason(StrEnum):
     Terminal: an unmet condition is usually the page's, and a retry is a whole render."""
 
     TOO_LARGE = "too_large"
-    """The page is taller than a capture may be, or the image is over the blob ceiling."""
+    """The image is taller or wider than a capture may be, or over the blob ceiling."""
 
 
 class HandlerError(RuntimeError):

@@ -131,7 +131,7 @@ and a fetch already refuses the same destination.
 **Recommendation: delegation.** `replicator.service` gains `Delegate=memory pids` and
 `DelegateSubgroup=worker`. The worker creates a sibling `browser/` cgroup with:
 
-- `memory.max` = `REPLICATOR_CAPTURE_MEMORY_MAX` (default `1536M`: 2× the measured long-page peak);
+- `memory.max` = `REPLICATOR_CAPTURE_MEMORY_MAX_BYTES` (default `1536M`: 2× the measured long-page peak);
 - `memory.swap.max=0`;
 - `memory.oom.group=1`;
 - `pids.max=512`.
@@ -234,7 +234,7 @@ content.capture → validate → pace(host) → launch (cgroup, sandbox, SOCKS g
 | `http_status` | terminal, with `status_code` | The navigation's final response is non-2xx, apart from those below |
 | *(transient, no fact)* | retry | 5xx, 408 or 429 on the navigation (429/503 escalate the pacer); no response to the navigation (connect, TLS or DNS failure); a parked pacing wait |
 | `wait_timeout` | **terminal** | `load`, or the condition, unmet within `REPLICATOR_CAPTURE_MAX_WAIT_SECONDS` |
-| `too_large` | terminal | Page height over `MAX_CAPTURE_HEIGHT`, or the PNG over `REPLICATOR_MAX_BLOB_BYTES` |
+| `too_large` | terminal | Page height over `MAX_CAPTURE_HEIGHT` or width over 4096 (CR 12), or the PNG over `REPLICATOR_MAX_BLOB_BYTES` |
 | `handler_error` | terminal at the delivery ceiling | Unclassified failures: the browser was killed (cap, crash, `TargetClosedError`), or the whole-render deadline expired. These ride `REPLICATOR_MAX_DELIVERY_ATTEMPTS`, not the transient exemption, because a page that kills the browser once usually kills it again |
 
 **Why `wait_timeout` is terminal:** the bound is the operator's ceiling, and an unmet `selector` or

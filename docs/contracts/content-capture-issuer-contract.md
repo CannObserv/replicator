@@ -28,7 +28,7 @@ refusal vocabulary.
 | `url` | `http(s)` only. Echoed on both facts. |
 | `info_source_id` | Echoed, never read (#28). |
 | `viewport` | `width` × `height` in CSS pixels, each `1..4096`. Device scale is 1. |
-| `full_page` | `true` captures the whole document, up to 32768 × 4096 px; `false`, the viewport. |
+| `full_page` | `true` captures the whole document, up to 4096 px wide × 32768 px tall; `false`, the viewport. |
 | `wait` | `None`: after the `load` event (measured, #138). `networkidle`: the network has gone quiet. `selector`: the CSS `selector` is visible. `delay`: `seconds` after `load`. |
 
 **Every wait is after `load`, and each is bounded** by `REPLICATOR_CAPTURE_MAX_WAIT_SECONDS`
