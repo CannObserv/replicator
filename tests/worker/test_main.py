@@ -1343,8 +1343,8 @@ def test_the_worker_builds_the_cluster_shared_store():
     can disagree in one commit, and the point of the lift is that Observo's
     permanent tier and this temp tier derive every key from one module.
 
-    The local one is a subclass since #159, and only ever around the two writes:
-    a retry of the shared store's own write, never a second layout.
+    The local one is a subclass since #159, and only ever around the two writes
+    and the retry they share: the shared store's own write, never a second layout.
     """
     import co_core_sync.drivers.blobstore as shared
     from co_core.pure.util.blobstore import BlobStore
@@ -1354,7 +1354,7 @@ def test_the_worker_builds_the_cluster_shared_store():
 
     assert src.worker.main.SweepSafeLocalBlobStore.__mro__[1] is shared.LocalBlobStore
     overridden = {name for name in vars(SweepSafeLocalBlobStore) if not name.startswith("__")}
-    assert overridden == {"store", "store_file"}
+    assert overridden == {"store", "store_file", "_once_more"}
     assert src.worker.main.GcsBlobStore is shared.GcsBlobStore
     assert src.worker.handler.BlobStore is BlobStore
     assert src.worker.replicate.BlobStore is BlobStore
