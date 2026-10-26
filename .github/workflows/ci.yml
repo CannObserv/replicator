@@ -258,12 +258,25 @@ jobs:
       - name: uv sync
         run: uv sync --frozen --group dev
 
-      # The revision is the one uv.lock's Playwright pins; --with-deps pulls the
-      # shared libraries a bare runner lacks.
-      - name: Install the pinned headless shell
+      # The revision is the one uv.lock's Playwright pins. Not --with-deps: that
+      # runs `apt-get update && apt-get install` itself, so a broken third-party
+      # index (the redis step's Hash Sum mismatch) would fail this job (#138 CR 24).
+      # The update is tolerant, the package list is the dry run's, and ldd decides.
+      - name: Install the pinned headless shell and its libraries
         run: |
+          sudo apt-get update \
+            || echo "::warning::apt-get update reported errors (usually a third-party index); continuing — the install and the ldd check below decide"
+          deps=$(uv run playwright install-deps --dry-run chromium-headless-shell | sed -n 's/^  //p')
+          if [ -n "$deps" ]; then
+            sudo apt-get install -y --no-install-recommends $deps
+          fi
           PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/ms-playwright" \
-            uv run playwright install --with-deps chromium-headless-shell
+            uv run playwright install chromium-headless-shell
+          shell=$(uv run python -c "from pathlib import Path; from src.worker.browser import pinned_shell; print(pinned_shell(Path('$RUNNER_TEMP/ms-playwright')))")
+          if ldd "$shell" | grep 'not found'; then
+            echo "::error::the pinned shell is missing shared libraries"
+            exit 1
+          fi
 
       # Ubuntu 24.04 runners refuse unprivileged user namespaces through
       # AppArmor, which is the renderer sandbox's mechanism. The production host
