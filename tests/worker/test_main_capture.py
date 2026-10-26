@@ -185,8 +185,14 @@ async def test_a_browser_that_cannot_be_built_degrades_capture_alone(
 
     await run(asyncio.Event(), capture_topic=CAPTURE_TOPIC)
 
+    # The sibling's two claims as well (CR 36): the group survives, and the line says why.
+    assert await _group_names(fake_redis, CAPTURE_TOPIC) == ["replicator.capture"]
     assert "content.capture" not in [label for label, _ in started]
-    assert _ready(_lines(capsys))["capture"] == "unavailable"
+    lines = _lines(capsys)
+    assert _ready(lines)["capture"] == "unavailable"
+    (critical,) = [line for line in lines if line.get("level") == "CRITICAL"]
+    assert "viewport-capture-runbook" in critical["runbook"]
+    assert "not delegated" in critical["error"]
 
 
 def test_the_renderer_is_built_against_the_settings_cgroup_and_path(monkeypatch, tmp_path):
