@@ -16,7 +16,9 @@ The tree holds **three** populations, and they are not interchangeable:
   whose bytes were fine. They are matched by their own pattern, on their own
   much longer grace, so only genuine SIGKILL debris is caught;
 * empty shard directories, removed last for the same reason — an ``rmdir`` under
-  a writer breaks its rename just as surely as unlinking the temp would.
+  a writer breaks its rename just as surely as unlinking the temp would — and on
+  the temporaries' grace too. A store makes its shard *before* its temporary, so
+  a fresh shard is empty and still a writer's (#159).
 
 Orphans — blobs whose ``blob_available`` never published — are deliberately not
 a fourth case. They are ordinary aged blobs to the sweep; the exact signal is
@@ -30,6 +32,7 @@ be opened in another repo — the one failure with no local symptom. The ceiling
 is enforced instead by ``BlobUsage``, which the byte path reads to stop fetching.
 """
 
+import stat
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -144,7 +147,7 @@ def sweep(root: Path, *, ttl_seconds: float, temp_grace_seconds: float) -> Sweep
         temps_reaped=temps.reaped,
         # Last, and only after both file passes: an empty directory is only
         # safely empty once nothing is about to be renamed into it.
-        shards_removed=_remove_empty_shards(root),
+        shards_removed=_remove_empty_shards(root, cutoff=now - temp_grace_seconds),
         blobs_remaining=blobs.survivors,
         temps_remaining=temps.survivors,
         temp_bytes_remaining=temps.survivor_bytes,
@@ -207,18 +210,34 @@ def _reap_older_than(root: Path, pattern: str, *, cutoff: float) -> _PassResult:
     )
 
 
-def _remove_empty_shards(root: Path) -> int:
+def _remove_empty_shards(root: Path, *, cutoff: float) -> int:
     """Remove shard directories nothing is left in, innermost level first.
 
     ``rmdir`` rather than a recursive delete, and its refusal to touch a
     non-empty directory is the safety property: a shard holding a live
     temporary is left exactly where it is. The root is never a candidate — it
     is the store's construction-time invariant, not a shard.
+
+    A shard touched since ``cutoff`` is left too, empty or not (#159). The
+    store makes its shard levels and only then its temporary, and a shard
+    caught in between is empty and a writer's: removing it fails the
+    ``mkstemp``. ``cutoff`` is the temporaries' grace, the same bound on how
+    long a writer can be mid-store. The price is that each level outlives
+    the sweep that emptied it by a grace — reaping a blob touches its ``<cd>``,
+    removing ``<cd>`` touches its ``<ab>`` — and that costs only the entries.
+
+    Narrows the race, not closes it: an *old* empty shard the store has already
+    found can still go before its temporary lands. The worker's store retries
+    that one (``src.storage.local_store``).
     """
     removed = 0
     for pattern in SHARD_GLOBS:
         for path in root.glob(pattern):
-            if not path.is_dir():
+            try:
+                stat_result = path.stat()
+            except OSError:
+                continue  # gone, or untraversable — either way not ours to remove
+            if not stat.S_ISDIR(stat_result.st_mode) or stat_result.st_mtime >= cutoff:
                 continue
             try:
                 path.rmdir()

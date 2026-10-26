@@ -26,8 +26,9 @@ failure fact, the retention sweep, the pacer, and the `content.fetch-policy` rea
 each behind their own seam. The content-addressed temp store is **co-core's** since #114 —
 `co_core_sync.drivers.blobstore` behind the `co_core.pure.util.blobstore.BlobStore`
 protocol (cannobserv#475), **two backends** (`local`, `gcs`) selected by
-`REPLICATOR_BLOB_BACKEND`, default `local` (#7) — and `src/storage/` keeps only the
-retention sweep, which is temp-tier policy. `src/api/` is the dev-only `/health`
+`REPLICATOR_BLOB_BACKEND`, default `local` (#7) — and `src/storage/` keeps only
+temp-tier policy: the retention sweep, and the one-retry write that keeps the
+shared local store safe under it (#159). `src/api/` is the dev-only `/health`
 app; `src/core/` holds config, logging, and the consume path's failure vocabulary;
 `tests/` mirrors `src/`.
 
@@ -46,6 +47,7 @@ src/worker/pacing.py — Per-host request spacing; the mechanism half of politen
 src/worker/policy.py — The content.fetch-policy consumer: the map, and the groupless tail (#19)
 src/storage/    — Temp-tier policy only. The store itself is co-core's: `co_core_sync.drivers.blobstore` (cannobserv#475, #114)
 src/storage/sweeper.py — Retention: TTL reap, stale temps, empty shards; the measured size
+src/storage/local_store.py — The shared local store, retrying a write once when a sweep took its shard (#159)
 src/api/        — FastAPI app (/health only; not part of the MVP loop)
 src/api/main.py — App factory, lifespan, router registration
 src/core/       — Shared domain logic, logging, config

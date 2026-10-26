@@ -14,8 +14,10 @@ import os
 import signal
 import stat
 import tempfile
+import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -29,8 +31,10 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import NoPermissionError
 
 import src.worker.main
+import src.worker.retention
 from src.core.config import Settings, get_settings
 from src.core.logging import configure_logging
+from src.storage.local_store import SweepSafeLocalBlobStore
 from src.storage.sweeper import SweepResult
 from src.worker.egress import RESOLVE_TIMEOUT_SECONDS, BodyCeilingTransport, GuardedTransport
 from src.worker.main import (
@@ -630,52 +634,48 @@ async def test_run_closes_the_fetch_driver(monkeypatch, fake_redis, tmp_path):
     assert [client.is_closed for client in clients] == [True]
 
 
-async def test_run_dispatches_to_the_byte_path(monkeypatch, fake_redis, tmp_path):
-    """The loop must be wired to the real handler, not the placeholder logger.
+class _PageDriver:
+    """A fetch driver that answers every command with the same small page."""
 
-    Asserted end to end: a command on the stream produces a blob on disk and a
-    fact on ``content.blobs``. Without this, every piece could pass its own unit
-    tests while ``run()`` still dispatched to ``log_only_handler``.
+    def __init__(self, client):
+        self._client = client
+
+    async def execute(self, effect):
+        return FetchResult(
+            content=b"page bytes",
+            status_code=200,
+            headers={"content-type": "text/plain"},
+            duration_ms=3,
+            fetcher_used="http",
+        )
+
+    async def aclose(self):
+        return None
+
+
+async def _run_until_published(monkeypatch, fake_redis, blob_dir, *, gave_up=lambda: False):
+    """Run the worker over one command until its ``blob_available`` lands; whether it did.
+
+    The bound is wall clock, so a loaded machine used to trip it silently: the
+    old spelling set ``stop`` on timeout exactly as it did on success, and the
+    test then died in ``LocalBlobStore.open`` with a bare ``FileNotFoundError``
+    that reads as a byte-path regression rather than the timeout it was. Set
+    generously — this is a liveness bound, not a latency assertion (CR round 1).
+    ``gave_up`` ends the wait early, for a test that already knows it failed.
     """
-    blob_dir = tmp_path / "blobs"
     monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(blob_dir))
     monkeypatch.setenv("REPLICATOR_CONSUMER_START_ID", "0")
     monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
-
-    class StubDriver:
-        def __init__(self, client):
-            self._client = client
-
-        async def execute(self, effect):
-            return FetchResult(
-                content=b"page bytes",
-                status_code=200,
-                headers={"content-type": "text/plain"},
-                duration_ms=3,
-                fetcher_used="http",
-            )
-
-        async def aclose(self):
-            return None
-
-    monkeypatch.setattr("src.worker.main.AsyncFetchDriver", StubDriver)
+    monkeypatch.setattr("src.worker.main.AsyncFetchDriver", _PageDriver)
     await fake_redis.xadd(streams.CONTENT_FETCH, make_command("cmd-wired"))
 
     stop = asyncio.Event()
     published = asyncio.Event()
 
     async def stop_once_published():
-        """Stop as soon as the fact lands, and record *whether* it ever did.
-
-        The bound is wall clock, so a loaded machine used to trip it silently: the
-        old spelling set ``stop`` on timeout exactly as it did on success, and the
-        test then died in ``LocalBlobStore.open`` with a bare ``FileNotFoundError``
-        that reads as a byte-path regression rather than the timeout it was. Set
-        generously — this is a liveness bound, not a latency assertion (CR round 1).
-        """
         try:
             deadline = time.monotonic() + BYTE_PATH_DEADLINE_SECONDS
-            while time.monotonic() < deadline:
+            while time.monotonic() < deadline and not gave_up():
                 if await fake_redis.exists(streams.CONTENT_BLOBS):
                     published.set()
                     return
@@ -686,8 +686,21 @@ async def test_run_dispatches_to_the_byte_path(monkeypatch, fake_redis, tmp_path
             stop.set()
 
     await asyncio.gather(run(stop), stop_once_published())
+    return published.is_set()
 
-    assert published.is_set(), (
+
+async def test_run_dispatches_to_the_byte_path(monkeypatch, fake_redis, tmp_path):
+    """The loop must be wired to the real handler, not the placeholder logger.
+
+    Asserted end to end: a command on the stream produces a blob on disk and a
+    fact on ``content.blobs``. Without this, every piece could pass its own unit
+    tests while ``run()`` still dispatched to ``log_only_handler``.
+    """
+    blob_dir = tmp_path / "blobs"
+
+    published = await _run_until_published(monkeypatch, fake_redis, blob_dir)
+
+    assert published, (
         f"content.blobs never appeared within {BYTE_PATH_DEADLINE_SECONDS}s — the byte "
         "path did not complete. On a loaded machine that is this bound expiring, not a "
         "regression; check the machine before hunting in run()."
@@ -696,6 +709,55 @@ async def test_run_dispatches_to_the_byte_path(monkeypatch, fake_redis, tmp_path
     fingerprint = sha256(b"page bytes")
     assert LocalBlobStore(blob_dir).open(fingerprint) == b"page bytes"
     assert await fake_redis.xlen(streams.CONTENT_BLOBS) == 1
+
+
+async def test_the_boot_sweep_landing_inside_the_first_store_does_not_fail_it(
+    monkeypatch, fake_redis, tmp_path
+):
+    """The flake above, forced (#159): fetch and capture share this store and this sweep.
+
+    The boot sweep and the first command's store run on two threads at once.
+    Left to chance, the sweep landed between the store making the shard and
+    putting its temporary in about one run in fifty, ``rmdir``ed the still-empty
+    shard, and the command waited a full reclaim — past the deadline above. Here
+    two events pin the sweep into exactly that gap, every run.
+    """
+    import co_core_sync.drivers.blobstore.local as shared_local
+
+    shard_made = threading.Event()
+    swept = threading.Event()
+    failures: list[BaseException] = []
+    real_sweep = src.worker.retention.sweep
+    real_mkstemp = shared_local.tempfile.mkstemp
+
+    def sweep_inside_the_store(root, **kwargs):
+        if not swept.is_set():
+            shard_made.wait(timeout=10)
+        try:
+            return real_sweep(root, **kwargs)
+        finally:
+            swept.set()
+
+    def mkstemp_after_the_sweep(*args, **kwargs):
+        if not shard_made.is_set():
+            shard_made.set()
+            swept.wait(timeout=10)
+        try:
+            return real_mkstemp(*args, **kwargs)
+        except FileNotFoundError as exc:
+            failures.append(exc)
+            raise
+
+    monkeypatch.setattr("src.worker.retention.sweep", sweep_inside_the_store)
+    monkeypatch.setattr(shared_local, "tempfile", SimpleNamespace(mkstemp=mkstemp_after_the_sweep))
+
+    published = await _run_until_published(
+        monkeypatch, fake_redis, tmp_path / "blobs", gave_up=lambda: bool(failures)
+    )
+
+    assert swept.is_set() and shard_made.is_set()  # the interleaving really happened
+    assert failures == []
+    assert published
 
 
 async def test_an_unreachable_blob_dir_is_warned_about(monkeypatch, fake_redis, tmp_path, capsys):
@@ -1227,8 +1289,8 @@ async def test_the_local_backend_is_what_a_bare_environment_gets(monkeypatch, fa
     get_settings.cache_clear()
     built = []
     monkeypatch.setattr(
-        "src.worker.main.LocalBlobStore",
-        lambda root, **options: built.append(root) or LocalBlobStore(root, **options),
+        "src.worker.main.SweepSafeLocalBlobStore",
+        lambda root, **options: built.append(root) or SweepSafeLocalBlobStore(root, **options),
     )
 
     await run(_stopped())
@@ -1254,11 +1316,11 @@ async def test_the_local_backend_restarts_the_retention_clock_on_a_re_store(
     built = []
 
     def as_built(root, **options):
-        store = LocalBlobStore(root, **options)
+        store = SweepSafeLocalBlobStore(root, **options)
         built.append(store)
         return store
 
-    monkeypatch.setattr("src.worker.main.LocalBlobStore", as_built)
+    monkeypatch.setattr("src.worker.main.SweepSafeLocalBlobStore", as_built)
 
     await run(_stopped())
 
@@ -1280,6 +1342,9 @@ def test_the_worker_builds_the_cluster_shared_store():
     Identity, not shape: two stores that merely agree today are two stores that
     can disagree in one commit, and the point of the lift is that Observo's
     permanent tier and this temp tier derive every key from one module.
+
+    The local one is a subclass since #159, and only ever around the two writes:
+    a retry of the shared store's own write, never a second layout.
     """
     import co_core_sync.drivers.blobstore as shared
     from co_core.pure.util.blobstore import BlobStore
@@ -1287,7 +1352,9 @@ def test_the_worker_builds_the_cluster_shared_store():
     import src.worker.handler
     import src.worker.replicate
 
-    assert src.worker.main.LocalBlobStore is shared.LocalBlobStore
+    assert src.worker.main.SweepSafeLocalBlobStore.__mro__[1] is shared.LocalBlobStore
+    overridden = {name for name in vars(SweepSafeLocalBlobStore) if not name.startswith("__")}
+    assert overridden == {"store", "store_file"}
     assert src.worker.main.GcsBlobStore is shared.GcsBlobStore
     assert src.worker.handler.BlobStore is BlobStore
     assert src.worker.replicate.BlobStore is BlobStore

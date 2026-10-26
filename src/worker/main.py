@@ -27,13 +27,14 @@ from co_core.pure.util.blobstore import BlobStore
 from co_core_aio.bus import AsyncBusConsumer
 from co_core_aio.fetch import AsyncFetchDriver
 from co_core_aio.gcs import AsyncGcsDriver
-from co_core_sync.drivers.blobstore import GcsBlobStore, LocalBlobStore, ensure_directory
+from co_core_sync.drivers.blobstore import GcsBlobStore, ensure_directory
 from google.oauth2 import service_account
 from redis.asyncio import Redis
 
 from src.core.bus_client import build_bus_client
 from src.core.config import Settings, get_settings
 from src.core.logging import configure_logging, get_logger
+from src.storage.local_store import SweepSafeLocalBlobStore
 from src.storage.sweeper import BlobUsage
 from src.worker.aliases import AliasTable, load_alias_table
 from src.worker.browser import BrowserRuntime, PlaywrightRenderer, Renderer
@@ -686,8 +687,9 @@ def _prepare_storage(settings: Settings) -> tuple[BlobStore, Path | None]:
     warn_if_unreachable(blob_dir)
     # Touch on, for the same reason as the object store above: the sweep reaps
     # on "since last referenced", and the shared store's default would leave the
-    # mtime at the *first* store's.
-    return LocalBlobStore(blob_dir, touch_on_rereference=True), blob_dir
+    # mtime at the *first* store's. Sweep-safe because that sweep runs beside
+    # every write into this tree (#159).
+    return SweepSafeLocalBlobStore(blob_dir, touch_on_rereference=True), blob_dir
 
 
 def _claim_worker_reservation() -> int | str:

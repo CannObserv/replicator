@@ -160,31 +160,98 @@ def test_a_temporary_older_than_the_grace_is_debris_and_is_removed(store, tmp_pa
 
 
 def test_an_emptied_shard_directory_does_not_accumulate(store, tmp_path):
+    """Emptied shards go — on later sweeps, one level per grace (#159).
+
+    Reaping the blob touches its ``<cd>``, and removing ``<cd>`` touches its
+    ``<ab>``, so each level waits out its own grace after the sweep that emptied
+    it. Nothing is held but the directory entries themselves.
+    """
     store.store(AGED_DATA, AGED, "text/plain")
     age(blob_path(tmp_path, AGED), TTL + 1)
+    leaf = tmp_path / AGED[0:2] / AGED[2:4]
 
     run(tmp_path)
+    assert leaf.is_dir()  # just emptied, so just touched
 
-    assert not (tmp_path / AGED[0:2]).exists()
+    age(leaf, TEMP_GRACE + 1)
+    run(tmp_path)
+    assert not leaf.exists()
+    assert leaf.parent.is_dir()
+
+    age(leaf.parent, TEMP_GRACE + 1)
+    run(tmp_path)
+    assert not leaf.parent.exists()
+
+
+def test_an_empty_shard_younger_than_the_grace_is_kept(tmp_path):
+    """A store makes its shard before its temporary; in between, the shard is empty (#159)."""
+    shard = tmp_path / "9f" / "2a"
+    shard.mkdir(parents=True)
+
+    result = run(tmp_path)
+
+    assert shard.is_dir()
+    assert result.shards_removed == 0
+
+
+def test_an_empty_shard_older_than_the_grace_is_removed(tmp_path):
+    shard = tmp_path / "9f" / "2a"
+    shard.mkdir(parents=True)
+    age(shard, TEMP_GRACE + 1)
+    age(shard.parent, TEMP_GRACE + 1)
+
+    result = run(tmp_path)
+
+    assert not shard.exists()
+    assert result.shards_removed == 1  # ``9f`` was touched by the rmdir; next sweep's
 
 
 def test_a_shard_still_holding_a_blob_is_kept(store, tmp_path):
+    """Past its grace, so the ``rmdir`` refusal is what keeps it."""
     store.store(FRESH_DATA, FRESH, "text/plain")
-
-    run(tmp_path)
-
-    assert (tmp_path / FRESH[0:2] / FRESH[2:4]).is_dir()
-
-
-def test_a_shard_holding_an_in_flight_temporary_is_kept(tmp_path):
-    """Removing the directory under a writer breaks its rename just as surely."""
-    shard = tmp_path / "9f" / "2a"
-    shard.mkdir(parents=True)
-    (shard / f".{FRESH}.abc123.tmp").write_bytes(b"partial")
+    shard = tmp_path / FRESH[0:2] / FRESH[2:4]
+    age(shard, TEMP_GRACE + 1)
+    age(shard.parent, TEMP_GRACE + 1)
 
     run(tmp_path)
 
     assert shard.is_dir()
+
+
+def test_a_shard_holding_an_in_flight_temporary_is_kept(tmp_path):
+    """Removing the directory under a writer breaks its rename just as surely.
+
+    Aged past the grace, so the ``rmdir`` refusal is what keeps it, not the grace.
+    """
+    shard = tmp_path / "9f" / "2a"
+    shard.mkdir(parents=True)
+    (shard / f".{FRESH}.abc123.tmp").write_bytes(b"partial")
+    age(shard, TEMP_GRACE + 1)
+    age(shard.parent, TEMP_GRACE + 1)
+
+    run(tmp_path)
+
+    assert shard.is_dir()
+
+
+def test_a_shard_that_cannot_be_stat_ed_is_left_alone(tmp_path, monkeypatch):
+    """No age, no removal: an unreadable mtime is never taken for an old one."""
+    shard = tmp_path / "9f" / "2a"
+    shard.mkdir(parents=True)
+    age(shard, TEMP_GRACE + 1)
+    real_stat = Path.stat
+
+    def denied(self, *args, **kwargs):
+        if self != shard:
+            return real_stat(self, *args, **kwargs)
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(Path, "stat", denied)
+
+    result = run(tmp_path)
+
+    assert os.path.isdir(shard)  # not Path.is_dir, which the patch would refuse too
+    assert result.shards_removed == 0
 
 
 def test_the_root_itself_is_never_removed(tmp_path):
