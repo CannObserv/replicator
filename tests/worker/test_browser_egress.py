@@ -34,6 +34,8 @@ def _destination_guard(mapping: dict[str, list[str]], calls: list[str] | None = 
             calls.append(host)
         if host not in mapping:
             raise socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+        if isinstance(mapping[host], Exception):
+            raise mapping[host]
         return mapping[host]
 
     return DestinationGuard(blocked=blocked_networks(["10.0.0.0/8"]), resolve=resolve)
@@ -158,6 +160,32 @@ async def test_an_unresolvable_name_is_unreachable_not_refused(upstream):
         writer.close()
 
     assert rep == 4  # host unreachable
+    assert guard.refusal is None
+
+
+async def test_an_idna2008_a_label_is_relayed_as_sent(upstream):
+    """CR 3: Chromium punycodes non-transitionally; Python's IDNA2003 codec refused it."""
+    up_port, accepted = upstream
+    calls: list[str] = []
+    mapping = {"xn--fa-hia.de": ["127.0.0.1"]}
+    async with SocksGuard(_destination_guard(mapping, calls)) as guard:
+        rep, _, writer = await _socks_connect(guard.port, 3, _name("xn--fa-hia.de"), up_port)
+        writer.close()
+
+    assert rep == 0
+    assert calls == ["xn--fa-hia.de"]
+    assert accepted == [1]
+
+
+async def test_a_name_that_is_not_ascii_is_answered_not_dropped(upstream):
+    """CR 3: a reply, not a reset and an unhandled exception in the listener."""
+    up_port, accepted = upstream
+    async with SocksGuard(_destination_guard({})) as guard:
+        rep, _, writer = await _socks_connect(guard.port, 3, bytes([2]) + b"\xff\xfe", up_port)
+        writer.close()
+
+    assert rep == 1  # general failure
+    assert accepted == []
     assert guard.refusal is None
 
 

@@ -199,7 +199,12 @@ class SocksGuard:
             host = socket.inet_ntop(socket.AF_INET6, await reader.readexactly(16))
         elif atyp == _ATYP_NAME:
             (length,) = await reader.readexactly(1)
-            host = (await reader.readexactly(length)).decode("idna", errors="strict")
+            # ASCII, passed through: Chromium has already punycoded the name (IDNA2008,
+            # non-transitional), which Python's IDNA2003 codec refuses to decode (CR 3).
+            try:
+                host = (await reader.readexactly(length)).decode("ascii")
+            except UnicodeDecodeError as exc:
+                raise _HandshakeError(_GENERAL_FAILURE) from exc
         else:
             raise _HandshakeError(_ATYP_NOT_SUPPORTED)
         (port,) = struct.unpack("!H", await reader.readexactly(2))
