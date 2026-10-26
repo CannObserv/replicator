@@ -305,6 +305,10 @@ class PlaywrightRenderer:
         png = await page.screenshot(type="png", full_page=request.full_page, timeout=0)
         captured_at = self._clock()
         width, height = png_dimensions(png)
+        # The measurement above is the cheap exit; this is the check. A page that grew
+        # after it was measured comes out taller than it measured (CR 2).
+        if height > request.max_height:
+            raise PageTooTallError(height, request.max_height)
         return Rendered(
             png=png,
             image_width=width,

@@ -76,6 +76,8 @@ class FakePage:
         self.log = log
         self.url = "https://example.org/landed"
         self.scroll_height = 2000
+        # What the screenshot comes out as, when the page changed after it was measured.
+        self.shot_size: tuple[int, int] | None = None
         self.goto_hook = None
         self.load_states: dict[str, Exception | None] = {}
         self.selector_error: Exception | None = None
@@ -110,6 +112,8 @@ class FakePage:
         self.screenshot_kwargs = kwargs
         if self.screenshot_error:
             raise self.screenshot_error
+        if self.shot_size is not None:
+            return _png(*self.shot_size)
         return _png(1366, self.scroll_height if kwargs["full_page"] else 768)
 
 
@@ -456,6 +460,17 @@ async def test_an_over_tall_full_page_is_refused_before_the_shot(rig):
 
     assert (refused.value.height, refused.value.limit) == (40000, 32768)
     assert "screenshot" not in rig.log
+
+
+async def test_a_page_that_grew_after_it_was_measured_is_still_refused(rig):
+    """CR 2: the measurement is a cheap early exit; the PNG's own height is the check."""
+    rig.page.scroll_height = 2000
+    rig.page.shot_size = (1366, 40000)
+
+    with pytest.raises(PageTooTallError) as refused:
+        await rig.renderer.render(_request(full_page=True, max_height=32768))
+
+    assert (refused.value.height, refused.value.limit) == (40000, 32768)
 
 
 async def test_a_viewport_shot_does_not_measure_the_page(rig):
