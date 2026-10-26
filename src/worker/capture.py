@@ -38,6 +38,7 @@ from src.worker.browser import (
     DestinationRefusedError,
     InvalidSelectorError,
     NavigationFailedError,
+    NavigationImpossibleError,
     NavigationStatusError,
     PageTooTallError,
     PageTooWideError,
@@ -250,6 +251,10 @@ async def _render(
         raise PermanentCaptureError(str(exc), reason=CaptureReason.DESTINATION_REFUSED) from exc
     except NavigationFailedError as exc:
         raise TransientCaptureError(f"{command.url}: {exc}") from exc
+    except NavigationImpossibleError as exc:
+        raise PermanentCaptureError(
+            f"{command.url}: {exc}", reason=CaptureReason.NOT_FETCHABLE
+        ) from exc
     except NavigationStatusError as exc:
         headers = {} if exc.retry_after is None else {"retry-after": exc.retry_after}
         report_rate_limited(pacer, command, exc.status, headers, now=datetime.now(UTC))

@@ -95,17 +95,18 @@ as fetch spells them wherever the remedy is fetch's.
 | A viewport side outside `1..4096`; an unknown `wait.kind`; a `selector` wait with no selector, or one the browser does not parse as CSS; a `delay` that is not a finite number over zero, or is over the wait bound | `invalid_request_options` | Fix the command |
 | `load`, or the wait condition, unmet within the wait bound | `wait_timeout` | Re-issue with another condition, under a fresh `command_id`. Terminal because an unmet condition is usually the page's, and each retry is a whole render |
 | The URL, a redirect hop, or **any** connection the page opened, is to loopback, RFC 1918, link-local or the tailnet. The render is abandoned at the first one | `destination_refused` | None: the page cannot be captured here. A fetch of it is refused too |
-| The URL is not `http(s)`, or names no host | `not_fetchable` | Fix the URL |
+| The URL is not `http(s)`, or names no host; or the browser refuses the navigation outright: a port it blocks (`:6000`, `:25`), a redirect to a scheme it won't open | `not_fetchable` | Fix the URL |
 | The navigation's final response is a non-2xx other than those retried below; `status_code` says which | `http_status` | As for a fetch's `http_status` |
 | An image taller than 32768 px or wider than 4096 px (a `full_page` grows with the page's overflow), or a PNG over `REPLICATOR_MAX_BLOB_BYTES` | `too_large` | A smaller viewport, or `full_page: false`. **Refused, never clipped:** a clipped image could not be told from a whole one |
 
 The loop's own two apply as on every stream: **`unsupported_schema_version`**, and **`handler_error`**
 after the delivery ceiling. `handler_error` is where a killed browser lands (its memory cap, a crash),
-and a render that overran `REPLICATOR_MAX_FETCH_SECONDS`: a page that kills the browser once usually
-does again.
+a render that overran `REPLICATOR_MAX_FETCH_SECONDS`, and a navigation error that is neither a network
+failure nor a refused URL (a certificate error, a redirect loop): a page that fails a render that way
+once usually does again, and each retry is a whole render.
 
 **What stays open instead.** A 5xx, 408 or 429 on the navigation, no response to it at all (connect,
-TLS or DNS failure), a host whose politeness window is longer than a poll, and a blob tree over its
+TLS-handshake or DNS failure), a host whose politeness window is longer than a poll, and a blob tree over its
 disk ceiling, are retried with no fact, exempt from the delivery ceiling, as for a fetch.
 
 ## Enabling it on a host

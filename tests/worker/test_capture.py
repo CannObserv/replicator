@@ -28,6 +28,7 @@ from src.worker.browser import (
     DestinationRefusedError,
     InvalidSelectorError,
     NavigationFailedError,
+    NavigationImpossibleError,
     NavigationStatusError,
     PageTooTallError,
     PageTooWideError,
@@ -333,6 +334,14 @@ async def test_no_response_to_the_navigation_retries(store, published):
     exc = await _fails_with(store, published, NavigationFailedError("net::ERR_CONNECTION_REFUSED"))
 
     assert isinstance(exc, TransientError)
+
+
+async def test_a_navigation_the_browser_will_never_make_is_not_fetchable(store, published):
+    """CR 15: e.g. a port Chromium blocks; fetch's InvalidURL, never retried."""
+    exc = await _fails_with(store, published, NavigationImpossibleError("net::ERR_UNSAFE_PORT"))
+
+    assert isinstance(exc, PermanentCaptureError)
+    assert exc.reason == CaptureReason.NOT_FETCHABLE
 
 
 async def test_an_unmet_wait_is_a_terminal_wait_timeout(store, published):
