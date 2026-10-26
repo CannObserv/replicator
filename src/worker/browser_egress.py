@@ -34,7 +34,7 @@ import struct
 from types import TracebackType
 from typing import Self
 
-from src.core.errors import PermanentFetchError, TransientFetchError
+from src.core.errors import FailureReason, PermanentFetchError, TransientFetchError
 from src.core.logging import get_logger
 from src.worker.egress import DestinationGuard
 
@@ -153,6 +153,11 @@ class SocksGuard:
         try:
             addresses = await self._guard.vet(host, port, label=f"{host}:{port}")
         except PermanentFetchError as exc:
+            # Only a destination fails the capture. A name the resolver cannot encode
+            # is ``not_fetchable``, a broken subresource rather than a private one (CR 4).
+            if exc.reason is not FailureReason.DESTINATION_REFUSED:
+                await self._reply(writer, _HOST_UNREACHABLE)
+                return
             if self.refusal is None:
                 self.refusal = exc
                 logger.warning("capture connection refused", extra={"destination": host})

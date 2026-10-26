@@ -189,6 +189,21 @@ async def test_a_name_that_is_not_ascii_is_answered_not_dropped(upstream):
     assert guard.refusal is None
 
 
+async def test_an_unencodable_name_is_unreachable_not_a_refusal(upstream):
+    """CR 4: ``not_fetchable`` is not ``destination_refused``; one bad subresource must
+    not close the whole capture under the reason that means a private destination."""
+    up_port, _ = upstream
+    long_label = "a" * 64 + ".test"
+    mapping = {long_label: UnicodeError("label too long")}
+    async with SocksGuard(_destination_guard(mapping)) as guard:
+        rep, _, writer = await _socks_connect(guard.port, 3, _name(long_label), up_port)
+        writer.close()
+
+    assert rep == 4  # host unreachable
+    assert guard.refusal is None
+    assert not guard.refused.is_set()
+
+
 @pytest.mark.parametrize("cmd", [2, 3], ids=["bind", "udp-associate"])
 async def test_only_connect_is_served(upstream, cmd):
     up_port, accepted = upstream
