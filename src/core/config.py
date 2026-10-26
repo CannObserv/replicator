@@ -170,6 +170,11 @@ class Settings(BaseSettings):
     # mid-store left behind. Still an hour rather than seconds, because reaping
     # a live one makes the writer's os.replace fail with ENOENT and dead-letters
     # a command whose bytes were fine.
+    #
+    # Also how long an empty shard directory is left (#159): the store makes its
+    # shard before its temporary, so a fresh empty one is a writer's, and the
+    # local store's single retry relies on the shards it remakes being inside
+    # this grace.
     blob_temp_grace_seconds: float = Field(
         default=3_600.0, validation_alias="REPLICATOR_BLOB_TEMP_GRACE_SECONDS"
     )
