@@ -129,7 +129,7 @@ Fetch, replicate and persist keep running meanwhile.
   `docs/contracts/content-capture-issuer-contract.md`.
 
 The first real `stored a capture and published capture_stored` line closes the end-to-end
-verification debt (#138).
+verification debt (#138). Its `duration_ms` is the render alone, launch to screenshot.
 
 **Send back:** the `worker ready` line, the `XPENDING` summary, and the first capture line.
 

@@ -107,17 +107,14 @@ worth knowing before seeding a local test server. The full list is in
 Watch the live side with `sudo journalctl -u replicator -f`: each `stored a blob and published
 blob_available` is one of Watcher's commands closing.
 
-`scripts/seed_capture.py` does the same for `content.capture` (#138), scratch only: `content.capture`
-itself (archiver#380's), db 0 and a non-loopback host exit 2.
+`scripts/seed_capture.py` does the same for `content.capture` (#138), scratch only: the live stream
+(archiver#380's), db 0 and a non-loopback host exit 2.
 
 ```bash
 uv run python -m scripts.seed_capture \
   --redis-url redis://localhost:6379/15 --topic replicator.itest.capture \
   --full-page --wait selector --selector main https://example.test/
 ```
-
-Live, `stored a capture and published capture_stored` closes one of Archiver's; `duration_ms` is
-the render, launch to screenshot.
 
 ### The patching gate's in-flight count
 
@@ -162,7 +159,7 @@ Anything not shown in this file, check against broker's `deploy/redis-acl.conf` 
 
 **`XPENDING` moved columns on 2026-09-22 (broker#39, #103, #107)**, not as a courtesy: the
 delivery ceiling reads it, so before the grant `REPLICATOR_MAX_DELIVERY_ATTEMPTS` could never
-fire. Probed from here afterwards, as every row was: both groups answered 0 pending, where 12:55Z
+fire. Probed afterwards, like every row: both groups answered 0 pending, where 12:55Z
 had returned `NOPERM`.
 
 **Draining a dead-letter queue is this service's job, granted since 2026-09-11 (#86,
@@ -184,20 +181,19 @@ depth (`content.replicate.dlq` is 0), but the selector's shape can't be proven w
 something. The grant adds `+xdel` alone, so per-id deletion is the only disposal: precise, never
 a queue wipe.
 
-**`XTRIM` is not for these queues, or anything else, from here (#106).** The broker withdrew it
-on 2026-10-06 (CannObserv/broker#41) on the answer that nothing here issues it, which
-`tests/test_broker_keyspace.py` keeps true.
-Trimming a fact stream past a group's position deletes facts that group has not been delivered,
-so a drain wanting to go faster than one `XDEL` at a time is a broker issue, not a command to
-reach for.
+**`XTRIM` is not for these queues, or anything, from here (#106).** Broker withdrew it on
+2026-10-06 (CannObserv/broker#41) because nothing here issues it, which
+`tests/test_broker_keyspace.py` keeps true. Trimming a fact stream past a group's position
+deletes facts that group hasn't been delivered, so a drain faster than one `XDEL` at a time is
+a broker issue, not a command to reach for.
 
 **Triage before deleting, and not only for correctness.** The broker's probe copies every DLQ
 entry to its `dlq-evidence/` tree on the first tick that sees depth above zero, so a deleted
 frame is still recoverable — *unless* it was written and deleted inside one 10-minute tick,
 which leaves no evidence file at all. Read the frame, close its command, then delete.
 
-The denied column is marked `# NOPERM` at each use below rather than removed, because the
-command is still the right one to ask for — and two of them answer questions nothing else can.
+The denied column is marked `# NOPERM` where used below, not removed: each is still the right
+command to ask for, and two answer questions nothing else can.
 See [Redis](#redis) for what to know before asking.
 
 ```bash
@@ -349,15 +345,14 @@ The store, its endpoints and the one-host-per-`projectId` rule are in
 [INFRASTRUCTURE.md](INFRASTRUCTURE.md); the client contract is pinned by
 `tests/test_socraticode_config.py`.
 
-**Cap anything that launches a server.** co-replicator is 8 GiB with 4 G of swap
-since #99 — headroom, not immunity, as broker was 8 GiB too — and runs the
-worker beside these sessions. On CannObserv/broker's VM an uncapped
-launch degraded the tailnet for 57m48s with nothing OOM-killed (broker#17, our
-#94). `OOMScoreAdjust=-900` on the units is the other half and is already in
-place ([MEMORY-PROTECTION.md](MEMORY-PROTECTION.md)) — it does not remove the need for the cap.
-`choom -n 500` is part of it: under an `exe-init` that starts sessions at
-`oom_score_adj=-1000`, as this host's did until #125, a cgroup cap *stalls* a
-process rather than killing it.
+**Cap anything that launches a server.** co-replicator's 8 GiB plus 4 G swap (#99)
+is headroom, not immunity — broker was 8 GiB too — and the worker runs beside these
+sessions. On broker's VM an uncapped launch degraded the tailnet for 57m48s, nothing
+OOM-killed (broker#17, our #94). The units' `OOMScoreAdjust=-900`
+([MEMORY-PROTECTION.md](MEMORY-PROTECTION.md)) is the other half, not a substitute.
+`choom -n 500` is part of the cap: under an `exe-init` starting sessions at
+`oom_score_adj=-1000`, as here until #125, a cgroup cap *stalls* a process rather than
+killing it.
 
 ```bash
 # Offline, no server, no network — run these first; they catch a malformed
@@ -375,10 +370,9 @@ bash skills-vendor/gregoryfoster-skills/skills/init-socraticode/scripts/prefligh
 systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% \
   choom -n 500 -- node "$SOCRATICODE_DRIVER" health-check . --probe src/worker/main.py
 
-# The index itself. Same cap. Measured here 2026-09-18: 21 min wall for the full
-# tree — 1708 code points, 335 context points, 25/25 artifacts — with available
-# memory never below 2.33 GB and the worker at NRestarts=0 throughout. Embedding
-# runs on co-index, so almost none of that is local CPU.
+# The index itself, same cap. Measured 2026-09-18: 21 min wall, full tree (1708
+# code / 335 context points, 25/25 artifacts), available memory never below
+# 2.33 GB, worker NRestarts=0. Embedding runs on co-index: little local CPU.
 systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% \
   choom -n 500 -- node "$SOCRATICODE_DRIVER" index .
 ```
