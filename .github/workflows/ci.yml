@@ -260,8 +260,11 @@ jobs:
             echo "::warning::the dependency dry run reported neither a list nor 'all installed' (its error is above); installing nothing, ldd decides"
           fi
           deps=$(sed -n 's/^  //p' <<<"$dry")
+          # Fonts included, deliberately: these tests assert confinement, not pixels.
+          # Production installs none (the runbook: fonts are their own decision).
           if [ -n "$deps" ]; then
-            sudo apt-get install -y --no-install-recommends $deps
+            sudo apt-get install -y --no-install-recommends $deps \
+              || echo "::warning::the dependency install reported errors; continuing — ldd decides"
           fi
           PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/ms-playwright" \
             uv run playwright install chromium-headless-shell

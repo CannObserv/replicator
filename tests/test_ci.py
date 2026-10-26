@@ -178,3 +178,12 @@ def test_a_dry_run_that_failed_is_said_not_read_as_nothing_missing():
 
     assert "All system dependencies are installed" in text
     assert "Missing system dependencies" in text
+
+
+def test_the_dependency_install_is_tolerant_so_ldd_decides():
+    """CR 33: the list includes upgrades of installed libraries, so one mirror hiccup
+    on any of them must not fail a job whose shell ldd would pass."""
+    text = WORKFLOW.read_text()
+
+    assert "apt-get install -y --no-install-recommends $deps \\\n" in text
+    assert "the dependency install reported errors" in text
