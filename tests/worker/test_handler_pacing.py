@@ -13,6 +13,7 @@ feeds — compounding, the cap, the quiet window — is ``test_pacing.py``.
 """
 
 import asyncio
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -25,7 +26,7 @@ from src.core.errors import (
     PermanentFetchError,
     TransientFetchError,
 )
-from src.worker.handler import _retry_after_seconds, build_handler
+from src.worker.handler import _retry_after_seconds, build_handler, pace
 from src.worker.pacing import BACKOFF_MAX_HEADROOM, HostPacer
 from tests.worker.conftest import URL, Clock, FakeFetcher, command, fetch_result, published_facts
 
@@ -485,3 +486,49 @@ async def test_an_unpaced_handler_is_the_pre_12_byte_path(fake_redis, tmp_path):
     await handler(command("cmd-2"))
 
     assert fetcher.urls == [URL, URL]
+
+
+# ------------------------------------------------- one pacer, two loops (#138 CR 14)
+
+
+class _Command:
+    """What ``pace`` reads: fetch's and capture's commands alike."""
+
+    def __init__(self, command_id: str) -> None:
+        self.command_id = command_id
+        self.url = URL
+
+
+async def test_two_loops_waiting_on_one_host_go_out_an_interval_apart():
+    """Fetch and capture share one pacer; both used to wake and send together."""
+    interval = 0.2
+    pacer = HostPacer(interval)
+    pacer.record(URL)
+    sent: list[float] = []
+
+    async def go(name: str) -> None:
+        await pace(pacer, _Command(name), stop=asyncio.Event(), park_above_seconds=5.0)
+        sent.append(time.monotonic())
+
+    await asyncio.gather(go("fetch"), go("capture"))
+
+    first, second = sorted(sent)
+    assert second - first >= interval * 0.9
+
+
+async def test_a_second_wait_that_would_pass_the_park_bound_parks_instead():
+    """The total wait stays inside the bound broker's stop-budget sum counts on."""
+    pacer = HostPacer(0.3)
+    pacer.record(URL)
+    outcomes: list[str] = []
+
+    async def go(name: str) -> None:
+        try:
+            await pace(pacer, _Command(name), stop=asyncio.Event(), park_above_seconds=0.4)
+            outcomes.append("sent")
+        except TransientFetchError:
+            outcomes.append("parked")
+
+    await asyncio.gather(go("fetch"), go("capture"))
+
+    assert sorted(outcomes) == ["parked", "sent"]

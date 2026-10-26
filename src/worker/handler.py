@@ -688,40 +688,44 @@ async def pace(
     burning its delivery ceiling on politeness would dead-letter perfectly good
     work.
     """
-    wait = pacer.wait_seconds(command.url)
-    if wait <= 0:
-        pacer.record(command.url)
-        return 0.0
-    if wait > park_above_seconds:
-        raise TransientFetchError(
-            f"{command.url} is inside its host's {wait:.1f}-second politeness window; "
-            f"leaving it for the next reclaim"
+    # A loop, not one check (#138 CR 14): fetch and capture share this pacer, so
+    # whoever wakes second finds the host freshly stamped and waits again. The
+    # read and the record have no await between them, which is what makes the
+    # pair atomic on one event loop. The *total* is held to the park bound, so the
+    # pacing term in broker's stop-budget sum still covers it.
+    waited = 0.0
+    while (wait := pacer.wait_seconds(command.url)) > 0:
+        if waited + wait > park_above_seconds:
+            raise TransientFetchError(
+                f"{command.url} is inside its host's {wait:.1f}-second politeness window; "
+                f"leaving it for the next reclaim"
+            )
+        # INFO, and only on the branch that actually waits (CR #13). At DEBUG this
+        # was invisible under the root INFO level; on every command it repeated a
+        # gauge that changes only when the corpus does. Here it appears exactly when
+        # the mechanism acts, which is when an operator wants it, and carries
+        # `tracked_hosts` as the periodic-ish gauge that has nowhere better to live —
+        # the sweep's line is the other candidate, and it is silent on an idle tree.
+        logger.info(
+            "waiting out a host's politeness window",
+            extra={
+                "command_id": command.command_id,
+                "wait_seconds": wait,
+                "tracked_hosts": pacer.tracked_hosts,
+            },
         )
-    # INFO, and only on the branch that actually waits (CR #13). At DEBUG this
-    # was invisible under the root INFO level; on every command it repeated a
-    # gauge that changes only when the corpus does. Here it appears exactly when
-    # the mechanism acts, which is when an operator wants it, and carries
-    # `tracked_hosts` as the periodic-ish gauge that has nowhere better to live —
-    # the sweep's line is the other candidate, and it is silent on an idle tree.
-    logger.info(
-        "waiting out a host's politeness window",
-        extra={
-            "command_id": command.command_id,
-            "wait_seconds": wait,
-            "tracked_hosts": pacer.tracked_hosts,
-        },
-    )
-    await park(stop, wait)
-    # park returns early on SIGTERM, and an interrupted wait is not an elapsed
-    # one — the origin has had no space. The message stays in the PEL, which is
-    # where a command interrupted mid-flight belongs anyway.
-    if stop.is_set():
-        raise TransientFetchError(
-            f"{command.url} was still inside its host's politeness window when the worker "
-            f"began stopping"
-        )
+        await park(stop, wait)
+        # park returns early on SIGTERM, and an interrupted wait is not an elapsed
+        # one — the origin has had no space. The message stays in the PEL, which is
+        # where a command interrupted mid-flight belongs anyway.
+        if stop.is_set():
+            raise TransientFetchError(
+                f"{command.url} was still inside its host's politeness window when the "
+                f"worker began stopping"
+            )
+        waited += wait
     pacer.record(command.url)
-    return wait
+    return waited
 
 
 def report_rate_limited(
