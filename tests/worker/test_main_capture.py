@@ -227,6 +227,11 @@ def test_the_capture_override_moves_only_its_own_group(monkeypatch):
         src.worker.main.consumer_name_for(settings, settings.capture_consumer_group)
         == "replicator-capture-dev"
     )
-    assert src.worker.main.consumer_name_for(settings, settings.persist_consumer_group) != (
-        "replicator-capture-dev"
-    )
+    # Every other group, the default branch included (CR 35): a leak into the default
+    # would register fetch's consumer under capture's name.
+    for group in (
+        settings.consumer_group,
+        settings.replicate_consumer_group,
+        settings.persist_consumer_group,
+    ):
+        assert src.worker.main.consumer_name_for(settings, group) != "replicator-capture-dev"
