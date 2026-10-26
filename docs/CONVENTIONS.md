@@ -67,8 +67,9 @@ here touching it.
 
 **What they guard: an already-handled command, per command stream.**
 `replicator:cmd:<stream>:<command_id>` — `replicator:cmd:fetch:<command_id>`,
-`replicator:cmd:replicate:<command_id>` and, on a host that runs the persist loop,
-`replicator:cmd:persist:<command_id>` (#114), namespaced by the spec's
+`replicator:cmd:replicate:<command_id>` and, on a host that runs those loops,
+`replicator:cmd:persist:<command_id>` (#114) and `replicator:cmd:capture:<command_id>`
+(#138), namespaced by the spec's
 `dedupe_segment` since #29. The un-segmented `replicator:cmd:<id>` form was never
 read again after that release and, carrying the same day-long TTL, was gone within
 a day of it — today's scan finds none, and a keyspace audit that turns one up is

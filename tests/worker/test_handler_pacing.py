@@ -241,7 +241,7 @@ async def test_a_wait_inside_the_poll_window_sleeps_rather_than_parks(fake_redis
 # --------------------------------------------------------------------------- #
 # Escalation wiring (#25). Which statuses reach the pacer, and the Retry-After
 # parse. Reported from the call site rather than from _raise_for_status — see the
-# module docstring on src/worker/handler.py::_report_rate_limited.
+# module docstring on src/worker/handler.py::report_rate_limited.
 # --------------------------------------------------------------------------- #
 
 

@@ -31,7 +31,10 @@ from src.worker import loop
 from src.worker.loop import FETCH_SPEC, CommandSpec, Outcome, poll_once
 from tests.worker.conftest import (
     GROUP,
+    INFO_SOURCE_ID,
     TOPIC,
+    URL,
+    capture_command,
     make_command,
     noop_handler,
     process_one,
@@ -393,3 +396,36 @@ def test_a_persist_command_is_described_by_its_digest():
     command = make_persist_command_model()
 
     assert loop.PERSIST_SPEC.describe(command) == {"content_fingerprint": "ab" * 32}
+
+
+# The capture spec (#138).
+
+
+def test_the_capture_spec_labels_its_stream_and_has_its_own_namespace():
+    assert loop.CAPTURE_SPEC.label == streams.CONTENT_CAPTURE
+    assert loop.CAPTURE_SPEC.dedupe_key("x") not in {
+        FETCH_SPEC.dedupe_key("x"),
+        loop.REPLICATE_SPEC.dedupe_key("x"),
+        loop.PERSIST_SPEC.dedupe_key("x"),
+    }
+
+
+def test_the_capture_report_echoes_the_url_and_the_source_and_keeps_every_cause():
+    """``CaptureFailedEvent`` models ``status_code`` and ``attempts``, so nothing is dropped."""
+    report = loop.CAPTURE_SPEC.build_report(
+        capture_command(), reason="http_status", status_code=404, attempts=2, detail="404"
+    )
+
+    assert report == loop.CaptureFailureReport(
+        command_id="cap-1",
+        url=URL,
+        info_source_id=INFO_SOURCE_ID,
+        reason="http_status",
+        status_code=404,
+        attempts=2,
+        detail="404",
+    )
+
+
+def test_a_capture_command_is_described_by_its_url():
+    assert loop.CAPTURE_SPEC.describe(capture_command()) == {"url": URL}

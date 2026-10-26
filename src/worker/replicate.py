@@ -730,7 +730,7 @@ def _classify_source_failure(exc: Exception) -> Exception:
     ``locate_blob`` (CR 1) — either store, temp or permanent (#114).
 
     **Only the transient half is claimed**, matching the byte path's
-    ``_in_store``. 5xx, 408/429 and anything with no status stay open — the retry
+    ``in_store``. 5xx, 408/429 and anything with no status stay open — the retry
     is free and T4 makes it safe. A terminal status is re-raised unclassified,
     which is today's path: the delivery ceiling, then ``handler_error``. The
     accurate alternative would be a new ``ReplicateReason`` for "this worker

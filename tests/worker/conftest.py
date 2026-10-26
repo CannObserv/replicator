@@ -19,7 +19,13 @@ from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.dead_letter import DeadLetterProvenance, split_dead_letter
 from co_core.pure.adapters.bus.envelope import from_wire, to_wire
 from co_core.pure.adapters.bus.streams import dlq_name
-from co_core.pure.models.changes import BlobAvailableEvent, ContentFetchCommand
+from co_core.pure.models.changes import (
+    BlobAvailableEvent,
+    CaptureViewport,
+    CaptureWait,
+    ContentCaptureCommand,
+    ContentFetchCommand,
+)
 from co_core_sync.drivers.blobstore import LocalBlobStore
 
 from src.core.config import get_settings
@@ -244,6 +250,32 @@ def handler(fake_redis, tmp_path):
         )
 
     return build
+
+
+def capture_command(
+    command_id: str = "cap-1",
+    url: str = URL,
+    *,
+    width: int = 1280,
+    height: int = 800,
+    full_page: bool = False,
+    wait: dict | None = None,
+    info_source_id: str = INFO_SOURCE_ID,
+) -> ContentCaptureCommand:
+    """A ``content.capture`` command as the consume path decodes it (#138).
+
+    The canonical model, not the strict ``*Emit`` one, so a test can send what an
+    issuer can but should not: a zero viewport, an unknown wait kind.
+    """
+    return ContentCaptureCommand(
+        occurred_at=datetime(2026, 10, 25, tzinfo=UTC),
+        command_id=command_id,
+        url=url,
+        info_source_id=info_source_id,
+        viewport=CaptureViewport(width=width, height=height),
+        full_page=full_page,
+        wait=None if wait is None else CaptureWait(**wait),
+    )
 
 
 def make_command(

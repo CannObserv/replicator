@@ -522,7 +522,7 @@ def test_a_hostless_url_cannot_be_escalated():
 def test_a_refusal_on_a_host_with_no_recorded_request_still_spaces_it(clock):
     """Defensive, and free: the mechanism must not depend on call order.
 
-    ``_pace`` records before the fetch today, so the entry always exists by the
+    ``pace`` records before the fetch today, so the entry always exists by the
     time a 429 comes back. A pacer that only escalated known hosts would break
     silently if that order ever changed.
     """
@@ -538,7 +538,7 @@ def test_an_escalation_is_held_in_the_bounded_map_the_prune_governs(clock):
     to prevent, so the escalation rides the same entry as the timestamp.
 
     Observable as ``tracked_hosts`` — the figure the bound is enforced against and
-    the one ``_pace`` reports. An escalation kept beside it would leave this at
+    the one ``pace`` reports. An escalation kept beside it would leave this at
     ``0`` while holding an entry, which is the shape of the leak.
     """
     pacer = HostPacer(1.0, clock=clock)

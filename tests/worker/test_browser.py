@@ -641,3 +641,46 @@ def test_png_dimensions_read_the_ihdr():
 def test_anything_else_is_not_a_png(data):
     with pytest.raises(ValueError, match="not a PNG"):
         png_dimensions(data)
+
+
+# --------------------------------------------------------------------------- preflight
+
+
+async def test_preflight_launches_the_confined_shell_once_and_closes_it(rig):
+    """Boot's check (#138): the same launch a render makes, and nothing navigated."""
+    await rig.renderer.preflight()
+
+    assert rig.pw.launch_kwargs["chromium_sandbox"] is True
+    assert rig.pw.launch_kwargs["env"]["REPLICATOR_BROWSER_CGROUP_PROCS"].endswith("cgroup.procs")
+    assert rig.log == ["close"]
+
+
+async def test_preflight_kills_a_straggler_after_close(rig):
+    rig.cgroup.alive = True
+
+    await rig.renderer.preflight()
+
+    assert rig.log == ["close", "cgroup.kill"]
+
+
+async def test_preflight_reports_a_missing_runtime(tmp_path):
+    pw = FakePlaywright(FakeBrowser(FakePage([])))
+    renderer = PlaywrightRenderer(
+        BrowserRuntime(tmp_path / "nowhere", None),
+        DestinationGuard(blocked=blocked_networks(None)),
+        playwright_factory=lambda: pw,
+    )
+
+    with pytest.raises(RuntimeUnavailableError):
+        await renderer.preflight()
+    assert pw.launch_kwargs is None
+
+
+async def test_preflight_lets_a_launch_failure_through(rig):
+    async def refuse(**kwargs):
+        raise PlaywrightError("Target page, context or browser has been closed")
+
+    rig.pw.launch = refuse
+
+    with pytest.raises(PlaywrightError):
+        await rig.renderer.preflight()

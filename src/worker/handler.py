@@ -201,6 +201,16 @@ class Fetcher(Protocol):
     async def execute(self, effect: FetchContent) -> FetchResult: ...
 
 
+class Paced(Protocol):
+    """What pacing reads off a command: fetch's and capture's alike (#138)."""
+
+    @property
+    def command_id(self) -> str: ...
+
+    @property
+    def url(self) -> str: ...
+
+
 def build_handler(
     *,
     fetcher: Fetcher,
@@ -278,15 +288,13 @@ def build_handler(
         # sweep frees space. A command that can never succeed must not wait a
         # sweep interval to reach a conclusion available immediately.
         options = _request_options(command, settings.max_fetch_timeout_seconds)
-        _raise_for_ceiling(usage, ceiling)
+        raise_for_ceiling(usage, ceiling)
         # Last of the three, and after the ceiling on purpose: spending a wait to
         # reach a check that was going to park the message anyway is a wait the
         # origin never benefits from. The cost of that ordering is that the tree
         # can cross the ceiling *during* a wait — bounded by park_above_seconds,
         # and the ceiling is an inter-sweep estimate either way (CR #9).
-        paced_seconds = await _pace(
-            pacer, command, stop=stop, park_above_seconds=park_above_seconds
-        )
+        paced_seconds = await pace(pacer, command, stop=stop, park_above_seconds=park_above_seconds)
         result = await _fetch(
             fetcher, command, options, deadline_seconds=settings.max_fetch_seconds
         )
@@ -304,7 +312,7 @@ def build_handler(
         # status off the *result*, which is the only place it survives —
         # ``TransientFetchError`` carries no status code, so a call site that
         # waited for the raise could not tell a 429 from a 504.
-        _report_rate_limited(pacer, command, result.status_code, headers, now=fetched_at)
+        report_rate_limited(pacer, command, result.status_code, headers, now=fetched_at)
         _raise_for_status(result, command)
         _raise_for_size(result, command, settings.max_blob_bytes)
         fingerprint = sha256(result.content)
@@ -317,7 +325,7 @@ def build_handler(
         # count it, and a sweep reaping between the two calls means a genuinely
         # new write goes uncounted. Both drifts are bounded by the sweep
         # interval, after which observe() replaces the estimate outright.
-        is_new = not await _in_store(asyncio.to_thread(store.exists, fingerprint))
+        is_new = not await in_store(asyncio.to_thread(store.exists, fingerprint))
         # Read *before* the store, so the horizon published below can only be
         # earlier than the blob's real one. store() stamps the mtime the sweep
         # measures against, and mtime >= stored_at by however long the write
@@ -332,7 +340,7 @@ def build_handler(
         # Awaiting it here is what keeps one command's storage from being a lien
         # on every other command's poll. ``tests/worker/test_storage_offloop.py``
         # holds the rule by watching which thread the store ran on.
-        blob_uri = await _in_store(
+        blob_uri = await in_store(
             asyncio.to_thread(store.store, result.content, fingerprint, media_type)
         )
         if is_new and ceiling is not None:
@@ -422,7 +430,7 @@ def build_handler(
                 # slow drain cannot tell "waiting politely" from "origin is
                 # slow". A per-fetch datum, correlated with duration_ms above —
                 # the *gauge* (how much of the corpus is under pacing) rides
-                # _pace's own line instead, so a slowly-changing number is not
+                # pace's own line instead, so a slowly-changing number is not
                 # repeated once per command (CR #13).
                 "paced_seconds": paced_seconds,
             },
@@ -648,9 +656,9 @@ async def _fetch(
         ) from exc
 
 
-async def _pace(
+async def pace(
     pacer: HostPacer,
-    command: ContentFetchCommand,
+    command: Paced,
     *,
     stop: asyncio.Event,
     park_above_seconds: float,
@@ -716,9 +724,9 @@ async def _pace(
     return wait
 
 
-def _report_rate_limited(
+def report_rate_limited(
     pacer: HostPacer,
-    command: ContentFetchCommand,
+    command: Paced,
     status_code: int,
     headers: dict[str, str],
     *,
@@ -803,7 +811,7 @@ def _retry_after_seconds(value: str | None, now: datetime) -> float | None:
     return (when - now).total_seconds()
 
 
-async def _in_store[T](awaitable: Awaitable[T]) -> T:
+async def in_store[T](awaitable: Awaitable[T]) -> T:
     """Run a storage call, classifying what the provider says when it fails (CR #3).
 
     The local backend raises ``OSError`` and the object store raises the SDK's
@@ -843,7 +851,7 @@ async def _in_store[T](awaitable: Awaitable[T]) -> T:
         ) from exc
 
 
-def _raise_for_ceiling(usage: BlobUsage, ceiling_bytes: int | None) -> None:
+def raise_for_ceiling(usage: BlobUsage, ceiling_bytes: int | None) -> None:
     """Stop fetching once the blob tree has grown past what this deployment holds.
 
     ``None`` means this deployment has no such bound to enforce — the

@@ -21,13 +21,16 @@ successful conditional GET dead-letters again.
 import pytest
 
 from src.core.errors import (
+    CaptureReason,
     CompletedWithoutBlobError,
     FailureReason,
     HandlerError,
+    PermanentCaptureError,
     PermanentError,
     PermanentFetchError,
     PermanentPersistError,
     PersistReason,
+    TransientCaptureError,
     TransientError,
     TransientFetchError,
     TransientPersistError,
@@ -190,3 +193,32 @@ def test_a_permanent_persist_failure_is_a_permanent_failure_with_its_own_tokens(
 
 def test_a_transient_persist_failure_is_a_transient_failure():
     assert issubclass(TransientPersistError, TransientError)
+
+
+# The capture vocabulary (#138).
+
+
+def test_the_capture_reason_tokens_are_the_wire_tokens():
+    """Pinned literally: the issuer contract's registry is normative, and Archiver
+    branches on these. Three are fixed by co-core's ``CaptureFailedEvent``; the
+    rest reuse fetch's spelling where the remedy is fetch's."""
+    assert {reason.value for reason in CaptureReason} == {
+        "invalid_request_options",
+        "not_fetchable",
+        "destination_refused",
+        "http_status",
+        "wait_timeout",
+        "too_large",
+    }
+
+
+def test_a_permanent_capture_failure_carries_its_token_and_the_navigations_status():
+    exc = PermanentCaptureError("404", reason=CaptureReason.HTTP_STATUS, status_code=404)
+
+    assert isinstance(exc, PermanentError)
+    assert exc.reason == "http_status"
+    assert exc.status_code == 404
+
+
+def test_a_transient_capture_failure_is_a_transient_failure():
+    assert issubclass(TransientCaptureError, TransientError)

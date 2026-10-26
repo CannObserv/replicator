@@ -87,8 +87,8 @@ argues that some small table would be simpler.
 
 **Replicator (mechanism):** fetch execution, redirect following, retry cadence,
 fingerprinting, temp storage and its lifetime, disk ceiling, per-host pacing *enforcement*,
-and — future — alternate fetch drivers (browser, archival capture) and escalation between
-them.
+archival capture (a confined browser rendering a page to an image, #138), and — future —
+alternate fetch drivers (a browser-rendered fetch, #63) and escalation between them.
 
 **Issuer (policy/domain):** scheduling and cadence, extraction specs, change semantics,
 notification, correlation, pending maps and reapers, per-URL validator state, and the
@@ -368,8 +368,9 @@ the token list; `watched_item`, the domain noun, is not. String literals are in 
 leakage arrives as a dict key or log field as often as an attribute.
 
 **The exemptions are carve-outs, and a second scan is what makes them ones.** The wire requires
-naming each field to copy it, so each is allowed in exactly `handler.py`, `reporter.py` and
-`loop.py`, and only as the exact identifier — no `info_source_policy` map or `info_items` collection
+naming each field to copy it, so each is allowed only in the emit-path modules
+`DOMAIN_ECHO_MODULES` lists (the publishers and `loop.py`'s report types; a handler that never
+reaches the echo, like `replicate.py` or `capture.py`, stays off it), and only as the exact identifier — no `info_source_policy` map or `info_items` collection
 rides in behind one. The second scan holds the real invariant as an **allow-list**: the four shapes a
 verbatim echo can take, everything else refused. It began as a deny-list of reading positions; three
 review rounds each found ones it had not enumerated, so it now asks the opposite question and is
