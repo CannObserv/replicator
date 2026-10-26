@@ -38,7 +38,12 @@ def root(tmp_path):
 
 @pytest.fixture
 def worker_store(monkeypatch, root):
-    """The store the worker builds over a local root — what fetch and capture write through."""
+    """The store the worker builds over a local root — what fetch and capture write through.
+
+    Asked of the private builder, not named as a class, on purpose: before #159
+    this returned the plain shared store, so these tests failed there by losing
+    the race rather than on an import — the reproduction the fix answers.
+    """
     monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(root))
     get_settings.cache_clear()
     store, _ = _prepare_storage(get_settings())
