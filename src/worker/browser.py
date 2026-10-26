@@ -134,6 +134,15 @@ class PageTooTallError(RenderError):
         self.limit = limit
 
 
+class PageTooWideError(RenderError):
+    """The screenshot came out wider than the caller allows: a full page's overflow (CR 12)."""
+
+    def __init__(self, width: int, limit: int) -> None:
+        super().__init__(f"the page is {width}px wide, over the {limit}px limit")
+        self.width = width
+        self.limit = limit
+
+
 class BrowserKilledError(RenderError):
     """The kernel group-killed the browser at its cgroup's memory cap.
 
@@ -163,6 +172,7 @@ class RenderRequest:
     wait: Wait | None
     max_wait_seconds: float  # bounds ``commit``, ``load`` and the condition, each
     max_height: int  # a taller ``full_page`` is refused, never clipped
+    max_width: int  # so is a wider one: a full page is as wide as its overflow
 
 
 @dataclass(frozen=True)
@@ -309,6 +319,8 @@ class PlaywrightRenderer:
         # after it was measured comes out taller than it measured (CR 2).
         if height > request.max_height:
             raise PageTooTallError(height, request.max_height)
+        if width > request.max_width:
+            raise PageTooWideError(width, request.max_width)
         return Rendered(
             png=png,
             image_width=width,

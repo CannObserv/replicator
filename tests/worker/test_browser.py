@@ -34,6 +34,7 @@ from src.worker.browser import (
     NavigationFailedError,
     NavigationStatusError,
     PageTooTallError,
+    PageTooWideError,
     PlaywrightRenderer,
     RenderRequest,
     RuntimeUnavailableError,
@@ -226,6 +227,7 @@ def _request(**overrides) -> RenderRequest:
         wait=None,
         max_wait_seconds=30,
         max_height=32768,
+        max_width=4096,
     )
     values.update(overrides)
     return RenderRequest(**values)
@@ -486,6 +488,16 @@ async def test_a_page_that_grew_after_it_was_measured_is_still_refused(rig):
         await rig.renderer.render(_request(full_page=True, max_height=32768))
 
     assert (refused.value.height, refused.value.limit) == (40000, 32768)
+
+
+async def test_a_page_wider_than_the_limit_is_refused(rig):
+    """CR 12: a full page is as wide as its overflow, not its viewport."""
+    rig.page.shot_size = (9000, 2000)
+
+    with pytest.raises(PageTooWideError) as refused:
+        await rig.renderer.render(_request(full_page=True, max_width=4096))
+
+    assert (refused.value.width, refused.value.limit) == (9000, 4096)
 
 
 async def test_a_viewport_shot_does_not_measure_the_page(rig):

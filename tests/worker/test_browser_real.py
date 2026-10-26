@@ -169,6 +169,7 @@ def _request(url: str, **overrides) -> RenderRequest:
         wait=None,
         max_wait_seconds=10,
         max_height=32768,
+        max_width=4096,
     )
     values.update(overrides)
     return RenderRequest(**values)
