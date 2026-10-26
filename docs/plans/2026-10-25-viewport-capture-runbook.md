@@ -22,13 +22,15 @@ sudo cp deploy/replicator.service /etc/systemd/system/replicator.service
 sudo systemctl daemon-reload && sudo systemctl restart replicator
 ```
 
-Verify. All three must hold:
+Verify, **after `worker ready`**: the worker claims the leaf's `memory.low` about a second into
+boot, so until then `worker/memory.low` doesn't exist yet (seen 2026-10-26, a `cat` straight
+after the restart). All three must hold:
 
 ```bash
 S=/sys/fs/cgroup/system.slice/replicator.service
+journalctl -u replicator -n 50 -o cat | grep '"worker ready"' | tail -1   # "worker_memory_low": 134217728
 cat $S/cgroup.subtree_control                  # memory pids
 cat $S/memory.low $S/worker/memory.low         # 134217728 twice
-journalctl -u replicator -n 50 -o cat | grep '"worker ready"' | tail -1   # "worker_memory_low": 134217728
 uv run pytest --no-cov tests/test_deploy.py -k 'reservation or worker_leaf or adjust' -rs
 ```
 
