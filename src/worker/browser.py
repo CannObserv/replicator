@@ -41,6 +41,7 @@ deadline costs the stop budget.
 import asyncio
 import contextlib
 import json
+import re
 import struct
 import tempfile
 from collections.abc import Callable, Coroutine
@@ -80,6 +81,45 @@ CLOSE_TIMEOUT_SECONDS = 5.0
 # How long the shell may take to start. Measured at 0.05-0.16 s; this is a hang, not a slow start.
 LAUNCH_TIMEOUT_SECONDS = 30.0
 
+# How a navigation's ``net::ERR_*`` reads (#138 CR 15). Network failures are worth another
+# attempt, as a fetch's connect, TLS or DNS failure is; behind the guard an unresolvable
+# name arrives as ERR_SOCKS_CONNECTION_FAILED. A URL the browser refuses outright
+# (ERR_UNSAFE_PORT, measured on :6000) never changes. Anything else (certificates,
+# redirect loops, codes not listed) is left to the delivery ceiling: neither retried
+# forever on a whole render each time, nor guessed terminal.
+_NET_ERROR = re.compile(r"net::(ERR_[A-Z0-9_]+)")
+_NETWORK_FAILURES = frozenset(
+    {
+        "ERR_ADDRESS_UNREACHABLE",
+        "ERR_CONNECTION_ABORTED",
+        "ERR_CONNECTION_CLOSED",
+        "ERR_CONNECTION_FAILED",
+        "ERR_CONNECTION_REFUSED",
+        "ERR_CONNECTION_RESET",
+        "ERR_CONNECTION_TIMED_OUT",
+        "ERR_EMPTY_RESPONSE",
+        "ERR_INTERNET_DISCONNECTED",
+        "ERR_NAME_NOT_RESOLVED",
+        "ERR_NAME_RESOLUTION_FAILED",
+        "ERR_NETWORK_CHANGED",
+        "ERR_PROXY_CONNECTION_FAILED",
+        "ERR_SOCKS_CONNECTION_FAILED",
+        "ERR_SOCKS_CONNECTION_HOST_UNREACHABLE",
+        "ERR_SSL_PROTOCOL_ERROR",
+        "ERR_TIMED_OUT",
+        "ERR_TUNNEL_CONNECTION_FAILED",
+    }
+)
+_IMPOSSIBLE_NAVIGATIONS = frozenset(
+    {
+        "ERR_DISALLOWED_URL_SCHEME",
+        "ERR_INVALID_REDIRECT",
+        "ERR_INVALID_URL",
+        "ERR_UNKNOWN_URL_SCHEME",
+        "ERR_UNSAFE_PORT",
+    }
+)
+
 # The document's full height, for refusing an over-tall full_page shot before taking it.
 _SCROLL_HEIGHT_JS = (
     "Math.max(document.documentElement ? document.documentElement.scrollHeight : 0,"
@@ -109,6 +149,10 @@ class DestinationRefusedError(RenderError):
 
 class NavigationFailedError(RenderError):
     """The navigation got no response: DNS, connect, TLS, or nothing within the bound."""
+
+
+class NavigationImpossibleError(RenderError):
+    """The browser will never navigate to this URL: a blocked port, a scheme it won't open."""
 
 
 class NavigationStatusError(RenderError):
@@ -384,8 +428,11 @@ async def _navigate(page: Any, url: str, bound: float) -> int:
     except PlaywrightTimeoutError as exc:
         raise NavigationFailedError(f"no response within {bound:g}s") from exc
     except PlaywrightError as exc:
-        if "net::ERR_" in str(exc):
+        code = _NET_ERROR.search(str(exc))
+        if code is not None and code.group(1) in _NETWORK_FAILURES:
             raise NavigationFailedError(_first_line(exc)) from exc
+        if code is not None and code.group(1) in _IMPOSSIBLE_NAVIGATIONS:
+            raise NavigationImpossibleError(_first_line(exc)) from exc
         raise
     if response is None:
         raise NavigationFailedError("the navigation produced no response")

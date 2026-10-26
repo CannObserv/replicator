@@ -32,6 +32,7 @@ from src.worker.browser import (
     DestinationRefusedError,
     InvalidSelectorError,
     NavigationFailedError,
+    NavigationImpossibleError,
     NavigationStatusError,
     PageTooTallError,
     PageTooWideError,
@@ -399,6 +400,54 @@ async def test_a_network_error_is_a_failed_navigation(rig):
 
     with pytest.raises(NavigationFailedError, match="ERR_CONNECTION_REFUSED"):
         await rig.renderer.render(_request())
+
+
+@pytest.mark.parametrize(
+    "code",
+    ["ERR_SOCKS_CONNECTION_FAILED", "ERR_NAME_NOT_RESOLVED", "ERR_CONNECTION_RESET",
+     "ERR_TIMED_OUT", "ERR_SSL_PROTOCOL_ERROR", "ERR_EMPTY_RESPONSE"],
+)  # fmt: skip
+async def test_a_network_failure_is_a_failed_navigation(rig, code):
+    """CR 15: worth retrying, as a fetch's connect, TLS or DNS failure is."""
+
+    async def failed(page):
+        raise PlaywrightError(f"Page.goto: net::{code} at https://example.org/")
+
+    rig.page.goto_hook = failed
+
+    with pytest.raises(NavigationFailedError, match=code):
+        await rig.renderer.render(_request())
+
+
+@pytest.mark.parametrize(
+    "code",
+    ["ERR_UNSAFE_PORT", "ERR_UNKNOWN_URL_SCHEME", "ERR_INVALID_REDIRECT",
+     "ERR_DISALLOWED_URL_SCHEME", "ERR_INVALID_URL"],
+)  # fmt: skip
+async def test_a_url_the_browser_will_never_open_is_impossible(rig, code):
+    """CR 15: deterministic, so never retried; measured ERR_UNSAFE_PORT on :6000."""
+
+    async def failed(page):
+        raise PlaywrightError(f"Page.goto: net::{code} at http://example.org:6000/")
+
+    rig.page.goto_hook = failed
+
+    with pytest.raises(NavigationImpossibleError, match=code):
+        await rig.renderer.render(_request())
+
+
+@pytest.mark.parametrize("code", ["ERR_CERT_DATE_INVALID", "ERR_TOO_MANY_REDIRECTS"])
+async def test_any_other_net_error_is_left_unclassified(rig, code):
+    """CR 15: neither retried forever nor guessed terminal; the delivery ceiling decides."""
+
+    async def failed(page):
+        raise PlaywrightError(f"Page.goto: net::{code} at https://example.org/")
+
+    rig.page.goto_hook = failed
+
+    with pytest.raises(PlaywrightError, match=code) as raised:
+        await rig.renderer.render(_request())
+    assert not isinstance(raised.value, NavigationFailedError | NavigationImpossibleError)
 
 
 async def test_an_unrecognised_playwright_error_is_left_unclassified(rig):
