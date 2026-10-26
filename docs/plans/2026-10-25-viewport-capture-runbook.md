@@ -1,7 +1,7 @@
 ---
 title: Operator runbook for viewport capture — the browser runtime and the delegated unit
 date: 2026-10-25
-status: phase A ready with PR 1; phase B lands with PR 2
+status: phases A and B written; neither run
 plan: 2026-10-25-viewport-capture-design.md
 ---
 
@@ -83,11 +83,65 @@ rm -rf /var/lib/replicator/ms-playwright
 The code tolerates the old unit: `worker ready` says `"not delegated"`, and the unit's own
 `MemoryLow=` protects the worker again, as before #138.
 
-## Phase B — turn capture on (after PR 2 merges)
+## Phase B — turn capture on (after PR 2 merges, phase A sent back)
 
-Written with PR 2: the operator adds `REPLICATOR_CAPTURE_ENABLED=true` to
-`/etc/replicator/.env`, restarts, checks `worker ready` for `capture: enabled`, and then asks for
-broker's `acladmin` read-back of `replicator.capture` on broker#116.
+**Before Archiver's first command** (broker#116): the group is created here at `0`, so nothing
+earlier is lost, but a backlog renders one page at a time while broker's 320 s undelivered-age
+probe fires. `/etc/replicator/.env` sets no `REPLICATOR_MAX_FETCH_SECONDS` (checked 2026-10-26),
+so the default 120 s clears the settings check (`2 × 30 + 30`).
+
+### B1. Deploy PR 2, still off
+
+```bash
+cd /home/exedev/replicator
+git pull --ff-only && uv sync --frozen && sudo systemctl restart replicator
+journalctl -u replicator -n 50 -o cat | grep '"worker ready"' | tail -1   # "capture": "disabled"
+```
+
+### B2. The flag (the operator's write)
+
+```bash
+sudo cp -p /etc/replicator/.env /etc/replicator/.env.bak-pre-capture
+echo 'REPLICATOR_CAPTURE_ENABLED=true' | sudo tee -a /etc/replicator/.env >/dev/null
+sudo systemctl restart replicator
+```
+
+Verify:
+
+```bash
+journalctl -u replicator -n 80 -o cat | grep '"worker ready"' | tail -1
+# "capture": "enabled", "capture_group": "replicator.capture", "capture_consumer": "replicator-capture-1"
+journalctl -u replicator -n 80 -o cat | grep -c '"CRITICAL"'                # 0
+set -a; . /etc/replicator/.env; set +a; . scripts/rcli.sh
+rcli XPENDING content.capture replicator.capture                           # 0 pending
+```
+
+`"capture": "unavailable"` means the group exists and the browser didn't start: the `CRITICAL`
+line before it names the error. Fix it from phase A (A2's install, A1's delegation), then restart.
+Fetch, replicate and persist keep running meanwhile.
+
+### B3. Hand-offs
+
+- **broker#116:** ask for `acladmin`'s read-back of `replicator.capture` (it must exist, at `0`)
+  and an `ACL LOG` check for `replicator` denials since the restart. Never read the group as
+  `replicator`: `XINFO GROUPS` is denied and lands in that log.
+- **archiver#380:** Archiver may issue. The contract is
+  `docs/contracts/content-capture-issuer-contract.md`.
+
+The first real `stored a capture and published capture_stored` line closes the end-to-end
+verification debt (#138).
+
+**Send back:** the `worker ready` line, the `XPENDING` summary, and the first capture line.
+
+### Rollback (phase B)
+
+```bash
+sudo sed -i '/^REPLICATOR_CAPTURE_ENABLED=/d' /etc/replicator/.env
+sudo systemctl restart replicator                 # "capture": "disabled"
+```
+
+The group stays; it's inert while nothing reads it, but broker's probe reports anything Archiver
+writes as undelivered. Tell archiver#380 to stop issuing first.
 
 ## Upgrading Playwright
 
