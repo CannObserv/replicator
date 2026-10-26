@@ -10,9 +10,9 @@ and any host that is not loopback.
         --redis-url redis://localhost:6379/15 --topic replicator.itest.capture \\
         --width 1280 --height 800 --full-page https://example.test/
 
-Point a dev worker at the same database with ``REPLICATOR_CAPTURE_ENABLED=true``
-and its ``capture_topic`` moved to the scratch stream (``docs/COMMANDS.md``), then
-read ``content.artifacts`` on that database for the outcome.
+A ``uv run`` worker never consumes it: its topics are ``run()``'s defaulted
+arguments, not settings. ``tests/worker/test_capture_integration.py`` builds one on
+the scratch stream; this puts a frame there by hand for the same rehearsal.
 
 Exit codes: ``0`` published · ``1`` publishing failed · ``2`` the target was refused.
 """
