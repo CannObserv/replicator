@@ -320,8 +320,14 @@ async def test_the_browser_runs_sandboxed_capped_and_ranked_below_the_worker(
     seen: dict[str, object] = {}
 
     async def observe():
-        await asyncio.sleep(1.0)
-        seen.update(_snapshot(cgroup))
+        # Polled, not one look at 1 s: the renderer exists only once the navigation
+        # starts, and a cold first launch put that past a fixed snapshot. The page
+        # holds for 2 s, so the window is there.
+        for _ in range(18):
+            await asyncio.sleep(0.1)
+            seen.update(_snapshot(cgroup))
+            if seen["renderers"]:
+                return
 
     observer = asyncio.create_task(observe())
     await renderer.render(_request(site.url("/"), wait=Wait("delay", seconds=2)))
