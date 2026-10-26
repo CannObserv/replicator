@@ -144,7 +144,8 @@ jobs:
       # resolves lazily, so it is named explicitly: importing the package alone
       # would pass without the extra. `simhash` needs no extra — only hashlib and
       # re — so co-core takes none (#142): its [extract] brought parsers nothing
-      # here imports.
+      # here imports. The capture types (#138) are named because co-core 0.39 is
+      # the first release carrying them: an older wheel in the mirror fails here.
       - name: co-core import smoke (bus and gcs extras wired)
         run: |
           uv run python -c "
@@ -152,11 +153,13 @@ jobs:
           from co_core.pure.extract import simhash
           from co_core.pure.adapters.bus import streams
           from co_core.pure.models.changes import BlobAvailableEvent, ContentFetchCommand
+          from co_core.pure.models.changes import CaptureFailedEmit, CaptureStoredEmit, ContentCaptureCommand
           from co_core_aio.bus import AsyncBusConsumer, AsyncBusPublisher
           from co_core_aio.fetch import AsyncFetchDriver
           from co_core_sync.drivers.blobstore import GcsBlobStore, LocalBlobStore
           assert streams.CONTENT_FETCH == 'content.fetch'
           assert streams.CONTENT_BLOBS == 'content.blobs'
+          assert streams.CONTENT_CAPTURE == 'content.capture'
           print('co-core extras OK')
           "
 

@@ -107,6 +107,15 @@ worth knowing before seeding a local test server. The full list is in
 Watch the live side with `sudo journalctl -u replicator -f`: each `stored a blob and published
 blob_available` is one of Watcher's commands closing.
 
+`scripts/seed_capture.py` does the same for `content.capture` (#138), scratch only: the live stream
+(archiver#380's), db 0 and a non-loopback host exit 2.
+
+```bash
+uv run python -m scripts.seed_capture \
+  --redis-url redis://localhost:6379/15 --topic replicator.itest.capture \
+  --full-page --wait selector --selector main https://example.test/
+```
+
 ### The patching gate's in-flight count
 
 What `patching-hosts` asks before each step (#131):
@@ -130,9 +139,8 @@ AGENTS.md), then source this once per shell from the repo root; the examples bel
 . scripts/rcli.sh   # defines rcli: redis-cli against $REPLICATOR_REDIS_URL
 ```
 
-**Never hand `$REPLICATOR_REDIS_URL` to `redis-cli -u` (#127).** That puts the password in argv, which
-every local user can read from `/proc` while the call runs; this file's old `rcli` alias did
-exactly that. `rcli` strips the URL's userinfo and query, passes `--user`, and hands the
+**Never hand `$REPLICATOR_REDIS_URL` to `redis-cli -u` (#127).** It puts the password in argv, readable
+from `/proc` by every local user while the call runs; this file's old `rcli` alias did. `rcli` strips the URL's userinfo and query, passes `--user`, and hands the
 password over in `REDISCLI_AUTH` (broker#47's rule), wherever in the URL redis-py would have
 found it — the floor check uses the same helper.
 `tests/test_rcli.py` fails on any `redis-cli` in a script or runbook here that is given `-a`
@@ -144,72 +152,62 @@ scoped to its own topics, permanently and by design, so the operator surface spl
 
 | Runnable here | Denied — ask the broker operator |
 |---|---|
-| `XPENDING`, `XRANGE`, `XINFO STREAM` on the three command streams; `XLEN`, `XRANGE` on both fact streams, the three `.dlq` streams and `content.fetch-policy`; `XDEL` on the three `.dlq` streams; `INFO` | `SCAN`, `XINFO GROUPS`, `XINFO CONSUMERS`, `CLIENT LIST`, `ACL LOG`, `SELECT`, `XREVRANGE`, `MEMORY USAGE`; any command on a key its row doesn't name, e.g. `XLEN content.fetch` |
+| `XPENDING`, `XRANGE`, `XINFO STREAM` on the four command streams; `XLEN`, `XRANGE` on both fact streams, the four `.dlq` streams and `content.fetch-policy`; `XDEL` on the four `.dlq` streams; `INFO` | `SCAN`, `XINFO GROUPS`, `XINFO CONSUMERS`, `CLIENT LIST`, `ACL LOG`, `SELECT`, `XREVRANGE`, `MEMORY USAGE`; any command on a key its row doesn't name, e.g. `XLEN content.fetch` |
 
 **Every read is per key since broker#43 (2026-10-06, #129)**: command and key must both match.
 Anything not shown in this file, check against broker's `deploy/redis-acl.conf` first.
 
-**`XPENDING` moved columns on 2026-09-22 (broker#39, #103, #107)**, and not as a diagnostic
-courtesy: the loop's delivery ceiling reads it, so until the grant landed
-`REPLICATOR_MAX_DELIVERY_ATTEMPTS` could never fire. Probed from this host afterwards, the way
-every other row here was settled — both groups answer, each reporting 0 pending, where the same
-command returned `NOPERM` at 12:55Z.
+**`XPENDING` moved columns on 2026-09-22 (broker#39, #103, #107)**, not as a courtesy: the
+delivery ceiling reads it, so before the grant `REPLICATOR_MAX_DELIVERY_ATTEMPTS` could never
+fire. Probed afterwards, like every row: both groups answered 0 pending, where 12:55Z
+had returned `NOPERM`.
 
-**Draining a dead-letter queue is this service's job, and since 2026-09-11 it has the grant
-for it (#86, broker#12).** It briefly did not: `XADD <topic>.dlq` was granted and the deletion
-never was, so the service that fills its own queue could not empty it — found when the
-`alias_unknown` frame the #86 rehearsal parked at 2026-09-10T21:02:02Z refused to delete. The
-broker's Phase 5 had already assigned both queues here, so the gap was an unfinished decision
-rather than a policy, and it was closed with a **Redis 7.0 ACL selector** rather than a blanket
+**Draining a dead-letter queue is this service's job, granted since 2026-09-11 (#86,
+broker#12).** `XADD <topic>.dlq` was granted first and the deletion not, so the service could not
+empty its own queue — found when the #86 rehearsal's `alias_unknown` frame (parked
+2026-09-10T21:02:02Z) refused to delete. Broker's Phase 5 had already assigned the queues here, an
+unfinished decision rather than a policy, closed with a **Redis 7.0 ACL selector**, not a blanket
 command grant:
 
 ```
-(+xdel ~content.fetch.dlq ~content.replicate.dlq ~content.persist.dlq)
+(+xdel ~content.fetch.dlq ~content.replicate.dlq ~content.persist.dlq ~content.capture.dlq)
 ```
 
-The third queue joined with `content.persist` (broker#64, read from broker's `deploy/redis-acl.conf` on
-2026-09-26). So `XDEL` works on those three queues and is refused on every other key this credential can
-reach — the command streams and the fact streams included. The root permission set never
-gains `+xdel`. Verified on the broker's node against 7.0.15, not from here: this host can
-confirm a drained queue by its depth (`content.replicate.dlq` is 0) but cannot prove the
-selector's shape without deleting something. The grant adds `+xdel` and nothing else, so treat
-per-id deletion as the only disposal available, which is the point of a selector anyway:
-precise, never a queue wipe.
+Persist's queue joined 2026-09-26 (broker#64), capture's with broker#114 (`7fe8f44`), each read
+from broker's `deploy/redis-acl.conf`. `XDEL` works on those four and is refused on every other key
+this credential reaches, command and fact streams included; the root permission set never gains
+`+xdel`. Verified on the broker's node against 7.0.15, not from here: a drained queue shows by its
+depth (`content.replicate.dlq` is 0), but the selector's shape can't be proven without deleting
+something. The grant adds `+xdel` alone, so per-id deletion is the only disposal: precise, never
+a queue wipe.
 
-**`XTRIM` is not for these queues, or anything else, from here (#106).** The broker withdrew it
-on 2026-10-06 (CannObserv/broker#41) on the answer that nothing here issues it, which
-`tests/test_broker_keyspace.py` keeps true.
-Trimming a fact stream past a group's position deletes facts that group has not been delivered,
-so a drain wanting to go faster than one `XDEL` at a time is a broker issue, not a command to
-reach for.
+**`XTRIM` is not for these queues, or anything, from here (#106).** Broker withdrew it on
+2026-10-06 (CannObserv/broker#41) because nothing here issues it, which
+`tests/test_broker_keyspace.py` keeps true. Trimming a fact stream past a group's position
+deletes facts that group hasn't been delivered, so a drain faster than one `XDEL` at a time is
+a broker issue, not a command to reach for.
 
 **Triage before deleting, and not only for correctness.** The broker's probe copies every DLQ
 entry to its `dlq-evidence/` tree on the first tick that sees depth above zero, so a deleted
 frame is still recoverable — *unless* it was written and deleted inside one 10-minute tick,
 which leaves no evidence file at all. Read the frame, close its command, then delete.
 
-The denied column is marked `# NOPERM` at each use below rather than removed, because the
-command is still the right one to ask for — and two of them answer questions nothing else can.
-`XPENDING` carries no mark any more; it is granted (above).
+The denied column is marked `# NOPERM` where used below, not removed: each is still the right
+command to ask for, and two answer questions nothing else can.
 See [Redis](#redis) for what to know before asking.
 
 ```bash
 # Pending entries: id, holder, idle ms, and delivery count — the last field is
 # the times_delivered the DLQ ceiling reads. Add `IDLE <ms>` before the range to
 # filter to entries idle at least that long (what claim_stale would reclaim).
-rcli XPENDING content.fetch replicator.fetch - + 10
-rcli XPENDING content.replicate replicator.replicate - + 10
-rcli XPENDING content.persist replicator.persist - + 10
+for s in fetch replicate persist capture; do rcli XPENDING content.$s replicator.$s - + 10; done
 
 # Dead-lettered frames. Reading, triaging and deleting are all granted here.
 # Each entry is the frame plus dlq.reason / dlq.source_id / dlq.group /
 # dlq.consumer (#116); older ones carry dlq_reason / dlq_original_id instead.
-rcli XLEN content.fetch.dlq
-rcli XRANGE content.fetch.dlq - + COUNT 5
-rcli XLEN content.replicate.dlq
-rcli XRANGE content.replicate.dlq - + COUNT 5
-rcli XLEN content.persist.dlq
-rcli XRANGE content.persist.dlq - + COUNT 5
+for s in fetch replicate persist capture; do
+  rcli XLEN content.$s.dlq; rcli XRANGE content.$s.dlq - + COUNT 5
+done
 
 # Disposal, once a frame is triaged and its command closed. One entry at a
 # time by id, which is the whole point of a selector: a drain cannot become a
@@ -267,6 +265,8 @@ uv run pytest --no-cov -m gcs              # the T4 rows against the real replic
                                            # a missing REPLICATOR_TEST_GCS_BUCKET or
                                            # REPLICATOR_TEST_BLOB_BUCKET skips only its half,
                                            # since the two are provisioned separately (#38, #53)
+uv run pytest --no-cov -m browser -rs      # the real pinned shell (#138); fails, never skips,
+                                           # without it or a delegated scope (TESTING.md)
 ```
 
 ## Lint
@@ -345,15 +345,14 @@ The store, its endpoints and the one-host-per-`projectId` rule are in
 [INFRASTRUCTURE.md](INFRASTRUCTURE.md); the client contract is pinned by
 `tests/test_socraticode_config.py`.
 
-**Cap anything that launches a server.** co-replicator is 8 GiB with 4 G of swap
-since #99 — headroom, not immunity, as broker was 8 GiB too — and runs the
-worker beside these sessions. On CannObserv/broker's VM an uncapped
-launch degraded the tailnet for 57m48s with nothing OOM-killed (broker#17, our
-#94). `OOMScoreAdjust=-900` on the units is the other half and is already in
-place ([MEMORY-PROTECTION.md](MEMORY-PROTECTION.md)) — it does not remove the need for the cap.
-`choom -n 500` is part of it: under an `exe-init` that starts sessions at
-`oom_score_adj=-1000`, as this host's did until #125, a cgroup cap *stalls* a
-process rather than killing it.
+**Cap anything that launches a server.** co-replicator's 8 GiB plus 4 G swap (#99)
+is headroom, not immunity — broker was 8 GiB too — and the worker runs beside these
+sessions. On broker's VM an uncapped launch degraded the tailnet for 57m48s, nothing
+OOM-killed (broker#17, our #94). The units' `OOMScoreAdjust=-900`
+([MEMORY-PROTECTION.md](MEMORY-PROTECTION.md)) is the other half, not a substitute.
+`choom -n 500` is part of the cap: under an `exe-init` starting sessions at
+`oom_score_adj=-1000`, as here until #125, a cgroup cap *stalls* a process rather than
+killing it.
 
 ```bash
 # Offline, no server, no network — run these first; they catch a malformed
@@ -371,10 +370,9 @@ bash skills-vendor/gregoryfoster-skills/skills/init-socraticode/scripts/prefligh
 systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% \
   choom -n 500 -- node "$SOCRATICODE_DRIVER" health-check . --probe src/worker/main.py
 
-# The index itself. Same cap. Measured here 2026-09-18: 21 min wall for the full
-# tree — 1708 code points, 335 context points, 25/25 artifacts — with available
-# memory never below 2.33 GB and the worker at NRestarts=0 throughout. Embedding
-# runs on co-index, so almost none of that is local CPU.
+# The index itself, same cap. Measured 2026-09-18: 21 min wall, full tree (1708
+# code / 335 context points, 25/25 artifacts), available memory never below
+# 2.33 GB, worker NRestarts=0. Embedding runs on co-index: little local CPU.
 systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% \
   choom -n 500 -- node "$SOCRATICODE_DRIVER" index .
 ```

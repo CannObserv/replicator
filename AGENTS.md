@@ -8,8 +8,6 @@ Retrieval, fingerprinting, and temporary storage layer for the Cannabis Observer
 
 **Worker-first.** Primary process = bus consumer (`src/worker/main.py`), not an HTTP API. The FastAPI app is a dev-only `/health` surface.
 
-The command → fact flow: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
 ## Development Methodology
 
 TDD required: no production code without a failing test first.
@@ -69,8 +67,8 @@ Full tool table, prefetch hook, per-tool guidance: [`docs/SOCRATICODE.md`](docs/
 
 ## Project Layout
 
-`src/worker/` is the bus consumer; `tests/` mirrors `src/`. Each module's job, its
-seams and the file map: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+`tests/` mirrors `src/`. Each module's job, its seams, the command → fact flow and
+the file map: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Infrastructure
 
@@ -160,13 +158,12 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
   [docs/CONVENTIONS.md](docs/CONVENTIONS.md#the-replicatorcmd-keys).
 - **Producers own the outbox.** No DB here — the durable
   record of intent is the group's PEL; never add a Postgres outbox to the consume path.
-- **Three stream kinds, three sets of rules.** `content.fetch`,
-  `content.replicate` and `content.persist` are command streams (one group each,
-  competing consumers; persist runs only with `REPLICATOR_PERSIST_ENABLED`, off by
-  default); `content.blobs` carries both fetch outcomes and `content.artifacts`
-  both outcomes of replicate and of persist; `content.fetch-policy` is read
-  **groupless** — no group, no ack, no DLQ.
-- **A fetch may not reach loopback, RFC 1918, or the tailnet (#89, #95).** Per redirect hop.
+- **Three stream kinds, three sets of rules.** `content.fetch`, `.replicate`,
+  `.persist` and `.capture` are command streams (one group each, competing
+  consumers; persist and capture off unless `REPLICATOR_*_ENABLED`); `content.blobs`
+  carries both fetch outcomes, `content.artifacts` the other three's; `content.fetch-policy` is read **groupless** — no group, no ack, no DLQ.
+- **A fetch may not reach loopback, RFC 1918, or the tailnet (#89, #95).** Per redirect hop;
+  a capture, per connection (#138).
 - **The `docs/contracts/` documents are normative**, indexed below.
   `tests/test_boundaries.py` enforces the charter in CI; change a charter and its
   tests together.
@@ -198,8 +195,6 @@ uv run python -m src.worker.main
 # FastAPI dev server (/health only)
 uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8001 --reload --log-config src/core/log_config.json
 ```
-
-Full reference: `docs/COMMANDS.md`
 
 ## Agent Skills
 
@@ -250,4 +245,5 @@ source — with rationale and ruff gates: [docs/STYLE.md](docs/STYLE.md).
   - [cohort charter](https://github.com/CannObserv/cannobserv/blob/main/docs/BOUNDARIES.md) — its parent
 - [content-replicate-issuer-contract.md](docs/contracts/content-replicate-issuer-contract.md) — the replicate trust model and issuer obligations (#34)
 - [content-replicate-issuer-reference.md](docs/contracts/content-replicate-issuer-reference.md) — the why behind trust, T3a, T4, T6; triggers, Charter check, open questions
-- [content-persist-issuer-contract.md](docs/contracts/content-persist-issuer-contract.md) — keeping a blob in the permanent store by digest: obligations, refusal registry, enabling it on a host (#114)
+- [content-persist-issuer-contract.md](docs/contracts/content-persist-issuer-contract.md) — keeping a blob permanently by digest: obligations, refusal registry, enabling (#114)
+- [content-capture-issuer-contract.md](docs/contracts/content-capture-issuer-contract.md) — page to PNG: limits, `reason` registry, enabling (#138)

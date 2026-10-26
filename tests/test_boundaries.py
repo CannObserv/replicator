@@ -174,6 +174,9 @@ DOMAIN_ECHO_MODULES = frozenset(
         "src/worker/reporter.py",
         "src/worker/loop.py",
         "src/worker/replicate_reporter.py",
+        # The capture publishers (#138). Not ``capture.py``: the handler renders a
+        # URL and never reaches the echo, as ``replicate.py`` never does.
+        "src/worker/capture_reporter.py",
     }
 )
 

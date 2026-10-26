@@ -909,7 +909,7 @@ async def test_the_byte_path_and_the_policy_reader_share_one_map(monkeypatch, fa
     real_build_handler = src.worker.main.build_handler
 
     def recording_build_handler(**kwargs):
-        seen["policy"] = kwargs["policy"]
+        seen["policy"] = kwargs["pacer"]._policy
         return real_build_handler(**kwargs)
 
     async def recording_run_policy_reader(*args, **kwargs):

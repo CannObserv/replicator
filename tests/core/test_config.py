@@ -65,7 +65,12 @@ def _group_field_defaults() -> dict[str, ast.expr]:
         for node in ast.parse(source).body
         if isinstance(node, ast.ClassDef) and node.name == "Settings"
     )
-    wanted = {"consumer_group", "replicate_consumer_group", "persist_consumer_group"}
+    wanted = {
+        "consumer_group",
+        "replicate_consumer_group",
+        "persist_consumer_group",
+        "capture_consumer_group",
+    }
     defaults: dict[str, ast.expr] = {}
     for node in settings_class.body:
         if not (isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)):
@@ -91,7 +96,12 @@ def test_the_group_defaults_are_derived_not_spelled():
     ``_group_field_defaults`` for why the obvious value comparison proves nothing.
     """
     defaults = _group_field_defaults()
-    assert set(defaults) == {"consumer_group", "replicate_consumer_group", "persist_consumer_group"}
+    assert set(defaults) == {
+        "consumer_group",
+        "replicate_consumer_group",
+        "persist_consumer_group",
+        "capture_consumer_group",
+    }
 
     called = {}
     for field, expr in defaults.items():
@@ -105,6 +115,7 @@ def test_the_group_defaults_are_derived_not_spelled():
         "consumer_group": "streams.group_name(streams.CONTENT_FETCH, SERVICE_NAME)",
         "replicate_consumer_group": "streams.group_name(streams.CONTENT_REPLICATE, SERVICE_NAME)",
         "persist_consumer_group": "streams.group_name(streams.CONTENT_PERSIST, SERVICE_NAME)",
+        "capture_consumer_group": "streams.group_name(streams.CONTENT_CAPTURE, SERVICE_NAME)",
     }
 
 
@@ -590,3 +601,97 @@ def test_the_persist_group_has_its_own_name_override(monkeypatch):
     settings = get_settings()
     assert settings.persist_consumer_name == "replicator-persist-2"
     assert settings.replicate_consumer_name is None
+
+
+# The capture loop (#138).
+
+
+def test_capture_is_off_unless_an_operator_turns_it_on(monkeypatch):
+    """Persist's reason, and the runtime's: the group is created at boot, and the
+    host needs the pinned shell installed first."""
+    monkeypatch.delenv("REPLICATOR_CAPTURE_ENABLED", raising=False)
+
+    settings = get_settings()
+    assert settings.capture_enabled is False
+    assert settings.capture_consumer_group == "replicator.capture"
+    assert settings.capture_consumer_name is None
+
+
+def test_the_capture_defaults(monkeypatch):
+    settings = get_settings()
+
+    assert settings.capture_max_wait_seconds == 30.0
+    assert settings.capture_memory_max_bytes == 1536 * 1024 * 1024
+    assert settings.capture_cgroup is True
+    assert settings.playwright_browsers_path == Path("/var/lib/replicator/ms-playwright")
+
+
+def test_the_cgroup_escape_reads_off(monkeypatch):
+    """``REPLICATOR_CAPTURE_CGROUP=off`` is the dev run's spelling."""
+    monkeypatch.setenv("REPLICATOR_CAPTURE_CGROUP", "off")
+
+    assert get_settings().capture_cgroup is False
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf"])
+def test_the_capture_wait_bound_is_a_finite_positive_number(monkeypatch, value):
+    monkeypatch.setenv("REPLICATOR_CAPTURE_MAX_WAIT_SECONDS", value)
+
+    with pytest.raises(ValidationError):
+        get_settings()
+
+
+def test_the_memory_cap_has_a_floor(monkeypatch):
+    """Under it the shell cannot start, and every capture would ride the delivery
+    ceiling to ``handler_error`` for a host misconfiguration."""
+    monkeypatch.setenv("REPLICATOR_CAPTURE_MEMORY_MAX_BYTES", str(64 * 1024 * 1024))
+
+    with pytest.raises(ValidationError):
+        get_settings()
+
+
+def test_an_enabled_capture_needs_room_for_all_three_waits_inside_the_whole_render(
+    monkeypatch,
+):
+    """The first response, ``load`` and the condition are each bounded by the wait;
+    launch and the screenshot share the rest. A deadline that cannot hold three full
+    waits would turn a slow page's ``wait_timeout`` into a ``handler_error`` (CR 5).
+    35 s fits two waits and 30 s inside 120 s, and not three."""
+    monkeypatch.setenv("REPLICATOR_CAPTURE_ENABLED", "true")
+    monkeypatch.setenv("REPLICATOR_CAPTURE_MAX_WAIT_SECONDS", "35")
+    monkeypatch.setenv("REPLICATOR_MAX_FETCH_SECONDS", "120")
+
+    with pytest.raises(ValidationError, match="REPLICATOR_CAPTURE_MAX_WAIT_SECONDS"):
+        get_settings()
+
+
+def test_the_wait_bound_is_only_checked_when_capture_is_on(monkeypatch):
+    """A host that never captures keeps booting on whatever it had."""
+    monkeypatch.delenv("REPLICATOR_CAPTURE_ENABLED", raising=False)
+    monkeypatch.setenv("REPLICATOR_CAPTURE_MAX_WAIT_SECONDS", "50")
+    monkeypatch.setenv("REPLICATOR_MAX_FETCH_SECONDS", "120")
+
+    assert get_settings().capture_max_wait_seconds == 50.0
+
+
+def test_the_default_wait_bound_fits_the_default_deadline(monkeypatch):
+    monkeypatch.setenv("REPLICATOR_CAPTURE_ENABLED", "true")
+
+    settings = get_settings()
+    assert 3 * settings.capture_max_wait_seconds + 30 <= settings.max_fetch_seconds
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        "REPLICATOR_CONSUMER_GROUP",
+        "REPLICATOR_REPLICATE_CONSUMER_GROUP",
+        "REPLICATOR_PERSIST_CONSUMER_GROUP",
+    ],
+)
+def test_the_capture_group_may_not_collide_with_another(monkeypatch, other):
+    monkeypatch.setenv(other, "replicator.shared")
+    monkeypatch.setenv("REPLICATOR_CAPTURE_CONSUMER_GROUP", "replicator.shared")
+
+    with pytest.raises(ValidationError, match="different groups"):
+        get_settings()

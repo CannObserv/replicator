@@ -324,6 +324,21 @@ class PlaywrightRenderer:
                 finally:
                     await self._teardown(browser, failed=failed)
 
+    async def preflight(self) -> None:
+        """Launch the confined shell once and close it: boot's check that a render can start.
+
+        The same launch a render makes (wrapper, cgroup, sandbox, guard), navigating
+        nothing. Raises whatever stopped it; the caller decides what that means for boot.
+        """
+        shell = self._runtime.executable()
+        with tempfile.TemporaryDirectory(prefix="replicator-preflight-") as home:
+            async with SocksGuard(self._guard) as socks, self._playwright() as pw:
+                browser = None
+                try:
+                    browser = await pw.chromium.launch(**self.launch_kwargs(shell, socks, home))
+                finally:
+                    await self._teardown(browser, failed=browser is None)
+
     def launch_kwargs(self, shell: Path, socks: SocksGuard, home: str) -> dict[str, Any]:
         """Everything handed to ``chromium.launch``; a test pins each confinement here."""
         env = {

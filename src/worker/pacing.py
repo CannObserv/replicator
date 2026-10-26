@@ -184,7 +184,7 @@ class HostPacer:
     def tracked_hosts(self) -> int:
         """How many hosts currently hold an entry.
 
-        Reported on ``handler.py::_pace``'s log line — the branch that actually
+        Reported on ``handler.py::pace``'s log line — the branch that actually
         waits — so a rising figure is visible as the corpus widening rather than
         inferred from throughput, without repeating a slow gauge once per
         command.
@@ -286,7 +286,7 @@ class HostPacer:
         stepped = max(self._interval_for(host, state, now) * BACKOFF_MULTIPLIER, BACKOFF_FIRST_STEP)
         asked = 0.0 if retry_after_seconds is None else retry_after_seconds
         escalated = min(max(stepped, asked), floor + BACKOFF_MAX_HEADROOM)
-        # Defensive on the stamp: ``_pace`` records before the fetch, so an entry
+        # Defensive on the stamp: ``pace`` records before the fetch, so an entry
         # always exists by the time a status comes back. A mechanism that only
         # escalated hosts it had already seen would break silently if that order
         # ever changed, and "now" is the truthful answer anyway — a request just

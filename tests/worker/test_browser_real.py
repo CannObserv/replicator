@@ -19,7 +19,15 @@ import socket
 from pathlib import Path
 
 import pytest
+from co_core.pure.adapters.bus import streams
+from co_core.pure.adapters.bus.envelope import from_wire
+from co_core.pure.models.changes import CaptureStoredEvent
+from co_core.pure.util.hashing import sha256
+from co_core_sync.drivers.blobstore import LocalBlobStore
 
+from src.core.config import get_settings
+from src.core.errors import CaptureReason, PermanentCaptureError
+from src.storage.sweeper import BlobUsage
 from src.worker.browser import (
     BrowserKilledError,
     BrowserRuntime,
@@ -32,9 +40,14 @@ from src.worker.browser import (
     Wait,
     WaitTimeoutError,
     pinned_shell,
+    png_dimensions,
 )
 from src.worker.browser_cgroup import BrowserCgroup, delegated_service_cgroup
+from src.worker.capture import build_capture_handler
+from src.worker.capture_reporter import build_captured_publisher
 from src.worker.egress import DestinationGuard, blocked_networks
+from src.worker.pacing import HostPacer
+from tests.worker.conftest import capture_command
 
 pytestmark = pytest.mark.browser
 
@@ -383,6 +396,67 @@ async def test_a_dns_name_is_resolved_by_the_guard_not_the_browser(browsers_path
 def test_the_host_resolves_localhost_to_loopback():
     """The premise of the test above."""
     assert socket.gethostbyname("localhost").startswith("127.")
+
+
+# --------------------------------------------------------------------------- end to end
+
+
+def _capture_handler(renderer, tmp_path, client):
+    """``run()``'s capture handler over the real shell, publishing to ``content.artifacts``."""
+    settings = get_settings()
+    stop = asyncio.Event()
+    return build_capture_handler(
+        renderer=renderer,
+        store=LocalBlobStore(tmp_path),
+        settings=settings,
+        pacer=HostPacer(0.0),
+        usage=BlobUsage(),
+        ceiling_bytes=None,
+        complete=build_captured_publisher(client=client),
+        stop=stop,
+    )
+
+
+async def test_a_capture_command_lands_a_png_and_its_fact(renderer, site, tmp_path, fake_redis):
+    """The whole path but the bus loop (#138): command, real render, store, ``capture_stored``."""
+    site.pages["/"] = (200, {}, "<html><body style='margin:0'><main>hello</main></body></html>")
+    handle = _capture_handler(renderer, tmp_path, fake_redis)
+
+    await handle(capture_command(url=site.url("/"), width=640, height=480,
+                                 wait={"kind": "selector", "selector": "main"}))  # fmt: skip
+
+    ((entry_id, fields),) = await fake_redis.xrange(streams.CONTENT_ARTIFACTS)
+    fact = from_wire(
+        {k.decode(): v.decode() for k, v in fields.items()},
+        topic=streams.CONTENT_ARTIFACTS,
+        message_id=entry_id.decode(),
+    ).payload
+    assert isinstance(fact, CaptureStoredEvent)
+    assert (fact.image_width, fact.image_height) == (640, 480)
+    assert fact.media_type == "image/png"
+    assert fact.final_url == site.url("/")
+    png = LocalBlobStore(tmp_path).open(fact.content_fingerprint)
+    assert sha256(png) == fact.content_fingerprint
+    assert png_dimensions(png) == (640, 480)
+
+
+async def test_a_refused_subresource_closes_the_command_destination_refused(
+    renderer, site, canary, tmp_path, fake_redis
+):
+    """The contract's reading of the guard: one private request fails the whole capture."""
+    site.pages["/"] = (
+        200,
+        {},
+        f'<html><img src="http://{CANARY_HOST}:{canary.port}/x.png"></html>',
+    )
+    handle = _capture_handler(renderer, tmp_path, fake_redis)
+
+    with pytest.raises(PermanentCaptureError) as refused:
+        await handle(capture_command(url=site.url("/")))
+
+    assert refused.value.reason == CaptureReason.DESTINATION_REFUSED
+    assert canary.tcp == 0
+    assert await fake_redis.xlen(streams.CONTENT_ARTIFACTS) == 0
 
 
 @pytest.mark.parametrize(

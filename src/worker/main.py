@@ -36,11 +36,27 @@ from src.core.config import Settings, get_settings
 from src.core.logging import configure_logging, get_logger
 from src.storage.sweeper import BlobUsage
 from src.worker.aliases import AliasTable, load_alias_table
-from src.worker.browser_cgroup import CgroupUnavailableError, claim_worker_memory_low
+from src.worker.browser import BrowserRuntime, PlaywrightRenderer, Renderer
+from src.worker.browser_cgroup import BrowserCgroup, CgroupUnavailableError, claim_worker_memory_low
+from src.worker.capture import build_capture_handler
+from src.worker.capture_reporter import build_capture_reporter, build_captured_publisher
 from src.worker.checkout import checkout_refusal
-from src.worker.egress import BodyCeilingTransport, GuardedTransport, blocked_networks
+from src.worker.egress import (
+    BodyCeilingTransport,
+    DestinationGuard,
+    GuardedTransport,
+    blocked_networks,
+)
 from src.worker.handler import build_handler
-from src.worker.loop import FETCH_SPEC, PERSIST_SPEC, REPLICATE_SPEC, retry_at_boot, run_loop
+from src.worker.loop import (
+    CAPTURE_SPEC,
+    FETCH_SPEC,
+    PERSIST_SPEC,
+    REPLICATE_SPEC,
+    retry_at_boot,
+    run_loop,
+)
+from src.worker.pacing import HostPacer
 from src.worker.persist import build_persist_handler
 from src.worker.persist_reporter import build_persist_reporter, build_persisted_publisher
 from src.worker.policy import (
@@ -104,6 +120,55 @@ def build_fetch_client(settings: Settings) -> httpx.AsyncClient:
         ),
         follow_redirects=True,
     )
+
+
+# Where an operator is sent when the browser cannot start.
+CAPTURE_RUNBOOK = "docs/plans/2026-10-25-viewport-capture-runbook.md"
+# Bounds boot's one launch. The launch itself is bounded inside at 30 s; this
+# covers the driver's start and the close as well.
+PREFLIGHT_TIMEOUT_SECONDS = 60.0
+
+
+def build_capture_renderer(settings: Settings, guard: DestinationGuard) -> PlaywrightRenderer:
+    """The confined renderer (#138): the pinned shell, its cgroup, the egress guard.
+
+    ``BrowserCgroup.prepare`` writes the delegated subtree's limits here, at boot,
+    so an undelegated unit is found before a command is read.
+    ``REPLICATOR_CAPTURE_CGROUP=off`` skips it: the dev escape, never a host's.
+    """
+    cgroup = (
+        BrowserCgroup.prepare(memory_max=settings.capture_memory_max_bytes)
+        if settings.capture_cgroup
+        else None
+    )
+    if cgroup is None:
+        logger.warning(
+            "capture renders without a cgroup — no memory cap, no group-kill",
+            extra={"detail": "REPLICATOR_CAPTURE_CGROUP=off is for dev runs only"},
+        )
+    return PlaywrightRenderer(BrowserRuntime(settings.playwright_browsers_path, cgroup), guard)
+
+
+async def prepare_capture(settings: Settings) -> Renderer | None:
+    """Build the renderer and launch it once; ``None`` if the browser cannot start.
+
+    A failure degrades capture alone (#138 design, operator call 4): the group is
+    already ensured, so no command is skipped, and fetch, replicate and persist
+    keep running. The ``CRITICAL`` line names the runbook; broker's
+    undelivered-age probe is the alarm on the backlog.
+    """
+    guard = DestinationGuard(blocked=blocked_networks(settings.blocked_destination_cidrs))
+    try:
+        renderer = build_capture_renderer(settings, guard)
+        async with asyncio.timeout(PREFLIGHT_TIMEOUT_SECONDS):
+            await renderer.preflight()
+    except Exception as exc:
+        logger.critical(
+            "capture is unavailable: the browser could not start",
+            extra={"error": f"{type(exc).__name__}: {exc}", "runbook": CAPTURE_RUNBOOK},
+        )
+        return None
+    return renderer
 
 
 def warn_if_unreachable(blob_dir: Path) -> None:
@@ -282,6 +347,7 @@ def consumer_name_for(settings: Settings, group: str) -> str:
     overrides = {
         settings.replicate_consumer_group: settings.replicate_consumer_name,
         settings.persist_consumer_group: settings.persist_consumer_name,
+        settings.capture_consumer_group: settings.capture_consumer_name,
     }
     override = overrides.get(group, settings.consumer_name)
     return override or resolve_consumer_name(group)
@@ -647,13 +713,14 @@ async def run(
     policy_topic: str = streams.CONTENT_FETCH_POLICY,
     replicate_topic: str = streams.CONTENT_REPLICATE,
     persist_topic: str = streams.CONTENT_PERSIST,
+    capture_topic: str = streams.CONTENT_CAPTURE,
 ) -> None:
     """Connect to the bus, ensure the consumer group, and consume until stopped.
 
     ``stop`` is injectable so tests drive the loop without signals; left unset,
     the process owns its own event and wires SIGTERM/SIGINT to it.
 
-    ``policy_topic``, ``replicate_topic`` and ``persist_topic`` are defaulted arguments for the same
+    ``policy_topic`` and the command topics are defaulted arguments for the same
     reason ``content.fetch`` and ``content.blobs`` are: the only caller that moves
     them is a live-broker test working on a scratch stream.
     """
@@ -745,6 +812,15 @@ async def run(
             else None
         )
         persist_consumer_name = consumer_name_for(settings, settings.persist_consumer_group)
+        # The fourth (#138), on the same terms.
+        capture_consumer = (
+            build_consumer(
+                client, settings, topic=capture_topic, group=settings.capture_consumer_group
+            )
+            if settings.capture_enabled
+            else None
+        )
+        capture_consumer_name = consumer_name_for(settings, settings.capture_consumer_group)
         # Host state, read once at boot: which destinations an operator
         # provisioned here. Unset means nothing is provisioned and every
         # replicate command is refused — the safe default (contract T5), and
@@ -788,15 +864,21 @@ async def run(
         # still exits at once (broker#64). A `stop` during the backoff ends the
         # run here, before the replay: past this point every step either reads
         # nothing or logs a summary of work it never did (#133 CR 1).
-        for boot_consumer, boot_group in (
-            (consumer, settings.consumer_group),
-            (replicate_consumer, settings.replicate_consumer_group),
-            (persist_consumer, settings.persist_consumer_group),
+        #
+        # Capture's group is created at `0`, never `$` (#138): Replicator holds no
+        # XLEN on a command stream, so it cannot prove one empty, and `0` makes
+        # "never at `$` against entries" true by construction. Inert once the
+        # group exists, like the setting.
+        for boot_consumer, boot_group, start_id in (
+            (consumer, settings.consumer_group, settings.consumer_start_id),
+            (replicate_consumer, settings.replicate_consumer_group, settings.consumer_start_id),
+            (persist_consumer, settings.persist_consumer_group, settings.consumer_start_id),
+            (capture_consumer, settings.capture_consumer_group, "0"),
         ):
             if boot_consumer is None:
                 continue
             if not await retry_at_boot(
-                functools.partial(boot_consumer.ensure_group, start_id=settings.consumer_start_id),
+                functools.partial(boot_consumer.ensure_group, start_id=start_id),
                 what=f"ensure_group {boot_group}",
                 settings=settings,
                 stop=stop,
@@ -824,6 +906,17 @@ async def run(
         # startup ordering. `ensure_group` above already makes a blocking broker
         # call at boot, so this adds a round trip, not a new failure mode.
         policies = FetchPolicyMap(settings.min_host_interval_seconds)
+        # One pacer for every origin request, fetch's and capture's (#138): a
+        # host's tolerance is one number however it is asked, and two instances
+        # would each be individually polite while together asking twice as often.
+        pacer = HostPacer(settings.min_host_interval_seconds, policy=policies.interval_for)
+        # After the group, so a browser that cannot start skips nothing.
+        renderer = None if capture_consumer is None else await prepare_capture(settings)
+        capture_state = (
+            "disabled"
+            if capture_consumer is None
+            else ("enabled" if renderer is not None else "unavailable")
+        )
         policy_reader = build_policy_reader(client, topic=policy_topic)
         await replay_policies(policy_reader, policies, stop=stop)
         # **After** the replay, not before (#85). "Ready" naming both groups
@@ -881,6 +974,17 @@ async def run(
                         if persist_consumer is not None
                         else {}
                     ),
+                    # Whether this worker renders captures (#138). "unavailable":
+                    # the group exists and nothing consumes it (CRITICAL above).
+                    "capture": capture_state,
+                    **(
+                        {
+                            "capture_group": settings.capture_consumer_group,
+                            "capture_consumer": capture_consumer_name,
+                        }
+                        if capture_consumer is not None
+                        else {}
+                    ),
                 },
             )
         await _run_until_first_exit(
@@ -904,13 +1008,12 @@ async def run(
                     client=client,
                     settings=settings,
                     usage=usage,
-                    # Where the per-host numbers come from (#19). A bound method
-                    # rather than the map, so the byte path never learns there is
-                    # a stream behind it — and the *same* map the reader below
-                    # writes to, for the reason `usage` is one instance: two
-                    # would both be individually correct and the policies would
-                    # never reach the pacer.
-                    policy=policies.interval_for,
+                    # Shared with capture (#138). Its numbers come from the
+                    # *same* map the reader below writes to (#19), as a bound
+                    # method so the byte path never learns there is a stream
+                    # behind it: two maps would both be individually correct and
+                    # the policies would never reach the pacer.
+                    pacer=pacer,
                     # The same stop event the loop and the sweeper ride, so a
                     # handler waiting out a politeness window does not hold a
                     # SIGTERM for it (#12).
@@ -968,6 +1071,36 @@ async def run(
                         ),
                         reporter=build_persist_reporter(client=client),
                         spec=PERSIST_SPEC,
+                        stop=stop,
+                    )
+                ]
+            ),
+            # The fourth command loop (#138), when enabled and the browser
+            # started. Fetch's pacer, store, usage and ceiling: a capture is an
+            # origin request that lands bytes in the same tree.
+            *(
+                []
+                if capture_consumer is None or renderer is None
+                else [
+                    run_loop(
+                        client=client,
+                        consumer=capture_consumer,
+                        group=settings.capture_consumer_group,
+                        settings=settings,
+                        handler=build_capture_handler(
+                            renderer=renderer,
+                            store=store,
+                            settings=settings,
+                            pacer=pacer,
+                            usage=usage,
+                            ceiling_bytes=(
+                                None if blob_dir is None else settings.blob_max_total_bytes
+                            ),
+                            complete=build_captured_publisher(client=client),
+                            stop=stop,
+                        ),
+                        reporter=build_capture_reporter(client=client),
+                        spec=CAPTURE_SPEC,
                         stop=stop,
                     )
                 ]

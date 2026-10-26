@@ -302,6 +302,43 @@ class Settings(BaseSettings):
     # somewhere to write.
     persist_enabled: bool = Field(default=False, validation_alias="REPLICATOR_PERSIST_ENABLED")
 
+    # The fourth command stream (#138): render a page, store the image. Off by
+    # default for persist's reason, and for the host's: the pinned browser has to
+    # be installed first (docs/plans/2026-10-25-viewport-capture-runbook.md).
+    capture_enabled: bool = Field(default=False, validation_alias="REPLICATOR_CAPTURE_ENABLED")
+    capture_consumer_group: str = Field(
+        default=streams.group_name(streams.CONTENT_CAPTURE, SERVICE_NAME),
+        validation_alias="REPLICATOR_CAPTURE_CONSUMER_GROUP",
+    )
+    capture_consumer_name: str | None = Field(
+        default=None, validation_alias="REPLICATOR_CAPTURE_CONSUMER_NAME"
+    )
+    # Bounds the navigation's first response, `load`, and the wait condition, each.
+    # The whole render, launch to screenshot, sits inside max_fetch_seconds, so the
+    # stop budget gains no term (#138 design, "Stop budget"). Three of them fit inside it.
+    capture_max_wait_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        allow_inf_nan=False,
+        validation_alias="REPLICATOR_CAPTURE_MAX_WAIT_SECONDS",
+    )
+    # The browser cgroup's memory.max. The spike's longest page peaked at 768 MiB;
+    # over the cap the kernel group-kills the browser and the worker lives. The
+    # floor is where the shell stops starting at all.
+    capture_memory_max_bytes: int = Field(
+        default=1536 * 1024 * 1024,
+        ge=256 * 1024 * 1024,
+        validation_alias="REPLICATOR_CAPTURE_MEMORY_MAX_BYTES",
+    )
+    # Off is the dev escape: a run outside the delegated unit has no cgroup to
+    # give the browser, so it renders uncapped. Never off on a host.
+    capture_cgroup: bool = Field(default=True, validation_alias="REPLICATOR_CAPTURE_CGROUP")
+    # Where `playwright install chromium-headless-shell` put the pinned shell.
+    playwright_browsers_path: Path = Field(
+        default=Path("/var/lib/replicator/ms-playwright"),
+        validation_alias="REPLICATOR_PLAYWRIGHT_BROWSERS_PATH",
+    )
+
     # Where the alias table lives, or None on a host that does not replicate.
     #
     # A *path*, not the table itself: the provisioned set is host state, which
@@ -580,6 +617,7 @@ class Settings(BaseSettings):
             "REPLICATOR_CONSUMER_GROUP": self.consumer_group,
             "REPLICATOR_REPLICATE_CONSUMER_GROUP": self.replicate_consumer_group,
             "REPLICATOR_PERSIST_CONSUMER_GROUP": self.persist_consumer_group,
+            "REPLICATOR_CAPTURE_CONSUMER_GROUP": self.capture_consumer_group,
         }
         names = list(groups)
         for i, first in enumerate(names):
@@ -605,6 +643,27 @@ class Settings(BaseSettings):
             raise ValueError(
                 "REPLICATOR_PERSIST_ENABLED needs REPLICATOR_PERMANENT_BUCKET — "
                 "persisting copies bytes into the permanent store, and none is configured"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _a_whole_render_holds_its_waits(self) -> "Settings":
+        """An enabled capture's deadline must fit all three waits (#138, CR 5).
+
+        The navigation's first response, ``load`` and the condition are each bounded by
+        the wait; launch and the screenshot share the 30 s left. Tighter, and a slow
+        page's ``wait_timeout`` would arrive as the deadline's ``handler_error`` instead.
+        Checked only when capture is on, so a host that never captures keeps booting on
+        the env file it had.
+        """
+        if not self.capture_enabled:
+            return self
+        needed = 3 * self.capture_max_wait_seconds + 30
+        if needed > self.max_fetch_seconds:
+            raise ValueError(
+                f"REPLICATOR_CAPTURE_MAX_WAIT_SECONDS ({self.capture_max_wait_seconds}) "
+                f"needs REPLICATOR_MAX_FETCH_SECONDS of at least {needed:g} "
+                f"(three waits and 30 s), and it is {self.max_fetch_seconds:g}"
             )
         return self
 

@@ -248,6 +248,38 @@ class PersistReason(StrEnum):
     counterpart of replicate's ``provider_disabled``."""
 
 
+class CaptureReason(StrEnum):
+    """The ``reason`` token on a ``capture_failed`` fact (#138).
+
+    Its own enum for ``PersistReason``'s reason; the loop's two stay on
+    ``FailureReason``. Fetch's spelling wherever the remedy is fetch's, so an
+    issuer handling both reads one token one way.
+
+    Normative source: ``docs/contracts/content-capture-issuer-contract.md``.
+    ``invalid_request_options``, ``wait_timeout`` and ``destination_refused`` are
+    fixed by co-core's ``CaptureFailedEvent``; the rest are Replicator's.
+    """
+
+    INVALID_REQUEST_OPTIONS = "invalid_request_options"
+    """The viewport, the wait or its bound is unusable, or the selector is not CSS."""
+
+    NOT_FETCHABLE = "not_fetchable"
+    """The URL is not ``http(s)``, or names no host the browser could ask for."""
+
+    DESTINATION_REFUSED = "destination_refused"
+    """The URL, a redirect hop, or **any** request the page made, was refused."""
+
+    HTTP_STATUS = "http_status"
+    """The navigation's final response was a terminal non-2xx; ``status_code`` says which."""
+
+    WAIT_TIMEOUT = "wait_timeout"
+    """``load``, or the condition, was not reached within the operator's bound.
+    Terminal: an unmet condition is usually the page's, and a retry is a whole render."""
+
+    TOO_LARGE = "too_large"
+    """The image is taller or wider than a capture may be, or over the blob ceiling."""
+
+
 class HandlerError(RuntimeError):
     """Base for failures a command handler reports deliberately."""
 
@@ -379,5 +411,21 @@ class PermanentFetchError(PermanentError):
 
     def __init__(
         self, message: str, *, reason: FailureReason, status_code: int | None = None
+    ) -> None:
+        super().__init__(message, reason=reason, status_code=status_code)
+
+
+class TransientCaptureError(TransientError):
+    """A ``content.capture`` handler's transient failure: a 5xx, no response, a park."""
+
+
+class PermanentCaptureError(PermanentError):
+    """A ``content.capture`` handler's permanent failure, narrowed to ``CaptureReason``.
+
+    ``status_code`` is the navigation's, for ``http_status``.
+    """
+
+    def __init__(
+        self, message: str, *, reason: CaptureReason, status_code: int | None = None
     ) -> None:
         super().__init__(message, reason=reason, status_code=status_code)

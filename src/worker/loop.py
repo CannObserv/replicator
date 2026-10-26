@@ -39,6 +39,7 @@ from co_core.effects.bus import BusMessage, PoisonFrame
 from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
 from co_core.pure.models.changes import (
+    ContentCaptureCommand,
     ContentFetchCommand,
     ContentPersistCommand,
     ContentReplicateCommand,
@@ -228,6 +229,26 @@ class PersistFailureReport:
     detail: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class CaptureFailureReport:
+    """What a ``capture_failed`` fact needs (#138).
+
+    ``FailureReport``'s shape with ``reason`` widened to ``str``: the capture tokens
+    are producer-owned (``CaptureReason``) and the loop adds its own two.
+    ``CaptureFailedEvent`` models ``status_code`` (the navigation's) and
+    ``attempts``, so the builder drops nothing. ``url`` and ``info_source_id`` are
+    echoed, never read (#28).
+    """
+
+    command_id: str
+    url: str
+    info_source_id: str
+    reason: str
+    status_code: int | None = None
+    attempts: int | None = None
+    detail: str | None = None
+
+
 class Command(Protocol):
     """The only two fields the loop reads off a command, whatever stream it came from.
 
@@ -392,6 +413,22 @@ PERSIST_SPEC: CommandSpec[ContentPersistCommand, PersistFailureReport] = Command
     ),
     # No URL and no destination: what names a persist is the bytes it keeps.
     describe=lambda command: {"content_fingerprint": command.content_fingerprint},
+)
+
+# The fourth command stream (#138). Every cause carries through: the fact
+# models them all.
+CAPTURE_SPEC: CommandSpec[ContentCaptureCommand, CaptureFailureReport] = CommandSpec(
+    command_type=ContentCaptureCommand,
+    label=streams.CONTENT_CAPTURE,
+    dedupe_segment="capture",
+    build_report=lambda command, **cause: CaptureFailureReport(
+        command_id=command.command_id,
+        url=command.url,
+        # Copied across, never read (#28).
+        info_source_id=command.info_source_id,
+        **cause,
+    ),
+    describe=lambda command: {"url": command.url},
 )
 
 

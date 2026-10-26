@@ -49,17 +49,19 @@ src/storage/sweeper.py — Retention: TTL reap, stale temps, empty shards; the m
 src/api/        — FastAPI app (/health only; not part of the MVP loop)
 src/api/main.py — App factory, lifespan, router registration
 src/core/       — Shared domain logic, logging, config
-src/core/errors.py   — TransientError / PermanentError (what the loop catches) + the *Fetch/*Replicate leaves + FailureReason / ReplicateReason
+src/core/errors.py   — TransientError / PermanentError (what the loop catches) + the *Fetch/*Replicate leaves + FailureReason / ReplicateReason / PersistReason / CaptureReason
 src/worker/replicate.py — The content.replicate handler: alias resolve, T3/T3a guards, refusals; upload or server-side copy
 src/worker/aliases.py — The provisioned destination set, read once from env-referenced host config
 src/worker/replicate_reporter.py — replication_failed on content.artifacts
 src/worker/persist.py — The content.persist handler: T3a, the digest check, the copy into the permanent store (#114)
 src/worker/persist_reporter.py — blob_persisted / persist_failed on content.artifacts
+src/worker/capture.py — The content.capture handler: validate, pace (fetch's HostPacer), render, store, publish (#138)
+src/worker/capture_reporter.py — capture_stored / capture_failed on content.artifacts
 src/worker/checkout.py — Is this checkout main's code? Asked before a write identity is built (#52)
 src/core/logging.py  — build_json_formatter() + ColorMessageFilter + configure_logging() + get_logger()
 src/core/log_config.json — uvicorn --log-config; routes uvicorn's own loggers through that formatter
 src/core/config.py   — Settings / env access (see Environment Variables)
-scripts/        — sync_wheelhouse.py, co_core_closure_diff.py, check_redis_floor.sh, rcli.sh, check_main_checkout.sh, notify_failure.sh, browser_exec.sh, seed_fetch.py, inflight.py, rehearse_reconnect.sh
+scripts/        — sync_wheelhouse.py, co_core_closure_diff.py, check_redis_floor.sh, rcli.sh, check_main_checkout.sh, notify_failure.sh, browser_exec.sh, seed_fetch.py, seed_capture.py, inflight.py, rehearse_reconnect.sh
 scripts/rcli.sh  — sourced: redis-cli with the URL's credential in REDISCLI_AUTH, never argv (#127)
 scripts/notify_failure.sh — the OnFailure= handler's body: records the incident, dispatches it when configured (#94)
 scripts/seed_fetch.py — the seed harness; publishes content.fetch to scratch streams, --watch tails the facts
