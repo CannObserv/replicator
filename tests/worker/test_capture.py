@@ -322,10 +322,14 @@ async def test_a_retryable_navigation_status_retries(store, published, status):
     assert isinstance(exc, TransientError)
 
 
-async def test_a_429_escalates_the_hosts_pacing(store, published):
-    """The same pacer instance fetch uses, so the origin's request is honoured by both."""
+@pytest.mark.parametrize("status", [429, 503])
+async def test_a_request_for_later_escalates_the_hosts_pacing(store, published, status):
+    """The same pacer instance fetch uses, so the origin's request is honoured by both.
+    Both statuses, as the contract promises (CR 21)."""
     pacer = HostPacer(0.0)
-    await _fails_with(store, published, NavigationStatusError(429, retry_after="30"), pacer=pacer)
+    await _fails_with(
+        store, published, NavigationStatusError(status, retry_after="30"), pacer=pacer
+    )
 
     assert pacer.wait_seconds(URL) == pytest.approx(30, abs=1)
 
