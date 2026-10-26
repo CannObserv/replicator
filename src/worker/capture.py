@@ -40,6 +40,7 @@ from src.worker.browser import (
     NavigationFailedError,
     NavigationStatusError,
     PageTooTallError,
+    PageTooWideError,
     Rendered,
     Renderer,
     RenderRequest,
@@ -177,6 +178,7 @@ def render_request(command: ContentCaptureCommand, settings: Settings) -> Render
         wait=_wait(command, settings.capture_max_wait_seconds),
         max_wait_seconds=settings.capture_max_wait_seconds,
         max_height=MAX_CAPTURE_HEIGHT,
+        max_width=MAX_VIEWPORT,
     )
 
 
@@ -261,5 +263,5 @@ async def _render(
         raise PermanentCaptureError(str(exc), reason=CaptureReason.WAIT_TIMEOUT) from exc
     except InvalidSelectorError as exc:
         raise _invalid(f"the selector is not CSS the browser accepts: {exc}") from exc
-    except PageTooTallError as exc:
+    except (PageTooTallError, PageTooWideError) as exc:
         raise PermanentCaptureError(str(exc), reason=CaptureReason.TOO_LARGE) from exc

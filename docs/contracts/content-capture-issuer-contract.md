@@ -28,7 +28,7 @@ refusal vocabulary.
 | `url` | `http(s)` only. Echoed on both facts. |
 | `info_source_id` | Echoed, never read (#28). |
 | `viewport` | `width` × `height` in CSS pixels, each `1..4096`. Device scale is 1. |
-| `full_page` | `true` captures the whole document, up to 32768 px tall; `false`, the viewport. |
+| `full_page` | `true` captures the whole document, up to 32768 × 4096 px; `false`, the viewport. |
 | `wait` | `None`: after the `load` event (measured, #138). `networkidle`: the network has gone quiet. `selector`: the CSS `selector` is visible. `delay`: `seconds` after `load`. |
 
 **Every wait is after `load`, and each is bounded** by `REPLICATOR_CAPTURE_MAX_WAIT_SECONDS`
@@ -97,7 +97,7 @@ as fetch spells them wherever the remedy is fetch's.
 | The URL, a redirect hop, or **any** connection the page opened, is to loopback, RFC 1918, link-local or the tailnet. The render is abandoned at the first one | `destination_refused` | None: the page cannot be captured here. A fetch of it is refused too |
 | The URL is not `http(s)`, or names no host | `not_fetchable` | Fix the URL |
 | The navigation's final response is a non-2xx other than those retried below; `status_code` says which | `http_status` | As for a fetch's `http_status` |
-| A `full_page` document taller than 32768 px, or a PNG over `REPLICATOR_MAX_BLOB_BYTES` | `too_large` | A smaller viewport, or `full_page: false`. **Refused, never clipped:** a clipped image could not be told from a whole one |
+| An image taller than 32768 px or wider than 4096 px (a `full_page` grows with the page's overflow), or a PNG over `REPLICATOR_MAX_BLOB_BYTES` | `too_large` | A smaller viewport, or `full_page: false`. **Refused, never clipped:** a clipped image could not be told from a whole one |
 
 The loop's own two apply as on every stream: **`unsupported_schema_version`**, and **`handler_error`**
 after the delivery ceiling. `handler_error` is where a killed browser lands (its memory cap, a crash),

@@ -30,6 +30,7 @@ from src.worker.browser import (
     NavigationFailedError,
     NavigationStatusError,
     PageTooTallError,
+    PageTooWideError,
     Rendered,
     RenderRequest,
     RuntimeUnavailableError,
@@ -131,6 +132,7 @@ async def test_a_capture_is_stored_and_its_fact_describes_the_image(store, publi
         wait=Wait(kind="selector", selector="#main", seconds=None),
         max_wait_seconds=30.0,
         max_height=MAX_CAPTURE_HEIGHT,
+        max_width=MAX_VIEWPORT,
     )
     ((command, captured),) = published
     assert command.command_id == "cap-1"
@@ -350,6 +352,14 @@ async def test_a_selector_the_browser_cannot_parse_is_invalid_options(store, pub
 
 async def test_an_over_tall_page_is_too_large(store, published):
     exc = await _fails_with(store, published, PageTooTallError(40000, MAX_CAPTURE_HEIGHT))
+
+    assert isinstance(exc, PermanentCaptureError)
+    assert exc.reason == CaptureReason.TOO_LARGE
+
+
+async def test_an_over_wide_page_is_too_large(store, published):
+    """CR 12: horizontal overflow makes a full page wider than its viewport."""
+    exc = await _fails_with(store, published, PageTooWideError(9000, MAX_VIEWPORT))
 
     assert isinstance(exc, PermanentCaptureError)
     assert exc.reason == CaptureReason.TOO_LARGE
