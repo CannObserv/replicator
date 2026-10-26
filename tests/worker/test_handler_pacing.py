@@ -532,3 +532,20 @@ async def test_a_second_wait_that_would_pass_the_park_bound_parks_instead():
     await asyncio.gather(go("fetch"), go("capture"))
 
     assert sorted(outcomes) == ["parked", "sent"]
+
+
+async def test_an_escalation_during_the_wait_is_honoured_not_slept_past():
+    """A 429 seen by the other loop mid-wait raises the interval (CR 30). The old single
+    check sent at the stale 0.3 s; the re-read finds the escalated window and, past the
+    park bound, parks instead of sending into it."""
+    pacer = HostPacer(0.3)
+    pacer.record(URL)
+
+    async def escalate() -> None:
+        await asyncio.sleep(0.1)
+        pacer.report_rate_limited(URL, retry_after_seconds=None)
+
+    escalation = asyncio.create_task(escalate())
+    with pytest.raises(TransientFetchError):
+        await pace(pacer, _Command("fetch"), stop=asyncio.Event(), park_above_seconds=1.0)
+    await escalation
