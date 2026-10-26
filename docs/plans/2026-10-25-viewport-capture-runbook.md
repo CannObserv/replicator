@@ -47,7 +47,7 @@ ldd /var/lib/replicator/ms-playwright/chromium_headless_shell-*/chrome-headless-
 ```
 
 **Install no system packages unless `ldd` names a missing library**, and then only the package
-that provides it. Don't follow `playwright install-deps --dry-run`: it lists 21 packages here,
+that provides it. Don't follow `playwright install-deps --dry-run`: it lists 21 packages here (installs and upgrades of ones already present),
 including `xvfb`, `xserver-common` and font sets, which a headless shell doesn't need. **Fonts
 are a decision, not a dependency.** Pages render with the fonts already installed, and adding a
 font package changes how captures look and every digest after it, so it's a change of its own,
