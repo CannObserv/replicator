@@ -423,7 +423,7 @@ async def test_a_network_failure_is_a_failed_navigation(rig, code):
 @pytest.mark.parametrize(
     "code",
     ["ERR_UNSAFE_PORT", "ERR_UNKNOWN_URL_SCHEME", "ERR_INVALID_REDIRECT",
-     "ERR_DISALLOWED_URL_SCHEME", "ERR_INVALID_URL"],
+     "ERR_UNSAFE_REDIRECT", "ERR_DISALLOWED_URL_SCHEME", "ERR_INVALID_URL"],
 )  # fmt: skip
 async def test_a_url_the_browser_will_never_open_is_impossible(rig, code):
     """CR 15: deterministic, so never retried; measured ERR_UNSAFE_PORT on :6000."""

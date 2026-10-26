@@ -117,6 +117,8 @@ _IMPOSSIBLE_NAVIGATIONS = frozenset(
         "ERR_INVALID_URL",
         "ERR_UNKNOWN_URL_SCHEME",
         "ERR_UNSAFE_PORT",
+        # A redirect to file:, data: or chrome: (measured, CR 23).
+        "ERR_UNSAFE_REDIRECT",
     }
 )
 

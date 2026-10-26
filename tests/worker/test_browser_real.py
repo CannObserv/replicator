@@ -25,6 +25,7 @@ from src.worker.browser import (
     BrowserRuntime,
     DestinationRefusedError,
     InvalidSelectorError,
+    NavigationImpossibleError,
     NavigationStatusError,
     PlaywrightRenderer,
     RenderRequest,
@@ -376,3 +377,14 @@ async def test_a_dns_name_is_resolved_by_the_guard_not_the_browser(browsers_path
 def test_the_host_resolves_localhost_to_loopback():
     """The premise of the test above."""
     assert socket.gethostbyname("localhost").startswith("127.")
+
+
+@pytest.mark.parametrize(
+    "location", ["file:///etc/passwd", "data:text/html,hi", "chrome://version"]
+)
+async def test_a_redirect_to_a_scheme_the_browser_wont_open_is_impossible(renderer, site, location):
+    """CR 23: measured as ERR_UNSAFE_REDIRECT, which the contract closes as not_fetchable."""
+    site.pages["/"] = (302, {"Location": location}, "")
+
+    with pytest.raises(NavigationImpossibleError, match="ERR_UNSAFE_REDIRECT"):
+        await renderer.render(_request(site.url("/")))
