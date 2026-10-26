@@ -145,3 +145,16 @@ def test_the_wrapper_environment_names_the_cgroup(tmp_path):
     cgroup = _prepare(root, proc)
 
     assert cgroup.procs_file == root / SERVICE / "browser" / "cgroup.procs"
+
+
+def test_the_claim_enables_the_memory_controller_it_writes_through(tmp_path):
+    """CR 1: systemd 255 leaves a delegated unit's ``subtree_control`` empty.
+
+    Until ``+memory`` is written there, ``worker/memory.low`` does not exist and the
+    claim is refused, so the worker ran at ``memory.low=0`` whenever capture was off.
+    """
+    root, proc = _fs(tmp_path)
+
+    claim_worker_memory_low(root=root, proc_self_cgroup=proc)
+
+    assert "+memory" in (root / SERVICE / "cgroup.subtree_control").read_text().split()

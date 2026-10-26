@@ -71,14 +71,21 @@ def claim_worker_memory_low(
     """Copy the unit's ``memory.low`` onto the worker leaf; the bytes claimed, or ``None``.
 
     Runs at every boot, capture on or off: delegation moves the worker into the leaf
-    whether or not a browser ever launches.
+    whether or not a browser ever launches. systemd 255 leaves a delegated unit's
+    ``subtree_control`` empty, so the leaf has no ``memory.low`` until the controller is
+    enabled here (CR 1); ``BrowserCgroup.prepare`` writes the same line, harmlessly.
     """
     service = delegated_service_cgroup(root=root, proc_self_cgroup=proc_self_cgroup)
     if service is None:
         return None
+    _enable_controllers(service)
     value = (service / "memory.low").read_text().strip()
     (service / WORKER_LEAF / "memory.low").write_text(value)
     return 2**63 if value == "max" else int(value)
+
+
+def _enable_controllers(service: Path) -> None:
+    (service / "cgroup.subtree_control").write_text("+memory +pids")
 
 
 @dataclass(frozen=True)
@@ -111,7 +118,7 @@ class BrowserCgroup:
             )
         if not os.access(service / "cgroup.subtree_control", os.W_OK):
             raise CgroupUnavailableError(f"{service} is not delegated to this user")
-        (service / "cgroup.subtree_control").write_text("+memory +pids")
+        _enable_controllers(service)
         browser = service / BROWSER_LEAF
         mkdir(browser)
         cgroup = cls(browser)
