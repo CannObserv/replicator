@@ -102,11 +102,11 @@ as fetch spells them wherever the remedy is fetch's.
 The loop's own two apply as on every stream: **`unsupported_schema_version`**, and **`handler_error`**
 after the delivery ceiling. `handler_error` is where a killed browser lands (its memory cap, a crash),
 a render that overran `REPLICATOR_MAX_FETCH_SECONDS`, and a navigation error that is neither a network
-failure nor a refused URL (a certificate error, a redirect loop): a page that fails a render that way
+failure nor a refused URL (a certificate error, a TLS version or cipher mismatch, a redirect loop): a page that fails a render that way
 once usually does again, and each retry is a whole render.
 
-**What stays open instead.** A 5xx, 408 or 429 on the navigation, no response to it at all (connect,
-TLS-handshake or DNS failure), a host whose politeness window is longer than a poll, and a blob tree over its
+**What stays open instead.** A 5xx, 408 or 429 on the navigation, no response to it at all (a connect
+or DNS failure, or a TLS protocol error), a host whose politeness window is longer than a poll, and a blob tree over its
 disk ceiling, are retried with no fact, exempt from the delivery ceiling, as for a fetch.
 
 ## Enabling it on a host
