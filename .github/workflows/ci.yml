@@ -254,7 +254,12 @@ jobs:
         run: |
           sudo apt-get update \
             || echo "::warning::apt-get update reported errors (usually a third-party index); continuing — the install and the ldd check below decide"
-          deps=$(uv run playwright install-deps --dry-run chromium-headless-shell | sed -n 's/^  //p')
+          # Stdout only: a failure's stack trace (to the log) must not parse as packages.
+          dry=$(uv run playwright install-deps --dry-run chromium-headless-shell || true)
+          if ! grep -qE 'Missing system dependencies|All system dependencies are installed' <<<"$dry"; then
+            echo "::warning::the dependency dry run reported neither a list nor 'all installed' (its error is above); installing nothing, ldd decides"
+          fi
+          deps=$(sed -n 's/^  //p' <<<"$dry")
           if [ -n "$deps" ]; then
             sudo apt-get install -y --no-install-recommends $deps
           fi

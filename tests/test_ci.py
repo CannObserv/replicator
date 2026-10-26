@@ -169,3 +169,12 @@ def test_the_browser_jobs_ldd_check_fails_when_ldd_does():
 
     assert '$(ldd "$shell")' in text
     assert 'ldd "$shell" |' not in text
+
+
+def test_a_dry_run_that_failed_is_said_not_read_as_nothing_missing():
+    """CR 32: when the dry run's own apt simulation fails it lists no packages, and an
+    empty list would skip the install in silence."""
+    text = WORKFLOW.read_text()
+
+    assert "All system dependencies are installed" in text
+    assert "Missing system dependencies" in text
