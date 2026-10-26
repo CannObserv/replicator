@@ -368,10 +368,11 @@ the token list; `watched_item`, the domain noun, is not. String literals are in 
 leakage arrives as a dict key or log field as often as an attribute.
 
 **The exemptions are carve-outs, and a second scan is what makes them ones.** The wire requires
-naming each field to copy it, so each is allowed only in the emit-path modules
-`DOMAIN_ECHO_MODULES` lists (the publishers and `loop.py`'s report types; a handler that never
-reaches the echo, like `replicate.py` or `capture.py`, stays off it), and only as the exact identifier — no `info_source_policy` map or `info_items` collection
-rides in behind one. The second scan holds the real invariant as an **allow-list**: the four shapes a
+naming each field to copy it, so each is allowed only in the modules `DOMAIN_ECHO_MODULES` lists
+— `handler.py` and `reporter.py` (fetch's two facts), `replicate_reporter.py`,
+`capture_reporter.py`, and `loop.py`'s report types; a module that never echoes one, like
+`replicate.py`, `capture.py` or the persist publishers, stays off it — and only as the exact
+identifier — no `info_source_policy` map or `info_items` collection rides in behind one. The second scan holds the real invariant as an **allow-list**: the four shapes a
 verbatim echo can take, everything else refused. It began as a deny-list of reading positions; three
 review rounds each found ones it had not enumerated, so it now asks the opposite question and is
 exhaustive. Naming a field is mechanics; keying on it is a domain model one commit at a time. Two
