@@ -143,7 +143,8 @@ under a short timeout, then `cgroup.kill`. **#113 knock-on:** without `memory_re
 unit's `MemoryLow=128M` isn't handed down, so the worker writes `128M` into
 `worker/memory.low` at boot. `test_deploy.py`'s slice-sum test reads it there.
 
-**Playwright's Node driver stays in `worker/`**, at the worker's -900. If it shared `browser/`,
+**Playwright's Node driver stays in `worker/`**, at the worker's -900, with the worker's
+environment (CR 11: unreachable from a page, stated in `browser.py`). If it shared `browser/`,
 every cap kill would take the driver too, so a driver restart would be the normal case. It's
 bounded by the PNG it relays, base64, under the 64 MiB blob ceiling. The worker leaf keeps the
 128M reservation. A reservation isn't a cap, so a heavier worker isn't killed for exceeding it,

@@ -23,7 +23,10 @@ on without that subresource, as it would on any network.
 **No authentication, by design.** Chromium does no SOCKS auth, and the listener grants
 nothing a local process lacks: public internet, through the guard. It binds
 ``127.0.0.1:0`` and lives exactly as long as one render, so a refusal belongs to one
-capture.
+capture. **The accepted residual (CR 10):** any local process that finds the port can
+``CONNECT`` to a blocked address during that render and fail the capture as
+``destination_refused``. It reaches nothing new that way, only disrupts one capture;
+checking the peer (``SO_PEERCRED``) would close it at the cost of a second identity check.
 """
 
 import asyncio

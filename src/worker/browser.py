@@ -25,6 +25,13 @@ cache and service workers out of the next. Starting Playwright's Node driver per
 too means there is no long-lived driver to restart after it dies: the next render
 starts a new one. At one render at a time, the half-second it costs is not the bottleneck.
 
+**Playwright's Node driver is not confined (CR 11).** ``async_playwright()`` spawns it
+from the worker, so it sits in ``worker/`` at the worker's -900, outside the browser's
+memory cap, with the worker's whole environment, credentials included. No page can reach
+it: Chromium talks to it over a pipe, and Chromium's own environment is the scrubbed
+handful above. Its memory is the PNG it relays, base64, which the post-screenshot size
+checks bound.
+
 **Teardown kills before it asks when the render failed.** A render that raised or was
 cancelled (the caller's deadline) writes ``cgroup.kill`` first, which does not wait, and
 only then closes politely under :data:`CLOSE_TIMEOUT_SECONDS`. That bounds what a
