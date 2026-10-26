@@ -115,7 +115,10 @@ def test_a_fetch_or_capture_store_survives_a_sweep_removing_an_old_leaf_mid_writ
 
     uri = worker_store.store(DATA, FINGERPRINT, "image/png")
 
-    assert sweeps[0].shards_removed >= 1  # the race really was lost once
+    # The race really was lost once — and only ``<cd>`` went: its ``rmdir``
+    # touched ``<ab>``, which the grace then kept.
+    assert sweeps[0].shards_removed == 1
+    assert leaf(root).parent.is_dir()
     assert Path(uri.removeprefix("file://")).read_bytes() == DATA
 
 
