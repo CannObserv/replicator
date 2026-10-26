@@ -261,7 +261,9 @@ jobs:
           PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/ms-playwright" \
             uv run playwright install chromium-headless-shell
           shell=$(uv run python -c "from pathlib import Path; from src.worker.browser import pinned_shell; print(pinned_shell(Path('$RUNNER_TEMP/ms-playwright')))")
-          if ldd "$shell" | grep 'not found'; then
+          # Captured first: with no pipefail, `ldd x | grep` is green when ldd fails.
+          libs=$(ldd "$shell")
+          if grep 'not found' <<<"$libs"; then
             echo "::error::the pinned shell is missing shared libraries"
             exit 1
           fi

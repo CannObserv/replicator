@@ -160,3 +160,12 @@ def test_the_browser_job_survives_a_broken_third_party_apt_index():
     assert "playwright install --with-deps" not in text
     assert "playwright install-deps --dry-run chromium-headless-shell" in text
     assert "ldd" in text and "not found" in text
+
+
+def test_the_browser_jobs_ldd_check_fails_when_ldd_does():
+    """CR 31: Actions' bash has no pipefail, so ``ldd x | grep`` is green when ldd itself
+    fails. Capturing the output first lets ``-e`` stop on a failed ldd."""
+    text = WORKFLOW.read_text()
+
+    assert '$(ldd "$shell")' in text
+    assert 'ldd "$shell" |' not in text
