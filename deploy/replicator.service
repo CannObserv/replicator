@@ -124,6 +124,10 @@ MemoryLow=128M
 # the worker moves into the leaf either way. systemd >= 254 for DelegateSubgroup=.
 Delegate=memory pids
 DelegateSubgroup=worker
+# SIGTERM to the main process only (uv forwards it to the worker), SIGKILL to the
+# rest once it exits. The default control-group mode SIGTERMs the browser too and
+# fails the render the worker is finishing (#138 CR 7); teardown kills it anyway.
+KillMode=mixed
 # Creates /var/lib/replicator (REPLICATOR_BLOB_DIR's parent) owned by User=.
 StateDirectory=replicator
 

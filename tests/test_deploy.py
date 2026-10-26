@@ -700,6 +700,14 @@ BROWSER_EXEC = REPO_ROOT / "scripts" / "browser_exec.sh"
 INSTALLED_UNIT = Path("/etc/systemd/system/replicator.service")
 
 
+def test_a_stop_signals_the_worker_alone_and_kills_the_browser_after():
+    """CR 7: the default control-group mode SIGTERMs ``browser/`` too, failing the
+    render in flight as a ``handler_error``. ``mixed`` signals the main process (uv
+    forwards it to the worker, measured on uv 0.13.5) and SIGKILLs the rest after."""
+    assert _directive("KillMode") == "mixed"
+    assert _section_of(UNIT, "KillMode") == "Service"
+
+
 def test_the_unit_delegates_memory_and_pids_to_a_worker_leaf():
     assert set(_directive("Delegate").split()) == {"memory", "pids"}
     assert _directive("DelegateSubgroup") == "worker"
