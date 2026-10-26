@@ -315,7 +315,7 @@ class Settings(BaseSettings):
     )
     # Bounds the navigation's first response, `load`, and the wait condition, each.
     # The whole render, launch to screenshot, sits inside max_fetch_seconds, so the
-    # stop budget gains no term (#138 design, "Stop budget").
+    # stop budget gains no term (#138 design, "Stop budget"). Three of them fit inside it.
     capture_max_wait_seconds: float = Field(
         default=30.0,
         gt=0,
@@ -647,22 +647,23 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _a_whole_render_holds_both_waits(self) -> "Settings":
-        """An enabled capture's deadline must fit ``load`` and the condition (#138).
+    def _a_whole_render_holds_its_waits(self) -> "Settings":
+        """An enabled capture's deadline must fit all three waits (#138, CR 5).
 
-        Each is bounded by the wait; launch, the navigation and the screenshot share
-        the 30 s left. Tighter, and a slow page's ``wait_timeout`` would arrive as the
-        deadline's ``handler_error`` instead. Checked only when capture is on, so a
-        host that never captures keeps booting on the env file it had.
+        The navigation's first response, ``load`` and the condition are each bounded by
+        the wait; launch and the screenshot share the 30 s left. Tighter, and a slow
+        page's ``wait_timeout`` would arrive as the deadline's ``handler_error`` instead.
+        Checked only when capture is on, so a host that never captures keeps booting on
+        the env file it had.
         """
         if not self.capture_enabled:
             return self
-        needed = 2 * self.capture_max_wait_seconds + 30
+        needed = 3 * self.capture_max_wait_seconds + 30
         if needed > self.max_fetch_seconds:
             raise ValueError(
                 f"REPLICATOR_CAPTURE_MAX_WAIT_SECONDS ({self.capture_max_wait_seconds}) "
                 f"needs REPLICATOR_MAX_FETCH_SECONDS of at least {needed:g} "
-                f"(two waits and 30 s), and it is {self.max_fetch_seconds:g}"
+                f"(three waits and 30 s), and it is {self.max_fetch_seconds:g}"
             )
         return self
 

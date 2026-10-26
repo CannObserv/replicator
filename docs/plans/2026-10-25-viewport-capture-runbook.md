@@ -88,7 +88,7 @@ The code tolerates the old unit: `worker ready` says `"not delegated"`, and the 
 **Before Archiver's first command** (broker#116): the group is created here at `0`, so nothing
 earlier is lost, but a backlog renders one page at a time while broker's 320 s undelivered-age
 probe fires. `/etc/replicator/.env` sets no `REPLICATOR_MAX_FETCH_SECONDS` (checked 2026-10-26),
-so the default 120 s clears the settings check (`2 × 30 + 30`).
+so the default 120 s clears the settings check (`3 × 30 + 30`, exactly).
 
 ### B1. Deploy PR 2, still off
 

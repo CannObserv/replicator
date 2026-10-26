@@ -650,12 +650,15 @@ def test_the_memory_cap_has_a_floor(monkeypatch):
         get_settings()
 
 
-def test_an_enabled_capture_needs_room_for_both_waits_inside_the_whole_render(monkeypatch):
-    """``load`` and the condition are each bounded by the wait; launch, navigation and
-    the screenshot share the rest. A deadline that cannot hold two full waits would
-    turn every slow page's ``wait_timeout`` into a ``handler_error``."""
+def test_an_enabled_capture_needs_room_for_all_three_waits_inside_the_whole_render(
+    monkeypatch,
+):
+    """The first response, ``load`` and the condition are each bounded by the wait;
+    launch and the screenshot share the rest. A deadline that cannot hold three full
+    waits would turn a slow page's ``wait_timeout`` into a ``handler_error`` (CR 5).
+    35 s fits two waits and 30 s inside 120 s, and not three."""
     monkeypatch.setenv("REPLICATOR_CAPTURE_ENABLED", "true")
-    monkeypatch.setenv("REPLICATOR_CAPTURE_MAX_WAIT_SECONDS", "50")
+    monkeypatch.setenv("REPLICATOR_CAPTURE_MAX_WAIT_SECONDS", "35")
     monkeypatch.setenv("REPLICATOR_MAX_FETCH_SECONDS", "120")
 
     with pytest.raises(ValidationError, match="REPLICATOR_CAPTURE_MAX_WAIT_SECONDS"):
@@ -675,7 +678,7 @@ def test_the_default_wait_bound_fits_the_default_deadline(monkeypatch):
     monkeypatch.setenv("REPLICATOR_CAPTURE_ENABLED", "true")
 
     settings = get_settings()
-    assert 2 * settings.capture_max_wait_seconds + 30 <= settings.max_fetch_seconds
+    assert 3 * settings.capture_max_wait_seconds + 30 <= settings.max_fetch_seconds
 
 
 @pytest.mark.parametrize(

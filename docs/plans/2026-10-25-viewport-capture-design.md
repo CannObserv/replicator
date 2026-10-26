@@ -196,7 +196,8 @@ content.capture → validate → pace(host) → launch (cgroup, sandbox, SOCKS g
   `selector` that's visible, or `delay`). The `load` wait and the condition wait are each bounded
   by `REPLICATOR_CAPTURE_MAX_WAIT_SECONDS` (default 30). Everything from launch to screenshot sits
   inside one `REPLICATOR_MAX_FETCH_SECONDS` deadline. A settings validator requires
-  `2 × max_wait + 30 ≤ max_fetch_seconds`.
+  `2 × max_wait + 30 ≤ max_fetch_seconds`. *(CR 5: three, the navigation's first response
+  being bounded too: `3 × max_wait + 30`.)*
 - **Image.** PNG only, device scale 1, so `media_type` is `image/png`. `image_width` and
   `image_height` are read from the PNG's IHDR, never from the viewport. Before a `full_page` shot
   the document's scroll height is measured. Over `MAX_CAPTURE_HEIGHT` (32768 px) the capture is

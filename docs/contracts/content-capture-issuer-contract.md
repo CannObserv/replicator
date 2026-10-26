@@ -116,7 +116,7 @@ disk ceiling, are retried with no fact, exempt from the delivery ceiling, as for
 - **`REPLICATOR_CAPTURE_ENABLED=true`** creates `replicator.capture` at boot, at `0`, and starts the
   loop after one test launch. A launch that fails leaves the group in place and the loop off:
   `CRITICAL` names the runbook, and fetch, replicate and persist keep running.
-- Settings construction refuses `2 × REPLICATOR_CAPTURE_MAX_WAIT_SECONDS + 30` over
+- Settings construction refuses `3 × REPLICATOR_CAPTURE_MAX_WAIT_SECONDS + 30` over
   `REPLICATOR_MAX_FETCH_SECONDS`, so a slow page closes as `wait_timeout`, not as the deadline's
   `handler_error`.
 - `worker ready` reports `capture: enabled` with its group and consumer, `capture: unavailable`, or
