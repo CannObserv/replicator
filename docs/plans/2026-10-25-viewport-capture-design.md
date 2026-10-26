@@ -1,7 +1,7 @@
 ---
 title: Viewport capture — consume content.capture, render headless, store, publish the stored-capture fact
 date: 2026-10-25
-status: proposed 2026-10-25, awaiting approval on #138
+status: approved 2026-10-25 (all six operator calls as recommended)
 issue: "#138 (epic #154)"
 ---
 

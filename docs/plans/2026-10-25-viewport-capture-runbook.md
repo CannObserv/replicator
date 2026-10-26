@@ -65,7 +65,7 @@ REPLICATOR_PLAYWRIGHT_BROWSERS_PATH=/var/lib/replicator/ms-playwright \
   -- uv run pytest --no-cov -m browser -rs
 ```
 
-It should pass in full: about 18 tests, around 35 s. It must not skip anything; a missing
+It should pass in full: 21 tests, around 40 s. It must not skip anything; a missing
 runtime or an undelegated scope fails it.
 
 **Send back:** the `worker ready` line, the two `memory.low` values, `df -h /` before and after,
