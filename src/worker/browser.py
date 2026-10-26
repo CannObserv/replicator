@@ -322,11 +322,15 @@ class PlaywrightRenderer:
         cgroup = self._runtime.cgroup
         if failed and cgroup is not None:
             _kill(cgroup)
-        if browser is not None:
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(browser.close(), CLOSE_TIMEOUT_SECONDS)
-        if cgroup is not None and cgroup.populated():
-            _kill(cgroup)
+        try:
+            if browser is not None:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(browser.close(), CLOSE_TIMEOUT_SECONDS)
+        finally:
+            # In a finally: the caller's deadline cancels the close, and a cancellation
+            # is not an Exception the suppress above swallows (CR 6).
+            if cgroup is not None and cgroup.populated():
+                _kill(cgroup)
 
 
 def _kill(cgroup: BrowserCgroup) -> None:

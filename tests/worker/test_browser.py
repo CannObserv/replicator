@@ -121,6 +121,7 @@ class FakeBrowser:
     def __init__(self, page: FakePage) -> None:
         self.page = page
         self.context_kwargs: dict | None = None
+        self.close_hangs = False
 
     async def new_context(self, **kwargs):
         self.context_kwargs = kwargs
@@ -134,6 +135,8 @@ class FakeBrowser:
 
     async def close(self):
         self.page.log.append("close")
+        if self.close_hangs:
+            await asyncio.sleep(3600)
 
 
 class FakePlaywright:
@@ -347,6 +350,18 @@ async def test_a_straggler_after_close_is_killed(rig):
     rig.cgroup.alive = True
 
     await rig.renderer.render(_request())
+
+    assert rig.log[-2:] == ["close", "cgroup.kill"]
+
+
+async def test_a_deadline_during_the_polite_close_still_kills_the_cgroup(rig):
+    """CR 6: the caller's deadline cancels the close; the kill must not be skipped with it."""
+    rig.pw.browser.close_hangs = True
+    rig.cgroup.alive = True
+
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.2):
+            await rig.renderer.render(_request())
 
     assert rig.log[-2:] == ["close", "cgroup.kill"]
 
