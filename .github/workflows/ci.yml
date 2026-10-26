@@ -213,18 +213,6 @@ jobs:
       - name: pytest (broker OOM, ACL denial, and dead-letter command forms)
         run: uv run pytest --no-cov -m integration tests/worker/test_oom_integration.py -rs
 
-  # The only job in this workflow that holds a delete-capable identity, and it is
-  # a separate job for exactly that reason (#53). The `test` job authenticates as
-  # `co-pypi-reader` — read on the package index and nothing else — and giving it
-  # a second identity that can write and delete objects would widen every unit
-  # test's blast radius to buy coverage that three tests need.
-  #
-  # Keyless: the test SA is bound to this repo's WIF provider, so no key exists to
-  # leak. `google-github-actions/auth` writes a credentials file and exports
-  # GOOGLE_APPLICATION_CREDENTIALS; the fixtures in tests/conftest.py strip that
-  # variable from every test and re-point it, per test, from
-  # REPLICATOR_TEST_GCS_CREDENTIALS — so the path is threaded explicitly rather
-  # than inherited, and an unmarked test cannot reach the identity at all.
   browser:
     # The renderer against the pinned shell (#138): the egress canaries, the
     # sandbox, and an OOM group-kill in a delegated cgroup. `-m browser` is
@@ -306,6 +294,18 @@ jobs:
             -E PATH -E HOME -E REPLICATOR_PLAYWRIGHT_BROWSERS_PATH \
             -- uv run pytest --no-cov -m browser -rs
 
+  # The only job in this workflow that holds a delete-capable identity, and it is
+  # a separate job for exactly that reason (#53). The `test` job authenticates as
+  # `co-pypi-reader` — read on the package index and nothing else — and giving it
+  # a second identity that can write and delete objects would widen every unit
+  # test's blast radius to buy coverage that three tests need.
+  #
+  # Keyless: the test SA is bound to this repo's WIF provider, so no key exists to
+  # leak. `google-github-actions/auth` writes a credentials file and exports
+  # GOOGLE_APPLICATION_CREDENTIALS; the fixtures in tests/conftest.py strip that
+  # variable from every test and re-point it, per test, from
+  # REPLICATOR_TEST_GCS_CREDENTIALS — so the path is threaded explicitly rather
+  # than inherited, and an unmarked test cannot reach the identity at all.
   gcs:
     name: gcs (T4 against the test bucket)
     runs-on: ubuntu-latest
