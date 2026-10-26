@@ -42,12 +42,18 @@ running but unprotected from reclaim. Fix it before A2.
 df -h /                                         # needs ~450M free
 PLAYWRIGHT_BROWSERS_PATH=/var/lib/replicator/ms-playwright \
   uv run playwright install chromium-headless-shell
-uv run playwright install-deps --dry-run chromium-headless-shell   # the apt line it *would* run
+ldd /var/lib/replicator/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell \
+  | grep 'not found'                            # expect nothing (0 lines on 2026-10-26)
 ```
 
-If the dry run lists packages that `dpkg -s` reports missing, install those with `sudo apt-get
-install`. The 2026-10-25 spike needed none on this host. `StateDirectory=replicator` owns
-`/var/lib/replicator`, so no sudo is needed for the install itself. Expect
+**Install no system packages unless `ldd` names a missing library**, and then only the package
+that provides it. Don't follow `playwright install-deps --dry-run`: it lists 21 packages here,
+including `xvfb`, `xserver-common` and font sets, which a headless shell doesn't need. **Fonts
+are a decision, not a dependency.** Pages render with the fonts already installed, and adding a
+font package changes how captures look and every digest after it, so it's a change of its own,
+not part of this step.
+
+`StateDirectory=replicator` owns `/var/lib/replicator`, so no sudo is needed for the install. Expect
 `chromium_headless_shell-<rev>` (~273M) and `ffmpeg-<rev>` (~5M). The Python package and its
 bundled Node (~138M) are already in `.venv` from `uv sync`.
 
