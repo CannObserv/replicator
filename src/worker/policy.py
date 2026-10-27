@@ -241,8 +241,8 @@ class FetchPolicyMap:
         applied before ``generation`` existed: between two unordered frames it
         answers "stream order", and the map still drops an unordered frame
         stamped older than the one it holds, so unordered frames behave exactly
-        as Watcher's did before #136. Once either frame is ordered, the stamp is not
-        consulted — an outbox retry can stamp row N+1 earlier than row N.
+        as Watcher's did before #136. Once either frame is ordered, the stamp is
+        not consulted — an outbox retry can stamp row N+1 earlier than row N.
 
         ``>=`` rather than ``>`` on the stamp: a producer is free to stamp an
         entire full-set republish with one ``occurred_at``, and a strict
