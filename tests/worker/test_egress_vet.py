@@ -81,6 +81,14 @@ async def test_an_embedding_ipv6_address_is_returned_as_itself_not_unwrapped():
         assert await _guard({}).vet(address, 443) == [ipaddress.ip_address(address)]
 
 
+async def test_an_ipv6_literal_is_bracketed_in_the_refusal():
+    """``2002:a9fe:a9fe::1:80`` names a different address; the port needs brackets to read."""
+    with pytest.raises(PermanentFetchError) as refused:
+        await _guard({}).vet("2002:a9fe:a9fe::1", 80)
+
+    assert str(refused.value).startswith("[2002:a9fe:a9fe::1]:80 resolves to ")
+
+
 async def test_an_unresolvable_name_is_transient():
     with pytest.raises(TransientFetchError):
         await _guard({}).vet("nowhere.invalid", 80)

@@ -159,8 +159,9 @@ class DestinationGuard:
     async def vet(self, host: str, port: int, *, label: str | None = None) -> list[Address]:
         """Every address ``host`` answers with, or the refusal for the first blocked one.
 
-        ``label`` is what the refusal names: the URL for a fetch hop, the
-        ``host:port`` a page asked for when the caller has no URL.
+        ``label`` is what the refusal names: the URL for a fetch hop, else the
+        ``host:port`` asked for — an IPv6 literal bracketed, since its last group
+        would otherwise read as the port.
         """
         addresses = await self._addresses(host, port)
         for address in addresses:
@@ -170,7 +171,7 @@ class DestinationGuard:
                     continue
                 spelled = address if checked == address else f"{address} (embedding {checked})"
                 raise PermanentFetchError(
-                    f"{label or f'{host}:{port}'} resolves to {spelled}, inside the refused "
+                    f"{label or _host_port(host, port)} resolves to {spelled}, inside the refused "
                     f"range {network} — Replicator does not fetch its own host, its private "
                     f"network, or the tailnet",
                     reason=FailureReason.DESTINATION_REFUSED,
@@ -368,6 +369,10 @@ def _too_large(url: httpx.URL, observed: str, maximum: int) -> PermanentFetchErr
         f"{url} {observed}, over the {maximum}-byte ceiling — stopped reading",
         reason=FailureReason.TOO_LARGE,
     )
+
+
+def _host_port(host: str, port: int) -> str:
+    return f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
 
 
 def _default_port(url: httpx.URL) -> int:

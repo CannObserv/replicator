@@ -138,6 +138,8 @@ async def test_an_ipv6_address_embedding_a_refused_one_opens_nothing(
     assert accepted == []
     assert guard.refusal is not None
     assert "refused range 10.0.0.0/8 " in str(guard.refusal)
+    if atyp == 4:
+        assert str(guard.refusal).startswith(f"[64:ff9b::a00:7]:{up_port} ")
 
 
 async def test_the_first_refusal_is_the_one_kept(upstream):

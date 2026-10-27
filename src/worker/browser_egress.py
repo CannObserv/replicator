@@ -154,7 +154,7 @@ class SocksGuard:
             return
 
         try:
-            addresses = await self._guard.vet(host, port, label=f"{host}:{port}")
+            addresses = await self._guard.vet(host, port)
         except PermanentFetchError as exc:
             # Only a destination fails the capture. A name the resolver cannot encode
             # is ``not_fetchable``, a broken subresource rather than a private one (CR 4).
