@@ -323,14 +323,18 @@ async def test_an_ipv6_address_embedding_a_public_one_passes(path, label, addres
 @pytest.mark.parametrize(
     ("label", "address", "refused"),
     [
-        ("local-use NAT64 embedding a public address", "64:ff9b:1::5db8:d822", "64:ff9b:1::/48"),
-        ("ISATAP on a link-local prefix", "fe80::5efe:5db8:d822", "fe80::/10"),
+        ("ISATAP under link-local", "fe80::5efe:5db8:d822", "fe80::/10"),
+        ("ISATAP under ULA", "fd00::200:5efe:5db8:d822", "fc00::/7"),
+        ("local-use NAT64, its row", "64:ff9b:1::5db8:d822", "64:ff9b:1::/48"),
     ],
 )
 async def test_the_ipv6_address_itself_is_still_checked(label, address, refused):
     """Unwrapping adds a check; it does not replace the IPv6 one.
 
-    A public embedded address does not buy an IPv6 address out of its own row.
+    The ISATAP rows unwrap to a public address inside a blocked IPv6 range, so a
+    change that substituted the embedded address — as ``_address`` does for the
+    mapped form — would pass them. The local-use row pins the table: its prefix is
+    refused even where the low 32 bits are public.
     """
     with pytest.raises(PermanentFetchError, match=_refused_in(refused)):
         await _guard({}).handle_async_request(httpx.Request("GET", f"http://[{address}]/"))
