@@ -170,8 +170,8 @@ posture as every other wire input.
 
 **Producer:** Archiver, since the headless-Watcher flip F1
 ([CannObserv/watcher#374](https://github.com/CannObserv/watcher/issues/374)); Watcher published
-from its `Domain` table before it. The payload is unchanged but for an optional `generation`, which Archiver sets because its
-outbox can reorder frames ([CannObserv/cannobserv#566](https://github.com/CannObserv/cannobserv/issues/566)).
+from its `Domain` table before it. The payload is unchanged but for an optional `generation`,
+which Archiver sets because its outbox can reorder frames ([CannObserv/cannobserv#566](https://github.com/CannObserv/cannobserv/issues/566)).
 Replicator applies it through co-core's `fetch_policy_supersedes`; the rule is
 [POLITENESS.md](../POLITENESS.md#applying-a-policy)'s and the code of record
 [`src/worker/policy.py`](../../src/worker/policy.py). Nothing there branches on which producer
@@ -180,8 +180,8 @@ for the indirection.
 
 ### The fallback default (was the interim, #12 → #19)
 
-`REPLICATOR_MIN_HOST_INTERVAL_SECONDS`, default **1.0 s** — copied from Watcher's `DEFAULT_MIN_INTERVAL`,
-chosen precisely because it invents nothing. #12 shipped it as one number for every origin, standing
+`REPLICATOR_MIN_HOST_INTERVAL_SECONDS`, default **1.0 s** — copied from Watcher's
+`DEFAULT_MIN_INTERVAL`, chosen precisely because it invents nothing. #12 shipped it as one number for every origin, standing
 in for a stream that did not exist; #19 gave it its permanent job as what a host with **no explicit
 policy** resolves to — unknown, revoked, or not yet replayed — and never "unlimited", because a boot
 replay cannot tell a consumer whether the set it received is whole.
