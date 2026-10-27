@@ -21,6 +21,7 @@ The decision and the three tests it was run through: #89. The scope: #95, and
 
 import asyncio
 import ipaddress
+import re
 import socket
 
 import httpx
@@ -257,6 +258,12 @@ EMBEDDING_A_BLOCKED_ADDRESS = [
     ("ISATAP, u bit set", "2600:1f18::200:5efe:a00:7", "10.0.0.0/8"),
 ]
 
+
+def _refused_in(network: str) -> str:
+    """The refusal naming ``network`` — escaped, since a range's dots are regex wildcards."""
+    return re.escape(f"refused range {network} ")
+
+
 # The same forms carrying a public address, which the guard must let through.
 EMBEDDING_A_PUBLIC_ADDRESS = [
     ("NAT64 well-known prefix", "64:ff9b::5db8:d822"),
@@ -287,7 +294,7 @@ async def test_an_ipv6_address_embedding_a_blocked_one_is_refused(path, label, a
         else ("http://embedded.invalid/", {"embedded.invalid": [address]})
     )
 
-    with pytest.raises(PermanentFetchError, match=f"refused range {refused} ") as caught:
+    with pytest.raises(PermanentFetchError, match=_refused_in(refused)) as caught:
         await _guard(mapping).handle_async_request(httpx.Request("GET", url))
 
     assert caught.value.reason is FailureReason.DESTINATION_REFUSED
@@ -325,7 +332,7 @@ async def test_the_ipv6_address_itself_is_still_checked(label, address, refused)
 
     A public embedded address does not buy an IPv6 address out of its own row.
     """
-    with pytest.raises(PermanentFetchError, match=f"refused range {refused} "):
+    with pytest.raises(PermanentFetchError, match=_refused_in(refused)):
         await _guard({}).handle_async_request(httpx.Request("GET", f"http://[{address}]/"))
 
 
@@ -336,7 +343,7 @@ async def test_an_operator_table_cannot_drop_the_unwrap():
     """
     transport = _guard({}, blocked=blocked_networks(("10.0.0.0/8",)))
 
-    with pytest.raises(PermanentFetchError, match="refused range 10.0.0.0/8 "):
+    with pytest.raises(PermanentFetchError, match=_refused_in("10.0.0.0/8")):
         await transport.handle_async_request(httpx.Request("GET", "http://[64:ff9b::a00:7]/"))
 
 
@@ -349,7 +356,7 @@ async def test_a_redirect_to_an_embedded_literal_is_refused_at_the_hop():
     transport = _guard({"example.gov": ["93.184.216.34"]}, inner=httpx.MockTransport(respond))
 
     async with httpx.AsyncClient(transport=transport, follow_redirects=True) as client:
-        with pytest.raises(PermanentFetchError, match="refused range 127.0.0.0/8 "):
+        with pytest.raises(PermanentFetchError, match=_refused_in("127.0.0.0/8")):
             await client.get("http://example.gov/")
 
 

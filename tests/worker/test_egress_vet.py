@@ -9,6 +9,7 @@ window ``egress.py`` names as its residual).
 """
 
 import ipaddress
+import re
 import socket
 
 import pytest
@@ -66,7 +67,7 @@ async def test_a_mapped_ipv6_literal_is_unmapped_before_the_check():
 
 
 async def test_an_embedding_ipv6_address_is_refused_by_what_it_embeds():
-    with pytest.raises(PermanentFetchError, match="refused range 10.0.0.0/8 "):
+    with pytest.raises(PermanentFetchError, match=re.escape("refused range 10.0.0.0/8 ")):
         await _guard({}).vet("64:ff9b::a00:7", 80)
 
 
