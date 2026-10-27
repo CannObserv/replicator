@@ -73,7 +73,8 @@ problems and the run's process-log entry go upstream as `gregoryfoster/skills` i
 `maintaining-host-disk` (#148) installs the GC from the release pinned in its own `scripts/_pin.sh`,
 so a GC update reaches this host through the submodule refresh, and then the installer, run with
 the owner's approval. Never edit the installed copy: the installer refuses one that has drifted.
-Raise a change with Provisioner. The host side: [INFRASTRUCTURE.md](INFRASTRUCTURE.md#the-hosts-disk-gc-is-the-cohorts-148).
+Raise a change with Provisioner. Nothing flags a pin the refresh moved past the host: compare
+`DISK_GC_VERSION` in `_pin.sh` with `/usr/local/lib/cannobserv/disk-gc/VERSION`. The host side: [INFRASTRUCTURE.md](INFRASTRUCTURE.md#the-hosts-disk-gc-is-the-cohorts-148).
 
 **The table lists what is linked, which is a subset of what is vendored.** The `3fc7b71` → `2e1cf28`
 bump (#41) published skills this repo has not evaluated — `vendoring-openapi-client` is the one with
