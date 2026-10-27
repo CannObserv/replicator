@@ -5,8 +5,7 @@ class production
 posture scheduled
 
 # Largely pre-production (owner, 2026-10-06): any day, all day. Narrow these
-# once a consumer depends on fetch latency. No quiet range: no timer on the
-# host does work a step could overlap, and the bus queues across a restart.
+# once a consumer depends on fetch latency. The bus queues across a restart.
 window Mon 00:00-23:59
 window Tue 00:00-23:59
 window Wed 00:00-23:59
@@ -14,6 +13,11 @@ window Thu 00:00-23:59
 window Fri 00:00-23:59
 window Sat 00:00-23:59
 window Sun 00:00-23:59
+
+# The canonical disk GC (#148): 05:15 plus up to 30 min of RandomizedDelaySec,
+# then up to its 30 min TimeoutStartSec. A reboot inside it cuts the run short,
+# and the timer has no catch-up at boot (Persistent=false): that day's prune is lost.
+quiet 05:15-06:15
 
 # This worker's own unacked commands across the groups it consumes; fails
 # closed. scripts/inflight.py says why it reads this consumer, not the group.

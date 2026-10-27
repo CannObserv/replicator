@@ -22,7 +22,7 @@ tailnet name stays bare, so every broker URL and ACL rule reads naturally.
 
 ## What the ACL allows
 
-Replicator is a broker client, a notifier client and an index client, plus internet egress. **No rule lists
+Replicator is a broker client, a notifier client, an index client and a status client, plus internet egress. **No rule lists
 `tag:replicator` as a `dst` for any service port** — the worker binds nothing.
 
 | Rule | Why |
@@ -30,6 +30,7 @@ Replicator is a broker client, a notifier client and an index client, plus inter
 | `tag:replicator → tag:broker:6379` | The bus |
 | `tag:replicator → tag:notifier:9000` | The `OnFailure=` handler's alerts, and nothing else (#108, notifier#70). `:9000` only: replicator has no dev process to point at notifier's `:9001` |
 | `tag:replicator → tag:index:6333,11434` | SocratiCode's store — Qdrant and Ollama on `co-index` (notifier#57, [INFRASTRUCTURE.md](../INFRASTRUCTURE.md#the-semantic-index-is-co-index--a-store-this-repo-is-a-client-of)). The grant is node-wide, and Ollama unauthenticated; what keeps a command from aiming the worker at either port is the fetch destination guard, which refuses the tailnet's `100.64.0.0/10` on every hop (#95) |
+| `tag:replicator → tag:status:9000` | The host's disk-headroom sensor checking in with co-status (#148, status#67). A host unit, not the worker: [INFRASTRUCTURE.md](../INFRASTRUCTURE.md#the-hosts-disk-gc-is-the-cohorts-148) |
 | The tailnet's `autogroup:member → *:*`, plus an `ssh` block admitting `autogroup:member` as `exedev` or `root` | Admin reach, from your own devices only (watcher#296 D3). No tagged node reaches this one |
 
 Tailscale SSH needs **both** halves. Peer visibility follows `acls` rules, not
@@ -50,7 +51,9 @@ from `broker`, `replicator:22/8000/8001` are filtered. Verified 2026-09-23 for t
 notifier rule: `notifier:9000/health` answers `"environment":"production"` and
 `notifier:9001` times out, which is a filtered port, not a refusal. Verified
 2026-09-24 for the index rule: `index:6333` and `index:11434` accept a TCP
-connection, and `index:22` is filtered — notifier#57 D13's edge is gone.
+connection, and `index:22` is filtered — notifier#57 D13's edge is gone. Verified
+2026-10-27 for the status rule: `status:9000/health` answers `"environment":"production"`,
+and `status:9001` gives no answer.
 
 ## The path to the broker, measured
 

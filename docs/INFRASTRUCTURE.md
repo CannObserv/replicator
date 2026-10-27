@@ -17,6 +17,10 @@ Own exe.dev VM, **`co-replicator`** (`pdx`), tailnet **`replicator`** — off th
 
 The worker binds no port; 8000 is reserved for the API, 8001 is dev. No tailnet rule reaches either; the dev server is `https://co-replicator.exe.xyz:8001/` behind the exe.dev proxy's login gate.
 
+## The host's disk GC is the cohort's (#148)
+
+The root is shared by the worker's temp blobs, the journal, and the dev sessions' tooling trees. It reached 97% on 2026-10-22. Disk hygiene here is Provisioner's canonical GC and headroom sensor (`cannobserv-disk-gc.timer`, `cannobserv-disk-headroom.timer`), installed by the [`maintaining-host-disk`](../skills/maintaining-host-disk/) skill. It's a host install, not a `deploy/` copy: the config and key live in `/etc/cannobserv/disk-gc/`, outside the repo. What was installed, the lines and tiers, and why the two timers went on separately: #148.
+
 ## The broker is `co-broker` — Replicator connects, it does not run one
 
 The change bus runs on `co-broker` (tailnet `broker`), operated from CannObserv/broker (broker#1). Replicator is a **client** — the `replicator` ACL user (broker#2) — and never ships a broker. The `redis-server` here is a binary for tests that spawn their own; its service is masked.

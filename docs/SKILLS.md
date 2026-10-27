@@ -44,6 +44,7 @@ Every override's `SKILL.md` must declare `overrides:` and `override-reason:` in 
 | `enforcing-architecture` | Turns an accepted architecture finding into an executable fitness function |
 | `init-project-fastapi` | Bootstraps a CannObserv FastAPI service (this repo's own foundation) |
 | `init-socraticode` | Installs and indexes SocratiCode semantic code search |
+| `maintaining-host-disk` | Installs and turns on Provisioner's canonical disk GC and headroom sensor on this host (`disk GC`, `disk headroom`) |
 | `managing-skills` | Adds/updates/removes skill submodules and symlinks |
 | `orchestrating-issue-backlog` | Prioritizes an open issue backlog; analyzes conflicts and dependencies |
 | `patching-hosts` | Gated, owner-approved OS patch run against the `.skills/patching-hosts` knob (`patch the host`, `OS updates`) |
@@ -68,6 +69,11 @@ it; run its `references/security.md` leak check first.
 `patching-hosts` (#131) reads the committed knob `.skills/patching-hosts`; its `inflight` and
 `health` commands are this repo's (`scripts/inflight.sh`). Never write into the vendored copy:
 problems and the run's process-log entry go upstream as `gregoryfoster/skills` issues.
+
+`maintaining-host-disk` (#148) installs the GC from the release pinned in its own `scripts/_pin.sh`,
+so a GC update reaches this host through the submodule refresh, and then the installer, run with
+the owner's approval. Never edit the installed copy: the installer refuses one that has drifted.
+Raise a change with Provisioner. The host side: [INFRASTRUCTURE.md](INFRASTRUCTURE.md#the-hosts-disk-gc-is-the-cohorts-148).
 
 **The table lists what is linked, which is a subset of what is vendored.** The `3fc7b71` → `2e1cf28`
 bump (#41) published skills this repo has not evaluated — `vendoring-openapi-client` is the one with
