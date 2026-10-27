@@ -19,7 +19,7 @@ The worker binds no port; 8000 is reserved for the API, 8001 is dev. No tailnet 
 
 ## The host's disk GC is the cohort's (#148)
 
-The root is shared by the worker's temp blobs, the journal, and the dev sessions' tooling trees. It reached 97% on 2026-10-22. Disk hygiene here is Provisioner's canonical GC and headroom sensor (`cannobserv-disk-gc.timer`, `cannobserv-disk-headroom.timer`), installed by the [`maintaining-host-disk`](../skills/maintaining-host-disk/) skill. It's a host install, not a `deploy/` copy: the config and key live in `/etc/cannobserv/disk-gc/`, outside the repo. What was installed, the lines and tiers, and why the two timers went on separately: #148.
+The root is shared by the worker's temp blobs, the journal, and the dev sessions' tooling trees. It reached 97% on 2026-10-22. Disk hygiene here is Provisioner's canonical GC and headroom sensor (`cannobserv-disk-gc.timer`, `cannobserv-disk-headroom.timer`), adopted through the [`maintaining-host-disk`](../skills/maintaining-host-disk/) skill and never built here. It's a host install, not a `deploy/` copy: the config and key live in `/etc/cannobserv/disk-gc/`, outside the repo. The installed `VERSION`, the lines and tiers, and each timer's state are recorded on #148.
 
 ## The broker is `co-broker` — Replicator connects, it does not run one
 
