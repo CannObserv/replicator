@@ -222,10 +222,10 @@ not have failed but silently become decorative, pacing publication rather than o
 #12's default closed that window on the consumer side and #19 supplied the numbers; the
 issuer-side half — Watcher publishing its `Domain` rows onto this stream — shipped with
 [CannObserv/watcher#245](https://github.com/CannObserv/watcher/issues/245), closed 2026-08-06.
-Watcher's limiter module is gone, replaced by its `content.fetch-policy` producer, and its
-four inert rate-limiter columns were dropped in watcher#272. A host with no published policy
-still resolves to the fallback, which is the pre-#19 behaviour and is why the consumer half
-could land first.
+Watcher's limiter module is gone, replaced by its `content.fetch-policy` producer (itself stopped
+at F1), and its four inert rate-limiter columns were dropped in watcher#272. A host with no
+published policy still resolves to the fallback, which is the pre-#19 behaviour and is why the
+consumer half could land first.
 
 ## Reviewing a proposed payload field
 
