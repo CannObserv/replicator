@@ -53,7 +53,7 @@ notifier rule: `notifier:9000/health` answers `"environment":"production"` and
 2026-09-24 for the index rule: `index:6333` and `index:11434` accept a TCP
 connection, and `index:22` is filtered — notifier#57 D13's edge is gone. Verified
 2026-10-27 for the status rule: `status:9000/health` answers `"environment":"production"`,
-and `status:9001` gives no answer.
+and `status:9001` and `status:22` time out (filtered).
 
 ## The path to the broker, measured
 
