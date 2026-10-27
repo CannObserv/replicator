@@ -79,6 +79,10 @@ DEFAULT_BLOCKED_DESTINATIONS: tuple[str, ...] = (
     "240.0.0.0/4",  # reserved
     "::/128",  # unspecified
     "::1/128",  # loopback
+    # Local-use NAT64 — RFC 8215. A row, not an unwrap: where the IPv4 address sits
+    # depends on the prefix length the site chose (RFC 6052 §2.2). Every fixed-position
+    # form is unwrapped in _embedded instead (#156).
+    "64:ff9b:1::/48",
     "fc00::/7",  # unique local
     "fe80::/10",  # link-local
     "ff00::/8",  # multicast
@@ -160,10 +164,13 @@ class DestinationGuard:
         """
         addresses = await self._addresses(host, port)
         for address in addresses:
-            network = _containing(address, self._blocked)
-            if network is not None:
+            for checked in (address, *_embedded(address)):
+                network = _containing(checked, self._blocked)
+                if network is None:
+                    continue
+                spelled = address if checked == address else f"{address} (embedding {checked})"
                 raise PermanentFetchError(
-                    f"{label or f'{host}:{port}'} resolves to {address}, inside the refused "
+                    f"{label or f'{host}:{port}'} resolves to {spelled}, inside the refused "
                     f"range {network} — Replicator does not fetch its own host, its private "
                     f"network, or the tailnet",
                     reason=FailureReason.DESTINATION_REFUSED,
@@ -402,12 +409,60 @@ def _address(value: str) -> Address:
 
     An IPv4-mapped IPv6 address (``::ffff:127.0.0.1``) is the same destination
     spelled differently, and the ``/8`` above would not hold it — so it is
-    unmapped here, once, for both the literal and the resolved path.
+    unmapped here, once, for both the literal and the resolved path. The rest of its
+    class is checked, not unmapped: :func:`_embedded`.
     """
     parsed = ipaddress.ip_address(value)
     if isinstance(parsed, ipaddress.IPv6Address) and parsed.ipv4_mapped is not None:
         return parsed.ipv4_mapped
     return parsed
+
+
+# The IPv6 forms that carry an IPv4 address in their low 32 bits under a fixed prefix.
+_LOW_32_PREFIXES = (
+    ipaddress.IPv6Network("64:ff9b::/96"),  # NAT64 well-known prefix — RFC 6052 §2.1
+    ipaddress.IPv6Network("::ffff:0:0:0/96"),  # SIIT IPv4-translated — RFC 2765 §2.1
+    ipaddress.IPv6Network("::/96"),  # IPv4-compatible, deprecated — RFC 4291 §2.5.5.1
+)
+# ISATAP's interface id, ``0000:5efe`` or ``0200:5efe`` (u bit), under any prefix — RFC 5214 §6.1.
+_ISATAP_IID, _U_BIT = 0x00005EFE, 0x02000000
+
+
+def _embedded(address: Address) -> tuple[ipaddress.IPv4Address, ...]:
+    """The IPv4 addresses ``address`` carries at a fixed position, to check beside it (#156).
+
+    ``_containing`` compares versions, so ``64:ff9b::a00:7`` is never tested against
+    ``10.0.0.0/8`` — yet a NAT64 translator delivers it to ``10.0.0.7``. Each form here
+    puts its IPv4 address at a position fixed by its RFC; local-use NAT64 does not, and
+    is a row in :data:`DEFAULT_BLOCKED_DESTINATIONS` instead.
+
+    **Checked, never substituted.** :meth:`DestinationGuard.vet` returns the address
+    itself and the SOCKS guard dials it: as IPv4, a public NAT64 destination is
+    unreachable from an IPv6-only host, and 6to4's embedded address is the site's
+    relay router, not the host behind it. The mapped form *is* substituted, in
+    :func:`_address`, because it names the same destination.
+
+    **An unwrap rather than a row per prefix**, because ``REPLICATOR_BLOCKED_DESTINATIONS``
+    replaces the table: a host that sets it keeps this check, and a public NAT64 or
+    6to4 destination stays reachable.
+
+    Not covered: an operator-chosen prefix — a NAT64 network-specific prefix, 6rd, IVI,
+    MAP — whose position cannot be known without the prefix.
+    """
+    if not isinstance(address, ipaddress.IPv6Address):
+        return ()
+    value = int(address)
+    low_32 = ipaddress.IPv4Address(value & 0xFFFFFFFF)
+    found: list[ipaddress.IPv4Address] = []
+    if any(address in prefix for prefix in _LOW_32_PREFIXES):
+        found.append(low_32)
+    if address.sixtofour is not None:  # bits 16–48 — RFC 3056
+        found.append(address.sixtofour)
+    if address.teredo is not None:  # server, and the client deobfuscated — RFC 4380 §4
+        found.extend(address.teredo)
+    if (value >> 32) & 0xFFFFFFFF & ~_U_BIT == _ISATAP_IID:
+        found.append(low_32)
+    return tuple(found)
 
 
 def _containing(address: Address, blocked: tuple[Network, ...]) -> Network | None:

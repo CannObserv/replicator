@@ -94,7 +94,7 @@ as fetch spells them wherever the remedy is fetch's.
 |---|---|---|
 | A viewport side outside `1..4096`; an unknown `wait.kind`; a `selector` wait with no selector, or one the browser does not parse as CSS; a `delay` that is not a finite number over zero, or is over the wait bound | `invalid_request_options` | Fix the command |
 | `load`, or the wait condition, unmet within the wait bound | `wait_timeout` | Re-issue with another condition, under a fresh `command_id`. Terminal because an unmet condition is usually the page's, and each retry is a whole render |
-| The URL, a redirect hop, or **any** connection the page opened, is to loopback, RFC 1918, link-local or the tailnet. The render is abandoned at the first one | `destination_refused` | None: the page cannot be captured here. A fetch of it is refused too |
+| The URL, a redirect hop, or **any** connection the page opened, is to loopback, RFC 1918, link-local or the tailnet, or to an IPv6 address embedding one (#156). The render is abandoned at the first one | `destination_refused` | None: the page cannot be captured here. A fetch of it is refused too |
 | The URL is not `http(s)`, or names no host; or the browser refuses the navigation outright: a port it blocks (`:6000`, `:25`), a redirect to a scheme it won't open | `not_fetchable` | Fix the URL |
 | The navigation's final response is a non-2xx other than those retried below; `status_code` says which | `http_status` | As for a fetch's `http_status` |
 | An image taller than 32768 px or wider than 4096 px (a `full_page` grows with the page's overflow), or a PNG over `REPLICATOR_MAX_BLOB_BYTES` | `too_large` | A smaller viewport, or `full_page: false`. **Refused, never clipped:** a clipped image could not be told from a whole one |
