@@ -21,7 +21,7 @@ DLQ for being paced.
 
 **It also inherits the ceiling's granularity, and parking alone is therefore not a sufficient
 mechanism.** A parked message returns via `claim_stale`, so the finest per-host spacing it can
-express is `REPLICATOR_CLAIM_MIN_IDLE_MS` — **60 s by default**. Watcher's baseline today is
+express is `REPLICATOR_CLAIM_MIN_IDLE_MS` — **60 s by default**. Watcher's baseline was
 `DEFAULT_MIN_INTERVAL = 1.0` s (`watcher/src/core/rate_limiter.py` as it stood then; the
 file was deleted with the cutover), backing off to `BACKOFF_MAX_INTERVAL = 60.0` s. So parking matches the *backoff* case almost exactly and
 misses the *normal* case by 60×: implemented naively, every host would be paced at 1/60th of
@@ -63,15 +63,16 @@ Four consumer-side rules that came out of building it, each one a way to be wron
   raises.
 - **Arrival order is not publication order.** The producer republishes its whole set
   periodically; a republish assembled from a snapshot taken before a change that already
-  shipped would revert it, silently and in the loosening direction. After F1 the producer is
+  shipped would revert it, silently and in the loosening direction. Since F1 the producer is
   Archiver, whose outbox can also publish a retried row behind the next one. The map holds the
   last applied **frame** per host, tombstones included, and orders the next one through
   co-core's `fetch_policy_supersedes` (#136):
   - **With a `generation`:** a higher one applies. An equal one is a republish repeating its
     delta, so it is skipped, with no log line.
-  - **Without one** (all of Watcher's frames): the rule from before #136. The frame applies on
-    `>=` against the held `occurred_at`, `>=` rather than `>` so a full set stamped with one
-    instant does not lose every host after the first.
+  - **Without one** (Watcher's frames, plus any Archiver frame built without a `generation`):
+    the rule from before #136. The frame applies on `>=` against the held `occurred_at`, `>=`
+    rather than `>` so a full set stamped with one instant does not lose every host after the
+    first.
   - **Mixed, a ratchet:** an ordered frame claims an unordered slot whatever the two stamps
     say, since the producers' clocks are not comparable. An unordered frame never overwrites an
     ordered slot.
@@ -169,12 +170,13 @@ the last warning has rotated out while the condition still holds. Read
 non-zero is what says to run the warning grep unwindowed (no `--since`) to find out which hosts.
 
 **Two `ignoring a fetch policy` lines name an ordering refusal (#136), and an equal-generation
-skip names none** — that skip is every republish after F1. `older than the one already applied`
+skip names none** — that skip is every Archiver republish. `older than the one already applied`
 carries `generation` and `held_generation` when an outbox reorder was the reason, and the stamp
 pair when it was an unordered frame's `occurred_at`. `without a generation for a host that holds
-one` is a Watcher still publishing after F1, or an Archiver frame built without its
-`generation`. Either way the ratchet drops the frame, which `FetchPolicyState`'s docstring calls
-silent, and this line is what keeps it from being silent.
+one` is a Watcher still publishing, on the grant it holds until
+[CannObserv/broker#95](https://github.com/CannObserv/broker/issues/95) revokes it, or an
+Archiver frame built without its `generation`. Either way the ratchet drops the frame, which
+`FetchPolicyState`'s docstring calls silent, and this line is what keeps it from being silent.
 
 ## Escalation on 429 and 503
 
@@ -231,4 +233,4 @@ silent, and this line is what keeps it from being silent.
 
 ## Variables
 
-- `REPLICATOR_MIN_HOST_INTERVAL_SECONDS` — minimum spacing for a host with **no explicit policy**; default `1.0`. Since #19 this is the *fallback*, not the rule: the per-host numbers arrive on `content.fetch-policy` and an unknown, revoked, or not-yet-replayed host resolves here — never to unlimited, because a boot replay cannot tell a consumer whether the set it received is whole. 1.0 is Watcher's own `DEFAULT_MIN_INTERVAL`, chosen because it invents nothing. A wait ≤ `REPLICATOR_READ_BLOCK_MS` is slept through in the handler; a longer one raises `TransientFetchError` and parks the command, so the effective floor on a *parked* wait is `REPLICATOR_CLAIM_MIN_IDLE_MS`. **`0` no longer disables pacing outright** (#19 narrowed it): it is the fallback for unpublished hosts only, and a host with a policy is still paced by it — letting an env var veto a published value would invert the ownership split the charter settles. Capped at `3600`: past an hour the command parks and re-parks without ever dead-lettering (transient failures are exempt from the delivery ceiling) while the issuer's reaper concludes loss, so a fat-fingered extra zero should fail at startup rather than read as healthy. **It cannot be validated against what a producer might publish** — a published interval has no upper bound — so the strictness contract is enforced the only place it is knowable: a WARNING per host at apply time when a real policy turns out stricter than this number
+- `REPLICATOR_MIN_HOST_INTERVAL_SECONDS` — minimum spacing for a host with **no explicit policy**; default `1.0`. Since #19 this is the *fallback*, not the rule: the per-host numbers arrive on `content.fetch-policy` and an unknown, revoked, or not-yet-replayed host resolves here — never to unlimited, because a boot replay cannot tell a consumer whether the set it received is whole. 1.0 is copied from Watcher's `DEFAULT_MIN_INTERVAL`, chosen because it invents nothing. A wait ≤ `REPLICATOR_READ_BLOCK_MS` is slept through in the handler; a longer one raises `TransientFetchError` and parks the command, so the effective floor on a *parked* wait is `REPLICATOR_CLAIM_MIN_IDLE_MS`. **`0` no longer disables pacing outright** (#19 narrowed it): it is the fallback for unpublished hosts only, and a host with a policy is still paced by it — letting an env var veto a published value would invert the ownership split the charter settles. Capped at `3600`: past an hour the command parks and re-parks without ever dead-lettering (transient failures are exempt from the delivery ceiling) while the issuer's reaper concludes loss, so a fat-fingered extra zero should fail at startup rather than read as healthy. **It cannot be validated against what a producer might publish** — a published interval has no upper bound — so the strictness contract is enforced the only place it is knowable: a WARNING per host at apply time when a real policy turns out stricter than this number

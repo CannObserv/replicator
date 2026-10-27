@@ -9,21 +9,23 @@ the producer publishes a `FetchPolicyState` per host, every worker replays the
 stream from `0-0` at boot and tails it thereafter, and the map that results is
 what `HostPacer` consults.
 
-**The producer moves at the headless-Watcher flip F1.** Watcher publishes until
-then, from its `Domain` table, with no `generation`; Archiver publishes after,
-through an outbox that can reorder a retried row behind the next one, so every
-frame it sends carries a per-host `generation` (cannobserv#566, #136). Nothing
-here branches on which producer sent a frame — only on whether it is ordered:
+**The producer is Archiver, since the headless-Watcher flip F1.** Watcher
+published before it, from its `Domain` table, with no `generation`; Archiver
+publishes through an outbox that can reorder a retried row behind the next one,
+so it stamps each frame with a per-host `generation` (cannobserv#566, #136).
+Nothing here branches on which producer sent a frame — only on whether it is
+ordered:
 
 * **Ordered** frames apply iff co-core's `fetch_policy_supersedes` says so: a
   higher `generation` than the held frame's. Equal is a republish repeating its
   delta, and skipped.
-* **Unordered** frames keep the rule this map had before #136: arrival order,
+* **Unordered** frames — Watcher's, or an Archiver frame built without its
+  `generation` — keep the rule this map had before #136: arrival order,
   guarded by `occurred_at` (`>=`) against a stale republish.
 * **Mixed, a ratchet.** An ordered frame claims a slot holding an unordered one,
   whatever the two stamps say — the producers' clocks are not comparable. An
-  unordered frame never overwrites an ordered slot. A replay across F1 holds
-  Watcher's frames ahead of Archiver's, so the two rules agree on it.
+  unordered frame never overwrites an ordered slot. A replay that still reaches
+  Watcher's frames reads them ahead of Archiver's, so the two rules agree on it.
 
 Two pieces, split because only one of them needs a broker:
 
@@ -238,8 +240,8 @@ class FetchPolicyMap:
         than re-derived. What it leaves out is the ``occurred_at`` guard this map
         applied before ``generation`` existed: between two unordered frames it
         answers "stream order", and the map still drops an unordered frame
-        stamped older than the one it holds, so Watcher's frames behave exactly
-        as they did before #136. Once either frame is ordered, the stamp is not
+        stamped older than the one it holds, so unordered frames behave exactly
+        as Watcher's did before #136. Once either frame is ordered, the stamp is not
         consulted — an outbox retry can stamp row N+1 earlier than row N.
 
         ``>=`` rather than ``>`` on the stamp: a producer is free to stamp an
@@ -359,9 +361,9 @@ def _log_out_of_order(payload: FetchPolicyState, held: FetchPolicyState) -> None
     it.
     """
     if payload.generation is None:
-        # After F1 this is a Watcher that did not stop, or an Archiver frame built
-        # without its generation. FetchPolicyState's docstring calls both drops
-        # silent; this line is what makes them not.
+        # A Watcher still publishing (its grant stands until broker#95), or an
+        # Archiver frame built without its generation. FetchPolicyState's
+        # docstring calls both drops silent; this line is what makes them not.
         logger.info(
             "ignoring a fetch policy without a generation for a host that holds one",
             extra={

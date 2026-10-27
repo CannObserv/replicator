@@ -66,8 +66,8 @@ mechanism/policy split is what finishes the job.
 | 3 — expressible without domain vocabulary? | **Yes.** A hostname is a network fact, not an InfoSource. |
 
 Test 2 fires alone, but a naive reading of it — "politeness is Replicator's, done" — would
-move the *numbers* here too, and the numbers are operator policy: in Watcher's `Domain` table
-until the flip F1, in Archiver after it, which owns all operator intent under the cohort charter.
+move the *numbers* here too, and the numbers are operator policy: in Archiver, which owns all
+operator intent under the cohort charter.
 The resolution is the split: Replicator **enforces**, the issuer **decides**, and the decision
 travels over the bus (see **The policy stream**).
 
@@ -168,9 +168,9 @@ because it has no `schema_version`, no co-core model, and it couples Replicator 
 another service writes instead of to a payload contract. The stream keeps the same validation
 posture as every other wire input.
 
-**Producer:** Watcher, from its `Domain` table, until the headless-Watcher flip F1
-([CannObserv/watcher#374](https://github.com/CannObserv/watcher/issues/374)); Archiver after
-it. The payload is unchanged but for an optional `generation`, which Archiver sets because its
+**Producer:** Archiver, since the headless-Watcher flip F1
+([CannObserv/watcher#374](https://github.com/CannObserv/watcher/issues/374)); Watcher published
+from its `Domain` table before it. The payload is unchanged but for an optional `generation`, which Archiver sets because its
 outbox can reorder frames ([CannObserv/cannobserv#566](https://github.com/CannObserv/cannobserv/issues/566)).
 Replicator applies it through co-core's `fetch_policy_supersedes`; the rule is
 [POLITENESS.md](../POLITENESS.md#applying-a-policy)'s and the code of record
@@ -180,7 +180,7 @@ for the indirection.
 
 ### The fallback default (was the interim, #12 → #19)
 
-`REPLICATOR_MIN_HOST_INTERVAL_SECONDS`, default **1.0 s** — Watcher's own `DEFAULT_MIN_INTERVAL`,
+`REPLICATOR_MIN_HOST_INTERVAL_SECONDS`, default **1.0 s** — copied from Watcher's `DEFAULT_MIN_INTERVAL`,
 chosen precisely because it invents nothing. #12 shipped it as one number for every origin, standing
 in for a stream that did not exist; #19 gave it its permanent job as what a host with **no explicit
 policy** resolves to — unknown, revoked, or not yet replayed — and never "unlimited", because a boot
@@ -406,5 +406,5 @@ files passes forever while enforcing nothing — worse than no test, because thi
 - [CannObserv/cannobserv#285](https://github.com/CannObserv/cannobserv/issues/285) — the policy stream contract (co-core v0.7.7)
 - [CannObserv/watcher#241](https://github.com/CannObserv/watcher/issues/241) — Phase 4 issuer
 - [CannObserv/watcher#245](https://github.com/CannObserv/watcher/issues/245) — the politeness gap at cutover
-- [CannObserv/watcher#374](https://github.com/CannObserv/watcher/issues/374) — F1, the policy stream's producer moves to Archiver
+- [CannObserv/watcher#374](https://github.com/CannObserv/watcher/issues/374) — F1, the policy stream's producer moved to Archiver
 - [CannObserv/archiver#72](https://github.com/CannObserv/archiver/issues/72) — cluster integration strategy
