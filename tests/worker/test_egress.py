@@ -237,6 +237,122 @@ async def test_an_ipv4_mapped_address_is_the_address_it_maps(label, url, mapping
         await transport.handle_async_request(httpx.Request("GET", url))
 
 
+# --- IPv6 forms that embed an IPv4 address (#156) ----------------------------
+#
+# The mapped form above is one of a class. Each row is an IPv6 address carrying a
+# blocked IPv4 address, and the range the refusal must name — the IPv4 one, so a
+# refusal for some other reason (a future IPv6 row, say) fails the test rather
+# than passing it.
+EMBEDDING_A_BLOCKED_ADDRESS = [
+    ("NAT64 well-known prefix, RFC 6052", "64:ff9b::a00:7", "10.0.0.0/8"),
+    ("NAT64 well-known prefix, loopback", "64:ff9b::7f00:1", "127.0.0.0/8"),
+    ("local-use NAT64, RFC 8215", "64:ff9b:1::a00:7", "64:ff9b:1::/48"),
+    ("IPv4-compatible, RFC 4291", "::7f00:1", "127.0.0.0/8"),
+    ("SIIT IPv4-translated, RFC 2765", "::ffff:0:a00:7", "10.0.0.0/8"),
+    ("6to4, RFC 3056", "2002:7f00:1::", "127.0.0.0/8"),
+    ("6to4, the metadata address", "2002:a9fe:a9fe::1", "169.254.0.0/16"),
+    ("Teredo client, RFC 4380", "2001:0:4136:e378:8000:ffff:f5ff:fff8", "10.0.0.0/8"),
+    ("Teredo server", "2001:0:a00:7:8000:ffff:a247:27dd", "10.0.0.0/8"),
+    ("ISATAP, RFC 5214", "2600:1f18::5efe:a00:7", "10.0.0.0/8"),
+    ("ISATAP, u bit set", "2600:1f18::200:5efe:a00:7", "10.0.0.0/8"),
+]
+
+# The same forms carrying a public address, which the guard must let through.
+EMBEDDING_A_PUBLIC_ADDRESS = [
+    ("NAT64 well-known prefix", "64:ff9b::5db8:d822"),
+    ("IPv4-compatible", "::5db8:d822"),
+    ("SIIT IPv4-translated", "::ffff:0:5db8:d822"),
+    ("6to4", "2002:5db8:d822::1"),
+    ("Teredo", "2001:0:4136:e378:8000:ffff:a247:27dd"),
+    ("ISATAP", "2600:1f18::200:5efe:5db8:d822"),
+]
+
+
+@pytest.mark.parametrize("path", ["literal", "resolved"])
+@pytest.mark.parametrize(
+    ("label", "address", "refused"),
+    EMBEDDING_A_BLOCKED_ADDRESS,
+    ids=[row[0] for row in EMBEDDING_A_BLOCKED_ADDRESS],
+)
+async def test_an_ipv6_address_embedding_a_blocked_one_is_refused(path, label, address, refused):
+    """An IPv6 address carrying ``10.0.0.7`` reaches ``10.0.0.7`` through a translator.
+
+    ``_containing`` compares versions, so none of these is ever tested against the
+    IPv4 row holding what it embeds. Latent on this host — no global IPv6 route —
+    and a bypass of #89/#95 on one with NAT64/DNS64 or a 6to4 relay (#156).
+    """
+    url, mapping = (
+        (f"http://[{address}]:9999/", {})
+        if path == "literal"
+        else ("http://embedded.invalid/", {"embedded.invalid": [address]})
+    )
+
+    with pytest.raises(PermanentFetchError, match=f"refused range {refused} ") as caught:
+        await _guard(mapping).handle_async_request(httpx.Request("GET", url))
+
+    assert caught.value.reason is FailureReason.DESTINATION_REFUSED
+    assert address in str(caught.value), label
+
+
+@pytest.mark.parametrize("path", ["literal", "resolved"])
+@pytest.mark.parametrize(
+    ("label", "address"), EMBEDDING_A_PUBLIC_ADDRESS, ids=[r[0] for r in EMBEDDING_A_PUBLIC_ADDRESS]
+)
+async def test_an_ipv6_address_embedding_a_public_one_passes(path, label, address):
+    """Unwrapping refuses by what is embedded, so a public NAT64 or 6to4 destination stays
+    reachable — the issue's reason for preferring it to a table row per prefix."""
+    url, mapping = (
+        (f"http://[{address}]/", {})
+        if path == "literal"
+        else ("http://embedded.example/", {"embedded.example": [address]})
+    )
+    inner = httpx.MockTransport(lambda request: httpx.Response(200))
+
+    response = await _guard(mapping, inner=inner).handle_async_request(httpx.Request("GET", url))
+
+    assert response.status_code == 200, label
+
+
+@pytest.mark.parametrize(
+    ("label", "address", "refused"),
+    [
+        ("local-use NAT64 embedding a public address", "64:ff9b:1::5db8:d822", "64:ff9b:1::/48"),
+        ("ISATAP on a link-local prefix", "fe80::5efe:5db8:d822", "fe80::/10"),
+    ],
+)
+async def test_the_ipv6_address_itself_is_still_checked(label, address, refused):
+    """Unwrapping adds a check; it does not replace the IPv6 one.
+
+    A public embedded address does not buy an IPv6 address out of its own row.
+    """
+    with pytest.raises(PermanentFetchError, match=f"refused range {refused} "):
+        await _guard({}).handle_async_request(httpx.Request("GET", f"http://[{address}]/"))
+
+
+async def test_an_operator_table_cannot_drop_the_unwrap():
+    """``REPLICATOR_BLOCKED_DESTINATIONS`` *replaces* the table, so an IPv6 row per
+    translator prefix would vanish from any host that sets it. The unwrap holds whatever
+    the table says: an operator naming only ``10.0.0.0/8`` still refuses its NAT64 spelling.
+    """
+    transport = _guard({}, blocked=blocked_networks(("10.0.0.0/8",)))
+
+    with pytest.raises(PermanentFetchError, match="refused range 10.0.0.0/8 "):
+        await transport.handle_async_request(httpx.Request("GET", "http://[64:ff9b::a00:7]/"))
+
+
+async def test_a_redirect_to_an_embedded_literal_is_refused_at_the_hop():
+    """The redirect hop is where an issuer's public URL becomes an IPv6 literal."""
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": "http://[64:ff9b::7f00:1]:9999/"})
+
+    transport = _guard({"example.gov": ["93.184.216.34"]}, inner=httpx.MockTransport(respond))
+
+    async with httpx.AsyncClient(transport=transport, follow_redirects=True) as client:
+        with pytest.raises(PermanentFetchError, match="refused range 127.0.0.0/8 "):
+            await client.get("http://example.gov/")
+
+
 async def test_the_default_resolver_is_the_one_the_worker_runs_with():
     """The production path, exercised rather than assumed.
 

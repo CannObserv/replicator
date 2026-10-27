@@ -65,6 +65,22 @@ async def test_a_mapped_ipv6_literal_is_unmapped_before_the_check():
         await _guard({}).vet("::ffff:127.0.0.1", 80)
 
 
+async def test_an_embedding_ipv6_address_is_refused_by_what_it_embeds():
+    with pytest.raises(PermanentFetchError, match="refused range 10.0.0.0/8 "):
+        await _guard({}).vet("64:ff9b::a00:7", 80)
+
+
+async def test_an_embedding_ipv6_address_is_returned_as_itself_not_unwrapped():
+    """The SOCKS guard dials what ``vet`` returns (#156).
+
+    The embedded address is checked, never substituted. Dialled as IPv4,
+    ``64:ff9b::5db8:d822`` would be unreachable from an IPv6-only NAT64 host, and a
+    6to4 address would reach the site's relay router instead of the host behind it.
+    """
+    for address in ("64:ff9b::5db8:d822", "2002:5db8:d822::1"):
+        assert await _guard({}).vet(address, 443) == [ipaddress.ip_address(address)]
+
+
 async def test_an_unresolvable_name_is_transient():
     with pytest.raises(TransientFetchError):
         await _guard({}).vet("nowhere.invalid", 80)

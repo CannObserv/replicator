@@ -117,6 +117,29 @@ async def test_a_refused_literal_is_refused_without_resolving(upstream):
     assert guard.refusal is not None
 
 
+@pytest.mark.parametrize(
+    ("atyp", "address", "mapping"),
+    [
+        (4, socket.inet_pton(socket.AF_INET6, "64:ff9b::a00:7"), {}),
+        (3, _name("six-to-four.test"), {"six-to-four.test": ["2002:a00:7::"]}),
+    ],
+    ids=["NAT64 literal", "name resolving to 6to4"],
+)
+async def test_an_ipv6_address_embedding_a_refused_one_opens_nothing(
+    upstream, atyp, address, mapping
+):
+    """A page's connection to ``10.0.0.7`` spelled as IPv6 is refused like the plain one (#156)."""
+    up_port, accepted = upstream
+    async with SocksGuard(_destination_guard(mapping)) as guard:
+        rep, _, writer = await _socks_connect(guard.port, atyp, address, up_port)
+        writer.close()
+
+    assert rep == 2
+    assert accepted == []
+    assert guard.refusal is not None
+    assert "refused range 10.0.0.0/8 " in str(guard.refusal)
+
+
 async def test_the_first_refusal_is_the_one_kept(upstream):
     up_port, _ = upstream
     mapping = {"a.test": ["10.0.0.1"], "b.test": ["10.0.0.2"]}
