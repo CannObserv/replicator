@@ -131,13 +131,22 @@ def test_every_setup_uv_step_prunes_the_cache_it_saves():
     assert not bad, f"setup-uv steps without `prune-cache: true`: {bad}"
 
 
-def _wheelhouse_packages_without_a_wheel(lock: Path) -> list[str]:
+# What `[tool.uv] find-links` resolves: the packages the prune must keep out of the cache.
+WHEELHOUSE_PACKAGES = {"co-core", "co-core-aio", "co-core-sync"}
+
+
+def _wheelhouse_packages(lock: Path) -> list[dict]:
     packages = tomllib.loads(lock.read_text(encoding="utf-8"))["package"]
-    return [
-        p["name"]
-        for p in packages
-        if p.get("source", {}).get("registry") == ".wheelhouse" and not p.get("wheels")
-    ]
+    return [p for p in packages if p.get("source", {}).get("registry") == ".wheelhouse"]
+
+
+def _wheelhouse_packages_without_a_wheel(lock: Path) -> list[str]:
+    return [p["name"] for p in _wheelhouse_packages(lock) if not p.get("wheels")]
+
+
+def test_the_wheel_check_reads_the_wheelhouse_packages():
+    """A renamed find-links would leave the check below reading nothing, green."""
+    assert {p["name"] for p in _wheelhouse_packages(LOCK)} == WHEELHOUSE_PACKAGES
 
 
 def test_every_wheelhouse_package_is_locked_to_a_wheel():
