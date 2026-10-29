@@ -123,12 +123,41 @@ def test_pin_rule_rejects_a_tag_and_accepts_a_local_action():
     assert _is_pinned("actions/checkout@" + "0" * 40, " # v7.0.1")
 
 
+def _setup_uv_steps(workflows: list[Path]) -> list[tuple[str, dict]]:
+    """(file, step) for every setup-uv step in the given workflows."""
+    return [
+        (path.name, step)
+        for path in workflows
+        for job in yaml.safe_load(path.read_text(encoding="utf-8")).get("jobs", {}).values()
+        for step in job.get("steps", [])
+        if step.get("uses", "").split("@")[0] == "astral-sh/setup-uv"
+    ]
+
+
+def _unpruned_setup_uv_steps(workflows: list[Path]) -> list[tuple[str, dict]]:
+    return [
+        (name, step.get("with", {}))
+        for name, step in _setup_uv_steps(workflows)
+        if step.get("with", {}).get("prune-cache") is not True
+    ]
+
+
 def test_every_setup_uv_step_prunes_the_cache_it_saves():
-    """co-core's private source stays out of a public repo's Actions cache."""
-    steps = [s for s in _steps() if s.get("uses", "").split("@")[0] == "astral-sh/setup-uv"]
-    assert steps, "no setup-uv step found in ci.yml: the derivation broke"
-    bad = [s.get("with", {}) for s in steps if s.get("with", {}).get("prune-cache") is not True]
+    """co-core's private source stays out of a public repo's Actions cache, from
+    any workflow: the generated one included, since a leak doesn't care who
+    rendered the file."""
+    workflows = sorted(WORKFLOWS.glob("*.y*ml"))
+    assert _setup_uv_steps(workflows), "no setup-uv step found: the derivation broke"
+    bad = _unpruned_setup_uv_steps(workflows)
     assert not bad, f"setup-uv steps without `prune-cache: true`: {bad}"
+
+
+def test_prune_check_reads_a_second_workflow(tmp_path):
+    other = tmp_path / "other.yml"
+    other.write_text(
+        "jobs:\n  build:\n    steps:\n      - uses: astral-sh/setup-uv@" + "0" * 40 + " # v10.3.3\n"
+    )
+    assert _unpruned_setup_uv_steps([CI, other]) == [("other.yml", {})]
 
 
 # What `[tool.uv] find-links` resolves: the packages the prune must keep out of the cache.
