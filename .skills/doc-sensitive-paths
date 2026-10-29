@@ -35,6 +35,10 @@ deploy/
 # CI gates, including the charter enforcement in tests/test_boundaries.py.
 .github/workflows/
 
+# Which ecosystems Dependabot proposes, and what it excludes (docs/DEPLOYMENT.md,
+# "Dependabot proposes the action bumps"). Enabling uv edits only this file (#76).
+.github/dependabot.yml
+
 # Normative contracts — linked from sibling repos, so drift here is cross-repo.
 #
 # The rest of docs/ is deliberately absent, and that is a trade-off rather than
