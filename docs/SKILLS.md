@@ -355,7 +355,7 @@ existed to catch. `actions/checkout` does not fetch submodules by default, so th
 the key that makes the test runnable at all:
 
 ```yaml
-- uses: actions/checkout@v5
+- uses: actions/checkout@<sha> # SHA-pinned in ci.yml; Dependabot moves it (#76)
   with:
     submodules: true
 ```

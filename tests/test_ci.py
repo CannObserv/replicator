@@ -27,9 +27,9 @@ WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.y
 def _concurrency() -> dict[str, str]:
     """The top-level ``concurrency:`` mapping, values left uninterpolated.
 
-    Parsed as text rather than YAML: pyyaml is not a declared dependency, and
-    ``tests/test_deploy.py`` sets the precedent for asserting against a config
-    file the same way the tool that reads it would see the raw string.
+    Parsed as text rather than YAML: ``tests/test_deploy.py`` sets the
+    precedent for asserting against a config file the same way the tool that
+    reads it would see the raw string.
     """
     block = re.search(
         r"^concurrency:\n((?:[ \t]+\S.*\n)+)",

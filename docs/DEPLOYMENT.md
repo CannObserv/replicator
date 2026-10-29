@@ -80,6 +80,8 @@ Auth is ADC, with one substitution: on the VM the sync uses the read-only key na
 
 **Sync the wheelhouse before concluding a version is unavailable.** The #77 review reported 0.13.1 "not mirrored" from a local `ls` while the private index already carried it; the mirror had simply not been synced, and what silently fixed it was `replicator.service`'s own non-fatal `ExecStartPre` running `sync_wheelhouse.py` on the next restart. A local listing is a cache, not the index.
 
+**Lock from a wheels-only wheelhouse.** With the `.tar.gz` files in `./.wheelhouse`, `uv lock` writes `sdist = { path = … }` into the three co-core entries; without them it doesn't. `uv lock --check` passes either way, so the lines are churn in an unrelated diff. Lock in a worktree whose `.wheelhouse/` links `*.whl` only, as #160 and #76 did. Either shape keeps the CI cache prune's premise, that every co-core package is locked to a wheel (`tests/ci/test_workflow_pins.py`).
+
 ### The checkout guard — the service refuses to start off `main` (#37), or off unpushed commits (#48)
 
 "Code committed to main is the deployed code" was an invariant AGENTS.md asserted and nothing enforced. On 2026-08-14, during #29, a restart to verify a credential change deployed branch `29-replicate-refusals` as build `7d6f195` while `main` was at `b69771a`. The blast radius was small — the replicate loop had nothing provisioned and refused everything — but the service ran unmerged code, and it was noticed only because someone read the build stamp carefully. That is the point: a branch deploy stamps `BUILD_ID` with the branch commit, so the journal *looks* correct while describing code that is on no shared branch.
@@ -133,6 +135,12 @@ keys expired on `REPLICATOR_DEDUPE_TTL_SECONDS` and nothing reads them. Why
 losing any `replicator:cmd:*` key costs a re-fetch rather than correctness,
 including an empty namespace after a flush:
 [CONVENTIONS.md](CONVENTIONS.md#the-replicatorcmd-keys).
+
+### Dependabot proposes the action bumps (#76)
+
+`.github/dependabot.yml` proposes **action bumps only**, weekly. Every `uses:` in `ci.yml` pins a commit SHA with a `# vX.Y.Z` comment, and Dependabot moves both. `context-cadence.yml` is excluded, because the installer re-renders it (gregoryfoster/skills#373). `uv` is out until Dependabot's updater can reach the wheelhouse (CannObserv/cannobserv#554). `tests/ci/` pins the config, the SHA pins, `runs-on: ubuntu-24.04`, `prune-cache: true` and `uv sync --locked`.
+
+A bot PR touches only `.github/`, so it needs **no deploy and no restart**. Merging it on GitHub puts `origin/main` ahead of this checkout: `git pull --ff-only` before the next local commit. If a bot PR is red at the WIF auth step, suspect the Dependabot run's OIDC token before the bump (the verdict table on #76). Read the action's release notes, not the diff: setup-uv v9 flipped `prune-cache` silently. A bump that changes behaviour takes fix commits pushed onto its branch.
 
 ## Environment Variables
 

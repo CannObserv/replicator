@@ -26,19 +26,22 @@ concurrency:
 jobs:
   lint:
     name: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # WIF: mint an OIDC token for google-github-actions/auth to impersonate the
     # read-only co-pypi-reader SA and pull the cannobserv wheelhouse.
     permissions:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           enable-cache: true
+          # Stated, not defaulted: v9 flipped it to false, and the cache holds
+          # co-core from the private wheelhouse in a public repo (#76).
+          prune-cache: true
 
       - name: Install Python
         run: uv python install 3.12
@@ -58,13 +61,14 @@ jobs:
           WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
         run: |
           if [ -z "$WIF_PROVIDER" ]; then
-            echo "::error::vars.GCP_WIF_PROVIDER is empty for this repo. GCP is not the problem — the org variable is not visible here. Fix under Org Settings > Secrets and variables > Actions > Variables > GCP_WIF_PROVIDER > Repository access."
+            echo "::error::vars.GCP_WIF_PROVIDER is empty for this repo. GCP is not the problem — the org variable is not visible here. Fix under Org Settings > Secrets and variables > Actions > Variables > GCP_WIF_PROVIDER > Repository access. (Row 1 of the verdict table on #76; row 2, this step green and the auth step red, is OIDC.)"
             exit 1
           fi
           echo "WIF provider: $WIF_PROVIDER"
+          echo "If the auth step below fails on a Dependabot PR, suspect the OIDC token (id-token: write on a fork-like run), not IAM (#76)."
 
       - name: Authenticate to Google Cloud (WIF, read-only)
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: co-pypi-reader@co-gcs.iam.gserviceaccount.com
@@ -73,7 +77,7 @@ jobs:
         run: uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
 
       - name: uv sync
-        run: uv sync --frozen --group dev
+        run: uv sync --locked --group dev
 
       - name: ruff check
         run: uv run ruff check .
@@ -83,7 +87,7 @@ jobs:
 
   test:
     name: test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # WIF: mint an OIDC token for google-github-actions/auth (see the lint job).
     permissions:
       contents: read
@@ -98,14 +102,15 @@ jobs:
       # The lint job deliberately omits this — ruff extend-excludes
       # skills-vendor/ (pyproject.toml), so it never reads what it does not
       # fetch. Costs ~2.2s of a ~1m10s job. See docs/SKILLS.md.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           submodules: true
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           enable-cache: true
+          prune-cache: true
 
       - name: Install Python
         run: uv python install 3.12
@@ -121,13 +126,14 @@ jobs:
           WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
         run: |
           if [ -z "$WIF_PROVIDER" ]; then
-            echo "::error::vars.GCP_WIF_PROVIDER is empty for this repo. GCP is not the problem — the org variable is not visible here. Fix under Org Settings > Secrets and variables > Actions > Variables > GCP_WIF_PROVIDER > Repository access."
+            echo "::error::vars.GCP_WIF_PROVIDER is empty for this repo. GCP is not the problem — the org variable is not visible here. Fix under Org Settings > Secrets and variables > Actions > Variables > GCP_WIF_PROVIDER > Repository access. (Row 1 of the verdict table on #76; row 2, this step green and the auth step red, is OIDC.)"
             exit 1
           fi
           echo "WIF provider: $WIF_PROVIDER"
+          echo "If the auth step below fails on a Dependabot PR, suspect the OIDC token (id-token: write on a fork-like run), not IAM (#76)."
 
       - name: Authenticate to Google Cloud (WIF, read-only)
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: co-pypi-reader@co-gcs.iam.gserviceaccount.com
@@ -136,7 +142,7 @@ jobs:
         run: uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
 
       - name: uv sync
-        run: uv sync --frozen --group dev
+        run: uv sync --locked --group dev
 
       # Validates the wheelhouse end to end: the extras the loop depends on
       # ([bus] for the Redis Streams driver, and co-core-sync's [gcs] for the
@@ -227,18 +233,19 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           enable-cache: true
+          prune-cache: true
 
       - name: Install Python
         run: uv python install 3.12
 
       - name: Authenticate to Google Cloud (WIF, read-only)
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: co-pypi-reader@co-gcs.iam.gserviceaccount.com
@@ -247,7 +254,7 @@ jobs:
         run: uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
 
       - name: uv sync
-        run: uv sync --frozen --group dev
+        run: uv sync --locked --group dev
 
       # The revision is the one uv.lock's Playwright pins. Not --with-deps: that
       # runs `apt-get update && apt-get install` itself, so a broken third-party
@@ -321,17 +328,18 @@ jobs:
   # than inherited, and an unmarked test cannot reach the identity at all.
   gcs:
     name: gcs (T4 against the test bucket)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           enable-cache: true
+          prune-cache: true
 
       - name: Install Python
         run: uv python install 3.12
@@ -341,13 +349,14 @@ jobs:
           WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
         run: |
           if [ -z "$WIF_PROVIDER" ]; then
-            echo "::error::vars.GCP_WIF_PROVIDER is empty for this repo. GCP is not the problem — the org variable is not visible here. Fix under Org Settings > Secrets and variables > Actions > Variables > GCP_WIF_PROVIDER > Repository access."
+            echo "::error::vars.GCP_WIF_PROVIDER is empty for this repo. GCP is not the problem — the org variable is not visible here. Fix under Org Settings > Secrets and variables > Actions > Variables > GCP_WIF_PROVIDER > Repository access. (Row 1 of the verdict table on #76; row 2, this step green and the auth step red, is OIDC.)"
             exit 1
           fi
+          echo "If the auth step below fails on a Dependabot PR, suspect the OIDC token (id-token: write on a fork-like run), not IAM (#76)."
 
       # First identity: read-only, and only to mirror the wheelhouse.
       - name: Authenticate to Google Cloud (WIF, read-only)
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: co-pypi-reader@co-gcs.iam.gserviceaccount.com
@@ -356,14 +365,14 @@ jobs:
         run: uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
 
       - name: uv sync
-        run: uv sync --frozen --group dev
+        run: uv sync --locked --group dev
 
       # Second identity, after the wheelhouse is already mirrored: objectAdmin on
       # co-gcs-test-replication and co-gcs-test-blobs, and no write on production
       # (docs/INFRASTRUCTURE.md, "The GCS test bucket").
       - name: Authenticate to Google Cloud (WIF, test bucket writer)
         id: gcs_auth
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: co-gcs-test-replicator-writer@co-gcs.iam.gserviceaccount.com
