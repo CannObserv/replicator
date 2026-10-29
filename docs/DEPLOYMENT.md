@@ -138,7 +138,7 @@ including an empty namespace after a flush:
 
 ### Dependabot proposes the action bumps (#76)
 
-`.github/dependabot.yml` proposes **action bumps only**, weekly. Every `uses:` in `ci.yml` pins a commit SHA with a `# vX.Y.Z` comment, and Dependabot moves both. `context-cadence.yml` is excluded, because the installer re-renders it (gregoryfoster/skills#373). `uv` is out until Dependabot's updater can reach the wheelhouse (CannObserv/cannobserv#554). `tests/ci/` pins the config, the SHA pins, `runs-on: ubuntu-24.04`, `prune-cache: true` and `uv sync --locked`.
+`.github/dependabot.yml` proposes **action bumps only**, weekly. Every `uses:` in `ci.yml` pins a commit SHA with a `# vX.Y.Z` comment, and Dependabot moves both. `context-cadence.yml` is excluded, because the installer re-renders it (gregoryfoster/skills#373). `uv` is out until Dependabot's updater can reach the wheelhouse (CannObserv/cannobserv#554). Guarded by `tests/ci/`.
 
 A bot PR touches only `.github/`, so it needs **no deploy and no restart**. Merging it on GitHub puts `origin/main` ahead of this checkout: `git pull --ff-only` before the next local commit. If a bot PR is red at the WIF auth step, suspect the Dependabot run's OIDC token before the bump (the verdict table on #76). Read the action's release notes, not the diff: setup-uv v9 flipped `prune-cache` silently. A bump that changes behaviour takes fix commits pushed onto its branch.
 
