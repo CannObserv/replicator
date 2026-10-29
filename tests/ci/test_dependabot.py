@@ -21,15 +21,13 @@ The pins it moves are ``test_workflow_pins.py``'s. Pure file reads.
 """
 
 import re
-from pathlib import Path
 
 import pytest
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from tests.ci.test_workflow_pins import GENERATED, REPO_ROOT, _scanned, _uses
+
 CONFIG = REPO_ROOT / ".github" / "dependabot.yml"
-WORKFLOWS = REPO_ROOT / ".github" / "workflows"
-GENERATED = ".github/workflows/context-cadence.yml"
 
 # AGENTS.md → Conventions → Commit Messages.
 COMMIT_TYPES = {"feat", "fix", "refactor", "docs", "test", "chore"}
@@ -58,24 +56,9 @@ def _directories(block: dict) -> set[str]:
     )
 
 
-def _uses(node: object) -> list[str]:
-    """Every ``uses:`` value in a parsed workflow, at any depth."""
-    if isinstance(node, dict):
-        found = [node["uses"]] if isinstance(node.get("uses"), str) else []
-        return found + [u for value in node.values() for u in _uses(value)]
-    if isinstance(node, list):
-        return [u for item in node for u in _uses(item)]
-    return []
-
-
 def _actions() -> set[str]:
     """The distinct ``owner/repo`` actions the scanned workflows pin: one PR each."""
-    scanned = [
-        path
-        for path in sorted(WORKFLOWS.glob("*.y*ml"))
-        if path.relative_to(REPO_ROOT).as_posix() != GENERATED
-    ]
-    refs = [u for path in scanned for u in _uses(yaml.safe_load(path.read_text("utf-8")))]
+    refs = [u for path in _scanned() for u in _uses(yaml.safe_load(path.read_text("utf-8")))]
     return {m.group(1) for ref in refs if (m := _ACTION.match(ref))}
 
 
@@ -115,8 +98,9 @@ def test_actions_block_covers_the_workflows(actions_block):
 def test_actions_block_excludes_only_the_generated_workflow(actions_block):
     """A re-render of the cadence workflow reverts a bump (skills#373); nothing
     else is excluded, or its pins would go stale with nobody told."""
-    assert actions_block.get("exclude-paths") == [GENERATED]
-    assert (REPO_ROOT / GENERATED).is_file(), f"{GENERATED} moved: re-point the exclusion"
+    generated = GENERATED.relative_to(REPO_ROOT).as_posix()
+    assert actions_block.get("exclude-paths") == [generated]
+    assert GENERATED.is_file(), f"{generated} moved: re-point the exclusion"
 
 
 def test_actions_block_runs_weekly(actions_block):
