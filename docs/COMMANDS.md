@@ -356,6 +356,9 @@ systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p MemorySwapM
 # 2.33 GB, worker NRestarts=0. Embedding runs on co-index: little local CPU.
 systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p MemorySwapMax=0 -p CPUQuota=100% \
   choom -n 500 -- node "$SOCRATICODE_DRIVER" index .
+# After a manifest edit. Exit 1, often a session's lock: see its `codebase_status`.
+systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p MemorySwapMax=0 -p CPUQuota=100% \
+  choom -n 500 -- node "$SOCRATICODE_DRIVER" update .
 ```
 
 `systemd-run --user` needs linger and the `memory`/`cpu` controllers delegated —
