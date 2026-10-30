@@ -403,13 +403,15 @@ HEALTH_TIMEOUT_S = 120
 CAP_DEFAULT = re.compile(r'^CAP_DEFAULT="([^"]*)"', re.MULTILINE)
 CHOOM_CALL = "choom -n 500 -- "
 
-# A documented cap is a `systemd-run` scope bounding memory: one carrying
-# `MemoryMax=`. Identified by what it is, so the browser test's `Delegate=yes`
-# scopes stay out by construction (#171). Its properties are the `-p` flags
-# before the command's `--`; a backslash continuation is joined first, so a
-# cap wrapped mid-flags is read whole.
+# A documented cap is a `systemd-run` scope carrying any resource bound —
+# `Memory*=` or `CPUQuota=` — so one that lost its `MemoryMax=` is still read,
+# and fails as drifted (CR 1). Identified by what it is, so the browser test's
+# `Delegate=yes` scopes stay out by construction (#171). Its properties are
+# the `-p` flags before the command's `--`; a backslash continuation is joined
+# first, so a cap wrapped mid-flags is read whole.
 SYSTEMD_RUN = re.compile(r"systemd-run\b([^`\n]*)")
 SCOPE_PROPERTY = re.compile(r"(?:^|\s)(?:-p\s+|--property[=\s])(\S+)")
+RESOURCE_BOUND = re.compile(r"(?:Memory\w*|CPUQuota)=")
 CONTINUATION = re.compile(r"\\\n\s*")
 # Every tracked doc is scanned but these: vendored text is upstream's, a dated
 # plan and a `.skills/` warrant are records (the latter holds the pre-#162
@@ -425,12 +427,12 @@ CAP_HOMES = ("docs/COMMANDS.md", "docs/SOCRATICODE.md")
 
 
 def documented_caps(text: str) -> list[frozenset[str]]:
-    """The property set of every memory-capped `systemd-run` scope in `text`."""
+    """The property set of every resource-bounded `systemd-run` scope in `text`."""
     caps = []
     for call in SYSTEMD_RUN.finditer(CONTINUATION.sub(" ", text)):
         flags = re.split(r"\s--(?:\s|$)", call.group(1), maxsplit=1)[0]
         properties = frozenset(SCOPE_PROPERTY.findall(flags))
-        if any(p.startswith("MemoryMax=") for p in properties):
+        if any(RESOURCE_BOUND.match(p) for p in properties):
             caps.append(properties)
     return caps
 
@@ -555,7 +557,7 @@ class TestServerLaunchCost:
         """A scan that finds nothing passes the check above vacuously."""
         missing = [path for path in CAP_HOMES if path not in caps_by_doc]
         assert not missing, (
-            f"no memory-capped systemd-run scope found in {missing} — either the "
+            f"no resource-bounded systemd-run scope found in {missing} — either the "
             "caps moved (update CAP_HOMES) or documented_caps no longer reads "
             "their spelling"
         )
@@ -587,6 +589,11 @@ class TestServerLaunchCost:
             (
                 "sudo systemd-run --scope --property=MemoryMax=1G -- x",
                 [frozenset({"MemoryMax=1G"})],
+            ),
+            # A cap that lost its MemoryMax= is still a cap, and drifted (CR 1).
+            (
+                "systemd-run --user --scope -p MemoryHigh=1G -p CPUQuota=50% -- npx x",
+                [frozenset({"MemoryHigh=1G", "CPUQuota=50%"})],
             ),
             # Not caps: a delegation scope with and without `-q`, and prose.
             ("systemd-run --user --scope -q -p Delegate=yes -E PATH \\\n  uv run pytest", []),
