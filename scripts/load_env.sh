@@ -23,7 +23,7 @@
 
 _load_env_main() {
   local _le_root _le_recipe _le_env PRE_SHIP_ENV_NAMES  # the recipe appends key names to the last
-  _le_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd) || return 1
+  _le_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd) || return 1  # CDPATH would move it
   _le_recipe="$_le_root/skills/shipping-work-python-fastapi/scripts/pre-ship.sh"
   unset -f load_env
   [ -r "$_le_recipe" ] &&

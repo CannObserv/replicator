@@ -232,6 +232,25 @@ class TestTheScriptParses:
         new = set(r.stdout.split()) - etc_names - {SENTINEL_KEY}
         assert not new, f"left behind in the caller's shell: {sorted(new)}"
 
+    def test_cdpath_cannot_move_the_root(self, tmp_path: Path):
+        """`dirname` gives a relative `scripts`, which `cd` resolves through
+        CDPATH first: an interactive shell's CDPATH naming a directory with a
+        `scripts/` in it moved the root there, and `cd` printed it (CR 1)."""
+        main = _checkout(tmp_path)
+        (main / ".env").write_text(f"{SENTINEL_KEY}=right-root\n")
+        decoy = tmp_path / "decoy"
+        (decoy / "scripts").mkdir(parents=True)
+        r = subprocess.run(
+            ["bash", "-c", f'. {SCRIPT}\nprintf "%s" "${{{SENTINEL_KEY}-unset}}"'],
+            cwd=main,
+            env={"PATH": "/usr/bin:/bin", "CDPATH": str(decoy)},
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == "right-root"
+
     def test_a_missing_recipe_fails_loudly_without_killing_the_shell(self, tmp_path: Path):
         """An uninitialised submodule leaves no recipe to lift. Loading nothing
         quietly would surface later as `rcli: REPLICATOR_REDIS_URL is unset`."""
