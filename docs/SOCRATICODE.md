@@ -145,7 +145,7 @@ collection names and the one-host-per-`projectId` rule:
 [INFRASTRUCTURE.md](INFRASTRUCTURE.md). The client configuration is six values
 in `.claude/settings.json` plus `projectId` in `.socraticode.json`, pinned by
 `tests/test_socraticode_config.py`; the key is in `.claude/settings.local.json`
-and nowhere else ([ENVIRONMENT.md](ENVIRONMENT.md)). Capped invocations for
+and nowhere else ([below](#the-client-configuration-and-the-key)). Capped invocations for
 anything that launches a server: [COMMANDS.md](COMMANDS.md).
 
 That includes Graph health's `health-check`, which the template prints
@@ -157,6 +157,14 @@ doc in the Detail Docs index — `tests/test_socraticode_config.py` holds it to 
 `validate-manifest` ([COMMANDS.md](COMMANDS.md)) checks each path resolves. The
 manifest is a source, not the artifact: see
 `AGENTS.md` → `## Code Exploration Notes (repo-specific)`.
+
+### The client configuration and the key
+
+In `.claude/settings*.json` — **agent tooling, read by the harness and by nothing the service starts** (#92):
+
+A third carrier, and not a hole in the env-file boundary [ENVIRONMENT.md](ENVIRONMENT.md) draws: the rule is that `replicator.service` reads `/etc/replicator/.env` and nothing else, and the worker has no use for a semantic index. The six non-secret values addressing `co-index` (`QDRANT_MODE`, `QDRANT_URL`, `OLLAMA_MODE`, `OLLAMA_URL`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`) are **tracked**, in `.claude/settings.json`, so they travel with the checkout; their values are in [INFRASTRUCTURE.md](INFRASTRUCTURE.md).
+
+`QDRANT_API_KEY` goes in `.claude/settings.local.json` alone. Qdrant holds **one global `service.api_key`** — no key list, no per-client identity — so a leak anywhere is a cohort-wide rotation with no overlap window. The ignore rule is therefore *asserted*, not assumed: `tests/test_socraticode_config.py` requires `git check-ignore -v` to name the tracked `.gitignore` rather than a global excludes file that protects one machine, and refuses a key-shaped value in any tracked file. Broker, a public repo, had no rule at all while four of five cohort repos did — which is what made the assumption read as true (notifier#68). Install it with notifier's `install_qdrant_key.sh`, never by hand: [COMMANDS.md](COMMANDS.md).
 
 ### Two launch paths, pinned separately
 

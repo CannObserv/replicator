@@ -10,6 +10,20 @@ procedures that run a broker of their own — one stopped and restarted, one cap
 
 - Test structure mirrors source (`src/foo.py` → `tests/test_foo.py`). A module whose tests outgrow one file splits by concern, not by helper: `tests/worker/test_loop_dlq.py`, `test_loop_recovery.py`, … with the shared wiring in that package's `conftest.py`. Concern is the default axis; **environment** is the one exception — tests needing a live broker split off with an `_integration` suffix (`tests/worker/test_main_integration.py`), and those needing the real GCS bucket with a `_gcs` one (`tests/worker/test_replicate_writer_gcs.py`), so the filename says what the marker enforces. Where that would double — the module under test is already `gcs.py` — the marked file names the resource instead (`tests/storage/test_gcs_bucket.py`), never `_integration`, which is the other marker's suffix
 
+## Variables
+
+Read by neither env file, and indexed in [ENVIRONMENT.md](ENVIRONMENT.md): the
+test-only variables, defined in `tests/conftest.py`.
+
+- `REPLICATOR_TEST_REDIS_URL` — the scratch `redis-server` `@pytest.mark.integration` runs against; default `redis://localhost:6379/15`, and the tests skip until one answers there. Must not resolve to db 0 or a non-loopback host — the fixture fails before connecting on either (#132). **Never the broker**, whose only database since broker#5 is db 0 (#90) — see **Testing the bus**
+  [below](#testing-the-bus)
+- `REPLICATOR_TEST_GCS_BUCKET` — the bucket `@pytest.mark.gcs` may write to; `co-gcs-test-replication`. **No default** — absent means those tests skip, never "use whatever the code would have picked", which on a host configured for production is the production bucket
+- `REPLICATOR_TEST_BLOB_BUCKET` — the temp-blob bucket `@pytest.mark.gcs` may write to (#7); `co-gcs-test-blobs`, provisioned 2026-08-20. **No default**, same rule as above, and deliberately a *second* variable: the two destinations carry opposite grants — the replicate SA holds no `delete` at all, which is what puts T4 at IAM rather than only in our code, while the temp-store tests create objects and clean up after themselves. One bucket serving both would mean either the temp tests cannot tidy or the permanent store can be erased
+- `REPLICATOR_TEST_PERMANENT_BUCKET` — the permanent-store test twin `@pytest.mark.gcs` may write to and replicate from (#114); `co-gcs-test-replicator`. **No default**, same rule; the store guard admits it beside `REPLICATOR_TEST_BLOB_BUCKET`
+- `REPLICATOR_TEST_GCS_CREDENTIALS` — path to the test SA key (`/etc/replicator/co-gcs-test-replicator-writer.json` here, the WIF credentials file in CI). Also no default, and mapped onto `GOOGLE_APPLICATION_CREDENTIALS` for marked tests only — the bucket name alone cannot catch a run pointed at the right bucket with the production identity, which is reachable because the Common Commands snippet sources `/etc/replicator/.env`
+
+  All four belong in the repo `.env` or the invoking shell, **never in `/etc/replicator/.env`** — that is the file the service reads, and a delete-capable identity is precisely the grant T4 exists to withhold from the worker. The resource itself: [**The GCS test bucket**](INFRASTRUCTURE.md#the-gcs-test-bucket--the-opposite-grant-on-purpose-38-50)
+
 ## Testing the bus
 
 **Testing the bus.** `tests/conftest.py` ships a `fake_redis` fixture (fakeredis, Streams-capable) — consumer-group behaviour is testable without a broker, and assertions should read the broker's own view (`xinfo_groups` / `xinfo_consumers`) rather than co-core's private attributes, which are not a stable contract. Anything that genuinely needs a live Redis goes behind `@pytest.mark.integration` and is excluded by default.

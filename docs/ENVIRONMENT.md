@@ -4,8 +4,9 @@ Every variable Replicator reads, indexed here, with the reasoning behind each
 default — except where the reasoning sits beside the behaviour it argues about:
 the blob and temp-store settings in [STORAGE.md](STORAGE.md#variables), the
 fallback host interval in [POLITENESS.md](POLITENESS.md#variables), the
-`OnFailure=` handler's in [FAILURE-NOTIFICATION.md](FAILURE-NOTIFICATION.md), and the start guards' in
-[DEPLOYMENT.md](DEPLOYMENT.md#environment-variables). Two env
+`OnFailure=` handler's in [FAILURE-NOTIFICATION.md](FAILURE-NOTIFICATION.md), the start guards' in
+[DEPLOYMENT.md](DEPLOYMENT.md#environment-variables), and the test-only ones in
+[TESTING.md](TESTING.md#variables). Two env
 files carry them, and the boundary between the two is hard:
 `/etc/replicator/.env` is the **only** file `replicator.service` reads, and the
 repo `.env` holds dev/agent secrets the worker has no use for — org-wide PATs
@@ -16,21 +17,9 @@ In `.env` (dev/agent only — never read by the service):
 - `GH_TOKEN` — GitHub PAT for this repo (used by `gh` CLI)
 - `GH_TOKEN_ARCHIVER` / `GH_TOKEN_WATCHER` / `GH_TOKEN_CANNOBSERV` / `GH_TOKEN_SKILLS` — per-repo PATs. Cross-repo work is **filed as an issue**, never edited directly: each repo owns its own review, CI, and deploy cycle, and `main` is the deployed code. Pass the right one as `GH_TOKEN` for a given `gh` call.
 
-In `.claude/settings*.json` — **agent tooling, read by the harness and by nothing the service starts** (#92):
+A third carrier, `.claude/settings*.json`, is agent tooling read by the harness and by nothing the service starts (#92): its `co-index` values and `QDRANT_API_KEY` are in [SOCRATICODE.md](SOCRATICODE.md#the-client-configuration-and-the-key), with why the key's ignore rule is asserted rather than assumed.
 
-A third carrier, and not a hole in the boundary above: the rule is that `replicator.service` reads `/etc/replicator/.env` and nothing else, and the worker has no use for a semantic index. The six non-secret values addressing `co-index` (`QDRANT_MODE`, `QDRANT_URL`, `OLLAMA_MODE`, `OLLAMA_URL`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`) are **tracked**, in `.claude/settings.json`, so they travel with the checkout; their values are in [INFRASTRUCTURE.md](INFRASTRUCTURE.md).
-
-`QDRANT_API_KEY` goes in `.claude/settings.local.json` alone. Qdrant holds **one global `service.api_key`** — no key list, no per-client identity — so a leak anywhere is a cohort-wide rotation with no overlap window. The ignore rule is therefore *asserted*, not assumed: `tests/test_socraticode_config.py` requires `git check-ignore -v` to name the tracked `.gitignore` rather than a global excludes file that protects one machine, and refuses a key-shaped value in any tracked file. Broker, a public repo, had no rule at all while four of five cohort repos did — which is what made the assumption read as true (notifier#68). Install it with notifier's `install_qdrant_key.sh`, never by hand: [COMMANDS.md](COMMANDS.md).
-
-Read by neither env file — test-only, defined in `tests/conftest.py`:
-- `REPLICATOR_TEST_REDIS_URL` — the scratch `redis-server` `@pytest.mark.integration` runs against; default `redis://localhost:6379/15`, and the tests skip until one answers there. Must not resolve to db 0 or a non-loopback host — the fixture fails before connecting on either (#132). **Never the broker**, whose only database since broker#5 is db 0 (#90) — see **Testing the bus**
-  in [TESTING.md](TESTING.md)
-- `REPLICATOR_TEST_GCS_BUCKET` — the bucket `@pytest.mark.gcs` may write to; `co-gcs-test-replication`. **No default** — absent means those tests skip, never "use whatever the code would have picked", which on a host configured for production is the production bucket
-- `REPLICATOR_TEST_BLOB_BUCKET` — the temp-blob bucket `@pytest.mark.gcs` may write to (#7); `co-gcs-test-blobs`, provisioned 2026-08-20. **No default**, same rule as above, and deliberately a *second* variable: the two destinations carry opposite grants — the replicate SA holds no `delete` at all, which is what puts T4 at IAM rather than only in our code, while the temp-store tests create objects and clean up after themselves. One bucket serving both would mean either the temp tests cannot tidy or the permanent store can be erased
-- `REPLICATOR_TEST_PERMANENT_BUCKET` — the permanent-store test twin `@pytest.mark.gcs` may write to and replicate from (#114); `co-gcs-test-replicator`. **No default**, same rule; the store guard admits it beside `REPLICATOR_TEST_BLOB_BUCKET`
-- `REPLICATOR_TEST_GCS_CREDENTIALS` — path to the test SA key (`/etc/replicator/co-gcs-test-replicator-writer.json` here, the WIF credentials file in CI). Also no default, and mapped onto `GOOGLE_APPLICATION_CREDENTIALS` for marked tests only — the bucket name alone cannot catch a run pointed at the right bucket with the production identity, which is reachable because the Common Commands snippet sources `/etc/replicator/.env`
-
-  All four belong in the repo `.env` or the invoking shell, **never in `/etc/replicator/.env`** — that is the file the service reads, and a delete-capable identity is precisely the grant T4 exists to withhold from the worker. The resource itself: [**The GCS test bucket**](INFRASTRUCTURE.md#the-gcs-test-bucket--the-opposite-grant-on-purpose-38-50)
+Read by neither env file — test-only, defined in `tests/conftest.py`: the `REPLICATOR_TEST_*` variables (`_REDIS_URL`, `_GCS_BUCKET`, `_BLOB_BUCKET`, `_PERMANENT_BUCKET`, `_GCS_CREDENTIALS`) are in [TESTING.md](TESTING.md#variables), beside the fixtures and markers they gate. None goes in `/etc/replicator/.env`.
 
 In `/etc/replicator/.env` (read by the service):
 - `GOOGLE_APPLICATION_CREDENTIALS` — the worker's ADC: the writer SA key (`/etc/replicator/co-gcs-replicator-writer.json`, `co-gcs-replicator-writer` since #114; it replaced `co-gcs-replicator`). **Not** the wheelhouse reader — that is `REPLICATOR_WHEELHOUSE_CREDENTIALS` below, split off precisely so the boot step and the worker never share an identity (#29); this line said otherwise until #86 verified the file

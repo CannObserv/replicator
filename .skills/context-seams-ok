@@ -124,8 +124,6 @@ docs/DEPLOYMENT.md :: Rehearsing reconnection (#94)
 docs/DEPLOYMENT.md :: themselves are in [ENVIRONMENT.md](ENVIRONMENT.md), which indexes every one and
 docs/DEPLOYMENT.md :: All three live in `/etc/replicator/.env` and are read by the `OnFailure=` handler **only** — never by the worker, which is why they are here rather than in [ENVIRONMENT.md](ENVIRONMENT.md) with the settings `src/core/config.py` parses.
 docs/DEPLOYMENT.md :: and the boundary between them: [ENVIRONMENT.md](ENVIRONMENT.md).
-docs/INFRASTRUCTURE.md :: | Key | `QDRANT_API_KEY`, `.claude/settings.local.json` | See [ENVIRONMENT.md](ENVIRONMENT.md). |
-docs/SOCRATICODE.md :: and nowhere else ([ENVIRONMENT.md](ENVIRONMENT.md)). Capped invocations for
 docs/STORAGE.md :: configuration — [ENVIRONMENT.md](ENVIRONMENT.md) keeps the boundary between that
 # #146 moved the variable to DEPLOYMENT.md; the line now points there.
 docs/reference/tailscale.md :: `REPLICATOR_REDIS_FLOOR_WAIT` ([DEPLOYMENT.md](../DEPLOYMENT.md#environment-variables)). It is
@@ -442,7 +440,6 @@ docs/INFRASTRUCTURE.md :: The alias table, `REPLICATOR_REPLICATION_ALIASES_FILE`
 docs/CONVENTIONS.md :: - **DLQ is a shipped seam, not a TODO:**
 docs/CONVENTIONS.md :: back or reaps a key early, and the `SCAN` in [COMMANDS.md](COMMANDS.md) is an
 docs/DEPLOYMENT.md :: SocratiCode server is in [COMMANDS.md](COMMANDS.md).
-docs/ENVIRONMENT.md :: `QDRANT_API_KEY` goes in `.claude/settings.local.json` alone.
 docs/POLITENESS.md :: Of the journal greps for this stream in [COMMANDS.md](COMMANDS.md#politeness--contentfetch-policy-19):
 docs/SKILLS.md :: `scripts/` hit at `docs/COMMANDS.md` (#93).
 docs/SKILLS.md :: | `socraticode-health.sh` | SessionStart |
@@ -512,3 +509,27 @@ docs/POLITENESS.md :: [COMMANDS.md → Inspecting the consume path](COMMANDS.md#
 docs/TESTING.md :: The operator half of that split is tabulated in [COMMANDS.md](COMMANDS.md#inspecting-the-consume-path)
 # The SOCRATICODE.md manifest description's own provenance for what #146 moved in.
 .socraticodecontextartifacts.json :: "description": "The on-demand half of the Code Exploration Policy
+#
+# #162. Three acks above were dropped because their lines moved or were retargeted:
+# INFRASTRUCTURE.md's QDRANT_API_KEY row and SOCRATICODE.md's "nowhere else" now
+# point at SOCRATICODE.md's own section, and ENVIRONMENT.md's QDRANT_API_KEY
+# paragraph is in SOCRATICODE.md.
+#
+# Each of the following names content that did NOT move: COMMANDS.md keeps the
+# grants table, the Qdrant key's install recipe, the --frozen deploy lines and the
+# cap rationale; ENVIRONMENT.md keeps the env-file boundary and indexes the
+# test-only variables. The TESTING.md description names its own source.
+docs/INFRASTRUCTURE.md :: [COMMANDS.md](COMMANDS.md#inspecting-the-consume-path), beside the commands. Some of
+docs/SOCRATICODE.md :: `QDRANT_API_KEY` goes in `.claude/settings.local.json` alone.
+docs/SOCRATICODE.md :: A third carrier, and not a hole in the env-file boundary [ENVIRONMENT.md](ENVIRONMENT.md) draws
+docs/TESTING.md :: Read by neither env file, and indexed in [ENVIRONMENT.md](ENVIRONMENT.md): the
+tests/ci/test_workflow_pins.py :: docs/COMMANDS.md stay ``--frozen`` on purpose: production never re-resolves.
+tests/test_socraticode_pin.py :: worker runs beside every session (docs/COMMANDS.md). A spec that differs from the pre-install puts
+.socraticodecontextartifacts.json :: "description": "Test layout — the mirror rule, splitting by concern rather than by helper, and the _integration filename exception — and the test-only REPLICATOR_TEST_*
+#
+# #162: three standing provenance headings, added after #146's sweep by #76, #148
+# and #138. Renaming one moves its anchor, which this curation has no reason to
+# do. Rename each with its doc's next substantive edit.
+docs/DEPLOYMENT.md :: Dependabot proposes the action bumps (#76)
+docs/INFRASTRUCTURE.md :: The host's disk GC is the cohort's (#148)
+docs/TESTING.md :: Testing the browser (#138)

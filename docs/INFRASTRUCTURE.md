@@ -29,6 +29,36 @@ The change bus runs on `co-broker` (tailnet `broker`), operated from CannObserv/
 
 The **redis-py client** resolves `>=5,<8` transitively via `co-core-aio[bus]`. Don't re-pin it narrower.
 
+### Grants the `replicator` user gained later
+
+What this credential may run, and what to ask the broker operator for, is tabulated in
+[COMMANDS.md](COMMANDS.md#inspecting-the-consume-path), beside the commands. Some of
+those rows arrived after broker#2's ACL cutover, and this is how:
+
+**`XPENDING` moved columns on 2026-09-22 (broker#39, #103, #107)**, not as a courtesy: the
+delivery ceiling reads it, so before the grant `REPLICATOR_MAX_DELIVERY_ATTEMPTS` could never
+fire. Probed afterwards, like every row: both groups answered 0 pending, where 12:55Z
+had returned `NOPERM`.
+
+**Draining a dead-letter queue is this service's job, granted since 2026-09-11 (#86,
+broker#12).** `XADD <topic>.dlq` was granted first and the deletion not, so the service could not
+empty its own queue — found when the #86 rehearsal's `alias_unknown` frame (parked
+2026-09-10T21:02:02Z) refused to delete. Broker's Phase 5 had already assigned the queues here, an
+unfinished decision rather than a policy, closed with a **Redis 7.0 ACL selector**, not a blanket
+command grant:
+
+```
+(+xdel ~content.fetch.dlq ~content.replicate.dlq ~content.persist.dlq ~content.capture.dlq)
+```
+
+Persist's queue joined 2026-09-26 (broker#64), capture's with broker#114 (`7fe8f44`), each read
+from broker's `deploy/redis-acl.conf`. `XDEL` works on those four and is refused on every other key
+this credential reaches, command and fact streams included; the root permission set never gains
+`+xdel`. Verified on the broker's node against 7.0.15, not from here: a drained queue shows by its
+depth (`content.replicate.dlq` is 0), but the selector's shape can't be proven without deleting
+something. The grant adds `+xdel` alone, so per-id deletion is the only disposal: precise, never
+a queue wipe.
+
 ## The semantic index is `co-index` — a store this repo is a client of
 
 The cohort's shared Qdrant runs on a fifth VM, **`co-index`** (tailnet `index`),
@@ -42,7 +72,7 @@ existed.
 | Qdrant | `https://index.taild0fb76.ts.net:6333` | **The full MagicDNS name** — `index` alone is not in the certificate's SAN. TLS is not optional: upstream refuses to send `QDRANT_API_KEY` over a non-TLS, non-loopback connection, which is why the store serves TLS at all. |
 | Ollama | `http://index:11434` | `nomic-embed-text`, 768 dimensions — the store's, not this repo's choice. **Unauthenticated**: any node the ACL admits can reach it. Tailnet reachability is not authorization. |
 | Collections | `codebase_replicator`, `context_replicator`, `replicator_symgraph_{file,index,meta}` — all green since 2026-09-18 | Named by `projectId` in `.socraticode.json`. Without that file the id is `sha256(<absolute path>)[:12]` — `2a818eb7302d` for this checkout — which is not even per-host, and no collection under that hash has ever existed. |
-| Key | `QDRANT_API_KEY`, `.claude/settings.local.json` | See [ENVIRONMENT.md](ENVIRONMENT.md). |
+| Key | `QDRANT_API_KEY`, `.claude/settings.local.json` | See [SOCRATICODE.md](SOCRATICODE.md#the-client-configuration-and-the-key). |
 
 Both endpoints are reached over the tailnet, so the ACL must admit this VM to
 `tag:index:6333,11434`. **A missing ACL rule presents as a DNS failure, not a

@@ -791,3 +791,22 @@ docs/reference/tailscale.md :: retarget :: `REPLICATOR_REDIS_FLOOR_WAIT` ([ENVIR
 # ("every pin move", not "multi-minor") pointing at scripts/co_core_closure_diff.py;
 # --claims carries every atom, `diff -rq` and `.wheelhouse/` kept as #77's history.
 docs/DEPLOYMENT.md :: tighten :: **The 0.10 → 0.13 jump (#77) was the first departure from "pin the current minor"
+# #162: test_the_hook_cap_is_the_manual_ceiling failed on these four lines once
+# the skills bump vendored skills#340's MemorySwapMax=0 default; each gains that
+# one property and nothing else.
+docs/COMMANDS.md :: disproven :: systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% \
+# #162: ENVIRONMENT.md's preamble list of where variable reasoning lives gains
+# TESTING.md, where the test-only variables moved; the old last item loses its
+# terminal "Two env" to make room for it.
+docs/ENVIRONMENT.md :: retarget :: `OnFailure=` handler's in [FAILURE-NOTIFICATION.md](FAILURE-NOTIFICATION.md), and the start guards' in
+docs/ENVIRONMENT.md :: retarget :: [DEPLOYMENT.md](DEPLOYMENT.md#environment-variables). Two env
+# #162: the moved settings-carrier paragraph's "the boundary above" named
+# ENVIRONMENT.md's env-file boundary; in SOCRATICODE.md it links that doc instead.
+docs/ENVIRONMENT.md :: retarget :: A third carrier, and not a hole in the boundary above: the rule is that `replicator.service` reads `/etc/replicator/.env` and nothing else, and the worker has no use for a semantic index. The six non-secret values addressing `co-index` (`QDRANT_MODE`, `QDRANT_URL`, `OLLAMA_MODE`, `OLLAMA_URL`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`) are **tracked**, in `.claude/settings.json`, so they travel with the checkout; their values are in [INFRASTRUCTURE.md](INFRASTRUCTURE.md).
+# #162: the test-only block's lead-in became ENVIRONMENT.md's pointer to TESTING.md,
+# and the block's own link to TESTING.md became a same-doc [below].
+docs/ENVIRONMENT.md :: retarget :: Read by neither env file — test-only, defined in `tests/conftest.py`:
+docs/ENVIRONMENT.md :: retarget :: in [TESTING.md](TESTING.md)
+# #162: the key's location moved from ENVIRONMENT.md to SOCRATICODE.md.
+docs/SOCRATICODE.md :: retarget :: and nowhere else ([ENVIRONMENT.md](ENVIRONMENT.md)). Capped invocations for
+docs/INFRASTRUCTURE.md :: retarget :: | Key | `QDRANT_API_KEY`, `.claude/settings.local.json` | See [ENVIRONMENT.md](ENVIRONMENT.md). |

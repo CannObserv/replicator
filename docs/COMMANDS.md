@@ -157,29 +157,9 @@ scoped to its own topics, permanently and by design, so the operator surface spl
 **Every read is per key since broker#43 (2026-10-06, #129)**: command and key must both match.
 Anything not shown in this file, check against broker's `deploy/redis-acl.conf` first.
 
-**`XPENDING` moved columns on 2026-09-22 (broker#39, #103, #107)**, not as a courtesy: the
-delivery ceiling reads it, so before the grant `REPLICATOR_MAX_DELIVERY_ATTEMPTS` could never
-fire. Probed afterwards, like every row: both groups answered 0 pending, where 12:55Z
-had returned `NOPERM`.
-
-**Draining a dead-letter queue is this service's job, granted since 2026-09-11 (#86,
-broker#12).** `XADD <topic>.dlq` was granted first and the deletion not, so the service could not
-empty its own queue — found when the #86 rehearsal's `alias_unknown` frame (parked
-2026-09-10T21:02:02Z) refused to delete. Broker's Phase 5 had already assigned the queues here, an
-unfinished decision rather than a policy, closed with a **Redis 7.0 ACL selector**, not a blanket
-command grant:
-
-```
-(+xdel ~content.fetch.dlq ~content.replicate.dlq ~content.persist.dlq ~content.capture.dlq)
-```
-
-Persist's queue joined 2026-09-26 (broker#64), capture's with broker#114 (`7fe8f44`), each read
-from broker's `deploy/redis-acl.conf`. `XDEL` works on those four and is refused on every other key
-this credential reaches, command and fact streams included; the root permission set never gains
-`+xdel`. Verified on the broker's node against 7.0.15, not from here: a drained queue shows by its
-depth (`content.replicate.dlq` is 0), but the selector's shape can't be proven without deleting
-something. The grant adds `+xdel` alone, so per-id deletion is the only disposal: precise, never
-a queue wipe.
+**Draining the dead-letter queues is this service's job**: `XDEL`, one id at a time,
+below. How that grant and `XPENDING`'s were won, and the selector's exact shape:
+[INFRASTRUCTURE.md](INFRASTRUCTURE.md#grants-the-replicator-user-gained-later).
 
 **`XTRIM` is not for these queues, or anything, from here (#106).** Broker withdrew it on
 2026-10-06 (CannObserv/broker#41) because nothing here issues it, which
