@@ -245,8 +245,9 @@ A release whose embedding text is unchanged needs no re-index of the shared
 store (CannObserv/index#13). Leave `SOCRATICODE_AUTO_CLEANUP` unset.
 
 `tests/test_socraticode_config.py::TestServerLaunchCost` pins the spec's shape
-and the hook's cap; `tests/test_socraticode_pin.py` fails until all five sites
-agree — the pre-install, machine setting and npx entry are VM-local and skip in CI.
+and the hook's cap, holding every documented cap to it;
+`tests/test_socraticode_pin.py` fails until all five sites agree — the
+pre-install, machine setting and npx entry are VM-local and skip in CI.
 
 ### Cross-repo search
 
