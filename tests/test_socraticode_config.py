@@ -42,6 +42,7 @@ from urllib.parse import urlparse
 
 import pytest
 
+from tests._tracked import tracked_texts
 from tests.test_doc_sensitive_paths import read_tracked_files
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -402,9 +403,45 @@ HEALTH_TIMEOUT_S = 120
 CAP_DEFAULT = re.compile(r'^CAP_DEFAULT="([^"]*)"', re.MULTILINE)
 CHOOM_CALL = "choom -n 500 -- "
 
-# The manual invocations' ceiling, one `-p` property per flag.
-COMMANDS = REPO_ROOT / "docs" / "COMMANDS.md"
-MANUAL_CAP = re.compile(r"systemd-run --user --scope((?: -p \S+)+)")
+# A documented cap is a `systemd-run` scope bounding memory: one carrying
+# `MemoryMax=`. Identified by what it is, so the browser test's `Delegate=yes`
+# scopes stay out by construction (#171). Its properties are the `-p` flags
+# before the command's `--`; a backslash continuation is joined first, so a
+# cap wrapped mid-flags is read whole.
+SYSTEMD_RUN = re.compile(r"systemd-run\b([^`\n]*)")
+SCOPE_PROPERTY = re.compile(r"(?:^|\s)(?:-p\s+|--property[=\s])(\S+)")
+CONTINUATION = re.compile(r"\\\n\s*")
+# Every tracked doc is scanned but these: vendored text is upstream's, a dated
+# plan and a `.skills/` warrant are records (the latter holds the pre-#162
+# caps as `disproven`), and this file's detector fixtures are caps by design.
+CAP_SCAN_EXCLUDED = (
+    "skills-vendor/",
+    "docs/plans/",
+    ".skills/",
+    "tests/test_socraticode_config.py",
+)
+# Where the caps live today: an empty scan is a broken detector, not a pass.
+CAP_HOMES = ("docs/COMMANDS.md", "docs/SOCRATICODE.md")
+
+
+def documented_caps(text: str) -> list[frozenset[str]]:
+    """The property set of every memory-capped `systemd-run` scope in `text`."""
+    caps = []
+    for call in SYSTEMD_RUN.finditer(CONTINUATION.sub(" ", text)):
+        flags = re.split(r"\s--(?:\s|$)", call.group(1), maxsplit=1)[0]
+        properties = frozenset(SCOPE_PROPERTY.findall(flags))
+        if any(p.startswith("MemoryMax=") for p in properties):
+            caps.append(properties)
+    return caps
+
+
+@pytest.fixture(scope="module")
+def caps_by_doc() -> dict[str, list[frozenset[str]]]:
+    return {
+        path: caps
+        for path, text in tracked_texts(exclude=CAP_SCAN_EXCLUDED)
+        if (caps := documented_caps(text))
+    }
 
 
 def _session_start_hooks() -> list[dict]:
@@ -489,25 +526,76 @@ class TestServerLaunchCost:
             "a cgroup cap stalls the process instead of killing it"
         )
 
-    def test_the_hook_cap_is_the_manual_ceiling(self) -> None:
+    def test_the_hook_cap_is_the_manual_ceiling(self, caps_by_doc: dict) -> None:
         """One ceiling for every SocratiCode launch on this host.
 
         `docs/SKILLS.md` says the hook runs at `docs/COMMANDS.md`'s ceiling, and
         the manual invocations were sized on this VM (#99). An upstream change to
-        the hook's default would otherwise leave the two quietly different.
+        the hook's default would otherwise leave the two quietly different — and
+        a copy outside COMMANDS.md did, in `docs/SOCRATICODE.md`, until a review
+        caught it (#162). So every tracked doc is read, not one (#171).
         """
         default = CAP_DEFAULT.search(HEALTH_SCRIPT.read_text())
         assert default, f"the vendored {HEALTH_HOOK}.sh no longer assigns CAP_DEFAULT"
         hook = frozenset(default.group(1).split())
-        calls = MANUAL_CAP.finditer(COMMANDS.read_text())
-        manual = {frozenset(m.group(1).split()[1::2]) for m in calls}
-        assert manual == {hook}, (
-            f"docs/COMMANDS.md caps at {sorted(map(sorted, manual))}, the hook at "
-            f"{sorted(hook)} — bring COMMANDS.md's invocations to the hook's default, "
-            "checking first that this VM has the room (#99 sized the current one). "
-            "SOCRATICODE_HEALTH_CAP in .claude/settings.local.json caps this host's "
-            "hook but cannot satisfy this check, which reads the default"
+        drifted = {
+            path: sorted(map(sorted, set(caps)))
+            for path, caps in caps_by_doc.items()
+            if set(caps) != {hook}
+        }
+        assert not drifted, (
+            f"documented caps differ from the hook's {sorted(hook)}: {drifted} — bring "
+            "each to the hook's default, checking first that this VM has the room "
+            "(#99 sized the current one). SOCRATICODE_HEALTH_CAP in "
+            ".claude/settings.local.json caps this host's hook but cannot satisfy "
+            "this check, which reads the default"
         )
+
+    def test_the_cap_scan_reads_the_documented_caps(self, caps_by_doc: dict) -> None:
+        """A scan that finds nothing passes the check above vacuously."""
+        missing = [path for path in CAP_HOMES if path not in caps_by_doc]
+        assert not missing, (
+            f"no memory-capped systemd-run scope found in {missing} — either the "
+            "caps moved (update CAP_HOMES) or documented_caps no longer reads "
+            "their spelling"
+        )
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            # COMMANDS.md's shape: flags on one line, the command after a `\`.
+            (
+                "systemd-run --user --scope -p MemoryMax=1G -p CPUQuota=50% \\\n"
+                "  choom -n 500 -- node driver.mjs index .",
+                [frozenset({"MemoryMax=1G", "CPUQuota=50%"})],
+            ),
+            # Wrapped mid-flags: the continuation is joined before reading.
+            (
+                "systemd-run --user --scope -p MemoryHigh=1G \\\n    -p MemoryMax=2G -- npx -y pkg",
+                [frozenset({"MemoryHigh=1G", "MemoryMax=2G"})],
+            ),
+            # SOCRATICODE.md's shape: inline code, the command after `--`.
+            (
+                "1. `systemd-run --user --scope -p MemoryMax=1G -- npm install x`, then",
+                [frozenset({"MemoryMax=1G"})],
+            ),
+            # A `-p` after the command's `--` is the command's, not the scope's.
+            (
+                "systemd-run --scope -p MemoryMax=1G -- tool -p MemoryMax=9G",
+                [frozenset({"MemoryMax=1G"})],
+            ),
+            (
+                "sudo systemd-run --scope --property=MemoryMax=1G -- x",
+                [frozenset({"MemoryMax=1G"})],
+            ),
+            # Not caps: a delegation scope with and without `-q`, and prose.
+            ("systemd-run --user --scope -q -p Delegate=yes -E PATH \\\n  uv run pytest", []),
+            ("`systemd-run --user --scope -p Delegate=yes` (docs/TESTING.md)", []),
+            ("`systemd-run --user` needs linger and the controllers delegated", []),
+        ],
+    )
+    def test_documented_caps_reads_a_cap_by_what_it_is(self, text: str, expected: list) -> None:
+        assert documented_caps(text) == expected
 
     def test_the_health_hook_is_registered_as_the_installer_writes_it(self) -> None:
         """No wrapper: the hook's own scope is the cap, and a wrapper is not one.
