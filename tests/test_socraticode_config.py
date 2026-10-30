@@ -406,9 +406,11 @@ CHOOM_CALL = "choom -n 500 -- "
 # A documented cap is a `systemd-run` scope carrying any resource bound —
 # `Memory*=` or `CPUQuota=` — so one that lost its `MemoryMax=` is still read,
 # and fails as drifted (CR 1). Identified by what it is, so the browser test's
-# `Delegate=yes` scopes stay out by construction (#171). Its properties are
-# the `-p` flags before the command's `--`; a backslash continuation is joined
-# first, so a cap wrapped mid-flags is read whole.
+# `Delegate=yes` scopes stay out by construction (#171). Every cap is held to
+# the SocratiCode ceiling: a future non-SocratiCode cap (the browser's, say)
+# reads as drift, and is filtered by its command then, not by a guess now.
+# Its properties are the `-p` flags before the command's `--`; a backslash
+# continuation is joined first, so a cap wrapped mid-flags is read whole.
 SYSTEMD_RUN = re.compile(r"systemd-run\b([^`\n]*)")
 SCOPE_PROPERTY = re.compile(r"(?:^|\s)(?:-p\s+|--property[=\s])(\S+)")
 RESOURCE_BOUND = re.compile(r"(?:Memory\w*|CPUQuota)=")
