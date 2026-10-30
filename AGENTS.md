@@ -174,7 +174,7 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
 # Mirror the private index first (Environment & Tooling)
 uv sync
 
-# Load environment — dev only (required before the worker, gh, or rcli); parses, never runs, the files
+# Load environment — dev only (required before the worker, gh, or rcli); parses the env files, never runs them
 . scripts/load_env.sh; . scripts/rcli.sh
 
 # Run tests
