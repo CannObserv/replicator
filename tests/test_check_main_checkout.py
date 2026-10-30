@@ -34,7 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 GUARD = REPO_ROOT / "scripts" / "check_main_checkout.sh"
 
 # The bypass the guard honours. Scrubbed from every invocation below: an operator
-# who exported it in their shell (or sourced /etc/replicator/.env via the Common
+# who exported it in their shell (or loaded /etc/replicator/.env via the Common
 # Commands snippet) would otherwise turn every refusal assertion in this file
 # green, and a suite that passes because the thing under test was disabled is
 # worse than no suite.

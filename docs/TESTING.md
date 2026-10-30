@@ -20,7 +20,7 @@ test-only variables, defined in `tests/conftest.py`.
 - `REPLICATOR_TEST_GCS_BUCKET` — the bucket `@pytest.mark.gcs` may write to; `co-gcs-test-replication`. **No default** — absent means those tests skip, never "use whatever the code would have picked", which on a host configured for production is the production bucket
 - `REPLICATOR_TEST_BLOB_BUCKET` — the temp-blob bucket `@pytest.mark.gcs` may write to (#7); `co-gcs-test-blobs`, provisioned 2026-08-20. **No default**, same rule as above, and deliberately a *second* variable: the two destinations carry opposite grants — the replicate SA holds no `delete` at all, which is what puts T4 at IAM rather than only in our code, while the temp-store tests create objects and clean up after themselves. One bucket serving both would mean either the temp tests cannot tidy or the permanent store can be erased
 - `REPLICATOR_TEST_PERMANENT_BUCKET` — the permanent-store test twin `@pytest.mark.gcs` may write to and replicate from (#114); `co-gcs-test-replicator`. **No default**, same rule; the store guard admits it beside `REPLICATOR_TEST_BLOB_BUCKET`
-- `REPLICATOR_TEST_GCS_CREDENTIALS` — path to the test SA key (`/etc/replicator/co-gcs-test-replicator-writer.json` here, the WIF credentials file in CI). Also no default, and mapped onto `GOOGLE_APPLICATION_CREDENTIALS` for marked tests only — the bucket name alone cannot catch a run pointed at the right bucket with the production identity, which is reachable because AGENTS.md's Common Commands snippet sources `/etc/replicator/.env`
+- `REPLICATOR_TEST_GCS_CREDENTIALS` — path to the test SA key (`/etc/replicator/co-gcs-test-replicator-writer.json` here, the WIF credentials file in CI). Also no default, and mapped onto `GOOGLE_APPLICATION_CREDENTIALS` for marked tests only — the bucket name alone cannot catch a run pointed at the right bucket with the production identity, which is reachable because AGENTS.md's Common Commands snippet loads `/etc/replicator/.env`
 
   All four GCS ones belong in the repo `.env` or the invoking shell, **never in `/etc/replicator/.env`** — that is the file the service reads, and a delete-capable identity is precisely the grant T4 exists to withhold from the worker. The resource itself: [**The GCS test bucket**](INFRASTRUCTURE.md#the-gcs-test-bucket--the-opposite-grant-on-purpose-38-50)
 
@@ -89,12 +89,12 @@ makes production untestable (#38).
   the environment of every test — `REPLICATOR_REPLICATION_ALIASES_FILE`,
   `GOOGLE_APPLICATION_CREDENTIALS`, `REPLICATOR_BLOB_BACKEND`,
   `REPLICATOR_BLOB_BUCKET` and, since #114, `REPLICATOR_PERMANENT_BUCKET`. The Common
-  Commands snippet sources `/etc/replicator/.env`, so `uv run pytest` inherits all five. The blob pair was
-  added in #77 CR round 2, when sourcing that file and then running this document's
+  Commands snippet loads `/etc/replicator/.env`, so `uv run pytest` inherits all five. The blob pair was
+  added in #77 CR round 2, when loading that file and then running this document's
   own `-m integration` command failed the policy-replay test on `constructed a real
   GcsBlobStore('co-gcs-blobs')` — the construction guard working, but only after
   two documented procedures had contradicted each other. `PRODUCTION_ENV` in
-  `tests/conftest.py` is the list; `test_the_scrub_covers_the_whole_snippet_agents_are_told_to_source`
+  `tests/conftest.py` is the list; `test_the_scrub_covers_the_whole_snippet_agents_are_told_to_load`
   pins the blob pair's membership. Alongside the scrub, `AsyncGcsDriver.__init__` **and
   `GcsBlobStore.__init__`** are patched to refuse any bucket (co-core's class since #114;
   the patch is on the class object, so it holds wherever it is imported from). The refusal

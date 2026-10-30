@@ -80,7 +80,7 @@ SCANNED = (REPO / "src", REPO / "tests")
 # stay legal because `test` is infixed. The bucket name is the fast check; the
 # identity is the one that matters, because a test pointed at the right bucket
 # with the wrong ADC is a state reachable today
-# — `AGENTS.md` tells us to `set -a; . /etc/replicator/.env` before shell work,
+# — `AGENTS.md` tells us to load `/etc/replicator/.env` before shell work,
 # which puts the writer's key (`co-gcs-replicator-writer.json`) into the
 # environment `uv run pytest` inherits.
 #
@@ -223,12 +223,12 @@ def test_the_production_environment_is_not_visible_to_a_test():
     assert [name for name in PRODUCTION_ENV if name in os.environ] == []
 
 
-def test_the_scrub_covers_the_whole_snippet_agents_are_told_to_source():
+def test_the_scrub_covers_the_whole_snippet_agents_are_told_to_load():
     """Every production variable that reaches a test, not only the two ADC ones.
 
     ``/etc/replicator/.env`` also carries ``REPLICATOR_BLOB_BACKEND=gcs`` and the
-    production ``REPLICATOR_BLOB_BUCKET``, and AGENTS.md tells an agent to source
-    it before any repo command. Sourcing it and then running the documented
+    production ``REPLICATOR_BLOB_BUCKET``, and AGENTS.md tells an agent to load
+    it before any repo command. Loading it and then running the documented
     integration command failed the policy replay test on ``constructed a real
     GcsBlobStore('co-gcs-blobs')`` — the construction guard doing its job, but
     only after two documented procedures had contradicted each other, and reading

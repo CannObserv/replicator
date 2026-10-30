@@ -34,7 +34,7 @@ NOTIFY = REPO_ROOT / "scripts" / "notify_failure.sh"
 UNIT_NAME = "replicator.service"
 
 # Every variable the script reads. Scrubbed from each invocation below so a
-# developer who sourced /etc/replicator/.env into their shell cannot turn an
+# developer who loaded /etc/replicator/.env into their shell cannot turn an
 # "unconfigured" assertion green by having configured it — the same reasoning
 # tests/test_check_main_checkout.py applies to REPLICATOR_ALLOW_ANY_CHECKOUT.
 NOTIFY_VARS = (
