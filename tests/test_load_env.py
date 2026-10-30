@@ -31,7 +31,6 @@ THIS = "tests/test_load_env.py"
 # command separator. `>> ./.env`, `grep … .env` and `load_env .env` do not match.
 _SOURCES_AN_ENV_FILE = re.compile(r"(?:^|[;&|(`\s])(?:\.|source)\s+\S*\.env\b")
 
-_SCANNED_SUFFIXES = (".md", ".sh", ".py")
 # Vendored text is upstream's to fix; a dated plan is the record of what was run.
 _EXCLUDED_PREFIXES = ("skills-vendor/", "docs/plans/")
 # Lines that name the patterns in order to refuse them, file by file.
@@ -45,24 +44,29 @@ LOAD_SITES = ("AGENTS.md", "README.md", "docs/COMMANDS.md", "docs/DEPLOYMENT.md"
 
 
 def _tracked_lines():
-    """Every line of every tracked file in scope. `git ls-files` rather than a
-    walk: `skills/*` and `.claude/hooks/*` are tracked symlinks into
-    `skills-vendor/`, which a walk would follow past the prefix check."""
+    """Every line of every tracked text file in scope: docs, scripts, tests,
+    and the workflows and deploy/ units too, where sourcing the repo `.env`
+    would cost most (CR 4). `git ls-files` rather than a walk: `skills/*` and
+    `.claude/hooks/*` are tracked symlinks into `skills-vendor/`, which a walk
+    would follow past the prefix check."""
     out = subprocess.run(
         ["git", "ls-files", "-z"], cwd=REPO, capture_output=True, check=True
     ).stdout.decode()
     for name in sorted(filter(None, out.split("\0"))):
         path = REPO / name
         if (
-            not name.endswith(_SCANNED_SUFFIXES)
-            or name.startswith(_EXCLUDED_PREFIXES)
+            name.startswith(_EXCLUDED_PREFIXES)
             or name == THIS
             or path.is_symlink()
             or not path.is_file()
         ):
             continue
+        try:
+            text = path.read_text()
+        except UnicodeDecodeError:  # binary: nothing to teach
+            continue
         allowed = _CARVE_OUTS.get(name, set())
-        for n, line in enumerate(path.read_text().splitlines(), 1):
+        for n, line in enumerate(text.splitlines(), 1):
             if line not in allowed:
                 yield name, n, line
 
