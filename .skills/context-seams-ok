@@ -521,7 +521,9 @@ docs/TESTING.md :: The operator half of that split is tabulated in [COMMANDS.md]
 # test-only variables. The TESTING.md description names its own source.
 docs/INFRASTRUCTURE.md :: [COMMANDS.md](COMMANDS.md#inspecting-the-consume-path), beside the commands. Some of
 docs/SOCRATICODE.md :: `QDRANT_API_KEY` goes in `.claude/settings.local.json` alone.
-docs/SOCRATICODE.md :: A third carrier, and not a hole in the env-file boundary [ENVIRONMENT.md](ENVIRONMENT.md) draws
+docs/SOCRATICODE.md :: A third carrier beside the two env files [ENVIRONMENT.md](ENVIRONMENT.md) separates
+# CR 1: the moved line names AGENTS.md's Common Commands, which stays there.
+docs/TESTING.md :: - `REPLICATOR_TEST_GCS_CREDENTIALS` — path to the test SA key
 docs/TESTING.md :: Read by neither env file, and indexed in [ENVIRONMENT.md](ENVIRONMENT.md): the
 tests/ci/test_workflow_pins.py :: docs/COMMANDS.md stay ``--frozen`` on purpose: production never re-resolves.
 tests/test_socraticode_pin.py :: worker runs beside every session (docs/COMMANDS.md). A spec that differs from the pre-install puts

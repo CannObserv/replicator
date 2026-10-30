@@ -190,7 +190,8 @@ for s in fetch replicate persist capture; do
 done
 
 # Disposal, once a frame is triaged and its command closed. One entry at a
-# time by id, which is the whole point of a selector: a drain cannot become a
+# time by id, which is the whole point of the XDEL selector
+# (INFRASTRUCTURE.md): a drain cannot become a
 # wipe. Resting state for every queue is 0 — content.persist.dlq at 0 when its
 # stream was created, 2026-09-26; the other two verified 2026-09-11, both at
 # XLEN 0 (broker#12). The id comes from the XRANGE above.

@@ -160,9 +160,9 @@ manifest is a source, not the artifact: see
 
 ### The client configuration and the key
 
-In `.claude/settings*.json` — **agent tooling, read by the harness and by nothing the service starts** (#92):
+`.claude/settings*.json` is **agent tooling, read by the harness and by nothing the service starts** (#92).
 
-A third carrier, and not a hole in the env-file boundary [ENVIRONMENT.md](ENVIRONMENT.md) draws: the rule is that `replicator.service` reads `/etc/replicator/.env` and nothing else, and the worker has no use for a semantic index. The six non-secret values addressing `co-index` (`QDRANT_MODE`, `QDRANT_URL`, `OLLAMA_MODE`, `OLLAMA_URL`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`) are **tracked**, in `.claude/settings.json`, so they travel with the checkout; their values are in [INFRASTRUCTURE.md](INFRASTRUCTURE.md).
+A third carrier beside the two env files [ENVIRONMENT.md](ENVIRONMENT.md) separates, and not a hole in that boundary: the rule is that `replicator.service` reads `/etc/replicator/.env` and nothing else, and the worker has no use for a semantic index. The six non-secret values addressing `co-index` (`QDRANT_MODE`, `QDRANT_URL`, `OLLAMA_MODE`, `OLLAMA_URL`, `EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`) are **tracked**, in `.claude/settings.json`, so they travel with the checkout; their values are in [INFRASTRUCTURE.md](INFRASTRUCTURE.md).
 
 `QDRANT_API_KEY` goes in `.claude/settings.local.json` alone. Qdrant holds **one global `service.api_key`** — no key list, no per-client identity — so a leak anywhere is a cohort-wide rotation with no overlap window. The ignore rule is therefore *asserted*, not assumed: `tests/test_socraticode_config.py` requires `git check-ignore -v` to name the tracked `.gitignore` rather than a global excludes file that protects one machine, and refuses a key-shaped value in any tracked file. Broker, a public repo, had no rule at all while four of five cohort repos did — which is what made the assumption read as true (notifier#68). Install it with notifier's `install_qdrant_key.sh`, never by hand: [COMMANDS.md](COMMANDS.md).
 
@@ -229,11 +229,11 @@ schedule — nothing reports an upstream release, so check
 
 1. `SOCRATICODE_SPEC` in `.claude/settings.json`, and the version named above.
 2. The driver's pre-install, capped:
-   `systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% -- npm install --prefix ~/.socraticode/pin socraticode@<version>`
+   `systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p MemorySwapMax=0 -p CPUQuota=100% -- npm install --prefix ~/.socraticode/pin socraticode@<version>`
 3. The VS Code machine setting's `SOCRATICODE_SPEC`.
 4. **The session's npx entry, warmed under the same cap** — skipped, the cold
    install moves to the next session start:
-   `systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% -- npx -y -p socraticode@<version> -- node -e 0`.
+   `systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p MemorySwapMax=0 -p CPUQuota=100% -- npx -y -p socraticode@<version> -- node -e 0`.
    `-p` keys the same `~/.npm/_npx/<hash>` as the plugin's spelling (checked in
    #152: a plugin-style launch afterwards created no new entry).
 5. After a full VS Code reconnect: confirm from the process table, then

@@ -17,9 +17,9 @@ In `.env` (dev/agent only — never read by the service):
 - `GH_TOKEN` — GitHub PAT for this repo (used by `gh` CLI)
 - `GH_TOKEN_ARCHIVER` / `GH_TOKEN_WATCHER` / `GH_TOKEN_CANNOBSERV` / `GH_TOKEN_SKILLS` — per-repo PATs. Cross-repo work is **filed as an issue**, never edited directly: each repo owns its own review, CI, and deploy cycle, and `main` is the deployed code. Pass the right one as `GH_TOKEN` for a given `gh` call.
 
-A third carrier, `.claude/settings*.json`, is agent tooling read by the harness and by nothing the service starts (#92): its `co-index` values and `QDRANT_API_KEY` are in [SOCRATICODE.md](SOCRATICODE.md#the-client-configuration-and-the-key), with why the key's ignore rule is asserted rather than assumed.
+A third carrier, `.claude/settings*.json`, is agent tooling read by the harness and by nothing the service starts (#92): its `co-index` settings and `QDRANT_API_KEY` are in [SOCRATICODE.md](SOCRATICODE.md#the-client-configuration-and-the-key) (the values in [INFRASTRUCTURE.md](INFRASTRUCTURE.md)), with why the key's ignore rule is asserted rather than assumed.
 
-Read by neither env file — test-only, defined in `tests/conftest.py`: the `REPLICATOR_TEST_*` variables (`_REDIS_URL`, `_GCS_BUCKET`, `_BLOB_BUCKET`, `_PERMANENT_BUCKET`, `_GCS_CREDENTIALS`) are in [TESTING.md](TESTING.md#variables), beside the fixtures and markers they gate. None goes in `/etc/replicator/.env`.
+Read by neither env file — test-only, defined in `tests/conftest.py`: the `REPLICATOR_TEST_*` variables (`_REDIS_URL`, `_GCS_BUCKET`, `_BLOB_BUCKET`, `_PERMANENT_BUCKET`, `_GCS_CREDENTIALS`) are in [TESTING.md](TESTING.md#variables), beside the fixtures and markers they gate. The GCS ones never go in `/etc/replicator/.env`.
 
 In `/etc/replicator/.env` (read by the service):
 - `GOOGLE_APPLICATION_CREDENTIALS` — the worker's ADC: the writer SA key (`/etc/replicator/co-gcs-replicator-writer.json`, `co-gcs-replicator-writer` since #114; it replaced `co-gcs-replicator`). **Not** the wheelhouse reader — that is `REPLICATOR_WHEELHOUSE_CREDENTIALS` below, split off precisely so the boot step and the worker never share an identity (#29); this line said otherwise until #86 verified the file

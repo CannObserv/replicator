@@ -42,3 +42,7 @@ docs/contracts/content-fetch-issuer-contract.md :: disproven :: replicator:cmd:<
 docs/COMMANDS.md :: retarget :: POLITENESS.md#reading-the-apply-log
 docs/POLITENESS.md :: retarget :: COMMANDS.md#politeness--contentfetch-policy-19
 docs/SKILLS.md :: retarget :: SOCRATICODE.md
+# ---- #162 CR 1: atoms of the lines warranted `disproven` in context-loss-ok ----
+docs/SOCRATICODE.md :: disproven :: systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% -- npm install --prefix ~/.socraticode/pin socraticode@<version>
+docs/SOCRATICODE.md :: disproven :: systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% -- npx -y -p socraticode@<version> -- node -e 0
+docs/CONVENTIONS.md :: disproven :: (+xdel ~content.fetch.dlq ~content.replicate.dlq)

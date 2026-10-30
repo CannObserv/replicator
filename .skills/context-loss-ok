@@ -810,3 +810,21 @@ docs/ENVIRONMENT.md :: retarget :: in [TESTING.md](TESTING.md)
 # #162: the key's location moved from ENVIRONMENT.md to SOCRATICODE.md.
 docs/SOCRATICODE.md :: retarget :: and nowhere else ([ENVIRONMENT.md](ENVIRONMENT.md)). Capped invocations for
 docs/INFRASTRUCTURE.md :: retarget :: | Key | `QDRANT_API_KEY`, `.claude/settings.local.json` | See [ENVIRONMENT.md](ENVIRONMENT.md). |
+# #162 CR 1 (fresh-eyes review): the COMMANDS.md comment's "a selector" lost its
+# antecedent when the selector moved; it now names the XDEL selector and where it is.
+docs/COMMANDS.md :: retarget :: # time by id, which is the whole point of a selector: a drain cannot become a
+# #162 CR 1: in SOCRATICODE.md the settings lead-in is a sentence, not a colon
+# introducing ENVIRONMENT.md's next paragraph; same claims.
+docs/ENVIRONMENT.md :: tighten :: In `.claude/settings*.json` — **agent tooling, read by the harness and by nothing the service starts** (#92):
+# #162 CR 1: "the Common Commands snippet" is AGENTS.md's, which TESTING.md has to say;
+# "All four" sat under five bullets there, so it names the four GCS ones (TESTING.md's
+# own "All four are dev-only" paragraph already meant the same four).
+docs/ENVIRONMENT.md :: retarget :: - `REPLICATOR_TEST_GCS_CREDENTIALS` — path to the test SA key (`/etc/replicator/co-gcs-test-replicator-writer.json` here, the WIF credentials file in CI). Also no default, and mapped onto `GOOGLE_APPLICATION_CREDENTIALS` for marked tests only — the bucket name alone cannot catch a run pointed at the right bucket with the production identity, which is reachable because the Common Commands snippet sources `/etc/replicator/.env`
+docs/ENVIRONMENT.md :: tighten :: All four belong in the repo `.env` or the invoking shell, **never in `/etc/replicator/.env`** — that is the file the service reads, and a delete-capable identity is precisely the grant T4 exists to withhold from the worker. The resource itself: [**The GCS test bucket**](INFRASTRUCTURE.md#the-gcs-test-bucket--the-opposite-grant-on-purpose-38-50)
+# #162 CR 1: SOCRATICODE.md's re-pin copies of the two capped installs, refuted by the
+# hook's CAP_DEFAULT (skills#340) exactly as COMMANDS.md's were; they gain MemorySwapMax=0.
+docs/SOCRATICODE.md :: disproven :: `systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% -- npm install --prefix ~/.socraticode/pin socraticode@<version>`
+docs/SOCRATICODE.md :: disproven :: `systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% -- npx -y -p socraticode@<version> -- node -e 0`.
+# #162 CR 1: CONVENTIONS.md quoted a two-queue XDEL selector; broker's deploy/redis-acl.conf
+# names four (persist and capture joined). It now links the selector's shape instead.
+docs/CONVENTIONS.md :: disproven :: - **DLQ is a shipped seam, not a TODO:** `dead_letter(message_id, fields, reason=…)` copies the frame to `<topic>.dlq` with co-core's `dlq.*` provenance beside it, and acks the original. Deterministic failure ⇒ DLQ; transient failure ⇒ retry. **Draining it is this service's job, and both halves are granted** — `XADD <topic>.dlq` parks a frame and, since 2026-09-11, an ACL selector `(+xdel ~content.fetch.dlq ~content.replicate.dlq)` removes one once it is triaged (#86, broker#12). `XDEL` is refused on every other stream and nothing here issues `XTRIM` (#106 — the broker had granted it on both fact streams and both queues, and broker#41 withdraws it), so disposal is one entry at a time by id and a drain can never become a wipe. Resting state for both queues is 0: `docs/COMMANDS.md`.
