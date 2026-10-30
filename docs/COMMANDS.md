@@ -367,13 +367,13 @@ bash skills-vendor/gregoryfoster-skills/skills/init-socraticode/scripts/prefligh
 
 # Anything that starts a server, capped. Measured here: ~40 s, worker untouched,
 # available memory never below 2.28 GB.
-systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% \
+systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p MemorySwapMax=0 -p CPUQuota=100% \
   choom -n 500 -- node "$SOCRATICODE_DRIVER" health-check . --probe src/worker/main.py
 
 # The index itself, same cap. Measured 2026-09-18: 21 min wall, full tree (1708
 # code / 335 context points, 25/25 artifacts), available memory never below
 # 2.33 GB, worker NRestarts=0. Embedding runs on co-index: little local CPU.
-systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% \
+systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p MemorySwapMax=0 -p CPUQuota=100% \
   choom -n 500 -- node "$SOCRATICODE_DRIVER" index .
 ```
 
@@ -393,9 +393,9 @@ npm view socraticode version     # pick a literal; never @latest
 # Then: SOCRATICODE_SPEC in .claude/settings.json, the version SOCRATICODE.md
 # names, and claudeCode.environmentVariables in
 # ~/.vscode-server/data/Machine/settings.json.
-systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% \
+systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p MemorySwapMax=0 -p CPUQuota=100% \
   -- npm install --prefix ~/.socraticode/pin socraticode@<version>   # the driver's pre-install
-systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% \
+systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p MemorySwapMax=0 -p CPUQuota=100% \
   -- npx -y -p socraticode@<version> -- node -e 0                    # warm the session's npx entry
 
 # After a full VS Code reconnect, from the session's Bash tool ($PPID is its
