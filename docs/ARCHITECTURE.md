@@ -63,8 +63,9 @@ src/worker/checkout.py — Is this checkout main's code? Asked before a write id
 src/core/logging.py  — build_json_formatter() + ColorMessageFilter + configure_logging() + get_logger()
 src/core/log_config.json — uvicorn --log-config; routes uvicorn's own loggers through that formatter
 src/core/config.py   — Settings / env access (see Environment Variables)
-scripts/        — sync_wheelhouse.py, co_core_closure_diff.py, check_redis_floor.sh, rcli.sh, check_main_checkout.sh, notify_failure.sh, browser_exec.sh, seed_fetch.py, seed_capture.py, inflight.py, rehearse_reconnect.sh
+scripts/        — sync_wheelhouse.py, co_core_closure_diff.py, check_redis_floor.sh, rcli.sh, load_env.sh, check_main_checkout.sh, notify_failure.sh, browser_exec.sh, seed_fetch.py, seed_capture.py, inflight.py, rehearse_reconnect.sh
 scripts/rcli.sh  — sourced: redis-cli with the URL's credential in REDISCLI_AUTH, never argv (#127)
+scripts/load_env.sh — sourced: parses both env files into the shell, never runs them (#170)
 scripts/notify_failure.sh — the OnFailure= handler's body: records the incident, dispatches it when configured (#94)
 scripts/seed_fetch.py — the seed harness; publishes content.fetch to scratch streams, --watch tails the facts
 tests/          — Mirrors src/ structure; integration tests in `@pytest.mark.integration`

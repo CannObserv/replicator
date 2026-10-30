@@ -87,10 +87,11 @@ Two env files, with a deliberate boundary between them:
 2. **`.env`** (repo root, git-ignored) — dev/agent secrets, e.g. GitHub PATs. Loaded by
    developers and agents in a shell; **never** by the service, which has no use for them.
 
-For local work, load both:
+For local work, load both. [`scripts/load_env.sh`](scripts/load_env.sh) parses them rather than
+sourcing them, so nothing in either runs as shell code:
 
 ```bash
-set -a; . /etc/replicator/.env 2>/dev/null; . .env 2>/dev/null; set +a
+. scripts/load_env.sh
 ```
 
 Variables the service uses all live in `/etc/replicator/.env`. **[docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)

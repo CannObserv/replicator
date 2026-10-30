@@ -23,7 +23,7 @@ a variable of its own.
 ## Environment
 
 ```bash
-set -a; . /etc/replicator/.env 2>/dev/null; . .env 2>/dev/null; set +a
+. scripts/load_env.sh   # parses /etc/replicator/.env, then the repo .env; never runs them (#170)
 ```
 
 ## Worker

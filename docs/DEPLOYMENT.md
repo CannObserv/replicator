@@ -50,7 +50,7 @@ Rehearse reconnection before changing the start budget — the loop's half in py
 **Dev server workflow** (the `/health` app, port 8001 so a future live service on 8000 stays up):
 
 ```bash
-set -a; . /etc/replicator/.env 2>/dev/null; . .env 2>/dev/null; set +a
+. scripts/load_env.sh
 uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8001 --reload --log-config src/core/log_config.json
 ```
 
