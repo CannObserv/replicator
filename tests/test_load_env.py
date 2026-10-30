@@ -120,6 +120,7 @@ class TestNothingTeachesSourcing:
 
 
 SENTINEL_KEY = "LOAD_ENV_SENTINEL_170"
+ETC_ENV = Path("/etc/replicator/.env")
 
 
 # Pinned locally, so a global commit.gpgsign or defaultBranch cannot move a case.
@@ -164,6 +165,14 @@ def _source(checkout: Path, after: str = f'printf "%s" "${{{SENTINEL_KEY}-unset}
         text=True,
         timeout=60,
     )
+
+
+def _names(env_file: Path) -> set[str]:
+    """Key names only, never values: what /etc/replicator/.env may add here."""
+    if not env_file.is_file():
+        return set()
+    pattern = re.compile(r"^\s*(?:export\s+)?([A-Za-z0-9_]+)=")
+    return {m[1] for ln in env_file.read_text().splitlines() if (m := pattern.match(ln))}
 
 
 class TestTheScriptParses:
@@ -228,9 +237,21 @@ class TestTheScriptParses:
             timeout=60,
         )
         assert r.returncode == 0, r.stderr
-        etc_names = _names(Path("/etc/replicator/.env"))
+        etc_names = _names(ETC_ENV)
         new = set(r.stdout.split()) - etc_names - {SENTINEL_KEY}
         assert not new, f"left behind in the caller's shell: {sorted(new)}"
+
+    @pytest.mark.skipif(not _names(ETC_ENV), reason=f"{ETC_ENV} unreadable or empty here")
+    def test_the_repo_env_overrides_etc(self, tmp_path: Path):
+        """/etc first, then the checkout's `.env`, so the developer's file wins
+        (CR 3). The path is fixed, so this runs where the production file is
+        readable; it takes one key *name* from it, never a value."""
+        key = sorted(_names(ETC_ENV))[0]
+        main = _checkout(tmp_path)
+        (main / ".env").write_text(f"{key}=the-developers\n")
+        r = _source(main, f'[ "${key}" = the-developers ] && echo wins')
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.strip() == "wins", f"/etc/replicator/.env's {key} won"
 
     def test_outside_git_it_never_reads_the_callers_cwd(self, tmp_path: Path):
         """No `.env` and no repository: the fallback's `rev-parse` fails, and
@@ -283,11 +304,3 @@ class TestTheScriptParses:
         assert r.returncode != 0
         assert "still-here" in r.stdout, "a sourced script must return, not exit"
         assert "submodule" in r.stderr, r.stderr
-
-
-def _names(env_file: Path) -> set[str]:
-    """Key names only, never values: what /etc/replicator/.env may add here."""
-    if not env_file.is_file():
-        return set()
-    pattern = re.compile(r"^\s*(?:export\s+)?([A-Za-z0-9_]+)=")
-    return {m[1] for ln in env_file.read_text().splitlines() if (m := pattern.match(ln))}
