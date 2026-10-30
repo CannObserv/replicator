@@ -22,7 +22,7 @@
 # ours but load_env and what the files set. Bash only: it reads BASH_SOURCE.
 
 _load_env_main() {
-  local _le_root _le_recipe _le_env PRE_SHIP_ENV_NAMES  # the recipe appends key names to the last
+  local _le_root _le_recipe _le_env _le_common PRE_SHIP_ENV_NAMES  # the recipe appends key names to the last
   _le_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd) || return 1  # CDPATH would move it
   _le_recipe="$_le_root/skills/shipping-work-python-fastapi/scripts/pre-ship.sh"
   unset -f load_env
@@ -33,8 +33,11 @@ _load_env_main() {
     return 1
   fi
   _le_env="$_le_root/.env"
-  [ -r "$_le_env" ] ||
-    _le_env="$(dirname "$(git -C "$_le_root" rev-parse --path-format=absolute --git-common-dir)")/.env"
+  # Outside a repository there is no primary: never let `dirname ""` make it the cwd.
+  if [ ! -r "$_le_env" ] &&
+    _le_common=$(git -C "$_le_root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+    _le_env="$(dirname "$_le_common")/.env"
+  fi
   load_env /etc/replicator/.env && load_env "$_le_env"
 }
 

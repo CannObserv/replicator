@@ -232,6 +232,29 @@ class TestTheScriptParses:
         new = set(r.stdout.split()) - etc_names - {SENTINEL_KEY}
         assert not new, f"left behind in the caller's shell: {sorted(new)}"
 
+    def test_outside_git_it_never_reads_the_callers_cwd(self, tmp_path: Path):
+        """No `.env` and no repository: the fallback's `rev-parse` fails, and
+        `dirname ""` is `.`, which loaded the caller's cwd's `.env` (CR 2)."""
+        tree = tmp_path / "tree"
+        (tree / "scripts").mkdir(parents=True)
+        shutil.copy(REPO / SCRIPT, tree / SCRIPT)
+        (tree / RECIPE).parent.mkdir(parents=True)
+        shutil.copy(REPO / RECIPE, tree / RECIPE)
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / ".env").write_text(f"{SENTINEL_KEY}=unrelated\n")
+        r = subprocess.run(
+            ["bash", "-c", f'. "{tree / SCRIPT}"\nprintf "%s" "${{{SENTINEL_KEY}-unset}}"'],
+            cwd=elsewhere,
+            env={"PATH": "/usr/bin:/bin", "GIT_CEILING_DIRECTORIES": str(tmp_path)},
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == "unset", "loaded an .env from the caller's cwd"
+        assert r.stderr == "", r.stderr
+
     def test_cdpath_cannot_move_the_root(self, tmp_path: Path):
         """`dirname` gives a relative `scripts`, which `cd` resolves through
         CDPATH first: an interactive shell's CDPATH naming a directory with a
