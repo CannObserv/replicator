@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._tracked import tracked_texts
+
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = "scripts/load_env.sh"
 RECIPE = "skills/shipping-work-python-fastapi/scripts/pre-ship.sh"
@@ -46,25 +48,8 @@ LOAD_SITES = ("AGENTS.md", "README.md", "docs/COMMANDS.md", "docs/DEPLOYMENT.md"
 def _tracked_lines():
     """Every line of every tracked text file in scope: docs, scripts, tests,
     and the workflows and deploy/ units too, where sourcing the repo `.env`
-    would cost most (CR 4). `git ls-files` rather than a walk: `skills/*` and
-    `.claude/hooks/*` are tracked symlinks into `skills-vendor/`, which a walk
-    would follow past the prefix check."""
-    out = subprocess.run(
-        ["git", "ls-files", "-z"], cwd=REPO, capture_output=True, check=True
-    ).stdout.decode()
-    for name in sorted(filter(None, out.split("\0"))):
-        path = REPO / name
-        if (
-            name.startswith(_EXCLUDED_PREFIXES)
-            or name == THIS
-            or path.is_symlink()
-            or not path.is_file()
-        ):
-            continue
-        try:
-            text = path.read_text()
-        except UnicodeDecodeError:  # binary: nothing to teach
-            continue
+    would cost most (CR 4)."""
+    for name, text in tracked_texts(exclude=(*_EXCLUDED_PREFIXES, THIS)):
         allowed = _CARVE_OUTS.get(name, set())
         for n, line in enumerate(text.splitlines(), 1):
             if line not in allowed:
