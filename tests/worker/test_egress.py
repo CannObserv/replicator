@@ -391,8 +391,8 @@ IANA_SPECIAL_PURPOSE = [
 )
 async def test_an_iana_special_purpose_address_is_refused(path, label, address, refused):
     """No public corpus is served from a documentation, benchmarking or protocol range,
-    so refusing one costs nothing — except where a provider uses it inside the network
-    this host reaches, which is the case the rows close (``198.18.0.0/15`` above all).
+    so a refusal costs nothing. What one catches is a provider using such a range inside
+    the network this host reaches — ``198.18.0.0/15`` above all.
     """
     host = f"[{address}]" if ":" in address else address
     url, mapping = (
