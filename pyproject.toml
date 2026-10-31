@@ -72,9 +72,10 @@ dependencies = [
     #   `google.cloud.storage`'s own session.
     #
     # Requires-Dist is unchanged bar the self-pins. 0.39.3's Trello transport and
-    # 0.39.5's `extract_email_parts` fall outside the closure. All of `bus` is
-    # identical. The two dynamic imports are the same two as at 0.39.1, each
-    # target named again under `TYPE_CHECKING`.
+    # 0.39.5's `extract_email_parts` fall outside the closure. All of
+    # `co_core_aio/bus` and `pure/adapters/bus` is identical. The two dynamic
+    # imports are the same two as at 0.39.1, each target named again under
+    # `TYPE_CHECKING`.
     #
     # Previously:
     #
