@@ -7,46 +7,43 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
-    # Floor is 0.39.0, and it carries no new feature: **two minors (0.37 -> 0.39)**
-    # taken as a catch-up (#153), ahead of the capture consumer (#138), so that
-    # this diff does not land with a behaviour change. #138's types
-    # (`ContentCaptureCommand`, `CaptureStoredEmit` / `CaptureFailedEmit`, the
-    # `CONTENT_CAPTURE` constant) arrived in 0.37.1 (cannobserv#571), so every
-    # 0.39 release has them. The floor is 0.39.0, not 0.39.1: 0.39.1's diff over
-    # 0.39.0 is `__version__` in the three `__init__`s and nothing else, and the
-    # lock resolves 0.39.1. Both `co-core-aio` and `co-core-sync` 0.39.0 and
-    # 0.39.1 require `co-core>=0.39,<0.40`, so the three move together.
+    # Floor is 0.40.0, and it carries no new feature: a one-minor catch-up
+    # (#172), ahead of #63's `ContentFetchCommand.render` (cannobserv#602, a
+    # 0.40.1 PATCH not yet cut), so that this diff does not land with a
+    # behaviour change. #63 raises the patch floor itself when it starts reading
+    # the field. 0.40.0's two breaks are producer-side: `ContentReplicateCommandEmit`
+    # enforces the `<provider>-<role>` alias rule (cannobserv#495) and
+    # `SourceRevisionObservedEmit` requires `blob_fingerprint` (cannobserv#494).
+    # Replicator builds neither and decodes the canonical classes, which are
+    # unchanged; `ContentReplicateCommand.credentials_alias` stays a plain `str`,
+    # so an unknown alias still decodes and closes as `alias_unknown`. Both
+    # `co-core-aio` and `co-core-sync` 0.40.0 require `co-core>=0.40,<0.41`, so
+    # the three move together.
     #
-    # **`scripts/co_core_closure_diff.py 0.37.0 0.39.1`** (#145), verbatim:
+    # **`scripts/co_core_closure_diff.py 0.39.1 0.40.0`** (#145), verbatim:
     #
-    # ## Import closure, 0.37.0 → 0.39.1
+    # ## Import closure, 0.39.1 → 0.40.0
     #
     # Roots `src`, `scripts`; packages `co_core`, `co_core_aio`, `co_core_sync`.
     #
-    # 57 files at 0.37.0, 58 at 0.39.1. 14 not identical:
+    # 58 files at 0.39.1, 58 at 0.40.0. 8 not identical:
     #
     # - `version-only` co_core/__init__.py
-    # - `changed` co_core/pure/adapters/bus/envelope.py
-    # - `changed` co_core/pure/adapters/bus/streams.py
-    # - `changed` co_core/pure/extract/__init__.py
-    # - `added` co_core/pure/extract/_canonical_json.py
-    # - `docstrings-only` co_core/pure/extract/base.py
-    # - `changed` co_core/pure/extract/config.py
-    # - `changed` co_core/pure/extract/errors.py
-    # - `changed` co_core/pure/extract/extraction_defaults.py
-    # - `changed` co_core/pure/extract/media_type.py
-    # - `changed` co_core/pure/extract/spec_fingerprint.py
     # - `changed` co_core/pure/models/changes.py
+    # - `docstrings-only` co_core/pure/util/aliases.py
     # - `version-only` co_core_aio/__init__.py
+    # - `docstrings-only` co_core_aio/fetch.py
+    # - `changed` co_core_aio/transport.py
     # - `version-only` co_core_sync/__init__.py
+    # - `changed` co_core_sync/drivers/transport.py
     #
     # **Requires-Dist:**
     #
-    # - co_core: added `python-jsonpath<3,>=2.2; extra == 'extract'`, `soupsieve<3,>=2.0; extra == 'extract'`
-    # - co_core_aio: removed `co-core<0.38,>=0.37`; added `co-core<0.40,>=0.39`
-    # - co_core_sync: removed `co-core<0.38,>=0.37`; added `co-core<0.40,>=0.39`
+    # - co_core: unchanged
+    # - co_core_aio: removed `co-core<0.40,>=0.39`; added `co-core<0.41,>=0.40`
+    # - co_core_sync: removed `co-core<0.40,>=0.39`; added `co-core<0.41,>=0.40`
     #
-    # **Third-party imports** (at 0.39.1): `google`, `google_auth_oauthlib`, `googleapiclient`, `httpx`, `pydantic`, `redis`, `requests`, `urllib3`.
+    # **Third-party imports** (at 0.40.0): `google`, `google_auth_oauthlib`, `googleapiclient`, `httpx`, `pydantic`, `redis`, `requests`, `urllib3`.
     #
     # **Dynamic imports, not followed:**
     #
@@ -55,30 +52,53 @@ dependencies = [
     #
     # Read by hand, the `changed` files:
     #
-    # - `pure/models/changes.py`: the capture models and their Emit twins, added.
-    #   Every class that exists at 0.37.0 is AST-identical at 0.39.1 bar
-    #   docstrings, so no field, default or config moved under `extra="ignore"`;
-    # - `pure/adapters/bus/envelope.py`: `from_wire`'s global table gains
-    #   `content_capture`, `capture_stored` and `capture_failed`. On 0.37.0 one of
-    #   those on a stream read here raised `BusMessageUnknownEventTypeError`; now
-    #   it decodes and falls to the `isinstance` guards. A command stream still
-    #   dead-letters it, under "payload is not a ... command" instead of a poison
-    #   frame; `content.fetch-policy` skips it with a wrong-type warning instead
-    #   of a poison skip.
-    #   `idempotency_key` adds `occurred_at` to `InfoItemPrimaryChangedEvent`'s key,
-    #   a type Replicator never publishes;
-    # - `pure/adapters/bus/streams.py`: `CONTENT_CAPTURE`, a command stream;
-    # - `pure/extract/*`: 0.38.0's JSON extractor and `ignore_selectors`, and
-    #   `spec_fingerprint` routed through the added `_canonical_json.py`. They load
-    #   only because `changes.py` imports `extract.canonical`; nothing here imports
-    #   the package or calls `spec_fingerprint`, `extraction_config_from_spec` or
-    #   `refuse_unhonoured`.
+    # - `pure/models/changes.py`: the two Emit twins above, and the import of
+    #   `alias_provider` / `validate_credentials_alias` that the alias check
+    #   needs. Every other class is AST-identical, so no field, default or
+    #   config moved under `extra="ignore"`;
+    # - `co_core_aio/transport.py` (0.39.4, cannobserv#597): `RetryAsyncTransport`
+    #   re-raises a raw `ssl.SSLError` as `httpx.ReadError`. In the closure only
+    #   because `fetch.py` imports `build_resilient_client`. `build_fetch_client`
+    #   hands `AsyncFetchDriver` its own client, whose transport is
+    #   `GuardedTransport(BodyCeilingTransport(httpx.AsyncHTTPTransport()))`,
+    #   so the change never runs here. **A raw `ssl.SSLError` from a TLS read
+    #   still misses `handler.py`'s `except httpx.HTTPError`** and closes as
+    #   `handler_error` after the delivery ceiling: unchanged by this move;
+    # - `co_core_sync/drivers/transport.py` (0.39.2, cannobserv#509):
+    #   `DeadlineRetry.increment` stops re-sending a POST or PATCH after a TLS
+    #   error. Loaded because `co_core_sync/drivers/__init__` imports it eagerly,
+    #   but it acts only on a session mounted with `mount_resilient_adapter` or
+    #   `resilient_adapter`. Nothing here mounts one; `GcsBlobStore` goes through
+    #   `google.cloud.storage`'s own session.
     #
-    # The new Requires-Dist is gated on `extra == 'extract'`, which isn't
-    # installed. 0.39.0's co/v1 lookup refusals and 0.39.1's CRM-model
-    # datetimes fall outside the closure. All of `co_core_aio`, `bus` and `fetch`
-    # with it, is identical bar `__version__`. The two dynamic imports are the
-    # same two as at 0.37.0, each target named again under `TYPE_CHECKING`.
+    # Requires-Dist is unchanged bar the self-pins. 0.39.3's Trello transport and
+    # 0.39.5's `extract_email_parts` fall outside the closure. All of `bus` is
+    # identical. The two dynamic imports are the same two as at 0.39.1, each
+    # target named again under `TYPE_CHECKING`.
+    #
+    # Previously:
+    #
+    # Floor was 0.39.0, and it carried no new feature: **two minors (0.37 -> 0.39)**
+    # taken as a catch-up (#153), ahead of the capture consumer (#138), so that
+    # that diff did not land with a behaviour change. #138's types
+    # (`ContentCaptureCommand`, `CaptureStoredEmit` / `CaptureFailedEmit`, the
+    # `CONTENT_CAPTURE` constant) arrived in 0.37.1 (cannobserv#571), so every
+    # 0.39 release has them. The floor was 0.39.0, not 0.39.1: 0.39.1's diff over
+    # 0.39.0 is `__version__` in the three `__init__`s and nothing else.
+    #
+    # **Diffing the closure, 0.37.0 → 0.39.1** (57 files, then 58): 14 not
+    # identical. `pure/models/changes.py` added the capture models and their Emit
+    # twins; every class that existed at 0.37.0 was AST-identical bar
+    # docstrings. `from_wire`'s global table gained `content_capture`,
+    # `capture_stored` and `capture_failed`, so one of those on a stream read
+    # here now decodes and falls to the `isinstance` guards: a command stream
+    # still dead-letters it, under "payload is not a ... command" instead of a
+    # poison frame, and `content.fetch-policy` skips it with a wrong-type warning
+    # instead of a poison skip. `streams.py` added `CONTENT_CAPTURE`.
+    # `pure/extract/*` (0.38.0's JSON extractor, `ignore_selectors`, the added
+    # `_canonical_json.py`) loads only because `changes.py` imports
+    # `extract.canonical`. The new Requires-Dist was gated on `extra == 'extract'`,
+    # which isn't installed. All of `co_core_aio` was identical bar `__version__`.
     #
     # Previously:
     #
@@ -261,9 +281,9 @@ dependencies = [
     # at module load, so a skew cannot reach a running worker at all. Additive over
     # 0.8.0 for everything the fetch path uses — no field on ContentFetchCommand,
     # BlobAvailableEvent or FetchFailedEvent moved between the two.
-    "co-core>=0.39.0,<0.40",
-    "co-core-aio[bus,gcs]>=0.39.0,<0.40",
-    "co-core-sync[gcs]>=0.39.0,<0.40",
+    "co-core>=0.40.0,<0.41",
+    "co-core-aio[bus,gcs]>=0.40.0,<0.41",
+    "co-core-sync[gcs]>=0.40.0,<0.41",
     "fastapi>=0.126.0,<1",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.5.0,<3",
