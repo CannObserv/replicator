@@ -256,6 +256,7 @@ EMBEDDING_A_BLOCKED_ADDRESS = [
     ("Teredo server", "2001:0:a00:7:8000:ffff:a247:27dd", "10.0.0.0/8"),
     ("ISATAP, RFC 5214", "2600:1f18::5efe:a00:7", "10.0.0.0/8"),
     ("ISATAP, u bit set", "2600:1f18::200:5efe:a00:7", "10.0.0.0/8"),
+    ("NAT64 well-known prefix, benchmarking (#161)", "64:ff9b::c612:1", "198.18.0.0/15"),
 ]
 
 
@@ -362,6 +363,49 @@ async def test_a_redirect_to_an_embedded_literal_is_refused_at_the_hop():
     async with httpx.AsyncClient(transport=transport, follow_redirects=True) as client:
         with pytest.raises(PermanentFetchError, match=_refused_in("127.0.0.0/8")):
             await client.get("http://example.gov/")
+
+
+# --- The IANA special-purpose ranges (#161) -----------------------------------
+#
+# One row per range the operator chose, each address off the network's first one, and
+# the /15 and /20 and /28 rows at their top end so a narrower row fails them.
+IANA_SPECIAL_PURPOSE = [
+    ("IETF protocol assignments, RFC 6890", "192.0.0.170", "192.0.0.0/24"),
+    ("TEST-NET-1, RFC 5737", "192.0.2.7", "192.0.2.0/24"),
+    ("TEST-NET-2, RFC 5737", "198.51.100.7", "198.51.100.0/24"),
+    ("TEST-NET-3, RFC 5737", "203.0.113.7", "203.0.113.0/24"),
+    ("benchmarking, RFC 2544", "198.19.255.1", "198.18.0.0/15"),
+    ("6to4 relay anycast, RFC 7526", "192.88.99.1", "192.88.99.0/24"),
+    ("discard-only, RFC 6666", "100::7", "100::/64"),
+    ("IPv6 benchmarking, RFC 5180", "2001:2::7", "2001:2::/48"),
+    ("IPv6 documentation, RFC 3849", "2001:db8::7", "2001:db8::/32"),
+    ("IPv6 documentation, RFC 9637", "3fff:fff::7", "3fff::/20"),
+    ("ORCHIDv2, RFC 7343", "2001:2f::7", "2001:20::/28"),
+    ("SRv6 SIDs, RFC 9602", "5f00::7", "5f00::/16"),
+]
+
+
+@pytest.mark.parametrize("path", ["literal", "resolved"])
+@pytest.mark.parametrize(
+    ("label", "address", "refused"), IANA_SPECIAL_PURPOSE, ids=[r[0] for r in IANA_SPECIAL_PURPOSE]
+)
+async def test_an_iana_special_purpose_address_is_refused(path, label, address, refused):
+    """No public corpus is served from a documentation, benchmarking or protocol range,
+    so refusing one costs nothing — except where a provider uses it inside the network
+    this host reaches, which is the case the rows close (``198.18.0.0/15`` above all).
+    """
+    host = f"[{address}]" if ":" in address else address
+    url, mapping = (
+        (f"http://{host}:9999/", {})
+        if path == "literal"
+        else ("http://special.invalid/", {"special.invalid": [address]})
+    )
+
+    with pytest.raises(PermanentFetchError, match=_refused_in(refused)) as caught:
+        await _guard(mapping).handle_async_request(httpx.Request("GET", url))
+
+    assert caught.value.reason is FailureReason.DESTINATION_REFUSED
+    assert address in str(caught.value), label
 
 
 async def test_the_default_resolver_is_the_one_the_worker_runs_with():
