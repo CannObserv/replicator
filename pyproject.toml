@@ -92,7 +92,7 @@ dependencies = [
     # twins; every class that existed at 0.37.0 was AST-identical bar
     # docstrings. `from_wire`'s global table gained `content_capture`,
     # `capture_stored` and `capture_failed`, so one of those on a stream read
-    # here now decodes and falls to the `isinstance` guards: a command stream
+    # here decodes since 0.39 and falls to the `isinstance` guards: a command stream
     # still dead-letters it, under "payload is not a ... command" instead of a
     # poison frame, and `content.fetch-policy` skips it with a wrong-type warning
     # instead of a poison skip. `streams.py` added `CONTENT_CAPTURE`.
