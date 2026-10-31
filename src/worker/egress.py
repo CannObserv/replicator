@@ -59,10 +59,10 @@ import httpx
 
 from src.core.errors import FailureReason, PermanentFetchError, TransientFetchError
 
-# What a fetch may not reach. Every range here is either this host, this host's
-# private network, or the tailnet the bus rides — none of which a public corpus
-# is ever served from, so the operational cost of the guard is expected to be
-# exactly zero refusals.
+# What a fetch may not reach. Every range here is this host, this host's private
+# network, the tailnet the bus rides, or an IANA special-purpose range (#161) —
+# none of which a public corpus is ever served from, so the operational cost of
+# the guard is expected to be exactly zero refusals.
 #
 # ``100.64.0.0/10`` is the sharp one: CGNAT is where Tailscale assigns node
 # addresses, so this is the range that stops one bus participant from being made
@@ -74,7 +74,13 @@ DEFAULT_BLOCKED_DESTINATIONS: tuple[str, ...] = (
     "127.0.0.0/8",  # loopback, the whole /8 and not just .0.1
     "169.254.0.0/16",  # link-local, including the cloud metadata address
     "172.16.0.0/12",  # RFC 1918
+    "192.0.0.0/24",  # IETF protocol assignments, incl. DNS64 discovery — RFC 6890 §2.1
+    "192.0.2.0/24",  # documentation, TEST-NET-1 — RFC 5737
+    "192.88.99.0/24",  # 6to4 relay anycast, deprecated — RFC 7526
     "192.168.0.0/16",  # RFC 1918
+    "198.18.0.0/15",  # benchmarking, and some providers' internal networks — RFC 2544
+    "198.51.100.0/24",  # documentation, TEST-NET-2 — RFC 5737
+    "203.0.113.0/24",  # documentation, TEST-NET-3 — RFC 5737
     "224.0.0.0/4",  # multicast
     "240.0.0.0/4",  # reserved
     "::/128",  # unspecified
@@ -83,6 +89,14 @@ DEFAULT_BLOCKED_DESTINATIONS: tuple[str, ...] = (
     # depends on the prefix length the site chose (RFC 6052 §2.2). Every fixed-position
     # form is unwrapped in _embedded instead (#156).
     "64:ff9b:1::/48",
+    "100::/64",  # discard-only — RFC 6666
+    # The next two sit in the IETF's 2001::/23, as Teredo's 2001::/32 does; Teredo is
+    # unwrapped in _embedded, not refused, so the /23 itself is no row (#161).
+    "2001:2::/48",  # benchmarking — RFC 5180
+    "2001:20::/28",  # ORCHIDv2 — RFC 7343
+    "2001:db8::/32",  # documentation — RFC 3849
+    "3fff::/20",  # documentation — RFC 9637
+    "5f00::/16",  # SRv6 SIDs — RFC 9602
     "fc00::/7",  # unique local
     "fe80::/10",  # link-local
     "ff00::/8",  # multicast
@@ -173,7 +187,7 @@ class DestinationGuard:
                 raise PermanentFetchError(
                     f"{label or _host_port(host, port)} resolves to {spelled}, inside the refused "
                     f"range {network} — Replicator does not fetch its own host, its private "
-                    f"network, or the tailnet",
+                    f"network, the tailnet, or an IANA special-purpose range",
                     reason=FailureReason.DESTINATION_REFUSED,
                 )
         return addresses
