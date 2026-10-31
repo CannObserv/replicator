@@ -37,7 +37,7 @@ src/worker/     — Bus consumer; the primary process
 src/worker/main.py   — Entry point: client lifetime, consumer group, signals, backend selection
 src/worker/loop.py   — The consume path: poll → dispatch → ack, DLQ, dedupe, recovery; one loop per command stream, parameterized by CommandSpec
 src/worker/handler.py — The byte path behind the Handler seam: fetch → fingerprint → store → publish
-src/worker/egress.py — The destination guard: a transport refusing loopback, private and tailnet addresses per redirect hop (#95); an answer it cannot check retries, never passes (#100). Beside it, the body ceiling: every hop's body counted on the wire and not read past `REPLICATOR_MAX_BLOB_BYTES` (#104)
+src/worker/egress.py — The destination guard: a transport refusing loopback, private, tailnet and IANA special-purpose addresses per redirect hop (#95, #161); an answer it cannot check retries, never passes (#100). Beside it, the body ceiling: every hop's body counted on the wire and not read past `REPLICATOR_MAX_BLOB_BYTES` (#104)
 src/worker/browser.py — The renderer behind the Renderer seam: one pinned headless Chromium per render, sandboxed, scrubbed env, waits and screenshot; says what happened to the page, never the wire reason (#138; #63 reuses it)
 src/worker/browser_egress.py — The browser's egress guard: a per-render SOCKS5 listener vetting every connection a page opens with egress.py's DestinationGuard, dialling the address it checked (#138)
 src/worker/browser_cgroup.py — The delegated browser/ cgroup (cap, swap 0, group-kill, pids) and the worker leaf's memory.low re-claim (#138)
