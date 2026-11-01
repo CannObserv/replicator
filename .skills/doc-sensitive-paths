@@ -1,4 +1,4 @@
-# Sensitive paths for shipping-work-python-fastapi's doc-check.sh (Step 1.5).
+# Sensitive paths for shipping-work's doc-check.sh (Step 1.5).
 # One path per line; blank lines and #-comments ignored. Entries match whole
 # path SEGMENTS at any depth. This file REPLACES the script's built-in
 # defaults wholesale — it does not extend them (#75, gregoryfoster/skills#252).

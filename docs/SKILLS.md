@@ -50,13 +50,13 @@ Every override's `SKILL.md` must declare `overrides:` and `override-reason:` in 
 | `patching-hosts` | Gated, owner-approved OS patch run against the `.skills/patching-hosts` knob (`patch the host`, `OS updates`) |
 | `reviewing-architecture` | High-level structural and design-principle review |
 | `reviewing-code-python-fastapi` | Structured code review for uv + ruff + pytest + Pydantic v2 projects |
-| `shipping-work-python-fastapi` | Finalizes work: gates, commits, PR |
+| `shipping-work` | Finalizes work: gates, commits, PR |
 | `using-git-worktrees` | Parallel branch checkouts via `git worktree` |
 | `using-mayfly-chat` | Live agent-to-agent exchange over a Mayfly Chat channel (`mayfly`, `open a channel`, `chat with <repo>`) |
 | `writing-plans` | Short reviewed plan before non-trivial implementation |
 
-Only the `-python-fastapi` variants of the cross-cutting review/ship workflows are linked; the
-stack-neutral and other-stack variants are deliberately skipped.
+Shipping links the unified `shipping-work`, which detects the stack (gregoryfoster/skills#537);
+review links only its `-python-fastapi` variant until that family folds too (gregoryfoster/skills#536).
 
 `enforcing-architecture` is linked because `reviewing-architecture` **delegates** to it when a finding
 is accepted with a `N: fix + fitness` or bare `N: fitness` directive — without the symlink that
@@ -109,7 +109,7 @@ that hold has ended — see [The curating-context v1.2 hold (ended)](#the-curati
 ## The doc-check lists
 
 `.skills/doc-sensitive-paths` replaces — **not extends** — the built-in
-`SENSITIVE_PATHS` in `shipping-work-python-fastapi/scripts/doc-check.sh`, the
+`SENSITIVE_PATHS` in `shipping-work/scripts/doc-check.sh`, the
 Step 1.5 gate that asks whether a branch touched anything the docs inventory.
 One path per line, blank lines and `#`-comments ignored — the grammar the
 skills use for `.skills/import-targets` elsewhere, which this repo does not
@@ -187,7 +187,7 @@ list** — an entry added to `doc-sensitive-paths` with no line here is a hit th
 advice says nothing about.
 
 Verify a change to either file with the gate itself — `bash
-skills/shipping-work-python-fastapi/scripts/doc-check.sh` prints the list
+skills/shipping-work/scripts/doc-check.sh` prints the list
 source it consulted and names any entry that matches nothing; on a hit it names
 the advice source too.
 

@@ -1,7 +1,7 @@
 """`.skills/doc-sensitive-paths` still matches this tree (#75).
 
 The list tailors the Step 1.5 doc-drift gate in
-`shipping-work-python-fastapi/scripts/doc-check.sh`. Upstream
+`shipping-work/scripts/doc-check.sh`. Upstream
 gregoryfoster/skills#252 made a list where *no* entry matches anything an
 exit-2 failure, and made an exit-0 name the entries that matched nothing — but
 the individually-dead entry is only a *note* on an otherwise-green run, which

@@ -1,7 +1,7 @@
 """`.skills/doc-sections` routes every doc-check hit at a doc this repo keeps (#93).
 
 `.skills/doc-sensitive-paths` (#75) says what the Step 1.5 gate in
-`shipping-work-python-fastapi/scripts/doc-check.sh` watches; this file says
+`shipping-work/scripts/doc-check.sh` watches; this file says
 what to do about a hit. Absent, the gate prints the skill's two built-in lines
 — a "route table" this worker-first service has no equivalent of, and no doc
 under `docs/` — so a `scripts/` hit never names `docs/COMMANDS.md`, the doc
