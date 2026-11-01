@@ -11,7 +11,7 @@
 # keep secrets a shell has no use for out of both.
 #
 # load_env is lifted in place from the vendored recipe in the header of
-# skills/shipping-work-python-fastapi/scripts/pre-ship.sh, which stays the only
+# skills/shipping-work/scripts/pre-ship.sh, which stays the only
 # copy; init-project-fastapi's template lifts it with the same sed line.
 #
 # Order: /etc/replicator/.env, then the checkout's .env, so the developer's file
@@ -24,7 +24,7 @@
 _load_env_main() {
   local _le_root _le_recipe _le_env _le_common PRE_SHIP_ENV_NAMES  # the recipe appends key names to the last
   _le_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd) || return 1  # CDPATH would move it
-  _le_recipe="$_le_root/skills/shipping-work-python-fastapi/scripts/pre-ship.sh"
+  _le_recipe="$_le_root/skills/shipping-work/scripts/pre-ship.sh"
   unset -f load_env
   [ -r "$_le_recipe" ] &&
     eval "$(sed -n 's/^#   //; /^load_env() [{]/,/^[}]/p' "$_le_recipe")"

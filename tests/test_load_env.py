@@ -7,7 +7,7 @@ load lines sourced both files. They now source a tracked *script*, which is code
 and the script parses the two *files*, which are data.
 
 The loader itself is not copied here: the script lifts `load_env` in place from
-the vendored recipe in `shipping-work-python-fastapi`'s `pre-ship.sh` header, as
+the vendored recipe in `shipping-work`'s `pre-ship.sh` header, as
 `init-project-fastapi`'s template does. Running the real script against that real
 recipe is what keeps the two from drifting apart unseen.
 
@@ -26,7 +26,7 @@ from tests._tracked import tracked_texts
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = "scripts/load_env.sh"
-RECIPE = "skills/shipping-work-python-fastapi/scripts/pre-ship.sh"
+RECIPE = "skills/shipping-work/scripts/pre-ship.sh"
 THIS = "tests/test_load_env.py"
 
 # Running an env file as shell code: `.` or `source` after a line start or a
