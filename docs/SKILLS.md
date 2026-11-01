@@ -112,8 +112,8 @@ that hold has ended — see [The curating-context v1.2 hold (ended)](#the-curati
 `SENSITIVE_PATHS` in `shipping-work/scripts/doc-check.sh`, the
 Step 1.5 gate that asks whether a branch touched anything the docs inventory.
 One path per line, blank lines and `#`-comments ignored — the grammar the
-skills use for `.skills/import-targets` elsewhere, which this repo does not
-carry. Entries match whole path **segments** at any depth, so `src/` also
+skills use for `.skills/import-targets` elsewhere, which this repo leaves unset,
+so the gate's import check skips: the suite already imports every module. Entries match whole path **segments** at any depth, so `src/` also
 reaches `packages/<pkg>/src/` (gregoryfoster/skills#252).
 
 [`tests/test_doc_sensitive_paths.py`](../tests/test_doc_sensitive_paths.py)
