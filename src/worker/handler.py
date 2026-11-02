@@ -627,8 +627,9 @@ async def _fetch(
     write raises, and anyio converts only the EOF and syscall cases — so a record
     failing its MAC mid-response arrives raw, and ``ssl.SSLError`` is an
     ``OSError`` the loop does not retry. co-core's ``RetryAsyncTransport`` maps it
-    to ``ReadError``; it is not mounted here, because its own re-sends and
-    deadline would sit outside the destination guard and the fetch deadline.
+    to ``ReadError``, and is not mounted here: its re-sends and ``Retry-After``
+    sleeps would hit the origin behind the host pacer's back and duplicate the
+    reclaim's retry, and its own deadline would compete with this one.
 
     **The whole fetch runs under one deadline (#104).** ``options.timeout`` is
     httpx's, and httpx applies it per operation — connect, pool, write, and each
