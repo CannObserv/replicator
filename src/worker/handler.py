@@ -10,6 +10,7 @@ message pending for the next reclaim, and since #17
 import asyncio
 import math
 import re
+import ssl
 from collections.abc import Awaitable
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
@@ -621,6 +622,14 @@ async def _fetch(
     ``InvalidURL`` and ``UnsupportedProtocol`` are the exceptions: a URL that is
     not a URL will not become one on the next reclaim.
 
+    **A TLS error after the handshake is transient too (#173).** httpcore maps a
+    handshake's ``ssl.SSLError`` to ``ConnectError``, but not one a later read or
+    write raises, and anyio converts only the EOF and syscall cases — so a record
+    failing its MAC mid-response arrives raw, and ``ssl.SSLError`` is an
+    ``OSError`` the loop does not retry. co-core's ``RetryAsyncTransport`` maps it
+    to ``ReadError``; it is not mounted here, because its own re-sends and
+    deadline would sit outside the destination guard and the fetch deadline.
+
     **The whole fetch runs under one deadline (#104).** ``options.timeout`` is
     httpx's, and httpx applies it per operation — connect, pool, write, and each
     read — so it never bounded a fetch: a body trickling in under the read
@@ -647,6 +656,8 @@ async def _fetch(
         ) from exc
     except httpx.HTTPError as exc:
         raise TransientFetchError(f"{command.url} failed to fetch: {exc}") from exc
+    except ssl.SSLError as exc:
+        raise TransientFetchError(f"{command.url} failed over TLS: {exc}") from exc
     except TimeoutError as exc:
         if not deadline.expired():
             raise
