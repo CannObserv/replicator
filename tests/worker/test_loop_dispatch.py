@@ -9,6 +9,7 @@ co-core internals, which are private and not a stable contract.
 """
 
 import asyncio
+import json
 
 from co_core.pure.models.changes import ContentFetchCommand
 
@@ -117,3 +118,24 @@ async def test_the_loop_stops_between_messages_in_one_batch(fake_redis, consumer
     )
 
     assert handled == ["cmd-batch-1"]
+
+
+async def test_a_render_mode_survives_the_consume_path_decode(fake_redis, consumer, settings):
+    """``render`` reaches the handler's model rather than being dropped (#177).
+
+    The frame is written the way an issuer on a newer co-core would write it, by
+    the payload JSON, and read back through ``poll_once`` — the same
+    ``AsyncBusConsumer.read`` → ``from_wire`` decode the worker runs. A
+    hand-built ``ContentFetchCommand(render=...)`` would prove nothing: under
+    ``extra="ignore"`` a model without the field accepts the kwarg and drops it.
+    This is what holds the floor at 0.40.1; on 0.40.0 the field does not exist.
+    Honouring it is #63's; today the command is still fetched over HTTP.
+    """
+    frame = make_command(command_id="cmd-render")
+    frame["payload"] = json.dumps({**json.loads(frame["payload"]), "render": "browser"})
+    await fake_redis.xadd(TOPIC, frame)
+
+    (message,) = await poll_once(fake_redis, consumer, settings, group=GROUP)
+
+    assert isinstance(message.payload, ContentFetchCommand)
+    assert message.payload.render == "browser"
