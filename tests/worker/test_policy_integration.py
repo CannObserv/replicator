@@ -204,6 +204,11 @@ async def test_run_replays_the_named_policy_stream_into_the_byte_path(
     # registration is not a key, so nothing would ever sweep one that lacked it.
     monkeypatch.setenv("REPLICATOR_REPLICATE_CONSUMER_NAME", "replicator@itest-replicate")
     monkeypatch.setenv("REPLICATOR_READ_BLOCK_MS", "50")
+    # Pinned rather than inherited: the fallback must sit well below the published
+    # 30 s for the two hosts' waits to tell a replayed policy from no policy, and
+    # a shell that exported a stricter one would fail the precondition, not the
+    # wiring (#175 CR 4).
+    monkeypatch.setenv("REPLICATOR_MIN_HOST_INTERVAL_SECONDS", "1.0")
     get_settings.cache_clear()
     monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: real_redis)
     await publish(real_redis, policy_topic, "slow.test", 30.0)
@@ -242,5 +247,4 @@ async def test_run_replays_the_named_policy_stream_into_the_byte_path(
     pacer.record("https://slow.test/")
     assert 29.0 < pacer.wait_seconds("https://slow.test/") <= 30.0
     pacer.record("https://unpublished.test/")
-    default = get_settings().min_host_interval_seconds
-    assert 0.0 < pacer.wait_seconds("https://unpublished.test/") <= default < 29.0
+    assert 0.0 < pacer.wait_seconds("https://unpublished.test/") <= 1.0
