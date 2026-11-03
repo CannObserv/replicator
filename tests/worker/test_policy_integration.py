@@ -211,7 +211,11 @@ async def test_run_replays_the_named_policy_stream_into_the_byte_path(
     real_build_handler = src.worker.main.build_handler
 
     def recording_build_handler(**kwargs):
-        seen["policy"] = kwargs["policy"]
+        # The pacer, not `policy`: since #138 the map reaches the byte path inside
+        # the `HostPacer` that fetch and capture share. `build_handler` still
+        # *accepts* `policy`, so a recorder keyed on it fails on a KeyError
+        # rather than on an assertion, and only where this file runs (#175).
+        seen["pacer"] = kwargs["pacer"]
         return real_build_handler(**kwargs)
 
     async def stubbed_run_loop(**kwargs):
@@ -228,7 +232,14 @@ async def test_run_replays_the_named_policy_stream_into_the_byte_path(
         # database it leaves a `content.fetch` key the itest fixtures do not own.
         await real_redis.delete(streams.CONTENT_FETCH)
 
-    # Not just "a policy was applied" — the byte path's own lookup resolves the
-    # published interval, which is the end of the chain this feature is.
-    assert seen["policy"]("slow.test") == 30.0
-    assert seen["policy"]("unpublished.test") is None
+    # Not just "a policy was applied": the interval the byte path's pacer reports
+    # after a request is the published one, which is the end of the chain this
+    # feature is. Asked through `record`/`wait_seconds`, the pacer's public
+    # surface, so the assertion also covers the floor's resolution. Bounds, not
+    # equality, because the clock moves between the two calls.
+    pacer = seen["pacer"]
+    pacer.record("https://slow.test/")
+    assert 29.0 < pacer.wait_seconds("https://slow.test/") <= 30.0
+    pacer.record("https://unpublished.test/")
+    default = get_settings().min_host_interval_seconds
+    assert 0.0 < pacer.wait_seconds("https://unpublished.test/") <= default < 29.0
