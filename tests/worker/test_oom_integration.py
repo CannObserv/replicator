@@ -133,6 +133,13 @@ READ_BLOCK_MS = 100
 BACKOFF_BASE_SECONDS = 0.02
 BACKOFF_MAX_SECONDS = 0.1
 
+# The one loop-level property that *is* about how long the loop waits: the
+# closing-path test's fail/idle alternation holds only while an entry is still
+# too young to reclaim one backoff after a failed cycle. At ``CLAIM_MIN_IDLE_MS``
+# that margin was ~27 ms, and a loaded host spent it (#175). Production's ratio
+# instead — 60 s claim-idle over a 1 s backoff base — at this module's base.
+CLOSING_PATH_CLAIM_MIN_IDLE_MS = 60 * round(BACKOFF_BASE_SECONDS * 1000)
+
 # How long a test waits for the loop to reach an outcome once the cap clears.
 # Generous against a shared VM; the loop normally gets there in well under a
 # second.
@@ -1035,12 +1042,25 @@ async def test_a_sustained_cap_on_the_closing_path_retries_rather_than_exiting(
     acked. The counter still does its job against the failure it was written for
     (a broker that refuses the *read* too, where every cycle fails).
 
+    "Too young" is a timing precondition, and the one place this module's short
+    timers cannot stand in for production's: the refused cycle's own work plus
+    one backoff must stay under the claim-idle. Production holds it by ~59 s (60 s
+    against a 1 s base); this test ran it at 50 ms against 20 ms, and a host
+    under load closed the gap and took the restart instead — 1 of 8 runs at 4×
+    CPU oversubscription, the second reclaim landing at 49.8 ms (#175). Hence
+    ``CLOSING_PATH_CLAIM_MIN_IDLE_MS``: the same ratio, not the same seconds.
+
     Six refusals were observed here before this was rewritten from a test that
     asserted the restart; ``times_delivered`` is the broker-side evidence, and
     ``loop.done()`` is the assertion that the worker is still the one making them.
     """
 
-    settings = oom_settings.model_copy(update={"max_consecutive_cycle_failures": 3})
+    settings = oom_settings.model_copy(
+        update={
+            "max_consecutive_cycle_failures": 3,
+            "claim_min_idle_ms": CLOSING_PATH_CLAIM_MIN_IDLE_MS,
+        }
+    )
     message_id = (
         await broker.client.xadd(topic, make_command(command_id="cmd-permanent"))
     ).decode()
