@@ -7,50 +7,75 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
-    # Floor is 0.40.0, and it carries no new feature: a one-minor catch-up
-    # (#172), ahead of #63's `ContentFetchCommand.render` (cannobserv#602, a
-    # 0.40.1 PATCH not yet cut), so that this diff does not land with a
-    # behaviour change. #63 raises the patch floor itself when it starts reading
-    # the field. 0.40.0's two breaks are producer-side: `ContentReplicateCommandEmit`
-    # enforces the `<provider>-<role>` alias rule (cannobserv#495) and
-    # `SourceRevisionObservedEmit` requires `blob_fingerprint` (cannobserv#494).
-    # Replicator builds neither and decodes the canonical classes, which are
-    # unchanged; `ContentReplicateCommand.credentials_alias` stays a plain `str`,
-    # so an unknown alias still decodes and closes as `alias_unknown`. Both
-    # `co-core-aio` and `co-core-sync` 0.40.0 require `co-core>=0.40,<0.41`, so
-    # the three move together.
+    # Floor is 0.40.1, for `ContentFetchCommand.render` (cannobserv#602, #177).
+    # On 0.40.0 the canonical model has no such field and is `extra="ignore"`,
+    # so a `render` an issuer sets is dropped at decode and nothing fails; #63
+    # can't honour a field the decoder throws away. `tests/worker/test_loop_dispatch.py`
+    # holds the floor: it decodes a `render="browser"` frame through `poll_once`,
+    # and is red on 0.40.0. Reading the field is #63's. Until then such a command is
+    # decoded and still fetched over HTTP, today's behaviour, and co-core's MUST
+    # on `ContentFetchCommand` keeps issuers from setting it until Replicator
+    # announces support. `co-core-aio` and `co-core-sync` 0.40.1 still require
+    # `co-core>=0.40,<0.41`, so the three move together.
     #
-    # **`scripts/co_core_closure_diff.py 0.39.1 0.40.0`** (#145), verbatim:
+    # **`scripts/co_core_closure_diff.py 0.40.0 0.40.1`** (#145), verbatim:
     #
-    # ## Import closure, 0.39.1 → 0.40.0
+    # ## Import closure, 0.40.0 → 0.40.1
     #
     # Roots `src`, `scripts`; packages `co_core`, `co_core_aio`, `co_core_sync`.
     #
-    # 58 files at 0.39.1, 58 at 0.40.0. 8 not identical:
+    # 58 files at 0.40.0, 58 at 0.40.1. 4 not identical:
     #
     # - `version-only` co_core/__init__.py
     # - `changed` co_core/pure/models/changes.py
-    # - `docstrings-only` co_core/pure/util/aliases.py
     # - `version-only` co_core_aio/__init__.py
-    # - `docstrings-only` co_core_aio/fetch.py
-    # - `changed` co_core_aio/transport.py
     # - `version-only` co_core_sync/__init__.py
-    # - `changed` co_core_sync/drivers/transport.py
     #
     # **Requires-Dist:**
     #
     # - co_core: unchanged
-    # - co_core_aio: removed `co-core<0.40,>=0.39`; added `co-core<0.41,>=0.40`
-    # - co_core_sync: removed `co-core<0.40,>=0.39`; added `co-core<0.41,>=0.40`
+    # - co_core_aio: unchanged
+    # - co_core_sync: unchanged
     #
-    # **Third-party imports** (at 0.40.0): `google`, `google_auth_oauthlib`, `googleapiclient`, `httpx`, `pydantic`, `redis`, `requests`, `urllib3`.
+    # **Third-party imports** (at 0.40.1): `google`, `google_auth_oauthlib`, `googleapiclient`, `httpx`, `pydantic`, `redis`, `requests`, `urllib3`.
     #
     # **Dynamic imports, not followed:**
     #
     # - co_core_sync/drivers/__init__.py:89 `import_module(f"{__name__}.{module}")`
     # - co_core_sync/drivers/blobstore/__init__.py:32 `import_module(f"{__name__}.{module}")`
     #
-    # Read by hand, the `changed` files:
+    # Read by hand, the one `changed` file, `pure/models/changes.py`:
+    #
+    # - `ContentFetchCommand` gains `render: str | None = None`, `None` meaning
+    #   `http`. A plain `str`, so an unknown mode decodes; co-core leaves closing
+    #   it as `invalid_request_options` to the consumer, which is #63's;
+    # - `RegistryAnnouncementState` gains the same field. Nothing here decodes a
+    #   registry announcement;
+    # - both Emit twins narrow it to `RenderMode` (`Literal["http", "browser"]`),
+    #   and `ContentFetchCommandEmit` refuses an `If-None-Match` /
+    #   `If-Modified-Since` header beside `render="browser"`. Producer-side:
+    #   Replicator builds neither, so the canonical decode accepts that pair, and
+    #   refusing it is #63's too.
+    #
+    # Every other class is AST-identical, so no other field, default or config
+    # moved under `extra="ignore"`. Everything else in the closure is identical,
+    # `co_core_aio/bus` and `pure/adapters/bus` included, and the two dynamic
+    # imports are the same two as at 0.40.0.
+    #
+    # Previously:
+    #
+    # Floor was 0.40.0, and it carried no new feature: a one-minor catch-up
+    # (#172), ahead of the render field above, so that that diff did not land
+    # with a behaviour change. 0.40.0's two breaks are producer-side:
+    # `ContentReplicateCommandEmit` enforces the `<provider>-<role>` alias rule
+    # (cannobserv#495) and `SourceRevisionObservedEmit` requires
+    # `blob_fingerprint` (cannobserv#494). Replicator builds neither and decodes
+    # the canonical classes, which are unchanged;
+    # `ContentReplicateCommand.credentials_alias` stays a plain `str`, so an
+    # unknown alias still decodes and closes as `alias_unknown`.
+    #
+    # **Diffing the closure, 0.39.1 → 0.40.0** (58 files, both sides): 8 not
+    # identical, 3 of them `changed`. Read by hand:
     #
     # - `pure/models/changes.py`: the two Emit twins above, and the import of
     #   `alias_provider` / `validate_credentials_alias` that the alias check
@@ -282,9 +307,9 @@ dependencies = [
     # at module load, so a skew cannot reach a running worker at all. Additive over
     # 0.8.0 for everything the fetch path uses — no field on ContentFetchCommand,
     # BlobAvailableEvent or FetchFailedEvent moved between the two.
-    "co-core>=0.40.0,<0.41",
-    "co-core-aio[bus,gcs]>=0.40.0,<0.41",
-    "co-core-sync[gcs]>=0.40.0,<0.41",
+    "co-core>=0.40.1,<0.41",
+    "co-core-aio[bus,gcs]>=0.40.1,<0.41",
+    "co-core-sync[gcs]>=0.40.1,<0.41",
     "fastapi>=0.126.0,<1",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.5.0,<3",
