@@ -189,7 +189,8 @@ async def test_run_replays_the_named_policy_stream_into_the_byte_path(
     exists to make testable.
 
     The consume loop is stubbed so the run terminates; the handler is built for
-    real, so the callable asserted below is the one a fetch would consult.
+    real, so the pacer asserted below is the one a fetch (and a capture) would
+    consult.
     """
     monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
     monkeypatch.setenv("REPLICATOR_CONSUMER_GROUP", "replicator.itest")
