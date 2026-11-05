@@ -1,7 +1,7 @@
 ---
 title: Browser fetch — honour ContentFetchCommand.render, store the rendered document
 date: 2026-11-05
-status: draft, awaiting the operator's approval
+status: approved 2026-11-05 (all five operator calls as recommended)
 issue: "#63 (epic #154)"
 ---
 
