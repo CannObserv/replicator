@@ -170,7 +170,7 @@ same three confinements and the same teardown, so **a second caller of the seam,
 | `headers` | **Only** `content-type: <document.contentType>; charset=utf-8`, plus `retry-after` on a non-2xx that sent one. Never `etag` / `last-modified` (cannobserv decision 3) |
 | `final_url` | `page.url` when serialized: where the document landed, JS redirects included |
 | `fetcher_used` | `"browser"` |
-| `duration_ms` | launch to serialization, the lock wait excluded |
+| `duration_ms` | from the load request to serialization, including any wait for the render lock: how long the command held the serial path |
 
 So `blob_available` under `browser` has:
 

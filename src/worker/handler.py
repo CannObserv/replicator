@@ -37,6 +37,7 @@ from src.core.errors import (
 )
 from src.core.logging import get_logger
 from src.storage.sweeper import BlobUsage
+from src.worker.browser import RenderDeadlineError
 from src.worker.loop import Handler, park
 from src.worker.pacing import HostPacer, HostPolicy
 
@@ -729,7 +730,13 @@ async def _fetch(
     (``REPLICATOR_MAX_FETCH_SECONDS``) is around everything the driver does,
     which since #95 includes the destination guard's resolve on every hop.
 
-    Transient when it fires, like the per-operation timeouts it sits above, and
+    **Under ``render="browser"`` the expiry is unclassified instead** (#63, operator
+    call 4): :class:`RenderDeadlineError`, capture's. A render that overran once
+    overruns again, and retrying it transiently would re-spend a whole render on
+    this serial path every reclaim, forever; the delivery ceiling closes it as
+    ``handler_error``.
+
+    Otherwise transient when it fires, like the per-operation timeouts it sits above, and
     only when it is *this* deadline that fired: ``expired()`` tells it apart from
     a ``TimeoutError`` raised inside the fetch, which keeps its own type and
     message. Cancelling abandons the fetch cleanly — httpx closes the connection
@@ -752,6 +759,11 @@ async def _fetch(
     except TimeoutError as exc:
         if not deadline.expired():
             raise
+        if options.render == RENDER_BROWSER:
+            raise RenderDeadlineError(
+                f"{command.url}: the render overran REPLICATOR_MAX_FETCH_SECONDS "
+                f"({deadline_seconds:g}s)"
+            ) from exc
         raise TransientFetchError(
             f"{command.url} did not finish within the {deadline_seconds}-second fetch deadline "
             f"(REPLICATOR_MAX_FETCH_SECONDS)"
