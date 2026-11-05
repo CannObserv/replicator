@@ -26,13 +26,20 @@ from co_core.pure.util.hashing import sha256
 from co_core_sync.drivers.blobstore import LocalBlobStore
 
 from src.core.config import get_settings
-from src.core.errors import CaptureReason, PermanentCaptureError
+from src.core.errors import (
+    CaptureReason,
+    FailureReason,
+    PermanentCaptureError,
+    PermanentFetchError,
+    TransientFetchError,
+)
 from src.storage.sweeper import BlobUsage
 from src.worker.browser import (
     BrowserKilledError,
     BrowserRuntime,
     DestinationRefusedError,
     InvalidSelectorError,
+    LoadRequest,
     NavigationImpossibleError,
     NavigationStatusError,
     PlaywrightRenderer,
@@ -43,11 +50,13 @@ from src.worker.browser import (
     png_dimensions,
 )
 from src.worker.browser_cgroup import BrowserCgroup, delegated_service_cgroup
+from src.worker.browser_fetch import BrowserFetcher
 from src.worker.capture import build_capture_handler
 from src.worker.capture_reporter import build_captured_publisher
 from src.worker.egress import DestinationGuard, blocked_networks
+from src.worker.handler import build_handler
 from src.worker.pacing import HostPacer
-from tests.worker.conftest import capture_command
+from tests.worker.conftest import FakeFetcher, capture_command, command, published_facts
 
 pytestmark = pytest.mark.browser
 
@@ -93,6 +102,8 @@ async def canary():
 async def site():
     """A tiny HTTP/1.1 server on loopback: ``site.pages[path] = (status, headers, body)``."""
     pages: dict[str, tuple[int, dict[str, str], str]] = {}
+    delays: dict[str, float] = {}
+    user_agents: list[str] = []
 
     async def serve(reader, writer):
         try:
@@ -101,6 +112,12 @@ async def site():
             writer.close()
             return
         path = request.split(b" ", 2)[1].decode()
+        for line in request.decode("latin-1").split("\r\n")[1:]:
+            name, _, value = line.partition(":")
+            if name.lower() == "user-agent":
+                user_agents.append(value.strip())
+        if path in delays:
+            await asyncio.sleep(delays[path])
         status, headers, body = pages.get(path, (404, {}, "not here"))
         data = body.encode()
         head = f"HTTP/1.1 {status} X\r\nContent-Length: {len(data)}\r\nConnection: close\r\n"
@@ -119,6 +136,8 @@ async def site():
 
     s = Site()
     s.pages = pages
+    s.delays = delays
+    s.user_agents = user_agents
     s.url = lambda path: f"http://127.0.0.1:{port}{path}"
     yield s
     server.close()
@@ -468,3 +487,124 @@ async def test_a_redirect_to_a_scheme_the_browser_wont_open_is_impossible(render
 
     with pytest.raises(NavigationImpossibleError, match="ERR_UNSAFE_REDIRECT"):
         await renderer.render(_request(site.url("/")))
+
+
+# --------------------------------------------------------------------------- browser fetch (#63)
+
+# A page whose meaningful content only exists after its script runs, served as Latin-1
+# with a validator: the fact must describe the stored UTF-8 document, not this response.
+JS_PAGE = (
+    "<html><head><meta charset='iso-8859-1'></head><body><div id='x'>shell</div>"
+    "<script>document.getElementById('x').textContent = 'rendered caf\\u00e9';</script>"
+    "</body></html>"
+)
+
+
+def _fetch_handler(renderer, tmp_path, client, *, pacer=None):
+    """``run()``'s fetch handler with the real shell behind ``render="browser"``.
+
+    The HTTP driver is a recorder: a browser command that reached it would show there.
+    """
+    http = FakeFetcher()
+    settings = get_settings()
+    handle = build_handler(
+        fetcher=http,
+        store=LocalBlobStore(tmp_path),
+        client=client,
+        settings=settings,
+        ceiling_bytes=None,
+        pacer=pacer if pacer is not None else HostPacer(0.0),
+        browser_fetcher=BrowserFetcher(
+            renderer,
+            default_wait_seconds=settings.capture_max_wait_seconds,
+            max_bytes=settings.max_blob_bytes,
+        ),
+    )
+    return handle, http
+
+
+async def test_a_browser_fetch_stores_the_rendered_document(renderer, site, tmp_path, fake_redis):
+    """The whole byte path over the real shell: the script's text is in the stored bytes."""
+    site.pages["/"] = (
+        200,
+        {"Content-Type": "text/html; charset=ISO-8859-1", "ETag": '"abc"'},
+        JS_PAGE,
+    )
+    handle, http = _fetch_handler(renderer, tmp_path, fake_redis)
+
+    await handle(
+        command(url=site.url("/"), render="browser", headers={"user-agent": "watcher/0.1.0"})
+    )
+
+    assert http.effects == []
+    (fact,) = await published_facts(fake_redis)
+    document = LocalBlobStore(tmp_path).open(fact.content_fingerprint)
+    assert "rendered café".encode() in document
+    assert b"shell" not in document.split(b"<script>")[0]
+    assert fact.media_type == "text/html"
+    assert fact.content_type_raw == "text/html; charset=utf-8"
+    assert (fact.etag, fact.last_modified) == (None, None)
+    assert (fact.status_code, fact.final_url) == (200, site.url("/"))
+    assert site.user_agents and set(site.user_agents) == {"watcher/0.1.0"}
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [{"Content-Type": "application/pdf"}, {"Content-Disposition": "attachment; filename=x"},
+     {"Content-Type": "application/json"}],
+)  # fmt: skip
+async def test_a_download_or_a_non_html_document_is_not_fetchable(
+    renderer, site, tmp_path, fake_redis, headers
+):
+    """Measured: a download raises in ``goto``; JSON renders as Chromium's viewer."""
+    site.pages["/"] = (200, headers, '{"a": 1}')
+    handle, _ = _fetch_handler(renderer, tmp_path, fake_redis)
+
+    with pytest.raises(PermanentFetchError) as refused:
+        await handle(command(url=site.url("/"), render="browser"))
+
+    assert refused.value.reason is FailureReason.NOT_FETCHABLE
+    assert await fake_redis.xlen(streams.CONTENT_BLOBS) == 0
+
+
+async def test_a_429s_retry_after_reaches_the_pacer(renderer, site, tmp_path, fake_redis):
+    site.pages["/"] = (429, {"Retry-After": "45"}, "slow down")
+    pacer = HostPacer(0.0)
+    handle, _ = _fetch_handler(renderer, tmp_path, fake_redis, pacer=pacer)
+
+    with pytest.raises(TransientFetchError):
+        await handle(command(url=site.url("/"), render="browser"))
+
+    assert 44 < pacer.wait_seconds(site.url("/")) <= 45
+
+
+async def test_a_refused_subresource_closes_a_browser_fetch(
+    renderer, site, canary, tmp_path, fake_redis
+):
+    site.pages["/"] = (200, {}, f'<html><img src="http://{CANARY_HOST}:{canary.port}/x.png">')
+    handle, _ = _fetch_handler(renderer, tmp_path, fake_redis)
+
+    with pytest.raises(PermanentFetchError) as refused:
+        await handle(command(url=site.url("/"), render="browser"))
+
+    assert refused.value.reason is FailureReason.DESTINATION_REFUSED
+    assert canary.tcp == 0
+
+
+async def test_concurrent_loads_take_turns_rather_than_killing_each_other(renderer, site):
+    """Operator call 5. Without the lock the first teardown's ``cgroup.kill`` takes the
+    second, slower load's browser with it: the group is shared, the kill is not scoped."""
+    site.pages["/fast"] = (200, {}, "<html><body>fast</body></html>")
+    site.pages["/slow"] = (200, {}, '<html><body>slow<img src="/pixel"></body></html>')
+    site.pages["/pixel"] = (200, {"Content-Type": "image/gif"}, "GIF89a")
+    site.delays["/pixel"] = 1.5
+
+    def request(path: str) -> LoadRequest:
+        return LoadRequest(url=site.url(path), user_agent=None, max_wait_seconds=10,
+                           max_bytes=2**20)  # fmt: skip
+
+    slow, fast = await asyncio.gather(
+        renderer.load(request("/slow")), renderer.load(request("/fast"))
+    )
+
+    assert b"slow" in slow.document and b"fast" in fast.document
