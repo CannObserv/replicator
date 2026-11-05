@@ -163,7 +163,7 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
   consumers; persist and capture off unless `REPLICATOR_*_ENABLED`); `content.blobs`
   carries both fetch outcomes, `content.artifacts` the other three's; `content.fetch-policy` is read **groupless** — no group, no ack, no DLQ.
 - **A fetch may not reach loopback, RFC 1918, or the tailnet (#89, #95).** Per redirect hop;
-  a capture, per connection (#138).
+  a capture or browser fetch, per connection (#138, #63).
 - **The `docs/contracts/` documents are normative**, indexed below.
   `tests/test_boundaries.py` enforces the charter in CI; change a charter and its
   tests together.

@@ -56,7 +56,9 @@ shaped the way they are, and what an issuer owes its own consumer before acting 
 
 The six enriched fields (cannobserv#271, `final_url` sourced by cannobserv#279, produced by #10)
 carry what Replicator holds at publish time and a broadcast consumer cannot recover once fetching
-lives here rather than in Watcher. `blob_expires_at` (cannobserv#301, populated by #28) is a
+lives here rather than in Watcher. Under `render="browser"` they describe the stored document,
+not the origin's response: no validators, a UTF-8 `content_type_raw`
+([why](content-fetch-issuer-reference.md#render-the-browser-mode-63)). `blob_expires_at` (cannobserv#301, populated by #28) is a
 seventh, and describes the **store** rather than the fetch — see
 [MUST-7](content-fetch-issuer-contract.md#7-copy-the-bytes-before-the-blob-expires). Three details
 are the whole value of the six:
@@ -151,13 +153,13 @@ appears and why every one is `terminal=True`: [Reading the failure fact](#readin
 | Malformed frame (fails `from_wire`; includes a naive `occurred_at`, and any 0.7.x command with no `info_source_id`) | `content.fetch.dlq` — the raw frame, or provenance alone if its entry was trimmed | **nothing** — no payload at all |
 | HTTP 4xx — **412 included**, since a failed precondition on a GET is the issuer's error | fact, then `content.fetch.dlq` | `fetch_failed` · `http_status` (+ `status_code`) |
 | HTTP 304 Not Modified — a conditional GET that **succeeded** (#17) | fact, ack, and **no DLQ entry**; the dedupe key is written | `fetch_failed` · `not_modified` (+ `status_code=304`) |
-| URL not fetchable (bad scheme / invalid URL) | fact, then `content.fetch.dlq` | `fetch_failed` · `not_fetchable` |
+| URL not fetchable (bad scheme / invalid URL; under `browser`, a download or non-HTML document) | fact, then `content.fetch.dlq` | `fetch_failed` · `not_fetchable` |
 | Body over `REPLICATOR_MAX_BLOB_BYTES` (default 64 MiB) | fact, then `content.fetch.dlq` — since #104 **Replicator stops reading at the ceiling**, or before any byte when `Content-Length` declares more | `fetch_failed` · `too_large` |
-| Unsendable `headers` / `timeout_seconds` | fact, then `content.fetch.dlq`, **before the fetch** | `fetch_failed` · `invalid_request_options` |
+| Unsendable `headers` / `timeout_seconds` / `render` | fact, then `content.fetch.dlq`, **before the fetch** | `fetch_failed` · `invalid_request_options` |
 | Destination in a range this host will not fetch from — loopback, RFC 1918, link-local, ULA, the tailnet's CGNAT `100.64.0.0/10` (#95), an IANA special-purpose range (#161), or an IPv6 address embedding one (#156) | fact, then `content.fetch.dlq`, **before the request goes out**, and on **each redirect hop** | `fetch_failed` · `destination_refused` |
 | HTTP 5xx / 408 / 429, a network error, or a fetch still running at `REPLICATOR_MAX_FETCH_SECONDS` (default 120 s, #104) | retry indefinitely, default ~60 s cadence | delayed fact, or **nothing while it retries** |
 | Blob tree over `REPLICATOR_BLOB_MAX_TOTAL_BYTES` | parked in the PEL until a sweep frees space | delayed fact, or **nothing while it waits** |
-| Unclassified handler error | retried to the delivery ceiling (~4 reclaims / ~4 min at default settings), then fact + DLQ — **if the delivery count cannot be read, retried indefinitely instead** (#103) | `fetch_failed` · `handler_error` (+ `attempts`); **nothing while the count is unreadable** |
+| Unclassified handler error; under `browser`, also an unmet `load` or the deadline | retried to the delivery ceiling (~4 reclaims / ~4 min at default settings), then fact + DLQ — **if the delivery count cannot be read, retried indefinitely instead** (#103) | `fetch_failed` · `handler_error` (+ `attempts`); **nothing while the count is unreadable** |
 | Command trimmed from `content.fetch` while still pending — delivered, not yet handled (#109) | dropped from the PEL by the reclaim that finds it; a WARNING, no DLQ entry — the frame is gone | **nothing** — no payload left to key a fact on |
 | Success | `blob_available` on `content.blobs` | the fact |
 

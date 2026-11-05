@@ -37,6 +37,8 @@ and the failure taxonomy in
 Publish through co-core's `to_wire`, never hand-rolled fields. The wire carries one domain key —
 `info_source_id`, echoed onto both facts and read by nothing here — but correlation is still
 entirely the issuer's job, on `command_id`. Most ways of getting either wrong fail silently.
+`render="browser"` (#63) stores the page's DOM at `load` instead of the HTTP body; a host honours it
+once `worker ready` says `browser_fetch: enabled`, and parks it, never fetching over HTTP, until then.
 
 **Issuing `content.replicate`?** That loop runs, and it writes for `gcs` (#29) — read
 [`docs/contracts/content-replicate-issuer-contract.md`](docs/contracts/content-replicate-issuer-contract.md)

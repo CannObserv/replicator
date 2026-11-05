@@ -83,7 +83,8 @@ issuer's InfoSource table contains — so a fact a seed run puts on a scratch st
 synthetic. **The live target refuses that default, and a blank value**, exiting 2: a real fetch
 broadcasts whatever is passed here to the cluster, so it has to name a real InfoSource.
 
-`--header` and `--timeout` set the command's per-fetch request options (#11). They apply to
+`--header`, `--timeout` and `--render` set the command's per-fetch request options (#11, #63:
+`--render browser` loads the page in the worker's browser, which takes only a `User-Agent`). They apply to
 every URL in the run, and omitting them is the pre-#11 wire exactly. A dry run prints them inside
 the payload, after the script's own stripping — the value that would actually travel:
 

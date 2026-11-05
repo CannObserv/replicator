@@ -71,6 +71,66 @@ remains the sole dedupe key and the sole correlator. Two commands differing only
 fetch occasions (MUST-1 unchanged); a *redelivery* carrying different options is still the same
 command and is still deduped.
 
+### `render`: the browser mode (#63)
+
+**Honoured since #63** (co-core ≥ 0.40.1, cannobserv#602). `None` and `"http"` are one path,
+today's fetch, byte for byte. `"browser"` loads the page in the confined renderer
+[`content.capture`](content-capture-issuer-contract.md) uses, and stores the **document as it
+stands at the `load` event**: the doctype plus the serialized DOM, so whatever the page's scripts
+wrote by then. There's no wait condition (co-core ships none), so content a script adds after
+`load` isn't in it. Like the other options, `render` plays no part in identity, and the facts
+don't echo it: join on `command_id`.
+
+**Refused before any request goes out** (`invalid_request_options`, terminal, `status_code` and
+`attempts` unset):
+
+| Refused | Why |
+|---|---|
+| Any `render` other than `None`, `"http"` or `"browser"` (exact, so `"HTTP"` and `""` too) | What `ContentFetchCommandEmit`'s `RenderMode` admits, and no more |
+| `If-None-Match` or `If-Modified-Since` beside `"browser"`, in any case | A rendered page has no upstream validator to replay (cannobserv#602 decision 3) |
+| Any other header but `user-agent` beside `"browser"` | It would either go to every host the page contacts, `Authorization` included, or silently drop off at the first redirect. Neither is a request you asked for |
+
+**What a `browser` fetch does with the rest:**
+
+- **`user-agent`** becomes the browser's own UA, on the document and every request the page
+  makes. Without one, it's Chromium's `HeadlessChrome`.
+- **`timeout_seconds`** bounds the navigation's first response and `load`, each. The default is
+  `REPLICATOR_CAPTURE_MAX_WAIT_SECONDS` (30). The whole render, including any wait for the browser
+  (one render at a time, shared with capture), sits inside `REPLICATOR_MAX_FETCH_SECONDS`, so a
+  `timeout_seconds` near 120 lets that deadline fire first.
+- **Pacing** is unchanged: one request to the URL's host, against the same per-host pacer.
+  The page's subresources aren't paced.
+
+**What the success fact says** under `browser`:
+
+- `media_type` is `text/html` or `application/xhtml+xml`, the browser's reading of the document,
+  which sniffs a missing header.
+- `content_type_raw` is that type plus `; charset=utf-8`, because it **describes the stored bytes,
+  not the origin's response**. The document is re-serialized as UTF-8, and it keeps the origin's
+  own `<meta charset>`. A conforming parser takes the charset from `content_type_raw`. One that
+  only sniffs the `<meta>` mis-decodes non-ASCII.
+- `etag` and `last_modified` are always `None`.
+- `final_url` is where the document landed, script-driven navigations included.
+- `status_code` is the navigation's final response, as over HTTP.
+
+**Outcomes that differ from HTTP's**, all on [the outcome reference's](content-fetch-outcome-reference.md#failure-taxonomy-what-happens-and-what-the-issuer-sees)
+existing tokens:
+
+| Condition | Outcome |
+|---|---|
+| A download (a PDF, `Content-Disposition: attachment`) or a document that isn't HTML / XHTML (JSON, text, an image, XML) | `not_fetchable`. Chromium only *views* those, so their DOM is a viewer's wrapper, never the resource. Fetch such a URL with `"http"` |
+| `load` not reached within the bound, or the render still running at `REPLICATOR_MAX_FETCH_SECONDS` | retried to the delivery ceiling, then `handler_error`, rather than retried indefinitely: each retry is a whole render on a serial consume path |
+| A 304 | Unreachable. Validators are refused, and Chromium aborts an uncached 304 rather than returning it, which ends as `handler_error` |
+| **No browser on this worker** (`REPLICATOR_BROWSER_FETCH_ENABLED` off, or the browser failed its boot check) | **Never fetched over HTTP.** Retried at the reclaim cadence, silently, like a blob tree over its ceiling. A restart that fixes the browser resumes it; MUST-6's reaper is the backstop |
+
+Everything else behaves as over HTTP: 4xx `http_status`, transient 5xx / 408 / 429 with the
+pacer's escalation, and `too_large` on the document. So does `destination_refused`, which the guard
+checks on **every connection the page opens**, not only on the URL and its redirect hops.
+
+**A mode change is a fingerprint discontinuity.** Rendered bytes differ from HTTP bytes for the
+same URL, so the first fetch after a flip reads as a content change. Whether to re-baseline is the
+issuer's call (archiver#379).
+
 ### `invalid_request_options` and stored values
 
 **This is the one refusal an issuer can wedge itself on.** Every other terminal outcome describes
@@ -223,7 +283,9 @@ the tz-aware `occurred_at` in cannobserv#273, both shipped in **co-core v0.7.2**
 cannobserv#272, shipped in **v0.7.3** and **v0.7.5**. **v0.8.0** required `info_source_id` on all
 three payloads and `command_id` on `blob_available`, re-keyed `blob_available` to
 `content_fingerprint:command_id` (cannobserv#300), and added `blob_expires_at` (cannobserv#301).
-Replicator requires **co-core ≥ 0.8.0**.
+**v0.40.1** added `render` (cannobserv#602), honoured since #63; a consumer older than that fetches
+a `browser` command over HTTP and stores the empty shell, which is why co-core's MUST waited on
+Replicator's announcement. Replicator requires **co-core ≥ 0.8.0** to decode a command at all.
 Founding rationale:
 [`docs/plans/2026-06-25-replicator-mvp-design.md`](../plans/2026-06-25-replicator-mvp-design.md).
 
