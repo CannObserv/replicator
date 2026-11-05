@@ -30,10 +30,13 @@ from src.worker.browser import (
     BrowserKilledError,
     BrowserRuntime,
     DestinationRefusedError,
+    DocumentTooLargeError,
     InvalidSelectorError,
+    LoadRequest,
     NavigationFailedError,
     NavigationImpossibleError,
     NavigationStatusError,
+    NotADocumentError,
     PageTooTallError,
     PageTooWideError,
     PlaywrightRenderer,
@@ -89,6 +92,10 @@ class FakePage:
         self.headers: dict[str, str] = {}
         self.screenshot_kwargs: dict | None = None
         self.proxy_port: int | None = None
+        # The document a load serializes (#63), and what the browser read it as.
+        self.html = "<!DOCTYPE html><html><body>rendered é</body></html>"
+        self.content_type = "text/html"
+        self.document_bytes: int | None = None  # the in-page measure; None = the real size
 
     async def goto(self, url, *, wait_until, timeout):  # noqa: ASYNC109 - Playwright's signature
         self.log.append(f"goto {url} {wait_until} {timeout:g}")
@@ -108,7 +115,16 @@ class FakePage:
 
     async def evaluate(self, script):
         self.log.append("evaluate")
+        if "contentType" in script:
+            return self.content_type
+        if "TextEncoder" in script:
+            size = self.document_bytes
+            return len(self.html.encode()) if size is None else size
         return self.scroll_width if "Width" in script else self.scroll_height
+
+    async def content(self):
+        self.log.append("content")
+        return self.html
 
     async def screenshot(self, **kwargs):
         self.log.append("screenshot")
@@ -684,3 +700,160 @@ async def test_preflight_lets_a_launch_failure_through(rig):
 
     with pytest.raises(PlaywrightError):
         await rig.renderer.preflight()
+
+
+# --------------------------------------------------------------------------- load (#63)
+
+
+def _load(**overrides) -> LoadRequest:
+    values = dict(url="https://example.org/", user_agent=None, max_wait_seconds=30, max_bytes=1024)
+    values.update(overrides)
+    return LoadRequest(**values)
+
+
+async def test_a_load_serializes_the_document_at_the_load_event(rig):
+    loaded = await rig.renderer.load(_load(max_wait_seconds=20))
+
+    assert loaded.document == rig.page.html.encode("utf-8")
+    assert loaded.media_type == "text/html"
+    assert loaded.status == 200
+    assert loaded.final_url == "https://example.org/landed"
+    assert loaded.retry_after is None
+    # commit, then load, each under the request's bound; the document only after load.
+    assert rig.log.index("goto https://example.org/ commit 20000") < rig.log.index(
+        "load_state load 20000"
+    )
+    assert rig.log.index("load_state load 20000") < rig.log.index("content")
+    assert "screenshot" not in rig.log
+
+
+async def test_a_load_uses_a_fixed_viewport_and_a_fresh_blocked_context(rig):
+    await rig.renderer.load(_load())
+
+    assert rig.pw.browser.context_kwargs == {
+        "viewport": {"width": 1280, "height": 720},
+        "device_scale_factor": 1,
+        "service_workers": "block",
+        "accept_downloads": False,
+    }
+
+
+async def test_the_issuers_user_agent_is_the_browsers(rig):
+    await rig.renderer.load(_load(user_agent="watcher/0.1.0"))
+
+    assert rig.pw.browser.context_kwargs["user_agent"] == "watcher/0.1.0"
+
+
+async def test_a_load_launches_inside_every_confinement(rig, shell):
+    """The same launch a capture makes: one session, not a copy of it."""
+    await rig.renderer.load(_load())
+
+    assert rig.pw.launch_kwargs["chromium_sandbox"] is True
+    assert rig.pw.launch_kwargs["env"]["REPLICATOR_BROWSER_EXECUTABLE"] == str(shell)
+    assert rig.log[-1] == "close"
+
+
+@pytest.mark.parametrize("status", [404, 429, 503, 301])
+async def test_a_non_2xx_load_returns_its_status_without_waiting_for_load(rig, status):
+    """Returned, not raised: the fetch path's own classifier and pacer read it (#63)."""
+    rig.page.status = status
+    rig.page.headers = {"retry-after": "120"}
+
+    loaded = await rig.renderer.load(_load())
+
+    assert (loaded.status, loaded.retry_after, loaded.document) == (status, "120", b"")
+    assert not any(entry.startswith("load_state") for entry in rig.log)
+    assert "content" not in rig.log
+
+
+@pytest.mark.parametrize("content_type", ["application/json", "text/plain", "image/png"])
+async def test_a_document_that_is_not_html_is_refused_unserialized(rig, content_type):
+    """Chromium's viewer wrapper is not the resource (spike, 2026-11-05)."""
+    rig.page.content_type = content_type
+
+    with pytest.raises(NotADocumentError, match=content_type):
+        await rig.renderer.load(_load())
+
+    assert "content" not in rig.log
+
+
+async def test_xhtml_is_a_document(rig):
+    rig.page.content_type = "application/xhtml+xml"
+
+    assert (await rig.renderer.load(_load())).media_type == "application/xhtml+xml"
+
+
+async def test_a_download_is_not_a_document(rig):
+    """What ``goto`` raises for a PDF, or for ``Content-Disposition: attachment``."""
+
+    async def download(page):
+        raise PlaywrightError("Page.goto: Download is starting")
+
+    rig.page.goto_hook = download
+
+    with pytest.raises(NotADocumentError, match="download"):
+        await rig.renderer.load(_load())
+
+
+async def test_a_document_over_the_ceiling_is_refused_before_it_is_relayed(rig):
+    """Measured in the page, inside the cgroup, so the bytes never cross the Node driver."""
+    rig.page.document_bytes = 1025
+
+    with pytest.raises(DocumentTooLargeError) as refused:
+        await rig.renderer.load(_load(max_bytes=1024))
+
+    assert (refused.value.size, refused.value.limit) == (1025, 1024)
+    assert "content" not in rig.log
+
+
+async def test_a_load_that_never_reaches_load_is_a_wait_timeout(rig):
+    rig.page.load_states["load"] = PlaywrightTimeoutError("Timeout 30000ms exceeded.")
+
+    with pytest.raises(WaitTimeoutError):
+        await rig.renderer.load(_load())
+
+    assert rig.log[-2:] == ["cgroup.kill", "close"]
+
+
+async def test_a_load_with_no_response_is_a_failed_navigation(rig):
+    async def refused(page):
+        raise PlaywrightError("net::ERR_CONNECTION_REFUSED at https://example.org/")
+
+    rig.page.goto_hook = refused
+
+    with pytest.raises(NavigationFailedError):
+        await rig.renderer.load(_load())
+
+
+async def test_a_refused_subresource_abandons_the_load(rig):
+    async def intranet(page):
+        await _socks_connect_intranet(page)
+        await asyncio.sleep(30)
+
+    rig.page.goto_hook = intranet
+
+    with pytest.raises(DestinationRefusedError) as refused:
+        await rig.renderer.load(_load())
+
+    assert refused.value.refusal.reason is FailureReason.DESTINATION_REFUSED
+
+
+async def test_renders_and_loads_never_overlap(rig):
+    """One browser at a time in the shared cgroup (#63, operator call 5).
+
+    Not only memory: a failed render's teardown writes ``cgroup.kill``, which takes
+    every browser in the group with it.
+    """
+
+    async def slow(page):
+        page.log.append("goto-start")
+        await asyncio.sleep(0.05)
+        page.log.append("goto-end")
+        return FakeResponse(200)
+
+    rig.page.goto_hook = slow
+
+    await asyncio.gather(rig.renderer.render(_request()), rig.renderer.load(_load()))
+
+    first_close = rig.log.index("close")
+    assert rig.log.index("goto-start", rig.log.index("goto-start") + 1) > first_close

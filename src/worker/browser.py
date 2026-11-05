@@ -2,9 +2,17 @@
 
 :class:`Renderer` is the seam. :class:`PlaywrightRenderer` is the one implementation: it
 launches the pinned ``chromium-headless-shell`` per render, behind three confinements, and
-returns a PNG or a :class:`RenderError` the caller classifies. The vocabulary on the wire
-is the caller's (``src/worker/capture.py`` for ``content.capture``); this module only says
-*what happened to the page*.
+returns a PNG (:meth:`~PlaywrightRenderer.render`, for ``content.capture``) or the
+serialized document (:meth:`~PlaywrightRenderer.load`, for a ``render="browser"`` fetch),
+or a :class:`RenderError` the caller classifies. The vocabulary on the wire is the
+caller's (``src/worker/capture.py``, ``src/worker/browser_fetch.py``); this module only
+says *what happened to the page*.
+
+**One browser at a time, across both callers (#63).** The two run in separate loops and
+share one ``browser/`` cgroup, whose memory cap is sized for one render, and whose
+teardown is ``cgroup.kill``, which takes every browser in the group with it. A lock held
+from launch to teardown is what makes both true; the wait for it falls inside the
+caller's deadline, so the stop budget gains no term.
 
 The confinements, each from the design doc (``docs/plans/2026-10-25-viewport-capture-design.md``):
 
@@ -122,6 +130,21 @@ _IMPOSSIBLE_NAVIGATIONS = frozenset(
     }
 )
 
+# What a load may store: the types Chromium builds a page's own DOM from (#63). Read off
+# ``document.contentType``, the browser's own reading, which sniffs a missing header.
+DOCUMENT_TYPES = frozenset({"text/html", "application/xhtml+xml"})
+# A load's viewport: Playwright's default, and a constant, so a document's fingerprint
+# does not move with configuration.
+LOAD_VIEWPORT = {"width": 1280, "height": 720}
+# What ``goto`` raises when the response is a download (a PDF, an attachment).
+_DOWNLOAD = "Download is starting"
+# ``page.content()``'s own serialization, measured as UTF-8 in the page, inside the cgroup.
+_DOCUMENT_BYTES_JS = (
+    "new TextEncoder().encode("
+    "(document.doctype ? new XMLSerializer().serializeToString(document.doctype) : '')"
+    " + (document.documentElement ? document.documentElement.outerHTML : '')).length"
+)
+
 # The document's full height, for refusing an over-tall full_page shot before taking it.
 _SCROLL_HEIGHT_JS = (
     "Math.max(document.documentElement ? document.documentElement.scrollHeight : 0,"
@@ -198,6 +221,33 @@ class PageTooWideError(RenderError):
         self.limit = limit
 
 
+class NotADocumentError(RenderError):
+    """The response is not an HTML document: a download, or a type Chromium only views (#63).
+
+    For JSON, text, images and XML Chromium builds a viewer page around the resource, so
+    serializing it would store the wrapper, never the resource (spike, 2026-11-05).
+    """
+
+
+class DocumentTooLargeError(RenderError):
+    """The serialized document would be over the caller's ceiling, measured in the page."""
+
+    def __init__(self, size: int, limit: int) -> None:
+        super().__init__(f"the document is {size} bytes, over the {limit}-byte ceiling")
+        self.size = size
+        self.limit = limit
+
+
+class RenderDeadlineError(RuntimeError):
+    """The whole render overran ``REPLICATOR_MAX_FETCH_SECONDS``.
+
+    Not a ``TimeoutError``, which the loop counts transient and would retry forever:
+    left unclassified, so the delivery ceiling closes it ``handler_error``. A page that
+    overran once overruns again, and each retry spends a whole render on a serial path.
+    Shared by capture and a browser fetch (#63, operator call 4).
+    """
+
+
 class BrowserKilledError(RenderError):
     """The kernel group-killed the browser at its cgroup's memory cap.
 
@@ -242,6 +292,29 @@ class Rendered:
 
 class Renderer(Protocol):
     async def render(self, request: RenderRequest) -> Rendered: ...
+
+
+@dataclass(frozen=True)
+class LoadRequest:
+    url: str
+    user_agent: str | None  # the issuer's, or None for Chromium's own
+    max_wait_seconds: float  # bounds ``commit`` and ``load``, each
+    max_bytes: int  # a larger document is refused before it is relayed
+
+
+@dataclass(frozen=True)
+class Loaded:
+    """A navigation's outcome. A non-2xx carries its status and no document."""
+
+    document: bytes  # UTF-8, the doctype plus the serialized DOM; b"" on a non-2xx
+    media_type: str | None  # ``document.contentType``; None on a non-2xx
+    status: int  # the navigation's final response
+    retry_after: str | None  # the final response's, verbatim
+    final_url: str  # the main frame's URL when serialized
+
+
+class DocumentLoader(Protocol):
+    async def load(self, request: LoadRequest) -> Loaded: ...
 
 
 # --------------------------------------------------------------------------- runtime
@@ -299,30 +372,40 @@ class PlaywrightRenderer:
         self._guard = guard
         self._playwright = playwright_factory
         self._clock = clock
+        self._lock = asyncio.Lock()
 
     async def render(self, request: RenderRequest) -> Rendered:
-        shell = self._runtime.executable()
-        cgroup = self._runtime.cgroup
-        kills_before = cgroup.oom_group_kills() if cgroup else 0
-        with tempfile.TemporaryDirectory(prefix="replicator-render-") as home:
-            async with SocksGuard(self._guard) as socks, self._playwright() as pw:
-                browser = None
-                failed = True
-                try:
-                    browser = await pw.chromium.launch(**self.launch_kwargs(shell, socks, home))
-                    rendered = await _first_of(socks, self._drive(browser, request))
-                    failed = False
-                    return rendered
-                except RenderError:
-                    raise
-                except PlaywrightError as exc:
-                    if cgroup and cgroup.oom_group_kills() > kills_before:
-                        raise BrowserKilledError(
-                            f"the browser was group-killed at its memory cap ({exc})"
-                        ) from exc
-                    raise
-                finally:
-                    await self._teardown(browser, failed=failed)
+        return await self._session(lambda browser: self._drive(browser, request))
+
+    async def load(self, request: LoadRequest) -> Loaded:
+        """The page's document at the load event, or its non-2xx status (#63)."""
+        return await self._session(lambda browser: _load(browser, request))
+
+    async def _session[T](self, drive: Callable[[Any], Coroutine[Any, Any, T]]) -> T:
+        """Launch, drive, tear down: every confinement, one browser at a time."""
+        async with self._lock:
+            shell = self._runtime.executable()
+            cgroup = self._runtime.cgroup
+            kills_before = cgroup.oom_group_kills() if cgroup else 0
+            with tempfile.TemporaryDirectory(prefix="replicator-render-") as home:
+                async with SocksGuard(self._guard) as socks, self._playwright() as pw:
+                    browser = None
+                    failed = True
+                    try:
+                        browser = await pw.chromium.launch(**self.launch_kwargs(shell, socks, home))
+                        result = await _first_of(socks, drive(browser))
+                        failed = False
+                        return result
+                    except RenderError:
+                        raise
+                    except PlaywrightError as exc:
+                        if cgroup and cgroup.oom_group_kills() > kills_before:
+                            raise BrowserKilledError(
+                                f"the browser was group-killed at its memory cap ({exc})"
+                            ) from exc
+                        raise
+                    finally:
+                        await self._teardown(browser, failed=failed)
 
     async def preflight(self) -> None:
         """Launch the confined shell once and close it: boot's check that a render can start.
@@ -371,7 +454,7 @@ class PlaywrightRenderer:
             accept_downloads=False,
         )
         page = await context.new_page()
-        status = await _navigate(page, request.url, bound)
+        status = await _require_2xx(await _navigate(page, request.url, bound))
         await _wait(
             page, "load", bound, lambda: page.wait_for_load_state("load", timeout=ms(bound))
         )
@@ -429,7 +512,7 @@ def ms(seconds: float) -> float:
     return seconds * 1000
 
 
-async def _first_of(socks: SocksGuard, drive: Coroutine[Any, Any, Rendered]) -> Rendered:
+async def _first_of[T](socks: SocksGuard, drive: Coroutine[Any, Any, T]) -> T:
     """The render, unless the guard refuses a connection first; a refusal always wins."""
     driving = asyncio.ensure_future(drive)
     refused = asyncio.ensure_future(socks.refused.wait())
@@ -444,12 +527,55 @@ async def _first_of(socks: SocksGuard, drive: Coroutine[Any, Any, Rendered]) -> 
     return driving.result()
 
 
-async def _navigate(page: Any, url: str, bound: float) -> int:
+async def _load(browser: Any, request: LoadRequest) -> Loaded:
+    """Navigate, wait for ``load``, and serialize, if the response is a document."""
+    bound = request.max_wait_seconds
+    context = await browser.new_context(
+        viewport=dict(LOAD_VIEWPORT),
+        device_scale_factor=1,
+        service_workers="block",
+        accept_downloads=False,
+        **({} if request.user_agent is None else {"user_agent": request.user_agent}),
+    )
+    page = await context.new_page()
+    response = await _navigate(page, request.url, bound)
+    if not _is_2xx(response.status):
+        # Returned, not raised: the fetch path's classifier and pacer read the status.
+        return Loaded(
+            document=b"",
+            media_type=None,
+            status=response.status,
+            retry_after=await response.header_value("retry-after"),
+            final_url=page.url,
+        )
+    await _wait(page, "load", bound, lambda: page.wait_for_load_state("load", timeout=ms(bound)))
+    media_type = await page.evaluate("document.contentType")
+    if media_type not in DOCUMENT_TYPES:
+        raise NotADocumentError(f"the response is {media_type}, not an HTML document")
+    # The cheap exit, before the bytes cross the unconfined Node driver. The handler's
+    # own size check is the check: a page that grew after this comes out larger.
+    size = int(await page.evaluate(_DOCUMENT_BYTES_JS))
+    if size > request.max_bytes:
+        raise DocumentTooLargeError(size, request.max_bytes)
+    document = (await page.content()).encode("utf-8")
+    return Loaded(
+        document=document,
+        media_type=media_type,
+        status=response.status,
+        retry_after=None,
+        final_url=page.url,
+    )
+
+
+async def _navigate(page: Any, url: str, bound: float) -> Any:
+    """``goto(commit)``, its failures named; the response, whatever its status."""
     try:
         response = await page.goto(url, wait_until="commit", timeout=ms(bound))
     except PlaywrightTimeoutError as exc:
         raise NavigationFailedError(f"no response within {bound:g}s") from exc
     except PlaywrightError as exc:
+        if _DOWNLOAD in str(exc):
+            raise NotADocumentError("the response is a download, not a document") from exc
         code = _NET_ERROR.search(str(exc))
         if code is not None and code.group(1) in _NETWORK_FAILURES:
             raise NavigationFailedError(_first_line(exc)) from exc
@@ -458,10 +584,19 @@ async def _navigate(page: Any, url: str, bound: float) -> int:
         raise
     if response is None:
         raise NavigationFailedError("the navigation produced no response")
+    return response
+
+
+async def _require_2xx(response: Any) -> int:
+    """A capture's reading: anything but a 2xx is the render's failure."""
     status = response.status
-    if not 200 <= status < 300:
+    if not _is_2xx(status):
         raise NavigationStatusError(status, retry_after=await response.header_value("retry-after"))
     return status
+
+
+def _is_2xx(status: int) -> bool:
+    return 200 <= status < 300
 
 
 async def _wait(page: Any, stage: str, bound: float, waiting: Callable[[], Any]) -> None:

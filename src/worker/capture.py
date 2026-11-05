@@ -42,6 +42,7 @@ from src.worker.browser import (
     NavigationStatusError,
     PageTooTallError,
     PageTooWideError,
+    RenderDeadlineError,
     Rendered,
     Renderer,
     RenderRequest,
@@ -83,14 +84,6 @@ class Captured:
 
 
 type CapturedPublisher = Callable[[ContentCaptureCommand, Captured], Awaitable[None]]
-
-
-class RenderDeadlineError(RuntimeError):
-    """The whole render overran ``REPLICATOR_MAX_FETCH_SECONDS``.
-
-    Not a ``TimeoutError``, which the loop counts transient and would retry
-    forever: left unclassified, so the delivery ceiling closes it ``handler_error``.
-    """
 
 
 def build_capture_handler(
