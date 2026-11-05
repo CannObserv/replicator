@@ -727,6 +727,22 @@ async def test_published_commands_carry_the_request_options(fake_redis):
     assert command.timeout_seconds == 2.5
 
 
+async def test_published_commands_carry_the_render_mode(fake_redis, owned_client):
+    """#63: end to end through argparse, so a scratch consumer sees a browser command."""
+    assert await run(seed_args("--topic", TOPIC, "--render", "browser", URL)) == 0
+
+    (command,) = await decoded_commands(fake_redis)
+    assert command.render == "browser"
+
+
+async def test_an_unknown_render_mode_still_travels(fake_redis):
+    """A free string, not a choice: seeding a refusal is a reason to run this script."""
+    await publish(fake_redis, TOPIC, [URL], render="pdf")
+
+    (command,) = await decoded_commands(fake_redis)
+    assert command.render == "pdf"
+
+
 async def test_published_commands_carry_the_domain_key(fake_redis):
     """CR #5: the flag crosses three functions before it reaches the wire.
 
@@ -766,6 +782,7 @@ async def test_a_command_without_options_carries_neither_field(fake_redis):
     (command,) = await decoded_commands(fake_redis)
     assert command.headers is None
     assert command.timeout_seconds is None
+    assert command.render is None
 
 
 def test_repeated_header_flags_collect_into_one_mapping():
@@ -816,6 +833,8 @@ def test_a_dry_run_shows_the_options_that_would_travel(capsys):
             "User-Agent: watcher/0.1.0",
             "--timeout",
             "5",
+            "--render",
+            "browser",
             URL,
         ]
     )
@@ -824,3 +843,4 @@ def test_a_dry_run_shows_the_options_that_would_travel(capsys):
     printed = capsys.readouterr().out
     assert "watcher/0.1.0" in printed
     assert "5.0" in printed
+    assert '"render":"browser"' in printed

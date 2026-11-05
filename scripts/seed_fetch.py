@@ -122,6 +122,7 @@ def build_command(
     headers: dict[str, str] | None = None,
     timeout_seconds: float | None = None,
     info_source_id: str = SEED_INFO_SOURCE_ID,
+    render: str | None = None,
 ) -> ContentFetchCommand:
     """Mint a command for one URL.
 
@@ -143,6 +144,9 @@ def build_command(
     to name here. A recognizable placeholder makes the facts a seed run produces
     identifiable as synthetic; pass ``--info-source-id`` when the point of the
     run is to watch a real issuer's correlation work end to end.
+
+    ``render`` (#63) is ``None`` by default, today's HTTP fetch. It is passed through
+    unchecked, so a scratch run can seed the refusal of an unknown mode too.
     """
     return ContentFetchCommand(
         occurred_at=datetime.now(UTC),
@@ -151,6 +155,7 @@ def build_command(
         headers=headers,
         timeout_seconds=timeout_seconds,
         info_source_id=info_source_id,
+        render=render,
     )
 
 
@@ -291,6 +296,7 @@ async def publish(
     headers: dict[str, str] | None = None,
     timeout_seconds: float | None = None,
     info_source_id: str = SEED_INFO_SOURCE_ID,
+    render: str | None = None,
 ) -> list[SeedResult]:
     """XADD one command per URL, in the order given.
 
@@ -306,7 +312,7 @@ async def publish(
     publisher = AsyncBusPublisher(client)
     results = []
     for url in urls:
-        command = build_command(url, headers, timeout_seconds, info_source_id)
+        command = build_command(url, headers, timeout_seconds, info_source_id, render)
         result = await publisher.execute(BusPublish(topic, to_wire(command)))
         published = SeedResult(command.command_id, url, result.bus_message_id)
         results.append(published)
@@ -484,6 +490,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--render",
+        default=None,
+        help=(
+            "render mode for every command: 'browser' loads the page in the worker's "
+            "renderer (#63); unchecked, so an unknown mode seeds its refusal "
+            "(default: omitted, a plain HTTP fetch)"
+        ),
+    )
+    parser.add_argument(
         "--watch-timeout",
         type=float,
         default=DEFAULT_WATCH_TIMEOUT_SECONDS,
@@ -498,6 +513,7 @@ def _print_dry_run(
     headers: dict[str, str] | None = None,
     timeout_seconds: float | None = None,
     info_source_id: str = SEED_INFO_SOURCE_ID,
+    render: str | None = None,
 ) -> None:
     """Show the wire frames without publishing them.
 
@@ -507,7 +523,7 @@ def _print_dry_run(
     travel, after this script's own stripping.
     """
     for url in urls:
-        command = build_command(url, headers, timeout_seconds, info_source_id)
+        command = build_command(url, headers, timeout_seconds, info_source_id, render)
         print(f"would publish to {topic}: {to_wire(command)}")
 
 
@@ -591,6 +607,7 @@ async def _seed(client: Redis, args: argparse.Namespace) -> int:
             headers=args.headers,
             timeout_seconds=args.timeout_seconds,
             info_source_id=args.info_source_id,
+            render=args.render,
         )
     except (RedisError, OSError) as exc:
         print(
@@ -669,7 +686,12 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.dry_run:
         _print_dry_run(
-            args.topic, args.urls, args.headers, args.timeout_seconds, args.info_source_id
+            args.topic,
+            args.urls,
+            args.headers,
+            args.timeout_seconds,
+            args.info_source_id,
+            args.render,
         )
         return 0
     return asyncio.run(run(args))
