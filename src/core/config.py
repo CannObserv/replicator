@@ -338,6 +338,13 @@ class Settings(BaseSettings):
     # Off is the dev escape: a run outside the delegated unit has no cgroup to
     # give the browser, so it renders uncapped. Never off on a host.
     capture_cgroup: bool = Field(default=True, validation_alias="REPLICATOR_CAPTURE_CGROUP")
+    # A content.fetch command's render="browser" mode (#63): the same renderer, the same
+    # cgroup, one browser at a time across both. Off by default for capture's reason.
+    # Off, or with a browser that failed its boot preflight, a browser command is parked
+    # in the PEL, never fetched over HTTP. Its waits use capture_max_wait_seconds.
+    browser_fetch_enabled: bool = Field(
+        default=False, validation_alias="REPLICATOR_BROWSER_FETCH_ENABLED"
+    )
     # Where `playwright install chromium-headless-shell` put the pinned shell.
     playwright_browsers_path: Path = Field(
         default=Path("/var/lib/replicator/ms-playwright"),
@@ -658,10 +665,10 @@ class Settings(BaseSettings):
         The navigation's first response, ``load`` and the condition are each bounded by
         the wait; launch and the screenshot share the 30 s left. Tighter, and a slow
         page's ``wait_timeout`` would arrive as the deadline's ``handler_error`` instead.
-        Checked only when capture is on, so a host that never captures keeps booting on
-        the env file it had.
+        Checked only when the browser is on, for capture or a browser fetch (#63), so a
+        host that never renders keeps booting on the env file it had.
         """
-        if not self.capture_enabled:
+        if not (self.capture_enabled or self.browser_fetch_enabled):
             return self
         needed = 3 * self.capture_max_wait_seconds + 30
         if needed > self.max_fetch_seconds:

@@ -204,6 +204,7 @@ async def test_run_replays_the_named_policy_stream_into_the_byte_path(
     # registration is not a key, so nothing would ever sweep one that lacked it.
     monkeypatch.setenv("REPLICATOR_REPLICATE_CONSUMER_NAME", "replicator@itest-replicate")
     monkeypatch.setenv("REPLICATOR_READ_BLOCK_MS", "50")
+    monkeypatch.delenv("REPLICATOR_BROWSER_FETCH_ENABLED", raising=False)
     # Pinned rather than inherited: the fallback must sit well below the published
     # 30 s for the two hosts' waits to tell a replayed policy from no policy, and
     # a shell that exported a stricter one would fail the precondition, not the
@@ -222,6 +223,9 @@ async def test_run_replays_the_named_policy_stream_into_the_byte_path(
         # *accepts* `policy`, so a recorder keyed on it fails on a KeyError
         # rather than on an assertion, and only where this file runs (#175).
         seen["pacer"] = kwargs["pacer"]
+        # The other byte-path kwarg `run` decides (#63). Keyed, so a rename fails
+        # here as well as in `test_main_capture.py`'s default-suite recorder.
+        seen["browser_fetcher"] = kwargs["browser_fetcher"]
         return real_build_handler(**kwargs)
 
     async def stubbed_run_loop(**kwargs):
@@ -248,3 +252,5 @@ async def test_run_replays_the_named_policy_stream_into_the_byte_path(
     assert 29.0 < pacer.wait_seconds("https://slow.test/") <= 30.0
     pacer.record("https://unpublished.test/")
     assert 0.0 < pacer.wait_seconds("https://unpublished.test/") <= 1.0
+    # Off by default: a browser command on this worker is parked, never fetched over HTTP.
+    assert seen["browser_fetcher"] is None

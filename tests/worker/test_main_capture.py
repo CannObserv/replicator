@@ -39,6 +39,9 @@ class FakeRenderer:
     async def render(self, request):  # pragma: no cover - the loop is stubbed
         raise AssertionError("no render at boot")
 
+    async def load(self, request):  # pragma: no cover - the loop is stubbed
+        raise AssertionError("no load at boot")
+
 
 def _loops_started(monkeypatch) -> list:
     started: list = []
@@ -241,3 +244,109 @@ def test_the_capture_override_moves_only_its_own_group(monkeypatch):
         settings.persist_consumer_group,
     ):
         assert src.worker.main.consumer_name_for(settings, group) != "replicator-capture-dev"
+
+
+# --------------------------------------------------------------------------- browser fetch (#63)
+
+
+def _browser_fetchers(monkeypatch) -> list:
+    """What ``build_handler`` was given as ``browser_fetcher``, per call."""
+    seen: list = []
+    real = src.worker.main.build_handler
+
+    def record(**kwargs):
+        seen.append(kwargs["browser_fetcher"])
+        return real(**kwargs)
+
+    monkeypatch.setattr("src.worker.main.build_handler", record)
+    return seen
+
+
+async def test_off_by_default_the_fetch_path_has_no_browser(monkeypatch, fake_redis, capsys):
+    monkeypatch.delenv("REPLICATOR_BROWSER_FETCH_ENABLED", raising=False)
+    monkeypatch.delenv("REPLICATOR_CAPTURE_ENABLED", raising=False)
+    get_settings.cache_clear()
+    built = _renderer(monkeypatch, FakeRenderer())
+    _loops_started(monkeypatch)
+    seen = _browser_fetchers(monkeypatch)
+
+    await run(asyncio.Event(), capture_topic=CAPTURE_TOPIC)
+
+    assert built == []
+    assert seen == [None]
+    assert _ready(_lines(capsys))["browser_fetch"] == "disabled"
+
+
+async def test_browser_fetch_alone_launches_the_browser_and_hands_it_to_fetch(
+    monkeypatch, fake_redis, capsys
+):
+    """Capture off: the renderer is still prepared, and the capture stream untouched."""
+    from src.worker.browser_fetch import BrowserFetcher
+
+    monkeypatch.setenv("REPLICATOR_BROWSER_FETCH_ENABLED", "true")
+    monkeypatch.delenv("REPLICATOR_CAPTURE_ENABLED", raising=False)
+    get_settings.cache_clear()
+    renderer = FakeRenderer()
+    _renderer(monkeypatch, renderer)
+    started = _loops_started(monkeypatch)
+    seen = _browser_fetchers(monkeypatch)
+
+    await run(asyncio.Event(), capture_topic=CAPTURE_TOPIC)
+
+    assert renderer.preflights == 1
+    (fetcher,) = seen
+    assert isinstance(fetcher, BrowserFetcher)
+    assert fetcher._loader is renderer
+    assert fetcher._default_wait == get_settings().capture_max_wait_seconds
+    assert fetcher._max_bytes == get_settings().max_blob_bytes
+    assert not await fake_redis.exists(CAPTURE_TOPIC)
+    assert "content.capture" not in [label for label, _ in started]
+    ready = _ready(_lines(capsys))
+    assert (ready["browser_fetch"], ready["capture"]) == ("enabled", "disabled")
+
+
+async def test_capture_and_browser_fetch_share_one_renderer(monkeypatch, fake_redis):
+    """One instance, one preflight, and one lock: one browser at a time (operator call 5)."""
+    monkeypatch.setenv("REPLICATOR_BROWSER_FETCH_ENABLED", "true")
+    monkeypatch.setenv("REPLICATOR_CAPTURE_ENABLED", "true")
+    get_settings.cache_clear()
+    renderer = FakeRenderer()
+    built = _renderer(monkeypatch, renderer)
+    _loops_started(monkeypatch)
+    seen = _browser_fetchers(monkeypatch)
+    captured: list = []
+    real_capture = src.worker.main.build_capture_handler
+
+    def capture(**kwargs):
+        captured.append(kwargs["renderer"])
+        return real_capture(**kwargs)
+
+    monkeypatch.setattr("src.worker.main.build_capture_handler", capture)
+
+    await run(asyncio.Event(), capture_topic=CAPTURE_TOPIC)
+
+    assert len(built) == 1 and renderer.preflights == 1
+    (fetcher,) = seen
+    assert captured == [renderer]
+    assert fetcher._loader is renderer
+
+
+async def test_a_browser_that_cannot_start_leaves_fetch_without_one(
+    monkeypatch, fake_redis, capsys
+):
+    """Fetch still runs; a browser command is then parked, never fetched over HTTP."""
+    monkeypatch.setenv("REPLICATOR_BROWSER_FETCH_ENABLED", "true")
+    monkeypatch.delenv("REPLICATOR_CAPTURE_ENABLED", raising=False)
+    get_settings.cache_clear()
+    _renderer(monkeypatch, FakeRenderer(RuntimeUnavailableError("the shell is missing")))
+    started = _loops_started(monkeypatch)
+    seen = _browser_fetchers(monkeypatch)
+
+    await run(asyncio.Event(), capture_topic=CAPTURE_TOPIC)
+
+    assert seen == [None]
+    assert "content.fetch" in [label for label, _ in started]
+    lines = _lines(capsys)
+    assert _ready(lines)["browser_fetch"] == "unavailable"
+    (critical,) = [line for line in lines if line.get("level") == "CRITICAL"]
+    assert "the shell is missing" in critical["error"]

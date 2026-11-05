@@ -39,6 +39,7 @@ from src.storage.sweeper import BlobUsage
 from src.worker.aliases import AliasTable, load_alias_table
 from src.worker.browser import BrowserRuntime, PlaywrightRenderer, Renderer
 from src.worker.browser_cgroup import BrowserCgroup, CgroupUnavailableError, claim_worker_memory_low
+from src.worker.browser_fetch import BrowserFetcher
 from src.worker.capture import build_capture_handler
 from src.worker.capture_reporter import build_capture_reporter, build_captured_publisher
 from src.worker.checkout import checkout_refusal
@@ -150,13 +151,17 @@ def build_capture_renderer(settings: Settings, guard: DestinationGuard) -> Playw
     return PlaywrightRenderer(BrowserRuntime(settings.playwright_browsers_path, cgroup), guard)
 
 
-async def prepare_capture(settings: Settings) -> Renderer | None:
+async def prepare_renderer(settings: Settings) -> PlaywrightRenderer | None:
     """Build the renderer and launch it once; ``None`` if the browser cannot start.
 
-    A failure degrades capture alone (#138 design, operator call 4): the group is
-    already ensured, so no command is skipped, and fetch, replicate and persist
-    keep running. The ``CRITICAL`` line names the runbook; broker's
-    undelivered-age probe is the alarm on the backlog.
+    One instance for capture and a browser fetch (#63): its lock is what keeps one
+    browser at a time in the shared cgroup, so two instances would defeat it.
+
+    A failure degrades the browser's users alone (#138 design, operator call 4): the
+    capture group is already ensured, so no command is skipped; a browser fetch is
+    parked, never fetched over HTTP; fetch, replicate and persist keep running. The
+    ``CRITICAL`` line names the runbook; broker's undelivered-age probe is the alarm
+    on a capture backlog.
     """
     guard = DestinationGuard(blocked=blocked_networks(settings.blocked_destination_cidrs))
     try:
@@ -165,11 +170,18 @@ async def prepare_capture(settings: Settings) -> Renderer | None:
             await renderer.preflight()
     except Exception as exc:
         logger.critical(
-            "capture is unavailable: the browser could not start",
+            "the browser could not start: capture and browser fetch are unavailable",
             extra={"error": f"{type(exc).__name__}: {exc}", "runbook": CAPTURE_RUNBOOK},
         )
         return None
     return renderer
+
+
+def _browser_state(enabled: bool, renderer: Renderer | None) -> str:
+    """A browser user's word on the ``worker ready`` line: off, on, or wanted and absent."""
+    if not enabled:
+        return "disabled"
+    return "enabled" if renderer is not None else "unavailable"
 
 
 def warn_if_unreachable(blob_dir: Path) -> None:
@@ -912,12 +924,23 @@ async def run(
         # host's tolerance is one number however it is asked, and two instances
         # would each be individually polite while together asking twice as often.
         pacer = HostPacer(settings.min_host_interval_seconds, policy=policies.interval_for)
-        # After the group, so a browser that cannot start skips nothing.
-        renderer = None if capture_consumer is None else await prepare_capture(settings)
-        capture_state = (
-            "disabled"
-            if capture_consumer is None
-            else ("enabled" if renderer is not None else "unavailable")
+        # After the group, so a browser that cannot start skips nothing. One renderer for
+        # capture and a browser fetch (#63): its lock is one browser at a time.
+        renderer = (
+            await prepare_renderer(settings)
+            if capture_consumer is not None or settings.browser_fetch_enabled
+            else None
+        )
+        capture_state = _browser_state(capture_consumer is not None, renderer)
+        browser_fetch_state = _browser_state(settings.browser_fetch_enabled, renderer)
+        browser_fetcher = (
+            BrowserFetcher(
+                renderer,
+                default_wait_seconds=settings.capture_max_wait_seconds,
+                max_bytes=settings.max_blob_bytes,
+            )
+            if settings.browser_fetch_enabled and renderer is not None
+            else None
         )
         policy_reader = build_policy_reader(client, topic=policy_topic)
         await replay_policies(policy_reader, policies, stop=stop)
@@ -979,6 +1002,9 @@ async def run(
                     # Whether this worker renders captures (#138). "unavailable":
                     # the group exists and nothing consumes it (CRITICAL above).
                     "capture": capture_state,
+                    # Whether a render="browser" fetch has a browser here (#63).
+                    # Anything but "enabled" parks such a command, never HTTP.
+                    "browser_fetch": browser_fetch_state,
                     **(
                         {
                             "capture_group": settings.capture_consumer_group,
@@ -1020,6 +1046,8 @@ async def run(
                     # handler waiting out a politeness window does not hold a
                     # SIGTERM for it (#12).
                     stop=stop,
+                    # render="browser" (#63). None: parked, never fetched over HTTP.
+                    browser_fetcher=browser_fetcher,
                 ),
                 # The other outcome of a command, on the same stream: an issuer
                 # closes a pending entry off one consumer group either way (#9,

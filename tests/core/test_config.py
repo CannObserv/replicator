@@ -674,6 +674,24 @@ def test_the_wait_bound_is_only_checked_when_capture_is_on(monkeypatch):
     assert get_settings().capture_max_wait_seconds == 50.0
 
 
+def test_browser_fetch_is_off_unless_an_operator_turns_it_on(monkeypatch):
+    """Capture's reason (#63): the pinned shell has to be on the host first."""
+    monkeypatch.delenv("REPLICATOR_BROWSER_FETCH_ENABLED", raising=False)
+
+    assert get_settings().browser_fetch_enabled is False
+
+
+def test_an_enabled_browser_fetch_checks_the_wait_bound_too(monkeypatch):
+    """A browser fetch waits on the same bound, under the same deadline (#63)."""
+    monkeypatch.delenv("REPLICATOR_CAPTURE_ENABLED", raising=False)
+    monkeypatch.setenv("REPLICATOR_BROWSER_FETCH_ENABLED", "true")
+    monkeypatch.setenv("REPLICATOR_CAPTURE_MAX_WAIT_SECONDS", "35")
+    monkeypatch.setenv("REPLICATOR_MAX_FETCH_SECONDS", "120")
+
+    with pytest.raises(ValidationError, match="REPLICATOR_CAPTURE_MAX_WAIT_SECONDS"):
+        get_settings()
+
+
 def test_the_default_wait_bound_fits_the_default_deadline(monkeypatch):
     monkeypatch.setenv("REPLICATOR_CAPTURE_ENABLED", "true")
 
