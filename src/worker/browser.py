@@ -57,6 +57,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
+from urllib.parse import urlsplit
 
 import playwright
 from playwright.async_api import Error as PlaywrightError
@@ -129,6 +130,8 @@ _IMPOSSIBLE_NAVIGATIONS = frozenset(
         "ERR_UNSAFE_REDIRECT",
     }
 )
+
+_BROWSABLE_SCHEMES = frozenset({"http", "https"})
 
 # What a load may store: the types Chromium builds a page's own DOM from (#63). Read off
 # ``document.contentType``, the browser's own reading, which sniffs a missing header.
@@ -567,8 +570,34 @@ async def _load(browser: Any, request: LoadRequest) -> Loaded:
     )
 
 
+def check_browsable(url: str) -> None:
+    """Refuse a URL the browser must never be pointed at: not ``http(s)``, or no host.
+
+    The egress guard is a SOCKS proxy, and a browser told ``file:`` or ``chrome:`` never
+    asks a proxy anything: measured, ``file:///…/x.html`` loads as ``text/html``, and a
+    directory listing does too (#63 CR 1). The guard decides *where* a host is; this
+    decides only that there is one, reached over HTTP. Capture checks it before the
+    launch, a browser fetch too, and :func:`_navigate` again, so neither operation can
+    go there whatever its caller checked.
+    """
+    try:
+        parts = urlsplit(url)
+        parts.port  # noqa: B018 - raises on an out-of-range or non-numeric port
+        host = parts.hostname
+        if parts.scheme.lower() not in _BROWSABLE_SCHEMES or not host:
+            raise ValueError("not an http(s) URL with a host")
+        if any(c.isspace() for c in url):
+            raise ValueError("whitespace in the URL")
+        host.encode("idna")
+    except (ValueError, UnicodeError) as exc:
+        raise NavigationImpossibleError(
+            f"{url!r} is not a URL a browser may be pointed at: {exc}"
+        ) from exc
+
+
 async def _navigate(page: Any, url: str, bound: float) -> Any:
     """``goto(commit)``, its failures named; the response, whatever its status."""
+    check_browsable(url)
     try:
         response = await page.goto(url, wait_until="commit", timeout=ms(bound))
     except PlaywrightTimeoutError as exc:

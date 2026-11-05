@@ -34,6 +34,7 @@ from src.worker.browser import (
     NavigationFailedError,
     NavigationImpossibleError,
     NotADocumentError,
+    check_browsable,
 )
 
 FETCHER_USED = "browser"
@@ -63,6 +64,8 @@ class BrowserFetcher:
         )
         started = time.monotonic()
         try:
+            # Before anything launches (CR 1); the renderer checks again at the seam.
+            check_browsable(effect.url)
             loaded = await self._loader.load(request)
         except DestinationRefusedError as exc:
             # The guard's own refusal, reason and message intact: the URL, a redirect

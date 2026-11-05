@@ -135,6 +135,25 @@ async def test_a_document_over_the_blob_ceiling_after_the_measure_is_too_large(
     assert refused.value.reason is FailureReason.TOO_LARGE
 
 
+@pytest.mark.parametrize(
+    "url",
+    ["file:///etc/", "file:///home/exedev/x.html", "chrome://version", "data:text/html,hi",
+     "javascript:alert(1)", "https:///nohost", "ftp://example.test/a"],
+)  # fmt: skip
+async def test_a_url_a_browser_must_not_open_is_not_fetchable_and_never_loaded(
+    browser_handler, url
+):
+    """CR 1: the SOCKS guard never sees ``file:``, and Chromium serves a local file as
+    ``text/html`` (measured), so the scheme is checked before anything launches."""
+    loader = FakeLoader()
+
+    with pytest.raises(PermanentFetchError) as refused:
+        await browser_handler(loader)(command(url=url, render="browser"))
+
+    assert refused.value.reason is FailureReason.NOT_FETCHABLE
+    assert loader.requests == []
+
+
 # --------------------------------------------------------------------------- statuses
 
 

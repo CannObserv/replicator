@@ -857,3 +857,14 @@ async def test_renders_and_loads_never_overlap(rig):
 
     first_close = rig.log.index("close")
     assert rig.log.index("goto-start", rig.log.index("goto-start") + 1) > first_close
+
+
+@pytest.mark.parametrize("url", ["file:///etc/", "chrome://version", "javascript:alert(1)"])
+async def test_the_renderer_itself_never_navigates_to_a_url_the_guard_cannot_see(rig, url):
+    """CR 1, at the seam: whatever its caller checked, neither operation goes there."""
+    with pytest.raises(NavigationImpossibleError):
+        await rig.renderer.load(_load(url=url))
+    with pytest.raises(NavigationImpossibleError):
+        await rig.renderer.render(_request(url=url))
+
+    assert not any(entry.startswith("goto") for entry in rig.log)

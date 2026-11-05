@@ -24,7 +24,6 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from urllib.parse import urlsplit
 
 from co_core.pure.models.changes import ContentCaptureCommand
 from co_core.pure.util.blobstore import BlobStore
@@ -48,6 +47,7 @@ from src.worker.browser import (
     RenderRequest,
     Wait,
     WaitTimeoutError,
+    check_browsable,
 )
 from src.worker.handler import in_store, pace, raise_for_ceiling, report_rate_limited
 from src.worker.pacing import HostPacer
@@ -63,7 +63,6 @@ MAX_CAPTURE_HEIGHT = 32768
 WAIT_KINDS = frozenset({"networkidle", "selector", "delay"})
 # Fetch's retryable statuses (handler.py's ``_raise_for_status``): every 5xx, 408, 429.
 _RETRYABLE_STATUSES = frozenset({408, 429})
-_HTTP_SCHEMES = frozenset({"http", "https"})
 
 type CaptureHandler = Callable[[ContentCaptureCommand], Awaitable[None]]
 
@@ -177,25 +176,11 @@ def render_request(command: ContentCaptureCommand, settings: Settings) -> Render
 
 
 def _check_url(url: str) -> None:
-    """``http(s)`` with a host a browser can ask a proxy for; nothing else is fetchable.
-
-    The guard decides *where* the host is; this decides only that there is one. A
-    browser told ``file:`` or ``chrome:`` would never ask the SOCKS guard at all.
-    """
+    """``http(s)`` with a host, before anything launches: the renderer's own rule."""
     try:
-        parts = urlsplit(url)
-        parts.port  # noqa: B018 - raises on an out-of-range or non-numeric port
-        host = parts.hostname
-        if parts.scheme.lower() not in _HTTP_SCHEMES or not host:
-            raise ValueError("not an http(s) URL with a host")
-        if any(c.isspace() for c in url):
-            raise ValueError("whitespace in the URL")
-        host.encode("idna")
-    except (ValueError, UnicodeError) as exc:
-        raise PermanentCaptureError(
-            f"{url!r} is not a URL a browser may be pointed at: {exc}",
-            reason=CaptureReason.NOT_FETCHABLE,
-        ) from exc
+        check_browsable(url)
+    except NavigationImpossibleError as exc:
+        raise PermanentCaptureError(str(exc), reason=CaptureReason.NOT_FETCHABLE) from exc
 
 
 def _wait(command: ContentCaptureCommand, bound: float) -> Wait | None:

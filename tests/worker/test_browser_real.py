@@ -608,3 +608,18 @@ async def test_concurrent_loads_take_turns_rather_than_killing_each_other(render
     )
 
     assert b"slow" in slow.document and b"fast" in fast.document
+
+
+async def test_a_local_file_is_never_fetched(renderer, tmp_path, fake_redis):
+    """CR 1: measured before the fix, Chromium served this file as text/html and the
+    handler would have published it on content.blobs."""
+    page = tmp_path / "local.html"
+    page.write_text("<html><body>on this host</body></html>")
+    handle, http = _fetch_handler(renderer, tmp_path / "blobs", fake_redis)
+
+    with pytest.raises(PermanentFetchError) as refused:
+        await handle(command(url=page.as_uri(), render="browser"))
+
+    assert refused.value.reason is FailureReason.NOT_FETCHABLE
+    assert http.effects == []
+    assert await fake_redis.xlen(streams.CONTENT_BLOBS) == 0
