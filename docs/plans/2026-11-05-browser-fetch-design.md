@@ -108,7 +108,7 @@ operator*.
 content.fetch → _request_options (headers, timeout, render + its refusals)
    → raise_for_ceiling → pace(host)
    → render == "browser" ? BrowserFetcher : AsyncFetchDriver      (inside one MAX_FETCH_SECONDS deadline)
-        BrowserFetcher: [render lock] launch (cgroup, sandbox, SOCKS guard) → goto(commit)
+        BrowserFetcher: http(s) with a host? (CR 1) → [render lock] launch (cgroup, sandbox, SOCKS guard) → goto(commit)
           → non-2xx? return status + headers, no document
           → load → document.contentType ∈ {text/html, application/xhtml+xml}? → measure → content()
    → report_rate_limited → _raise_for_status → _raise_for_size → fingerprint → store → blob_available
@@ -185,6 +185,7 @@ So `blob_available` under `browser` has:
 |---|---|
 | unknown `render`; a validator beside `browser`; (1A) any header but `user-agent` | `invalid_request_options`, before any request |
 | No renderer on this worker (disabled or failed preflight) | transient, parked, `WARNING`. **Never HTTP** (call 3) |
+| A URL that isn't `http(s)` with a host (`file:`, `chrome:`, `data:` …), checked before the launch and again in `_navigate` (CR 1: measured, `file:` HTML loaded as `text/html` without it) | `not_fetchable`, nothing launched |
 | The guard refused the URL, a hop, or **any** request the page made | `destination_refused` (the refusal's own `PermanentFetchError`) |
 | No response: DNS, connect, TLS, `commit` not reached in the bound | transient (as HTTP's connect / read errors) |
 | `NavigationImpossibleError` (unsafe port, scheme) | `not_fetchable` |
