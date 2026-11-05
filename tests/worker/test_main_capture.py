@@ -60,7 +60,7 @@ def _renderer(monkeypatch, renderer) -> list:
         built.append(guard)
         return renderer
 
-    monkeypatch.setattr("src.worker.main.build_capture_renderer", build)
+    monkeypatch.setattr("src.worker.main.build_renderer", build)
     return built
 
 
@@ -183,7 +183,7 @@ async def test_a_browser_that_cannot_be_built_degrades_capture_alone(
     def refuse(settings, guard):
         raise CgroupUnavailableError("not delegated")
 
-    monkeypatch.setattr("src.worker.main.build_capture_renderer", refuse)
+    monkeypatch.setattr("src.worker.main.build_renderer", refuse)
     started = _loops_started(monkeypatch)
 
     await run(asyncio.Event(), capture_topic=CAPTURE_TOPIC)
@@ -204,7 +204,7 @@ def test_the_renderer_is_built_against_the_settings_cgroup_and_path(monkeypatch,
     get_settings.cache_clear()
     guard = object()
 
-    renderer = src.worker.main.build_capture_renderer(get_settings(), guard)
+    renderer = src.worker.main.build_renderer(get_settings(), guard)
 
     assert renderer._runtime.browsers_path == tmp_path / "pw"
     assert renderer._runtime.cgroup is None
@@ -221,7 +221,7 @@ def test_with_the_cgroup_on_the_renderer_prepares_it_at_the_settings_cap(monkeyp
     monkeypatch.setattr("src.worker.main.BrowserCgroup.prepare", prepare)
     get_settings.cache_clear()
 
-    renderer = src.worker.main.build_capture_renderer(get_settings(), object())
+    renderer = src.worker.main.build_renderer(get_settings(), object())
 
     assert prepared == {"memory_max": 1536 * 1024 * 1024}
     assert renderer._runtime.cgroup == "the cgroup"

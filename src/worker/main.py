@@ -131,8 +131,10 @@ CAPTURE_RUNBOOK = "docs/plans/2026-10-25-viewport-capture-runbook.md"
 PREFLIGHT_TIMEOUT_SECONDS = 60.0
 
 
-def build_capture_renderer(settings: Settings, guard: DestinationGuard) -> PlaywrightRenderer:
-    """The confined renderer (#138): the pinned shell, its cgroup, the egress guard.
+def build_renderer(settings: Settings, guard: DestinationGuard) -> PlaywrightRenderer:
+    """The confined renderer capture and a browser fetch share (#138, #63).
+
+    The pinned shell, its cgroup, the egress guard.
 
     ``BrowserCgroup.prepare`` writes the delegated subtree's limits here, at boot,
     so an undelegated unit is found before a command is read.
@@ -145,7 +147,7 @@ def build_capture_renderer(settings: Settings, guard: DestinationGuard) -> Playw
     )
     if cgroup is None:
         logger.warning(
-            "capture renders without a cgroup — no memory cap, no group-kill",
+            "the browser renders without a cgroup — no memory cap, no group-kill",
             extra={"detail": "REPLICATOR_CAPTURE_CGROUP=off is for dev runs only"},
         )
     return PlaywrightRenderer(BrowserRuntime(settings.playwright_browsers_path, cgroup), guard)
@@ -165,7 +167,7 @@ async def prepare_renderer(settings: Settings) -> PlaywrightRenderer | None:
     """
     guard = DestinationGuard(blocked=blocked_networks(settings.blocked_destination_cidrs))
     try:
-        renderer = build_capture_renderer(settings, guard)
+        renderer = build_renderer(settings, guard)
         async with asyncio.timeout(PREFLIGHT_TIMEOUT_SECONDS):
             await renderer.preflight()
     except Exception as exc:
