@@ -95,6 +95,21 @@ _RATE_LIMIT_STATUSES = frozenset({429, 503})
 # spelled it, folded here, so the check cannot disagree with what went out.
 _VALIDATOR_HEADERS = frozenset({"if-none-match", "if-modified-since"})
 
+# ``ContentFetchCommand.render`` (cannobserv#602, #63). ``None`` reads as ``http``.
+# An exact match, so ``"HTTP"`` is refused: this is what ``ContentFetchCommandEmit``'s
+# ``RenderMode`` admits, and a consumer more lenient than the producer's own model
+# would accept spellings no conforming issuer can send.
+RENDER_HTTP = "http"
+RENDER_BROWSER = "browser"
+_RENDER_MODES = frozenset({RENDER_HTTP, RENDER_BROWSER})
+
+# The one issuer header a browser fetch sends: it becomes the browser's own user
+# agent, on the document and every request the page makes (#63, operator call 1A).
+# Any other header is refused under ``browser``. Sent on every request the page
+# makes, an ``Authorization`` would reach whatever hosts the page's author chose;
+# sent on the document alone, it would silently fall off at the first redirect.
+_BROWSER_HEADERS = frozenset({"user-agent"})
+
 # How many request headers a command may carry, and how many bytes they may add
 # up to on the wire (#11).
 #
@@ -194,6 +209,7 @@ class RequestOptions(NamedTuple):
 
     headers: dict[str, str] | None
     timeout: float | None
+    render: str = RENDER_HTTP
 
 
 class Fetcher(Protocol):
@@ -225,6 +241,7 @@ def build_handler(
     park_above_seconds: float | None = None,
     stop: asyncio.Event | None = None,
     blobs_topic: str = streams.CONTENT_BLOBS,
+    browser_fetcher: Fetcher | None = None,
 ) -> Handler:
     """Wire the byte path into a handler the loop can dispatch to.
 
@@ -270,6 +287,10 @@ def build_handler(
     live-broker test, which must keep its facts on a scratch stream. A fact
     written to the real ``content.blobs`` during a test would be a genuine
     announcement of a blob under ``tmp_path`` — gone before any consumer reads it.
+
+    ``browser_fetcher`` is where a ``render="browser"`` command goes (#63), and
+    ``None`` means this worker has no browser: the flag is off, or the boot
+    preflight failed. Such a command is parked, **never** fetched over HTTP.
     """
     publisher = AsyncBusPublisher(client)
     usage = usage if usage is not None else BlobUsage()
@@ -289,6 +310,7 @@ def build_handler(
         # sweep frees space. A command that can never succeed must not wait a
         # sweep interval to reach a conclusion available immediately.
         options = _request_options(command, settings.max_fetch_timeout_seconds)
+        selected = _select_fetcher(options, command, fetcher, browser_fetcher)
         raise_for_ceiling(usage, ceiling)
         # Last of the three, and after the ceiling on purpose: spending a wait to
         # reach a check that was going to park the message anyway is a wait the
@@ -297,7 +319,7 @@ def build_handler(
         # and the ceiling is an inter-sweep estimate either way (CR #9).
         paced_seconds = await pace(pacer, command, stop=stop, park_above_seconds=park_above_seconds)
         result = await _fetch(
-            fetcher, command, options, deadline_seconds=settings.max_fetch_seconds
+            selected, command, options, deadline_seconds=settings.max_fetch_seconds
         )
         # Stamped here rather than at publish: occurred_at is when the fact went
         # onto the bus, which under a reclaim is minutes after the bytes were on
@@ -425,6 +447,7 @@ def build_handler(
                 # read than can write to the bus.
                 "request_headers": sorted(options.headers or {}),
                 "request_timeout_seconds": options.timeout,
+                "render": options.render,
                 # Politeness, on the line that already exists rather than one of
                 # its own (CR #3): without it a mechanism that caps per-host
                 # throughput is absent from the journal, and an operator seeing a
@@ -497,10 +520,77 @@ def _request_options(command: ContentFetchCommand, max_timeout: float) -> Reques
     ``fetch_failed`` naming ``invalid_request_options`` — rather than receiving
     bytes fetched under conditions it did not ask for.
     """
+    headers = _request_headers(command.headers)
     return RequestOptions(
-        headers=_request_headers(command.headers),
+        headers=headers,
         timeout=_request_timeout(command.timeout_seconds, max_timeout),
+        render=_request_render(command.render, headers),
     )
+
+
+def _request_render(render: str | None, headers: dict[str, str] | None) -> str:
+    """The command's render mode, or the refusal that closes it (#63).
+
+    Two refusals, both co-core's (``FetchFailedEvent``'s docstring lists them), and
+    a third that is this repo's (operator call 1A):
+
+    - **an unknown mode.** ``render`` is a plain ``str`` on the class the consume
+      path decodes, so ``"pdf"`` arrives intact and must be closed here;
+    - **a validator beside ``browser``** (cannobserv#602 decision 3). A rendered
+      page has no upstream ``etag`` / ``last_modified`` to replay;
+    - **any other header but ``user-agent`` beside ``browser``.**
+
+    ``headers`` is the *folded* map ``_request_headers`` returned, so the
+    case-insensitive match is the existing fold, not a second one. The validator
+    check comes first only so its message names the rule an issuer most likely
+    broke.
+    """
+    if render is None or render == RENDER_HTTP:
+        return RENDER_HTTP
+    if render != RENDER_BROWSER:
+        raise _invalid_options(f"render={render!r} is not one of {sorted(_RENDER_MODES)}")
+    names = set(headers or {})
+    if validators := sorted(names & _VALIDATOR_HEADERS):
+        raise _invalid_options(
+            f"a validator ({', '.join(validators)}) beside render='browser': "
+            "a rendered page has none to match"
+        )
+    if others := sorted(names - _BROWSER_HEADERS):
+        raise _invalid_options(
+            f"only user-agent is sent under render='browser', not {', '.join(others)}"
+        )
+    return RENDER_BROWSER
+
+
+def _select_fetcher(
+    options: RequestOptions,
+    command: ContentFetchCommand,
+    fetcher: Fetcher,
+    browser_fetcher: Fetcher | None,
+) -> Fetcher:
+    """The HTTP driver, or the browser; a ``browser`` command never falls back (#63).
+
+    No browser here is **transient** (operator call 3): parked in the PEL, the way
+    capture's backlog waits for a browser that would not start, so a restart that
+    fixes it resumes the work and the issuer's reaper is the backstop. Raised
+    before the ceiling and the pacer, because no origin request is going to
+    happen and none should be recorded against the host.
+    """
+    if options.render != RENDER_BROWSER:
+        return fetcher
+    if browser_fetcher is None:
+        logger.warning(
+            "a browser fetch arrived and this worker has no browser; leaving it parked",
+            extra={
+                "command_id": command.command_id,
+                "detail": "REPLICATOR_BROWSER_FETCH_ENABLED is off, or the browser "
+                "failed its boot preflight (see the worker ready line)",
+            },
+        )
+        raise TransientFetchError(
+            f"{command.url}: render='browser' and there is no browser on this worker"
+        )
+    return browser_fetcher
 
 
 def _request_headers(headers: dict[str, str] | None) -> dict[str, str] | None:

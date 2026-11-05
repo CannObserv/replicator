@@ -33,6 +33,7 @@ from src.storage.sweeper import BlobUsage
 from src.worker.handler import build_handler
 from src.worker.loop import FETCH_SPEC, FailureReport, process_message, run_loop
 from src.worker.main import build_consumer
+from src.worker.pacing import HostPacer
 
 TOPIC = streams.CONTENT_FETCH
 GROUP = "replicator.fetch"
@@ -183,6 +184,7 @@ def command(
     headers: dict[str, str] | None = None,
     timeout_seconds: float | None = None,
     info_source_id: str = INFO_SOURCE_ID,
+    render: str | None = None,
 ) -> ContentFetchCommand:
     """A decoded ``content.fetch`` command, as the handler receives it.
 
@@ -199,6 +201,7 @@ def command(
         headers=headers,
         timeout_seconds=timeout_seconds,
         info_source_id=info_source_id,
+        render=render,
     )
 
 
@@ -235,6 +238,8 @@ def handler(fake_redis, tmp_path):
         blobs_topic: str | None = None,
         usage: BlobUsage | None = None,
         ceiling_bytes: int | None = _UNSET,
+        browser_fetcher=None,
+        pacer: HostPacer | None = None,
     ):
         return build_handler(
             fetcher=fetcher or FakeFetcher(),
@@ -247,6 +252,8 @@ def handler(fake_redis, tmp_path):
             # of its own rather than borrowing it (#7).
             **({} if ceiling_bytes is _UNSET else {"ceiling_bytes": ceiling_bytes}),
             **({} if blobs_topic is None else {"blobs_topic": blobs_topic}),
+            browser_fetcher=browser_fetcher,
+            pacer=pacer,
         )
 
     return build
