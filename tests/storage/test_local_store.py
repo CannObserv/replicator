@@ -133,11 +133,11 @@ def test_a_plain_verb_reaches_its_twin_inside_the_retry(monkeypatch, tmp_path, m
     real = getattr(LocalBlobStore, TWINS[method])
     calls: list = []
 
-    def twin(self, *args):
+    def twin(self, *args, **kwargs):
         calls.append(args)
         if len(calls) == 1:
             raise lost_shard(tmp_path)
-        return real(self, *args)
+        return real(self, *args, **kwargs)
 
     monkeypatch.setattr(LocalBlobStore, TWINS[method], twin)
     store = SweepSafeLocalBlobStore(tmp_path / "blobs")
