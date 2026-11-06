@@ -42,12 +42,18 @@ def _workflow_jobs(path: Path) -> dict[str, dict]:
     return yaml.safe_load(path.read_text(encoding="utf-8")).get("jobs", {})
 
 
+def _bound(node: dict) -> int | None:
+    """A literal ``timeout-minutes``; an expression or a string can't be compared."""
+    value = node.get("timeout-minutes")
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
 def _unbounded_jobs(workflows: list[Path]) -> list[str]:
     return [
         f"{path.name}:{name}"
         for path in workflows
         for name, job in _workflow_jobs(path).items()
-        if "timeout-minutes" not in job
+        if _bound(job) is None
     ]
 
 
@@ -66,8 +72,7 @@ def _misbounded_steps(path: Path) -> list[str]:
     return [
         f"{path.name}:{name}: {step.get('name', step['run'].splitlines()[0])!r}"
         for name, job, step in _network_install_steps(path)
-        if "timeout-minutes" not in step
-        or step["timeout-minutes"] >= job.get("timeout-minutes", GITHUB_DEFAULT_MINUTES)
+        if (bound := _bound(step)) is None or bound >= (_bound(job) or GITHUB_DEFAULT_MINUTES)
     ]
 
 
@@ -76,8 +81,8 @@ def test_every_job_has_a_timeout():
     assert CI in workflows, "ci.yml not found: the derivation broke"
     bad = _unbounded_jobs(workflows)
     assert not bad, (
-        "jobs without `timeout-minutes` fall back to GitHub's 360 minutes, and a "
-        f"hung step then holds the run that long (#180): {bad}"
+        "jobs without a literal integer `timeout-minutes` fall back to GitHub's 360 "
+        f"minutes, and a hung step then holds the run that long (#180): {bad}"
     )
 
 
@@ -93,7 +98,7 @@ def test_the_step_rule_finds_the_network_installs():
 def test_every_network_install_step_has_a_bound_below_its_jobs():
     bad = [step for path in sorted(WORKFLOWS.glob("*.y*ml")) for step in _misbounded_steps(path)]
     assert not bad, (
-        "a step that waits on apt or a download needs its own `timeout-minutes`, "
+        "a step that waits on apt or a download needs its own integer `timeout-minutes`, "
         f"below its job's, so a hang fails there and names the step (#180): {bad}"
     )
 
@@ -166,3 +171,19 @@ def test_the_update_check_tells_a_tolerated_update_from_a_fatal_one(tmp_path):
         "        run: sudo apt-get update && sudo apt-get install -y jq\n"
     )
     assert _apt_updates(workflow) == [("tolerated", True), ("fatal", False)]
+
+
+def test_a_bound_that_is_not_a_number_is_reported_not_raised(tmp_path):
+    """An expression bound can't be compared, so it's flagged by name."""
+    workflow = tmp_path / "other.yml"
+    workflow.write_text(
+        "jobs:\n"
+        "  a:\n"
+        "    timeout-minutes: ${{ vars.T }}\n"
+        "    steps:\n"
+        "      - name: expr\n"
+        "        timeout-minutes: '5'\n"
+        "        run: sudo apt-get update\n"
+    )
+    assert _unbounded_jobs([workflow]) == ["other.yml:a"]
+    assert _misbounded_steps(workflow) == ["other.yml:a: 'expr'"]
