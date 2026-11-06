@@ -35,7 +35,9 @@ concurrency:
 #   is 18 s.
 # - Job = its apt step's bound, if any, + ~3x the measured max of the rest of
 #   the job, rounded up to 5. A step bound at or above its job's never fires
-#   (tests/ci/test_workflow_timeouts.py).
+#   (tests/ci/test_workflow_timeouts.py). Max without the apt step, in minutes:
+#     lint   3x3.7      = 11.0 -> 15     test     15 + 3x4.4 = 28.2 -> 30
+#     gcs    3x4.4      = 13.1 -> 15     browser  15 + 3x3.8 = 26.2 -> 30
 # - The wheelhouse sync (median 2.0, max 3.6 min, most of every job) and
 #   `uv sync` stay under the job bound. A step bound on the sync would sit at
 #   the job's own number in lint and gcs.
