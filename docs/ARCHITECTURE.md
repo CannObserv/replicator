@@ -70,7 +70,7 @@ scripts/load_env.sh — sourced: parses both env files into the shell, never run
 scripts/notify_failure.sh — the OnFailure= handler's body: records the incident, dispatches it when configured (#94)
 scripts/seed_fetch.py — the seed harness; publishes content.fetch to scratch streams, --watch tails the facts
 tests/          — Mirrors src/ structure; integration tests in `@pytest.mark.integration`
-tests/ci/       — pins .github/: the Dependabot config, the action SHA pins, the runner, the uv cache prune, `--locked` (#76)
+tests/ci/       — pins .github/: the Dependabot config, the action SHA pins, the runner, the uv cache prune, `--locked` (#76), the timeouts (#180)
 docs/           — Reference docs; the Detail Docs index in AGENTS.md is the roster
 docs/contracts/ — Normative contracts, linked to from sibling repos: the issuer-facing half of the wire, and the boundaries charter (what Replicator may become)
 docs/plans/     — Implementation plans

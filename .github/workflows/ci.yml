@@ -23,10 +23,28 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Bounds (#180). With no `timeout-minutes`, a job gets GitHub's 360 minutes:
+# on 74c69a7 an `apt-get update` hung `test` for 3 h until someone cancelled it.
+# Sized from the 20 green `main` runs cda2861..7460a5c (2026-10-29..11-06),
+# median / max in minutes:
+#   lint 2.1 / 3.7   test 3.4 / 4.5   browser 3.2 / 14.3   gcs 3.1 / 4.4
+# - The two apt steps get 15 each. browser's 14.3 was its apt step on a slow
+#   but still-delivering Azure mirror: 731 s against a 17 s median, `Fetched
+#   19.5 MB in 11min 43s (27.7 kB/s)`, and the run went green. Same commands,
+#   same mirror pool, so redis's step gets the same bound, though its own max
+#   is 18 s.
+# - Job = its apt step's bound, if any, + ~3x the measured max of the rest of
+#   the job, rounded up to 5. A step bound at or above its job's never fires
+#   (tests/ci/test_workflow_timeouts.py).
+# - The wheelhouse sync (median 2.0, max 3.6 min, most of every job) and
+#   `uv sync` stay under the job bound. A step bound on the sync would sit at
+#   the job's own number in lint and gcs.
+# Re-size from `gh run view <id> --json jobs` when a job's shape changes.
 jobs:
   lint:
     name: lint
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     # WIF: mint an OIDC token for google-github-actions/auth to impersonate the
     # read-only co-pypi-reader SA and pull the cannobserv wheelhouse.
     permissions:
@@ -88,6 +106,7 @@ jobs:
   test:
     name: test
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     # WIF: mint an OIDC token for google-github-actions/auth (see the lint job).
     permissions:
       contents: read
@@ -192,8 +211,10 @@ jobs:
       # mirror a gate on Replicator's CI. Nothing is lost by continuing: a broken
       # *Ubuntu* index makes the install below fail on its own, and a binary that
       # never arrived is caught by the guard after it. The warning keeps the
-      # cause in the log rather than swallowing it.
+      # cause in the log rather than swallowing it. Non-fatal covers an exit,
+      # not a hang: #180's never returned, so the step carries its own bound.
       - name: Install redis-server (the OOM suite spawns its own broker)
+        timeout-minutes: 15
         run: |
           sudo apt-get update \
             || echo "::warning::apt-get update reported errors (usually a third-party index); continuing — the install and the guard below decide"
@@ -229,6 +250,7 @@ jobs:
     # and every precondition is asserted here rather than left to skip.
     name: browser (the renderer's confinements, pinned headless shell)
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write
@@ -260,7 +282,10 @@ jobs:
       # runs `apt-get update && apt-get install` itself, so a broken third-party
       # index (the redis step's Hash Sum mismatch) would fail this job (#138 CR 24).
       # The update is tolerant, the package list is the dry run's, and ldd decides.
+      # Bounded at 15: the slow mirror behind browser's 14.3-min max spent 12.2
+      # of it here, green (the sizing note above `jobs:`).
       - name: Install the pinned headless shell and its libraries
+        timeout-minutes: 15
         run: |
           sudo apt-get update \
             || echo "::warning::apt-get update reported errors (usually a third-party index); continuing — the install and the ldd check below decide"
@@ -329,6 +354,7 @@ jobs:
   gcs:
     name: gcs (T4 against the test bucket)
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: read
       id-token: write
