@@ -362,8 +362,9 @@ def _log_out_of_order(payload: FetchPolicyState, held: FetchPolicyState) -> None
     """
     if payload.generation is None:
         # An Archiver frame built without its generation, or a Watcher frame
-        # replayed behind an Archiver one. FetchPolicyState's docstring calls
-        # both drops silent; this line is what makes them not.
+        # from before broker#95 revoked its grant, replayed behind an Archiver
+        # one. FetchPolicyState's docstring calls both drops silent; this line
+        # is what makes them not.
         logger.info(
             "ignoring a fetch policy without a generation for a host that holds one",
             extra={

@@ -173,9 +173,10 @@ non-zero is what says to run the warning grep unwindowed (no `--since`) to find 
 skip names none** — that skip is every Archiver republish. `older than the one already applied`
 carries `generation` and `held_generation` when an outbox reorder was the reason, and the stamp
 pair when it was an unordered frame's `occurred_at`. `without a generation for a host that holds
-one` is an Archiver frame built without its `generation`, or a Watcher frame replayed behind an
-Archiver one. Either way the ratchet drops the frame, which
-`FetchPolicyState`'s docstring calls silent, and this line is what keeps it from being silent.
+one` is an Archiver frame built without its `generation`, or a Watcher frame from before
+broker#95 revoked its grant, replayed behind an Archiver one. Either way the ratchet drops the
+frame, which `FetchPolicyState`'s docstring calls silent, and this line is what keeps it from
+being silent.
 
 ## Escalation on 429 and 503
 
