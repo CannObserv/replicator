@@ -7,7 +7,70 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
-    # Floor is 0.40.1, for `ContentFetchCommand.render` (cannobserv#602, #177).
+    # Floor is 0.41.0, and it carries no new feature: a one-minor catch-up
+    # (#179), in #172's shape. `co-core-aio` and `co-core-sync` 0.41.0 require
+    # `co-core>=0.41,<0.42`, so the three move together.
+    #
+    # **`scripts/co_core_closure_diff.py 0.40.1 0.41.0`** (#145), verbatim:
+    #
+    # ## Import closure, 0.40.1 → 0.41.0
+    #
+    # Roots `src`, `scripts`; packages `co_core`, `co_core_aio`, `co_core_sync`.
+    #
+    # 58 files at 0.40.1, 58 at 0.41.0. 8 not identical:
+    #
+    # - `version-only` co_core/__init__.py
+    # - `docstrings-only` co_core/pure/adapters/bus/streams.py
+    # - `changed` co_core/pure/models/changes.py
+    # - `changed` co_core/pure/util/blobstore.py
+    # - `version-only` co_core_aio/__init__.py
+    # - `version-only` co_core_sync/__init__.py
+    # - `changed` co_core_sync/drivers/blobstore/gcs.py
+    # - `changed` co_core_sync/drivers/blobstore/local.py
+    #
+    # **Requires-Dist:**
+    #
+    # - co_core: unchanged
+    # - co_core_aio: removed `co-core<0.41,>=0.40`; added `co-core<0.42,>=0.41`
+    # - co_core_sync: removed `co-core<0.41,>=0.40`; added `co-core<0.42,>=0.41`
+    #
+    # **Third-party imports** (at 0.41.0): `google`, `google_auth_oauthlib`, `googleapiclient`, `httpx`, `pydantic`, `redis`, `requests`, `urllib3`.
+    #
+    # **Dynamic imports, not followed:**
+    #
+    # - co_core_sync/drivers/__init__.py:89 `import_module(f"{__name__}.{module}")`
+    # - co_core_sync/drivers/blobstore/__init__.py:32 `import_module(f"{__name__}.{module}")`
+    #
+    # Read by hand, the four `changed` files:
+    #
+    # - `pure/util/blobstore.py`, with `drivers/blobstore/local.py` and `gcs.py`
+    #   (cannobserv#530): each write verb gains a reporting twin,
+    #   `store_reporting` / `store_file_reporting`, returning `Stored(uri,
+    #   created)`. Each backend's plain verb is now `self.<twin>(...).uri`, and
+    #   their writes are otherwise the same, bar a `TypeError`'s wording.
+    #   `SweepSafeLocalBlobStore` (#159) overrides the plain verbs only, so
+    #   `super().store` still reaches the write inside `_once_more`; a call made
+    #   straight to a twin would skip the retry. **Kept the overrides and guarded
+    #   the twins** (#179's option (b)): no write site in `src/` names a twin, and
+    #   `tests/storage/test_local_store.py` turns red the day one does. That is a
+    #   deliberate departure from co-core's `BlobStore` docstring, which has a
+    #   wrapping subclass wrap the twins. Before the first twin call, move the
+    #   retry onto the two twins and drop both plain-verb overrides; keeping both
+    #   nests the retry, 4 attempts a write. The same file's dispatch test holds
+    #   this floor, since on 0.40 there is no twin to reach;
+    # - `pure/models/changes.py` (cannobserv#579): `FetchPolicyEmit` requires
+    #   `generation`. Producer-side: Replicator decodes `FetchPolicyState`, which
+    #   changed in its docstring only, so a frame without the field still decodes
+    #   and `fetch_policy_supersedes` keeps its ratchet.
+    #
+    # Every other top-level definition in `changes.py` and `blobstore.py` is
+    # AST-identical, so no field, default or config moved under `extra="ignore"`.
+    # `co_core_aio/bus` and `pure/adapters/bus` are identical bar `streams.py`'s
+    # docstring, and the two dynamic imports are the same two as at 0.40.1.
+    #
+    # Previously:
+    #
+    # Floor was 0.40.1, for `ContentFetchCommand.render` (cannobserv#602, #177).
     # On 0.40.0 the canonical model has no such field and is `extra="ignore"`,
     # so a `render` an issuer sets is dropped at decode and nothing fails; #63
     # can't honour a field the decoder throws away. `tests/worker/test_loop_dispatch.py`
@@ -307,9 +370,9 @@ dependencies = [
     # at module load, so a skew cannot reach a running worker at all. Additive over
     # 0.8.0 for everything the fetch path uses — no field on ContentFetchCommand,
     # BlobAvailableEvent or FetchFailedEvent moved between the two.
-    "co-core>=0.40.1,<0.41",
-    "co-core-aio[bus,gcs]>=0.40.1,<0.41",
-    "co-core-sync[gcs]>=0.40.1,<0.41",
+    "co-core>=0.41.0,<0.42",
+    "co-core-aio[bus,gcs]>=0.41.0,<0.42",
+    "co-core-sync[gcs]>=0.41.0,<0.42",
     "fastapi>=0.126.0,<1",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.5.0,<3",

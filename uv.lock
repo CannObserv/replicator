@@ -285,26 +285,26 @@ wheels = [
 
 [[package]]
 name = "co-core"
-version = "0.40.1"
+version = "0.41.0"
 source = { registry = ".wheelhouse" }
 dependencies = [
     { name = "dateparser" },
     { name = "pydantic" },
 ]
 wheels = [
-    { path = "co_core-0.40.1-py3-none-any.whl" },
+    { path = "co_core-0.41.0-py3-none-any.whl" },
 ]
 
 [[package]]
 name = "co-core-aio"
-version = "0.40.1"
+version = "0.41.0"
 source = { registry = ".wheelhouse" }
 dependencies = [
     { name = "co-core" },
     { name = "httpx" },
 ]
 wheels = [
-    { path = "co_core_aio-0.40.1-py3-none-any.whl" },
+    { path = "co_core_aio-0.41.0-py3-none-any.whl" },
 ]
 
 [package.optional-dependencies]
@@ -318,7 +318,7 @@ gcs = [
 
 [[package]]
 name = "co-core-sync"
-version = "0.40.1"
+version = "0.41.0"
 source = { registry = ".wheelhouse" }
 dependencies = [
     { name = "co-core" },
@@ -326,7 +326,7 @@ dependencies = [
     { name = "urllib3" },
 ]
 wheels = [
-    { path = "co_core_sync-0.40.1-py3-none-any.whl" },
+    { path = "co_core_sync-0.41.0-py3-none-any.whl" },
 ]
 
 [package.optional-dependencies]
@@ -1343,9 +1343,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "co-core", specifier = ">=0.40.1,<0.41" },
-    { name = "co-core-aio", extras = ["bus", "gcs"], specifier = ">=0.40.1,<0.41" },
-    { name = "co-core-sync", extras = ["gcs"], specifier = ">=0.40.1,<0.41" },
+    { name = "co-core", specifier = ">=0.41.0,<0.42" },
+    { name = "co-core-aio", extras = ["bus", "gcs"], specifier = ">=0.41.0,<0.42" },
+    { name = "co-core-sync", extras = ["gcs"], specifier = ">=0.41.0,<0.42" },
     { name = "fastapi", specifier = ">=0.126.0,<1" },
     { name = "playwright", specifier = "==1.64.1" },
     { name = "pydantic", specifier = ">=2.9,<3" },
