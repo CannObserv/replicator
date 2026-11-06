@@ -24,7 +24,7 @@ from pathlib import Path
 
 import yaml
 
-from tests.ci.test_workflow_pins import CI, WORKFLOWS
+from tests.ci.test_workflow_pins import CI, GENERATED, WORKFLOWS
 
 # What a job or step without `timeout-minutes` gets.
 GITHUB_DEFAULT_MINUTES = 360
@@ -80,9 +80,17 @@ def test_every_job_has_a_timeout():
     workflows = sorted(WORKFLOWS.glob("*.y*ml"))
     assert CI in workflows, "ci.yml not found: the derivation broke"
     bad = _unbounded_jobs(workflows)
+    generated = [job for job in bad if job.startswith(f"{GENERATED.name}:")]
     assert not bad, (
         "jobs without a literal integer `timeout-minutes` fall back to GitHub's 360 "
         f"minutes, and a hung step then holds the run that long (#180): {bad}"
+        + (
+            f"\n{GENERATED.name} is generated: don't hand-edit it. Restore the bound in "
+            "curating-context's cadence template (gregoryfoster/skills, "
+            "references/cadence/workflow.md), then re-run install-cadence.sh."
+            if generated
+            else ""
+        )
     )
 
 
