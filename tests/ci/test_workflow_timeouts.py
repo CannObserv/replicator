@@ -59,7 +59,7 @@ def _network_install_steps(path: Path) -> list[tuple[str, dict, dict]]:
 def _misbounded_steps(path: Path) -> list[str]:
     """Network install steps with no bound, or one its job's bound would beat."""
     return [
-        f"{name}: {step.get('name', step['run'].splitlines()[0])!r}"
+        f"{path.name}:{name}: {step.get('name', step['run'].splitlines()[0])!r}"
         for name, job, step in _network_install_steps(path)
         if "timeout-minutes" not in step
         or step["timeout-minutes"] >= job.get("timeout-minutes", GITHUB_DEFAULT_MINUTES)
@@ -86,7 +86,7 @@ def test_the_step_rule_finds_the_network_installs():
 
 
 def test_every_network_install_step_has_a_bound_below_its_jobs():
-    bad = _misbounded_steps(CI)
+    bad = [step for path in sorted(WORKFLOWS.glob("*.y*ml")) for step in _misbounded_steps(path)]
     assert not bad, (
         "a step that waits on apt or a download needs its own `timeout-minutes`, "
         f"below its job's, so a hang fails there and names the step (#180): {bad}"
@@ -113,5 +113,5 @@ def test_the_step_rule_rejects_a_missing_and_a_dead_bound(tmp_path):
         "      - name: only names it\n"
         "        run: echo '::error::missing after apt-get install'\n"
     )
-    assert _misbounded_steps(workflow) == ["a: 'unbounded'", "a: 'dead'"]
+    assert _misbounded_steps(workflow) == ["other.yml:a: 'unbounded'", "other.yml:a: 'dead'"]
     assert _unbounded_jobs([workflow]) == []
