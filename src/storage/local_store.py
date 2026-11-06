@@ -17,6 +17,15 @@ touched the level above — so all of them are inside the grace. A second
 Here rather than in ``in_store``, which takes an awaitable already running and
 serves the object store too, where there are no directories to lose. Fetch and
 capture both write through this class.
+
+**The reporting twins (co-core 0.41, #179).** ``LocalBlobStore.store`` is now
+``self.store_reporting(...).uri``, and ``store_file`` is the same with its own twin.
+So wrapping the plain verbs covers every call that enters through one, which
+is every call ``src/`` makes. A call made straight to a twin skips the retry.
+Before the first one, move the retry onto both twins and drop both overrides
+here. Keeping both would nest the retry, up to 4 attempts per write.
+``tests/storage/test_local_store.py`` goes red the day ``src/`` names a twin,
+or this class wraps one.
 """
 
 from collections.abc import Callable
