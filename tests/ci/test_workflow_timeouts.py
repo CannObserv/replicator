@@ -26,10 +26,12 @@ from tests.ci.test_workflow_pins import CI, WORKFLOWS
 # What a job or step without `timeout-minutes` gets.
 GITHUB_DEFAULT_MINUTES = 360
 
-# A command that waits on apt or on Playwright's CDN. `apt-get` must lead its
-# line, so an error message that names it doesn't count.
+# A command that waits on apt or on Playwright's CDN. `apt-get` must start a
+# command (a line, or after `&&`, `||` or `;`), so a message that only names it
+# doesn't count.
 _NETWORK_INSTALL = re.compile(
-    r"^\s*(?:sudo\s+)?apt-get\b|\bplaywright install\b(?!-deps)", re.MULTILINE
+    r"(?:^|&&|\|\||;)\s*(?:sudo\s+)?apt-get\b|\bplaywright install\b(?!-deps)",
+    re.MULTILINE,
 )
 
 
@@ -110,8 +112,14 @@ def test_the_step_rule_rejects_a_missing_and_a_dead_bound(tmp_path):
         "        run: sudo apt-get install -y redis-server\n"
         "      - name: not a download\n"
         "        run: uv run playwright install-deps --dry-run chromium\n"
+        "      - name: chained\n"
+        "        run: cd /tmp && sudo apt-get install -y jq\n"
         "      - name: only names it\n"
         "        run: echo '::error::missing after apt-get install'\n"
     )
-    assert _misbounded_steps(workflow) == ["other.yml:a: 'unbounded'", "other.yml:a: 'dead'"]
+    assert _misbounded_steps(workflow) == [
+        "other.yml:a: 'unbounded'",
+        "other.yml:a: 'dead'",
+        "other.yml:a: 'chained'",
+    ]
     assert _unbounded_jobs([workflow]) == []
