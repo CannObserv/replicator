@@ -3,6 +3,8 @@
 
 class production
 posture scheduled
+# Weekly, not the cohort's monthly (owner, 2026-11-06): the default, stated.
+cadence weekly
 
 # Largely pre-production (owner, 2026-10-06): any day, all day. Narrow these
 # once a consumer depends on fetch latency. The bus queues across a restart.
