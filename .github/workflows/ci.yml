@@ -28,8 +28,8 @@ concurrency:
 # Sized from the 20 green `main` runs cda2861..7460a5c (2026-10-29..11-06),
 # median / max in minutes:
 #   lint 2.1 / 3.7   test 3.4 / 4.5   browser 3.2 / 14.3   gcs 3.1 / 4.4
-# - The two apt steps get 15 each. browser's 14.3 was its apt step on a slow
-#   but still-delivering Azure mirror: 731 s against a 17 s median, `Fetched
+# - The two apt steps get 15 each. 12.2 of browser's 14.3 was its apt step on
+#   a slow but still-delivering Azure mirror: 731 s against a 17 s median, `Fetched
 #   19.5 MB in 11min 43s (27.7 kB/s)`, and the run went green. Same commands,
 #   same mirror pool, so redis's step gets the same bound, though its own max
 #   is 18 s. Slow-mirror samples of browser's apt step so far: 731 s (53918a7),
