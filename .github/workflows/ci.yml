@@ -32,7 +32,8 @@ concurrency:
 #   but still-delivering Azure mirror: 731 s against a 17 s median, `Fetched
 #   19.5 MB in 11min 43s (27.7 kB/s)`, and the run went green. Same commands,
 #   same mirror pool, so redis's step gets the same bound, though its own max
-#   is 18 s.
+#   is 18 s. Slow-mirror samples of browser's apt step so far: 731 s (53918a7),
+#   448 s (95b337c, this bound's first run), 229 s (81396a4).
 # - Job = its apt step's bound, if any, + ~3x the measured max of the rest of
 #   the job, rounded up to 5. A step bound at or above its job's never fires
 #   (tests/ci/test_workflow_timeouts.py). Max without the apt step, in minutes:
