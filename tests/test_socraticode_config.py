@@ -30,8 +30,9 @@ four of the five cohort repos did, which is exactly what made the assertion
 rule instead of reading it, by asking git.
 
 Precedent for pinning a non-Python artifact from pytest: `test_deploy.py` (the
-systemd unit), `test_ci.py` (workflow concurrency), `test_skills_hook.py` (the
-refresh hook), `test_doc_sensitive_paths.py` (a gate's configuration).
+systemd unit), `ci/test_workflow_runs.py` (workflow concurrency),
+`test_skills_hook.py` (the refresh hook), `test_doc_sensitive_paths.py` (a
+gate's configuration).
 """
 
 import json

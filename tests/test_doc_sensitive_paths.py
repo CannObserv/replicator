@@ -13,10 +13,11 @@ tree, and the corresponding entry stops matching. Nothing breaks, the gate
 stays green, and the doc-drift it was tailored to catch is silently no longer
 watched. A pytest guard turns that into a red test at the moment of the rename.
 
-Precedent for testing a non-Python gate artifact from pytest: `test_ci.py`
-(workflow concurrency), `test_deploy.py` (the systemd unit), `test_skills_hook.py`
-(the refresh hook), `test_check_main_checkout.py` (a shell guard). The list is
-one more artifact a gate reads and no interpreter validates.
+Precedent for testing a non-Python gate artifact from pytest:
+`ci/test_workflow_runs.py` (workflow concurrency), `test_deploy.py` (the
+systemd unit), `test_skills_hook.py` (the refresh hook),
+`test_check_main_checkout.py` (a shell guard). The list is one more artifact a
+gate reads and no interpreter validates.
 
 `path_matches` below is a port of the script's matcher, not an approximation.
 A looser port would vouch for entries the real gate never hits, which is the

@@ -248,8 +248,9 @@ construction, so an apt failure would otherwise leave a green job with the suite
 unrun, the same hazard the `gcs` job asserts its way out of — and then runs the
 file explicitly. Every other `@pytest.mark.integration` test still needs a scratch
 `redis-server` (the production broker refuses them, above) and never runs in CI, so the marker's meaning is unchanged: what
-CI selects is a path, not a marker. `tests/test_ci.py` pins both the step and its
-guard, because deleting either leaves a workflow that still passes.
+CI selects is a path, not a marker. `tests/ci/test_workflow_runs.py` pins both
+the step and its guard, because deleting either leaves a workflow that still
+passes.
 
 ```bash
 uv run pytest --no-cov -m integration tests/worker/test_oom_integration.py
