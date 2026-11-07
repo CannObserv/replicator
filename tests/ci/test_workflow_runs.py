@@ -32,7 +32,7 @@ def _concurrency() -> dict[str, str]:
     """
     block = re.search(
         r"^concurrency:\n((?:[ \t]+\S.*\n)+)",
-        CI.read_text(),
+        CI.read_text(encoding="utf-8"),
         flags=re.MULTILINE,
     )
     assert block, f"no top-level concurrency block in {CI.name}"
@@ -89,7 +89,7 @@ def _test_job_runs() -> list[str]:
     file as the tool that reads it would see is the precedent
     ``tests/test_deploy.py`` set.
     """
-    return [line.strip() for line in CI.read_text().splitlines()]
+    return [line.strip() for line in CI.read_text(encoding="utf-8").splitlines()]
 
 
 def test_the_broker_oom_suite_runs_in_ci():
@@ -124,7 +124,7 @@ def test_a_missing_scratch_broker_fails_ci_rather_than_skipping():
     """
     guard = re.search(
         r"if ! command -v redis-server.*?exit 1",
-        CI.read_text(),
+        CI.read_text(encoding="utf-8"),
         flags=re.DOTALL,
     )
 
@@ -142,7 +142,7 @@ def test_the_browser_suite_runs_in_ci_inside_a_delegated_scope():
     is a red job (the fixtures fail, never skip), but deleting the step is a green
     workflow with the renderer's confinements unproven.
     """
-    text = CI.read_text()
+    text = CI.read_text(encoding="utf-8")
 
     assert "-m browser" in text, "no CI step runs the browser suite"
     assert "systemd-run --user --scope -q -p Delegate=yes" in text
@@ -154,7 +154,7 @@ def test_the_browser_job_survives_a_broken_third_party_apt_index():
     """CR 24: ``--with-deps`` runs ``apt-get update && apt-get install`` itself, so one
     vendor's Hash Sum mismatch (the redis step's recorded failure) would fail the job.
     The update is tolerant, the list comes from the dry run, and ``ldd`` decides."""
-    text = CI.read_text()
+    text = CI.read_text(encoding="utf-8")
 
     assert "playwright install --with-deps" not in text
     assert "playwright install-deps --dry-run chromium-headless-shell" in text
@@ -164,7 +164,7 @@ def test_the_browser_job_survives_a_broken_third_party_apt_index():
 def test_the_browser_jobs_ldd_check_fails_when_ldd_does():
     """CR 31: Actions' bash has no pipefail, so ``ldd x | grep`` is green when ldd itself
     fails. Capturing the output first lets ``-e`` stop on a failed ldd."""
-    text = CI.read_text()
+    text = CI.read_text(encoding="utf-8")
 
     assert '$(ldd "$shell")' in text
     assert 'ldd "$shell" |' not in text
@@ -173,7 +173,7 @@ def test_the_browser_jobs_ldd_check_fails_when_ldd_does():
 def test_a_dry_run_that_failed_is_said_not_read_as_nothing_missing():
     """CR 32: when the dry run's own apt simulation fails it lists no packages, and an
     empty list would skip the install in silence."""
-    text = CI.read_text()
+    text = CI.read_text(encoding="utf-8")
 
     assert "All system dependencies are installed" in text
     assert "Missing system dependencies" in text
@@ -182,7 +182,7 @@ def test_a_dry_run_that_failed_is_said_not_read_as_nothing_missing():
 def test_the_dependency_install_is_tolerant_so_ldd_decides():
     """CR 33: the list includes upgrades of installed libraries, so one mirror hiccup
     on any of them must not fail a job whose shell ldd would pass."""
-    text = CI.read_text()
+    text = CI.read_text(encoding="utf-8")
 
     assert "apt-get install -y --no-install-recommends $deps \\\n" in text
     assert "the dependency install reported errors" in text
