@@ -85,9 +85,10 @@ def test_every_job_has_a_timeout():
         "jobs without a literal integer `timeout-minutes` fall back to GitHub's 360 "
         f"minutes, and a hung step then holds the run that long (#180): {bad}"
         + (
-            f"\n{GENERATED.name} is generated: don't hand-edit it. Restore the bound in "
-            "curating-context's cadence template (gregoryfoster/skills, "
-            "references/cadence/workflow.md), then re-run install-cadence.sh."
+            f"\n{GENERATED.name} is generated: don't hand-edit it. It renders from the "
+            "template inside curating-context's scripts/install-cadence.sh (its annotated "
+            "copy is references/cadence/workflow.md). File the lost bound on "
+            "gregoryfoster/skills, then re-run install-cadence.sh after the bump."
             if generated
             else ""
         )
