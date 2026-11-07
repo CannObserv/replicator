@@ -155,7 +155,9 @@ def test_the_browser_suite_runs_in_ci_inside_a_delegated_scope():
 def test_the_browser_job_survives_a_broken_third_party_apt_index():
     """CR 24: ``--with-deps`` runs ``apt-get update && apt-get install`` itself, so one
     vendor's Hash Sum mismatch (the redis step's recorded failure) would fail the job.
-    The update is tolerant, the list comes from the dry run, and ``ldd`` decides."""
+    The update is tolerant (pinned by ``test_workflow_timeouts.py``'s
+    ``test_apt_get_update_stays_non_fatal``), the list comes from the dry run, and
+    ``ldd`` decides."""
     text = CI.read_text(encoding="utf-8")
 
     assert "playwright install --with-deps" not in text
