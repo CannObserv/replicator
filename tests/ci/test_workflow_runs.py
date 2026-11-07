@@ -1,5 +1,7 @@
-"""Every commit that lands on `main` must keep its own CI run, and its one runnable
-integration file must keep running.
+"""Every commit that lands on `main` must keep its own CI run, and the suites the
+default selection leaves out must keep running in it: the one integration file
+that needs no external broker (#83) and the browser suite (#138), each pinned
+with the guards that keep its job from going green unrun.
 
 A concurrency group holds **at most one pending run**, and that queue depth is
 not what `cancel-in-progress` controls: with the flag false GitHub still evicts
