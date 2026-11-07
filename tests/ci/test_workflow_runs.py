@@ -82,8 +82,8 @@ def test_cancellation_stays_gated_on_pull_request_events():
     )
 
 
-def _test_job_runs() -> list[str]:
-    """Every ``run:`` line in the workflow, as raw text.
+def _workflow_lines() -> list[str]:
+    """Every line of the workflow, every job's, stripped but otherwise raw.
 
     Text rather than YAML for ``_concurrency``'s reason: asserting against the
     file as the tool that reads it would see is the precedent
@@ -105,7 +105,7 @@ def test_the_broker_oom_suite_runs_in_ci():
     leaves a green workflow, and the suite's own absence of a signal is the thing
     it would remove.
     """
-    lines = _test_job_runs()
+    lines = _workflow_lines()
 
     assert any(
         "-m integration" in line and "tests/worker/test_oom_integration.py" in line
