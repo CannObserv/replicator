@@ -29,13 +29,12 @@ from tests.ci.test_workflow_pins import CI, GENERATED, WORKFLOWS
 # What a job or step without `timeout-minutes` gets.
 GITHUB_DEFAULT_MINUTES = 360
 
-# A command that waits on apt or on Playwright's CDN. `apt-get` must start a
-# command (a line, or after `&&`, `||` or `;`), so a message that only names it
-# doesn't count.
-_NETWORK_INSTALL = re.compile(
-    r"(?:^|&&|\|\||;)\s*(?:sudo\s+)?apt-get\b|\bplaywright install\b(?!-deps)",
-    re.MULTILINE,
-)
+# `apt-get` as a command: at a line's start or after `&&`, `||` or `;`, so a
+# message that only names it doesn't count.
+_APT_GET = r"(?:^|&&|\|\||;)\s*(?:sudo\s+)?apt-get\b"
+
+# A command that waits on apt or on Playwright's CDN.
+_NETWORK_INSTALL = re.compile(rf"{_APT_GET}|\bplaywright install\b(?!-deps)", re.MULTILINE)
 
 
 def _workflow_jobs(path: Path) -> dict[str, dict]:
@@ -142,8 +141,9 @@ def test_the_step_rule_rejects_a_missing_and_a_dead_bound(tmp_path):
     assert _unbounded_jobs([workflow]) == []
 
 
-# An `apt-get update` command, with its line continuations joined.
-_APT_UPDATE = re.compile(r"(?:^|&&|;)\s*(?:sudo\s+)?apt-get update\b(.*)$", re.MULTILINE)
+# An `apt-get update` command, options allowed before the verb; matched with
+# its line continuations joined.
+_APT_UPDATE = re.compile(rf"{_APT_GET}(?:\s+-\S+)*\s+update\b(.*)$", re.MULTILINE)
 
 
 def _apt_updates(path: Path) -> list[tuple[str, bool]]:
@@ -178,8 +178,17 @@ def test_the_update_check_tells_a_tolerated_update_from_a_fatal_one(tmp_path):
         "            || echo warn\n"
         "      - name: fatal\n"
         "        run: sudo apt-get update && sudo apt-get install -y jq\n"
+        "      - name: flagged\n"
+        "        run: sudo apt-get -qq update || echo warn\n"
+        "      - name: in a fallback\n"
+        "        run: true || sudo apt-get update\n"
     )
-    assert _apt_updates(workflow) == [("tolerated", True), ("fatal", False)]
+    assert _apt_updates(workflow) == [
+        ("tolerated", True),
+        ("fatal", False),
+        ("flagged", True),
+        ("in a fallback", False),
+    ]
 
 
 def test_a_bound_that_is_not_a_number_is_reported_not_raised(tmp_path):
