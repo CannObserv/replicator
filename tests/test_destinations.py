@@ -45,6 +45,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import get_args
 
 import pytest
 from co_core_aio.gcs import AsyncGcsDriver
@@ -267,12 +268,13 @@ def test_every_switch_on_settings_is_scrubbed():
 
     Bools, not only ``*_enabled``: ``capture_cgroup`` is a switch by another name.
     A path-choosing ``Literal`` such as ``REPLICATOR_BLOB_BACKEND`` is not caught
-    here — it is listed by hand above.
+    here — it is listed by hand above. ``bool | None`` counts: a tri-state switch
+    is still a switch.
     """
     switches = {
         name: field.validation_alias
         for name, field in Settings.model_fields.items()
-        if field.annotation is bool
+        if bool in (field.annotation, *get_args(field.annotation))
     }
     assert switches, "no bool field on Settings — the derivation is broken, not the scrub"
     assert all(isinstance(alias, str) for alias in switches.values()), switches
