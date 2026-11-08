@@ -250,9 +250,8 @@ def test_the_scrub_covers_the_whole_snippet_agents_are_told_to_load():
         "REPLICATOR_BLOB_BUCKET",
         # #114: the production permanent store, same collision one bucket over.
         "REPLICATOR_PERMANENT_BUCKET",
-        # #114 CR 3: with the bucket scrubbed and this left in, every `Settings()`
-        # refuses persist-without-a-bucket the day an operator turns persist on.
-        "REPLICATOR_PERSIST_ENABLED",
+        # Switches (REPLICATOR_PERSIST_ENABLED since #114 CR 3) are not listed here:
+        # test_every_switch_on_settings_is_scrubbed derives them (#182).
     } <= set(PRODUCTION_ENV)
 
 
