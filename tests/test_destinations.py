@@ -50,6 +50,7 @@ import pytest
 from co_core_aio.gcs import AsyncGcsDriver
 from co_core_sync.drivers.blobstore import GcsBlobStore
 
+from src.core.config import Settings
 from tests.conftest import (
     DEFAULT_TEST_REDIS_URL,
     PRODUCTION_ENV,
@@ -252,6 +253,30 @@ def test_the_scrub_covers_the_whole_snippet_agents_are_told_to_load():
         # refuses persist-without-a-bucket the day an operator turns persist on.
         "REPLICATOR_PERSIST_ENABLED",
     } <= set(PRODUCTION_ENV)
+
+
+def test_every_switch_on_settings_is_scrubbed():
+    """Each ``bool`` setting's variable is in ``PRODUCTION_ENV``, derived, not listed (#182).
+
+    A switch's only job is to choose which code runs, so one the production shell
+    turned on runs that code under every ``Settings()`` a test builds. #138 and #63
+    each added a flag production then enabled, neither joined the list, and the
+    suite failed 5 tests whenever it ran after ``. scripts/load_env.sh``. Read
+    from ``model_fields`` so the next flag fails here, not in whichever tests it
+    happens to reach.
+
+    Bools, not only ``*_enabled``: ``capture_cgroup`` is a switch by another name.
+    A path-choosing ``Literal`` such as ``REPLICATOR_BLOB_BACKEND`` is not caught
+    here — it is listed by hand above.
+    """
+    switches = {
+        name: field.validation_alias
+        for name, field in Settings.model_fields.items()
+        if field.annotation is bool
+    }
+    assert switches, "no bool field on Settings — the derivation is broken, not the scrub"
+    assert all(isinstance(alias, str) for alias in switches.values()), switches
+    assert {name: alias for name, alias in switches.items() if alias not in PRODUCTION_ENV} == {}
 
 
 def test_the_test_bucket_variable_has_no_fallback():

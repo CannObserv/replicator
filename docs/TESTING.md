@@ -85,11 +85,14 @@ makes production untestable (#38).
   wheelhouse reader `co-pypi-reader.json` stays legal, because
   `test_replicate_guards.py` names it on purpose to prove the path guard refuses
   a real secret.
-- **The fixtures** (`tests/conftest.py`, autouse). Five variables are removed from
-  the environment of every test — `REPLICATOR_REPLICATION_ALIASES_FILE`,
+- **The fixtures** (`tests/conftest.py`, autouse). These variables are removed from
+  the environment of every test: `REPLICATOR_REPLICATION_ALIASES_FILE`,
   `GOOGLE_APPLICATION_CREDENTIALS`, `REPLICATOR_BLOB_BACKEND`,
-  `REPLICATOR_BLOB_BUCKET` and, since #114, `REPLICATOR_PERMANENT_BUCKET`. The Common
-  Commands snippet loads `/etc/replicator/.env`, so `uv run pytest` inherits all five. The blob pair was
+  `REPLICATOR_BLOB_BUCKET`, since #114 `REPLICATOR_PERMANENT_BUCKET`, and every
+  `bool` setting's variable, `REPLICATOR_PERSIST_ENABLED` among them. The Common
+  Commands snippet loads `/etc/replicator/.env`, so `uv run pytest` inherits them. Two
+  unscrubbed switches failed 5 tests after `load_env` (#182);
+  `test_every_switch_on_settings_is_scrubbed` now derives them from `Settings`. The blob pair was
   added in #77 CR round 2, when loading that file and then running this document's
   own `-m integration` command failed the policy-replay test on `constructed a real
   GcsBlobStore('co-gcs-blobs')` — the construction guard working, but only after
