@@ -64,13 +64,15 @@ PRODUCTION_ENV = (
     # Scrubbed with the bucket it requires, or the day an operator turns persist
     # on, every `Settings()` here refuses persist-without-a-bucket (#114 CR 3).
     "REPLICATOR_PERSIST_ENABLED",
-    # Production turned these on, and with them in, every `Settings()` here starts
-    # capture's consumer group or the browser path, or refuses the wait bound
-    # against a test's short REPLICATOR_MAX_FETCH_SECONDS: 5 failures after
-    # load_env (#182). Every bool setting must be here;
-    # test_every_switch_on_settings_is_scrubbed derives the list.
+    # Production turned these two on, and with them in, every `Settings()` here
+    # switches capture or the browser path on: `run()` creates capture's group, and
+    # a test's short REPLICATOR_MAX_FETCH_SECONDS fails the wait bound. 5 failures
+    # after load_env (#182). Every bool setting must be here, and
+    # test_every_switch_on_settings_is_scrubbed fails on one that is not.
     "REPLICATOR_CAPTURE_ENABLED",
     "REPLICATOR_BROWSER_FETCH_ENABLED",
+    # Production does not set this one. It is here because it is a switch: a dev
+    # shell's `off` would move capture's tests off the cgroup path (#182).
     "REPLICATOR_CAPTURE_CGROUP",
 )
 
