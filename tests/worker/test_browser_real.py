@@ -601,13 +601,16 @@ async def test_a_download_or_a_non_html_document_is_not_fetchable(
 
 async def test_a_429s_retry_after_reaches_the_pacer(renderer, site, tmp_path, fake_redis):
     site.pages["/"] = (429, {"Retry-After": "45"}, "slow down")
-    pacer = HostPacer(0.0)
+    # A stopped clock: the pacer stamps the request before the browser launches, so on a
+    # real one the wait read back is 45 less the whole fetch, however long a busy host
+    # makes that (#186: 2 s against a 1 s margin).
+    pacer = HostPacer(0.0, clock=lambda: 0.0)
     handle, _ = _fetch_handler(renderer, tmp_path, fake_redis, pacer=pacer)
 
     with pytest.raises(TransientFetchError):
         await handle(command(url=site.url("/"), render="browser"))
 
-    assert 44 < pacer.wait_seconds(site.url("/")) <= 45
+    assert pacer.wait_seconds(site.url("/")) == 45
 
 
 async def test_a_refused_subresource_closes_a_browser_fetch(
