@@ -93,7 +93,9 @@ makes production untestable (#38).
   `bool` setting's variable, `REPLICATOR_PERSIST_ENABLED` among them. The Common
   Commands snippet loads `/etc/replicator/.env`, so `uv run pytest` inherits them. Two
   unscrubbed switches failed 5 tests after `load_env` (#182);
-  `test_every_switch_on_settings_is_scrubbed` now derives them from `Settings`. The blob pair was
+  `test_every_switch_on_settings_is_scrubbed` now derives them from `Settings`, and
+  `test_every_credential_setting_is_scrubbed` each credential, `REPLICATOR_REDIS_URL`
+  among them (#187). The blob pair was
   added in #77 CR round 2, when loading that file and then running this document's
   own `-m integration` command failed the policy-replay test on `constructed a real
   GcsBlobStore('co-gcs-blobs')` — the construction guard working, but only after

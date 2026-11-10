@@ -67,7 +67,7 @@ per-skill symlinks, so linking a newly published skill stays a manual step (#13)
 it; run its `references/security.md` leak check first.
 
 `patching-hosts` (#131) reads the committed knob `.skills/patching-hosts`; its `inflight` and
-`health` commands are this repo's (`scripts/inflight.sh`). Never write into the vendored copy:
+`health` commands are this repo's (`scripts/inflight.py`). Never write into the vendored copy:
 problems and the run's process-log entry go upstream as `gregoryfoster/skills` issues.
 
 `maintaining-host-disk` (#148) installs the GC from the release pinned in its own `scripts/_pin.sh`,

@@ -122,7 +122,7 @@ What `patching-hosts` asks before each step (#131):
 
 The `patching-hosts` knob (`.skills/patching-hosts`) runs it as `inflight` before each apply step
 and inside the reboot chain, and as a `health` line for the broker round-trip. It reads
-`/etc/replicator/.env` itself (`--env-file` to override), counts only this host's consumer names,
+`/etc/replicator/.env` itself and ignores the shell's `REPLICATOR_*` (`--env-file` to override; #187), counts only this host's consumer names,
 and on any failure prints nothing and exits 1 — the gate never reads a failed read as `0`.
 
 ### Inspecting the consume path

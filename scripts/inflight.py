@@ -18,7 +18,11 @@ gate can never read a failed read as ``0``. That includes a missing env file:
 without ``/etc/replicator/.env`` the settings default to a localhost broker, and
 a ``0`` from there says nothing about this worker. The reboot chain runs knob
 commands through ``runuser`` with no session environment, which is why the file
-is read here rather than inherited.
+is read here rather than inherited. **The file is the only source** besides the
+defaults (#187 CR 1): pydantic-settings would rank a shell variable above it, and
+the pre-apply ``inflight`` line runs in the agent's shell. One pointed at a
+reachable redis without the groups answers ``NOGROUP`` on every read, which counts
+as ``0`` — the gate open for a worker it never asked about.
 
 A graceful stop drains the message in flight anyway (``deploy/replicator.service``),
 and at-least-once delivery makes an interrupted one a redelivery, not a loss. The
@@ -35,6 +39,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from co_core.pure.adapters.bus import streams
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
@@ -43,6 +48,21 @@ from src.core.config import Settings
 from src.worker.main import consumer_name_for
 
 DEFAULT_ENV_FILE = "/etc/replicator/.env"
+
+
+class _FileSettings(Settings):
+    """``Settings`` from the env file and the defaults alone, never the environment."""
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return init_settings, dotenv_settings
 
 
 def _groups(settings: Settings) -> list[tuple[str, str]]:
@@ -105,7 +125,7 @@ def main(
     try:
         # pydantic-settings skips a missing env file silently; this must not.
         env_file.read_text()
-        settings = Settings(_env_file=env_file)
+        settings = _FileSettings(_env_file=env_file)
         redis_url = settings.redis_url
         count = asyncio.run(_read(settings, client_factory))
     except Exception as exc:  # noqa: BLE001 — every failure must fail the gate
