@@ -42,6 +42,7 @@ whose first tripper is an English sentence gets deleted rather than heeded.
 import ast
 import ipaddress
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -50,6 +51,7 @@ from typing import get_args
 import pytest
 from co_core_aio.gcs import AsyncGcsDriver
 from co_core_sync.drivers.blobstore import GcsBlobStore
+from pydantic import SecretBytes, SecretStr
 
 from src.core.config import Settings
 from tests.conftest import (
@@ -277,6 +279,34 @@ def test_every_switch_on_settings_is_scrubbed():
     assert switches, "no bool field on Settings — the derivation is broken, not the scrub"
     assert all(isinstance(alias, str) for alias in switches.values()), switches
     assert {name: alias for name, alias in switches.items() if alias not in PRODUCTION_ENV} == {}
+
+
+# A field name that says the value may carry a secret: a URL's userinfo, or a
+# credential, token, password or secret by name (#187).
+_CREDENTIAL_FIELD = re.compile(r"_url$|credential|token|password|secret")
+
+
+def test_every_credential_setting_is_scrubbed():
+    """Each setting that can carry a credential has its variable in ``PRODUCTION_ENV`` (#187).
+
+    A test that inherits one can print it: ``REPLICATOR_REDIS_URL`` holds the
+    broker's ACL password, and ``test_main_reads_the_env_file``'s diff printed it
+    in full from a shell that had run ``. scripts/load_env.sh``. The switch guard
+    above, applied to credentials: derived from ``model_fields`` by name or a
+    ``Secret*`` type, so the next one fails here rather than in a diff.
+
+    Not a ``REPLICATOR_*`` prefix scrub: CI passes
+    ``REPLICATOR_PLAYWRIGHT_BROWSERS_PATH`` into the browser job on purpose.
+    """
+    credentials = {
+        name: field.validation_alias
+        for name, field in Settings.model_fields.items()
+        if _CREDENTIAL_FIELD.search(name)
+        or {SecretStr, SecretBytes} & {field.annotation, *get_args(field.annotation)}
+    }
+    assert "redis_url" in credentials, "the derivation is broken, not the scrub"
+    assert all(isinstance(alias, str) for alias in credentials.values()), credentials
+    assert {n: alias for n, alias in credentials.items() if alias not in PRODUCTION_ENV} == {}
 
 
 def test_the_test_bucket_variable_has_no_fallback():

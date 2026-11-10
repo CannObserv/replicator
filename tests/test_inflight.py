@@ -7,6 +7,7 @@ and nobody else's, and that any failure prints something other than ``0``.
 """
 
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 from co_core.pure.adapters.bus import streams
@@ -98,6 +99,12 @@ async def test_redis_answers_nogroup(real_redis):
         await real_redis.xpending("replicator.itest.inflight-absent", "nobody")
 
 
+def _shape(redis_url: str) -> tuple[str | None, int | None, str, bool]:
+    """Host, port, db path, and whether a password is present — nothing secret."""
+    parts = urlsplit(redis_url)
+    return parts.hostname, parts.port, parts.path, parts.password is not None
+
+
 def _env_file(tmp_path: Path, *lines: str) -> Path:
     path = tmp_path / "env"
     path.write_text("\n".join(lines) + "\n")
@@ -120,7 +127,10 @@ def test_main_reads_the_env_file(tmp_path, capsys, fake_redis_factory):
         return fake_redis_factory(settings)
 
     main(["--env-file", str(env)], client_factory=factory)
-    assert seen == ["redis://broker:6379/0"]
+    # Its shape, never the URL: a diff of the URL printed the broker password
+    # from a loaded shell (#187). Locals, so no ``+ where`` line shows a repr.
+    shapes = [_shape(url) for url in seen]
+    assert shapes == [("broker", 6379, "/0", False)]
 
 
 def test_a_missing_env_file_fails_closed(tmp_path, capsys, fake_redis_factory):

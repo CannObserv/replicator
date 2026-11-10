@@ -74,6 +74,12 @@ PRODUCTION_ENV = (
     # Production does not set this one. It is here because it is a switch: a dev
     # shell's `off` would move capture's tests off the cgroup path (#182).
     "REPLICATOR_CAPTURE_CGROUP",
+    # The broker URL carries the `replicator` ACL password, and a test that
+    # inherited it printed it in an assertion diff (#187). No test needs it: the
+    # live-broker fixtures read REPLICATOR_TEST_REDIS_URL. Every setting that can
+    # carry a credential must be here, and
+    # test_every_credential_setting_is_scrubbed fails on one that is not.
+    "REPLICATOR_REDIS_URL",
 )
 
 # The test destination, and the identity to reach it with. **Neither has a

@@ -18,7 +18,9 @@ gate can never read a failed read as ``0``. That includes a missing env file:
 without ``/etc/replicator/.env`` the settings default to a localhost broker, and
 a ``0`` from there says nothing about this worker. The reboot chain runs knob
 commands through ``runuser`` with no session environment, which is why the file
-is read here rather than inherited.
+is read here rather than inherited. A variable already in the environment still
+outranks the file (pydantic-settings' order), which is harmless: the knob's shell
+has none, and a loaded one took them from this same file (#187).
 
 A graceful stop drains the message in flight anyway (``deploy/replicator.service``),
 and at-least-once delivery makes an interrupted one a redelivery, not a loss. The
