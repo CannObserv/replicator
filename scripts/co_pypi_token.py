@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import http.client
 import os
 import sys
 import tempfile
@@ -134,9 +135,10 @@ def _get(opener, url: str, auth: str) -> bytes:
     try:
         with opener(urllib.request.Request(url, headers={"Authorization": auth})) as response:
             return response.read()
-    except urllib.error.URLError as exc:
-        # The exception names the URL and the status, never the request's headers.
-        raise FetchError(f"{url}: {exc}") from exc
+    except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
+        # A status, a timeout or a dropped connection (CR 4): each names the URL
+        # and the failure, never the request's headers.
+        raise FetchError(f"{url}: {type(exc).__name__}: {exc}") from exc
 
 
 def fetch_wheels(

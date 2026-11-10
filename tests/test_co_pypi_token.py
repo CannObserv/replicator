@@ -8,6 +8,7 @@ wrapped ``uv`` — not merely "not be read".
 """
 
 import hashlib
+import http.client
 import io
 import os
 import re
@@ -369,3 +370,22 @@ def test_the_shell_wrapper_allowlist_matches_the_python_one():
     # The shell layer also carries the key variable: it is the mint's input.
     assert array("ALLOWED") == set(cp.ALLOWED) | {cp.KEY_VAR}
     assert array("PREFIXES") == set(cp.ALLOWED_PREFIXES)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TimeoutError("The read operation timed out"),
+        http.client.RemoteDisconnected("Remote end closed connection without response"),
+        http.client.IncompleteRead(b"partial"),
+    ],
+    ids=["timeout", "disconnected", "incomplete-read"],
+)
+def test_a_dropped_connection_is_a_fetch_error_not_a_traceback(tmp_path, error):
+    """CR 4: only URLError was caught, so a flaky network escaped as a traceback."""
+
+    def opener(request):
+        raise error
+
+    with pytest.raises(cp.FetchError, match=cp.INDEX_HOST):
+        cp.fetch_wheels(TOKEN, ["0.41.0"], tmp_path, opener=opener)
