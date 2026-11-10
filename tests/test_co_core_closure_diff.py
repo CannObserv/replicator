@@ -7,10 +7,13 @@ transitively, ``from pkg import submodule``, relative imports, imports under
 ``TYPE_CHECKING``, and a module that joins the closure between versions. And a
 verdict that tells a docstring or ``__version__`` edit from a code change.
 
-The synthetic wheels are built in ``tmp_path``, so none of this needs a
-``.wheelhouse``. The one real-wheel check skips where the wheels aren't synced.
+The synthetic wheels are built in ``tmp_path``, so none of this needs the
+index. The one real-wheel check reads the directory ``REPLICATOR_TEST_CLOSURE_WHEELS``
+names, filled by ``bash scripts/co-pypi.sh wheels 0.36.0 0.37.0 DIR`` (#183),
+and skips without it.
 """
 
+import os
 import zipfile
 from pathlib import Path
 
@@ -31,9 +34,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGES = ["co_core", "co_core_aio"]
 
 
-def _wheel(wheelhouse: Path, package: str, version: str, files: dict, requires=()) -> None:
+def _wheel(wheels: Path, package: str, version: str, files: dict, requires=()) -> None:
     """Write ``<package>-<version>-py3-none-any.whl`` holding ``files`` and a METADATA."""
-    path = wheelhouse / f"{package}-{version}-py3-none-any.whl"
+    path = wheels / f"{package}-{version}-py3-none-any.whl"
     with zipfile.ZipFile(path, "w") as z:
         for name, source in files.items():
             z.writestr(name, source)
@@ -108,7 +111,7 @@ def _aio(version: str) -> dict:
 
 @pytest.fixture
 def repo(tmp_path):
-    """A repo with roots ``src`` and ``scripts`` and a two-version wheelhouse."""
+    """A repo with roots ``src`` and ``scripts`` and a two-version wheel directory."""
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "app.py").write_text(
         "import fastapi\n"
@@ -118,7 +121,7 @@ def repo(tmp_path):
     )
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "tool.py").write_text("import co_core_aio\n")
-    wh = tmp_path / ".wheelhouse"
+    wh = tmp_path / "wheels"
     wh.mkdir()
     _wheel(wh, "co_core", "1.0.0", _core("1.0.0", v2=False), ["pydantic>=2"])
     _wheel(wh, "co_core", "1.1.0", _core("1.1.0", v2=True), ["pydantic>=2", "httpx<1"])
@@ -128,7 +131,7 @@ def repo(tmp_path):
 
 
 def _closure(repo: Path, version: str):
-    wheels = load_wheels(repo / ".wheelhouse", PACKAGES, version)
+    wheels = load_wheels(repo / "wheels", PACKAGES, version)
     seeds = root_imports([repo / "src", repo / "scripts"])
     return closure(wheels.files, PACKAGES, seeds)
 
@@ -271,7 +274,7 @@ def _report(repo: Path, **kw) -> str:
         "1.1.0",
         roots=[repo / "src", repo / "scripts"],
         packages=PACKAGES,
-        wheelhouse=repo / ".wheelhouse",
+        wheels=repo / "wheels",
         **kw,
     )
 
@@ -299,13 +302,13 @@ def test_the_report_gives_the_requires_dist_delta_per_package(repo):
 
 def test_the_report_names_unresolved_and_unparsed_only_when_there_are_any(repo):
     assert "Unresolved" not in _report(repo) and "Not parsed" not in _report(repo)
-    wh = repo / ".wheelhouse"
+    wh = repo / "wheels"
     files = _core("1.2.0", v2=True)
     del files["co_core/extract/canonical.py"]
     files["co_core/util/hashing.py"] = "def digest(:\n"
     _wheel(wh, "co_core", "1.2.0", files)
     _wheel(wh, "co_core_aio", "1.2.0", _aio("1.2.0"))
-    report = build_report("1.1.0", "1.2.0", roots=[repo / "src"], packages=PACKAGES, wheelhouse=wh)
+    report = build_report("1.1.0", "1.2.0", roots=[repo / "src"], packages=PACKAGES, wheels=wh)
     assert "**Unresolved imports** (at 1.2.0): `co_core.extract.canonical`." in report
     assert "**Not parsed, imports not followed** (at 1.2.0): `co_core/util/hashing.py`." in report
 
@@ -317,12 +320,12 @@ def test_the_report_lists_third_party_and_dynamic_imports(repo):
 
 
 def test_a_dynamic_import_that_only_moved_lines_is_listed_once(repo):
-    wh = repo / ".wheelhouse"
+    wh = repo / "wheels"
     files = _core("1.2.0", v2=True)
     files["co_core/bus/__init__.py"] = "\n\n" + files["co_core/bus/__init__.py"]
     _wheel(wh, "co_core", "1.2.0", files)
     _wheel(wh, "co_core_aio", "1.2.0", _aio("1.2.0"))
-    report = build_report("1.1.0", "1.2.0", roots=[repo / "src"], packages=PACKAGES, wheelhouse=wh)
+    report = build_report("1.1.0", "1.2.0", roots=[repo / "src"], packages=PACKAGES, wheels=wh)
     sites = [line for line in report.splitlines() if "import_module" in line]
     assert sites == ["- co_core/bus/__init__.py:9 `import_module(f'{__name__}.gcs')`"]
 
@@ -333,7 +336,7 @@ def test_roots_are_reported_in_the_order_given(repo):
         "1.1.0",
         roots=[repo / "src", repo / "scripts"],
         packages=PACKAGES,
-        wheelhouse=repo / ".wheelhouse",
+        wheels=repo / "wheels",
     )
     assert report.index(str(repo / "src")) < report.index(str(repo / "scripts"))
 
@@ -346,9 +349,9 @@ def test_diff_adds_a_code_level_diff_of_each_changed_file_only(repo):
     assert "Models." not in with_diff  # docstrings never reach the diff
 
 
-def test_a_missing_wheel_names_the_sync_script(repo):
-    with pytest.raises(MissingWheelError, match="sync_wheelhouse.py"):
-        load_wheels(repo / ".wheelhouse", PACKAGES, "9.9.9")
+def test_a_missing_wheel_names_the_fetch(repo):
+    with pytest.raises(MissingWheelError, match="co-pypi.sh wheels"):
+        load_wheels(repo / "wheels", PACKAGES, "9.9.9")
 
 
 # --- the CLI ------------------------------------------------------------------
@@ -358,7 +361,7 @@ def _main(repo, *args):
     return main(
         [*args, "--root", str(repo / "src"), "--root", str(repo / "scripts")]
         + ["--package", "co_core", "--package", "co-core-aio"]
-        + ["--wheelhouse", str(repo / ".wheelhouse")]
+        + ["--wheels", str(repo / "wheels")]
     )
 
 
@@ -377,19 +380,19 @@ def test_main_exits_two_on_a_missing_wheel(repo, capsys):
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "co_core-9.9.9-py3-none-any.whl" in captured.err
-    assert "scripts/sync_wheelhouse.py" in captured.err
+    assert "bash scripts/co-pypi.sh wheels" in captured.err
 
 
 def test_main_exits_two_on_a_corrupt_wheel(repo, capsys):
-    (repo / ".wheelhouse" / "co_core-1.1.0-py3-none-any.whl").write_bytes(b"truncated")
+    (repo / "wheels" / "co_core-1.1.0-py3-none-any.whl").write_bytes(b"truncated")
     assert _main(repo, "1.0.0", "1.1.0") == 2
     err = capsys.readouterr().err
     assert "co_core-1.1.0-py3-none-any.whl" in err
-    assert "scripts/sync_wheelhouse.py" in err
+    assert "bash scripts/co-pypi.sh wheels" in err
 
 
 def test_main_exits_two_on_a_missing_root(repo, capsys):
-    rc = main(["1.0.0", "1.1.0", "--root", str(repo / "nope")])
+    rc = main(["1.0.0", "1.1.0", "--root", str(repo / "nope"), "--wheels", str(repo / "wheels")])
     assert rc == 2
     assert "nope" in capsys.readouterr().err
 
@@ -400,19 +403,32 @@ def test_main_exits_two_on_a_usage_error(capsys):
     assert exc.value.code == 2
 
 
+def test_the_wheel_directory_is_required(repo, capsys):
+    """No default: the .wheelhouse it defaulted to is retired (#183)."""
+    with pytest.raises(SystemExit) as exc:
+        main(["1.0.0", "1.1.0", "--root", str(repo / "src")])
+    assert exc.value.code == 2
+    assert "--wheels" in capsys.readouterr().err
+
+
+def test_the_retired_flag_is_gone(repo):
+    with pytest.raises(SystemExit):
+        main(["1.0.0", "1.1.0", "--wheelhouse", str(repo / "wheels")])
+
+
 # --- the real wheels ----------------------------------------------------------
 
 _REAL = ["co_core", "co_core_aio", "co_core_sync"]
+_REAL_DIR = Path(os.environ.get("REPLICATOR_TEST_CLOSURE_WHEELS") or "/nonexistent")
 _REAL_WHEELS = [
-    REPO_ROOT / ".wheelhouse" / f"{p}-{v}-py3-none-any.whl"
-    for p in _REAL
-    for v in ("0.36.0", "0.37.0")
+    _REAL_DIR / f"{p}-{v}-py3-none-any.whl" for p in _REAL for v in ("0.36.0", "0.37.0")
 ]
 
 
 @pytest.mark.skipif(
     not all(w.exists() for w in _REAL_WHEELS),
-    reason="0.36.0/0.37.0 wheels not synced (scripts/sync_wheelhouse.py)",
+    reason="REPLICATOR_TEST_CLOSURE_WHEELS has no 0.36.0/0.37.0 wheels"
+    " (bash scripts/co-pypi.sh wheels 0.36.0 0.37.0 DIR)",
 )
 def test_reproduces_136_for_0_36_to_0_37():
     """#136's result: 57 files at each version, six not identical.
@@ -422,8 +438,8 @@ def test_reproduces_136_for_0_36_to_0_37():
     """
     roots = [REPO_ROOT / "src", REPO_ROOT / "scripts"]
     seeds = root_imports(roots)
-    old = load_wheels(REPO_ROOT / ".wheelhouse", _REAL, "0.36.0")
-    new = load_wheels(REPO_ROOT / ".wheelhouse", _REAL, "0.37.0")
+    old = load_wheels(_REAL_DIR, _REAL, "0.36.0")
+    new = load_wheels(_REAL_DIR, _REAL, "0.37.0")
     old_c, new_c = closure(old.files, _REAL, seeds), closure(new.files, _REAL, seeds)
     assert (len(old_c.files), len(new_c.files)) == (57, 57)
     verdicts = {f: verdict(old.files.get(f), new.files.get(f)) for f in old_c.files | new_c.files}
