@@ -5,7 +5,7 @@ watcher#241, so what keeps this script is the scratch one: it mints a ULID
 ``command_id`` per URL and XADDs a ``ContentFetchCommand`` frame built by
 co-core's own ``to_wire``, and it is what drives the live-broker end-to-end test
 (``tests/worker/test_loop_integration.py``) — which earns it a permanent place
-next to ``sync_wheelhouse.py`` and ``check_redis_floor.sh``. Design:
+next to ``check_redis_floor.sh`` and ``inflight.py``. Design:
 ``docs/plans/2026-07-31-replicator-mvp-open-questions-design.md`` §2.
 
     uv run python -m scripts.seed_fetch \
@@ -549,7 +549,7 @@ async def _seed(client: Redis, args: argparse.Namespace) -> int:
     """Publish, optionally watch, and say precisely what happened.
 
     Failures are answered with a line and an exit code rather than a traceback
-    (CR #3), matching ``sync_wheelhouse.py``, the other operator-facing script
+    (CR #3), matching ``co_pypi_token.py``, the other operator-facing script
     here. Each step that can fail is guarded on its own, because the four
     failures mean four different things to whoever has to act on them: a refused
     target, a broker that died before anything went out, a loop that published

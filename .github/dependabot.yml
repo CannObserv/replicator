@@ -4,10 +4,10 @@
 # on a red one read the WIF auth step first (the verdict table on #76).
 # How one lands: docs/DEPLOYMENT.md -> "Dependabot".
 #
-# github-actions only. `uv` waits on #76's blocker 2: co-core resolves only
-# from the private wheelhouse, which Dependabot's updater cannot sync
-# (CannObserv/cannobserv#554). gitsubmodule (deliberate skills-vendor/ bumps)
-# stays out too.
+# github-actions only. `uv` stays parked under #169: co-core resolves from the
+# private co-pypi index (#183), which Dependabot's updater reaches only once an
+# org owner admits it (CannObserv/cannobserv#615). gitsubmodule (deliberate
+# skills-vendor/ bumps) stays out too.
 # Guarded by tests/ci/test_dependabot.py: a mistyped config stops producing
 # PRs without erroring anywhere a person looks.
 version: 2

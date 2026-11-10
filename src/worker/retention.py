@@ -3,7 +3,7 @@
 An in-worker task rather than a systemd timer. A timer's one real advantage is
 surviving a crashed worker, and that case is self-limiting — a worker that is not
 running is not writing blobs either, so the tree stops growing. Against it: a
-second unit repeating the wheelhouse and ``uv --frozen`` ``ExecStartPre`` chain,
+second unit repeating the ``ExecStartPre`` guard chain and ``uv --frozen``,
 and a second configuration surface, for a delete loop. The worker already has a
 stop-event cadence this can ride.
 
