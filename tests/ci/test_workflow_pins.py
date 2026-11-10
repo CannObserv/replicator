@@ -11,7 +11,7 @@ its tag needs the network, so it is checked by hand when a pin moves:
 
 **The cache.** setup-uv v9 flipped ``prune-cache`` to ``false`` (v5.4.2's
 ``action.yml`` defaults it ``true``). Unpruned, the uv cache a job saves holds
-co-core unpacked from the private wheelhouse, and this repo is public: a fork's
+co-core unpacked from the private co-pypi index, and this repo is public: a fork's
 pull request can restore a cache saved on ``main``. Dependabot's setup-uv PR
 would flip the default with CI green, so each step states it. Every step, not
 only those saying ``enable-cache: true``: the default is ``auto``, which caches
@@ -160,37 +160,113 @@ def test_prune_check_reads_a_second_workflow(tmp_path):
     assert _unpruned_setup_uv_steps([CI, other]) == [("other.yml", {})]
 
 
-# What `[tool.uv] find-links` resolves: the packages the prune must keep out of the cache.
-WHEELHOUSE_PACKAGES = {"co-core", "co-core-aio", "co-core-sync"}
+# What the co-pypi index resolves (#183): the packages the prune must keep out of the cache.
+INDEX_URL = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/simple/"
+INDEX_PACKAGES = {"co-core", "co-core-aio", "co-core-sync"}
 
 
-def _wheelhouse_packages(lock: Path) -> list[dict]:
+def _index_packages(lock: Path) -> list[dict]:
     packages = tomllib.loads(lock.read_text(encoding="utf-8"))["package"]
-    return [p for p in packages if p.get("source", {}).get("registry") == ".wheelhouse"]
+    return [p for p in packages if p.get("source", {}).get("registry") == INDEX_URL]
 
 
-def _wheelhouse_packages_without_a_wheel(lock: Path) -> list[str]:
-    return [p["name"] for p in _wheelhouse_packages(lock) if not p.get("wheels")]
+def _index_packages_without_a_wheel(lock: Path) -> list[str]:
+    return [p["name"] for p in _index_packages(lock) if not p.get("wheels")]
 
 
-def test_the_wheel_check_reads_the_wheelhouse_packages():
-    """A renamed find-links would leave the check below reading nothing, green."""
-    assert {p["name"] for p in _wheelhouse_packages(LOCK)} == WHEELHOUSE_PACKAGES
+def test_the_wheel_check_reads_the_index_packages():
+    """A moved index URL would leave the check below reading nothing, green."""
+    assert {p["name"] for p in _index_packages(LOCK)} == INDEX_PACKAGES
 
 
-def test_every_wheelhouse_package_is_locked_to_a_wheel():
-    """The prune's premise: a package installed from its wheel is pruned."""
-    assert _wheelhouse_packages_without_a_wheel(LOCK) == []
+def test_every_index_package_is_locked_to_a_wheel():
+    """The prune's premise: a package installed from its wheel is pruned. The
+    index lock records each sdist too; uv installs the wheel."""
+    assert _index_packages_without_a_wheel(LOCK) == []
 
 
 def test_wheel_check_fails_on_an_sdist_only_lock(tmp_path):
     lock = tmp_path / "uv.lock"
     lock.write_text(
         '[[package]]\nname = "co-core"\nversion = "9.9.9"\n'
-        'source = { registry = ".wheelhouse" }\n'
-        'sdist = { path = "co_core-9.9.9.tar.gz" }\n'
+        f'source = {{ registry = "{INDEX_URL}" }}\n'
+        'sdist = { url = "https://example/co_core-9.9.9.tar.gz", hash = "sha256:00" }\n'
     )
-    assert _wheelhouse_packages_without_a_wheel(lock) == ["co-core"]
+    assert _index_packages_without_a_wheel(lock) == ["co-core"]
+
+
+# The co-pypi token (#183): minted by each read-only WIF step, handed to that
+# job's `uv sync` alone, and the reader writes no credentials file for later
+# steps to inherit as ADC.
+READER = "co-pypi-reader@co-gcs.iam.gserviceaccount.com"
+TOKEN_VARS = {"UV_INDEX_CO_PYPI_USERNAME", "UV_INDEX_CO_PYPI_PASSWORD"}
+
+
+def _job_steps(path: Path) -> list[tuple[str, dict]]:
+    jobs = yaml.safe_load(path.read_text(encoding="utf-8"))["jobs"]
+    return [(name, step) for name, job in jobs.items() for step in job.get("steps", [])]
+
+
+def _token_findings(path: Path) -> list[str]:
+    """Every way a job breaks the token rule, as text."""
+    bad = []
+    readers = {
+        n: s for n, s in _job_steps(path) if s.get("with", {}).get("service_account") == READER
+    }
+    for job, step in readers.items():
+        w = step["with"]
+        if step.get("id") != "co_pypi" or w.get("token_format") != "access_token":
+            bad.append(f"{job}: the reader step mints no co_pypi access token")
+        if w.get("create_credentials_file") is not False:
+            bad.append(f"{job}: the reader step writes a credentials file (ADC for later steps)")
+    for job, step in _job_steps(path):
+        env = set(step.get("env", {}))
+        is_sync = bool(re.match(r"\s*uv sync\b", step.get("run", "")))
+        if is_sync and job in readers and env & TOKEN_VARS != TOKEN_VARS:
+            bad.append(f"{job}: `uv sync` lacks the token pair")
+        if env & TOKEN_VARS and not is_sync:
+            bad.append(f"{job}: {step.get('name')!r} gets the token but is not `uv sync`")
+        if "access_token" in step.get("run", "") or "sync_wheelhouse" in step.get("run", ""):
+            bad.append(f"{job}: {step.get('name')!r} names the token or the wheelhouse in run:")
+    return bad
+
+
+def test_the_derivation_finds_a_reader_in_every_job_that_syncs():
+    syncing = {n for n, s in _job_steps(CI) if re.match(r"\s*uv sync\b", s.get("run", ""))}
+    readers = {n for n, s in _job_steps(CI) if s.get("with", {}).get("service_account") == READER}
+    assert syncing and syncing == readers
+
+
+def test_the_token_reaches_uv_sync_alone():
+    assert _token_findings(CI) == []
+
+
+def test_the_token_check_bites(tmp_path):
+    bad = tmp_path / "ci.yml"
+    bad.write_text(
+        yaml.safe_dump(
+            {
+                "jobs": {
+                    "j": {
+                        "steps": [
+                            {"with": {"service_account": READER}},
+                            {"run": "uv sync --locked"},
+                            {"run": "uv run pytest", "env": dict.fromkeys(TOKEN_VARS, "x")},
+                        ]
+                    }
+                }
+            }
+        )
+    )
+    assert len(_token_findings(bad)) == 4
+
+
+def test_every_reader_job_asserts_the_wif_provider_first():
+    """#76's verdict row 1: an invisible org variable fails legibly, in every job
+    that authenticates (browser had no assert until #183)."""
+    for job in {n for n, s in _job_steps(CI) if s.get("with", {}).get("service_account") == READER}:
+        names = [s.get("name", "") for n, s in _job_steps(CI) if n == job]
+        assert "Assert co-pypi auth is configured" in names, job
 
 
 def _runners() -> set[str]:

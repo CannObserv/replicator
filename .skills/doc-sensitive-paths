@@ -16,8 +16,8 @@ AGENTS.md
 CLAUDE.md
 README.md
 
-# Dependency surface: the co-core pin and the wheelhouse story are documented
-# prose, not just lockfile state (docs/DEPLOYMENT.md).
+# Dependency surface: the co-core pin and the co-pypi index are documented
+# prose, not just lockfile state (docs/DEPENDENCIES.md).
 pyproject.toml
 uv.lock
 

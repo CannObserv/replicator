@@ -182,17 +182,10 @@ EnvironmentFile=/etc/replicator/.env
 # downgrade. Not '-' prefixed — that exit 1 must stop the start.
 ExecStartPre=/bin/bash /home/exedev/replicator/scripts/check_redis_floor.sh
 
-# Refresh the cannobserv wheelhouse. Non-fatal ('-' prefix): a transient GCS
-# failure is surfaced to the journal, and an already-populated wheelhouse still
-# starts. Only a genuinely missing wheel surfaces as a hard uv resolution error.
-#
-# What it writes to journald is plain text, not the app's JSON — it runs
-# --no-project, in an environment with none of the project's dependencies
-# installed, so it cannot import build_json_formatter() (#15, skills#83).
-ExecStartPre=-/usr/local/bin/uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
-
 # --frozen --no-sync: run exactly the committed lockfile; dependency sync is a
-# deploy step, not a service-start side effect.
+# deploy step, not a service-start side effect. So no step here reaches the
+# co-pypi index or needs its token: the deploy's `bash scripts/co-pypi.sh uv
+# sync --frozen` does (#183, which retired the wheelhouse refresh that stood here).
 ExecStart=/usr/local/bin/uv run --frozen --no-sync python -m src.worker.main
 Restart=on-failure
 RestartSec=5

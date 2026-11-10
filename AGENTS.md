@@ -26,13 +26,7 @@ Override vendored `brainstorming`'s defaults:
 
 Python ≥3.12, uv, pytest, ruff. `ty` (`uv run ty check`) is a **non-gating** type checker — no pre-commit or CI gate.
 
-**co-core comes from the wheelhouse, not PyPI.** `co-core` / `co-core-aio` / `co-core-sync` resolve from `./.wheelhouse`, mirrored from the private GCS index `gs://co-gcs-pypi` by `scripts/sync_wheelhouse.py` via `[tool.uv] find-links`. Run the sync **before** `uv sync` on a fresh clone or after a version bump:
-
-```bash
-uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
-```
-
-Auth is ADC. Pin the current minor — `>=0.41.0,<0.42` — and raise the **patch** floor with every co-core feature the code starts depending on; the ways a skew has already failed are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+**co-core comes from the private co-pypi index, not PyPI.** `uv lock` and a cold `uv sync` need its token: `bash scripts/co-pypi.sh uv …`, never the writer's ADC. Pin the current minor — `>=0.41.0,<0.42` — and raise the **patch** floor with every co-core feature the code starts depending on. Both, and each skew so far: [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md).
 
 <!-- BEGIN socraticode-policy -->
 ## Code Exploration Policy
@@ -83,8 +77,8 @@ critical, guarded by `scripts/check_redis_floor.sh`. Why, ports, redis-py pin:
 ## Server Lifecycle
 
 `replicator.service` runs the worker. Deploy committed code with `git pull --ff-only
-&& uv sync --frozen && sudo systemctl restart replicator` — `git push` instead of the
-pull when the merge happened here.
+&& bash scripts/co-pypi.sh uv sync --frozen && sudo systemctl restart replicator`
+— `git push` instead of the pull when the merge happened here.
 
 Two that bite, silently until they matter:
 
@@ -171,7 +165,7 @@ Replicator is a **consumer** first — follow what co-core and the archiver prod
 ## Common Commands
 
 ```bash
-# Mirror the private index first (Environment & Tooling)
+# A cold cache needs the index token (Environment & Tooling)
 uv sync
 
 # Load environment — dev only (required before the worker, gh, or rcli); parses the env files, never runs them
@@ -227,7 +221,8 @@ source — with rationale and ruff gates: [docs/STYLE.md](docs/STYLE.md).
 - [POLITENESS.md](docs/POLITENESS.md) — per-host pacing: the policy stream, sleep vs park, 429/503 escalation
 - [CONVENTIONS.md](docs/CONVENTIONS.md) — rules common to every stream: idempotency, validation, DLQ, `claim_stale`, the `replicator:cmd:*` keys (#80)
 - [STORAGE.md](docs/STORAGE.md) — blob paths and modes, the populations under `REPLICATOR_BLOB_DIR`, TTL and ceilings
-- [DEPLOYMENT.md](docs/DEPLOYMENT.md) — the unit's lifecycle, its start guards, the co-core pin
+- [DEPLOYMENT.md](docs/DEPLOYMENT.md) — the unit's lifecycle and its start guards
+- [DEPENDENCIES.md](docs/DEPENDENCIES.md) — the co-pypi index, its token wrapper, the co-core pin
 - [MEMORY-PROTECTION.md](docs/MEMORY-PROTECTION.md) — the host's memory tunables
 - [FAILURE-NOTIFICATION.md](docs/FAILURE-NOTIFICATION.md) — the `OnFailure=` handler: `REPLICATOR_NOTIFY_*`, notifier mode, delivery scoring
 - [INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) — VM topology, ports, the broker, buckets either side of the test/production line

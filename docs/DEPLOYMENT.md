@@ -1,6 +1,7 @@
 # Replicator Deployment
 
-The systemd unit's lifecycle, the guards it starts behind, and the co-core pin.
+The systemd unit's lifecycle and the guards it starts behind. Where co-core comes
+from, and its pin, are in [DEPENDENCIES.md](DEPENDENCIES.md).
 What it reports when it *fails* is in
 [FAILURE-NOTIFICATION.md](FAILURE-NOTIFICATION.md); the host's memory tunables
 are in [MEMORY-PROTECTION.md](MEMORY-PROTECTION.md).
@@ -18,8 +19,8 @@ The start guards' own variables are the exception, kept [below](#environment-var
 
 | Situation | Action |
 |---|---|
-| Code merged to main **on GitHub** (the usual path) | `git pull --ff-only && uv sync --frozen && sudo systemctl restart replicator` |
-| Code merged to main **locally** | `git push && uv sync --frozen && sudo systemctl restart replicator` |
+| Code merged to main **on GitHub** (the usual path) | `git pull --ff-only && bash scripts/co-pypi.sh uv sync --frozen && sudo systemctl restart replicator`, in a shell that ran `. scripts/load_env.sh` (the sync's token: [DEPENDENCIES.md](DEPENDENCIES.md)) |
+| Code merged to main **locally** | `git push && bash scripts/co-pypi.sh uv sync --frozen && sudo systemctl restart replicator` |
 | Testing a worktree/branch | `uv run python -m src.worker.main` (set distinct `REPLICATOR_CONSUMER_NAME` **and** `REPLICATOR_REPLICATE_CONSUMER_NAME` — **required** while the service runs, since #77 makes both loops derive the names the unit registers under) |
 | Debugging the live service | `sudo journalctl -u replicator -f` |
 | After editing `deploy/replicator.service` | `sudo cp deploy/replicator.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart replicator` |
@@ -30,10 +31,10 @@ The start guards' own variables are the exception, kept [below](#environment-var
 | After editing `deploy/apt/preferences.d/tailscale.pref` | `sudo install -D -m 644 deploy/apt/preferences.d/tailscale.pref /etc/apt/preferences.d/tailscale.pref` — **no reload**; `apt-cache policy tailscale` showing 600 over the site's 100 proves it. It scopes the Tailscale origin the `patching-hosts` maintenance lane follows (#131) |
 | After editing `deploy/needrestart.conf.d/replicator.conf` | `sudo install -D -m 644 deploy/needrestart.conf.d/replicator.conf /etc/needrestart/conf.d/replicator.conf` — **no reload**, apt's hook reads it at the next dpkg run; `sudo needrestart -m u -r l -b` printing `Disabling Ubuntu mode` proves it loads. Without it a security apply restarts the worker mid-apply, outside any window (#122) |
 | Reading what the failure handler reported | `journalctl -t replicator-failure` — **not** `journalctl -u`; why, in [FAILURE-NOTIFICATION.md](FAILURE-NOTIFICATION.md) |
-| After a co-core version bump | re-run `sync_wheelhouse.py`, then `uv sync` |
+| After a co-core pin move | the procedure in [DEPENDENCIES.md](DEPENDENCIES.md#moving-the-pin) |
 | `Start request repeated too quickly` | `sudo systemctl reset-failed replicator && sudo systemctl start replicator` — the rate limit, not a broken build |
 
-`ExecStart` uses `--frozen --no-sync`, so dependency sync is a deploy step, not a service-start side effect.
+`ExecStart` uses `--frozen --no-sync`, so dependency sync is a deploy step, not a service-start side effect: no step at start reaches the package index or needs its token (#183, `tests/test_deploy.py`).
 
 **`/etc/systemd/system/replicator.service` is a *copy*, not a symlink to `deploy/`.** So the `cp` above is load-bearing and `daemon-reload` alone silently does nothing — systemd re-reads the installed file, which is still the old one. The failure has no symptom at restart: the worker comes up on the new code under the *old* unit, and the mismatch only surfaces the first time a directive actually matters. Little guards it, either — `tests/test_deploy.py` reads the repo file, which is exactly the copy that is still correct; only its live checks of `OOMScoreAdjust=` and `MemoryLow=` (#113) read what the host holds. Diff the two when a restart follows a unit edit (#11 deploy).
 
@@ -65,22 +66,6 @@ notifier mode and its delivery scoring:
 `OOMScoreAdjust=` on both units and `tailscaled`, the host's swap and
 `vm.min_free_kbytes`, the `MemoryLow=` slice grant, and why `earlyoom` is
 declined: [MEMORY-PROTECTION.md](MEMORY-PROTECTION.md).
-
-### The co-core pin, and why the patch floor is load-bearing
-
-`co-core`, `co-core-aio` and `co-core-sync` come from the private GCS index `gs://co-gcs-pypi`,
-mirrored into `./.wheelhouse` by `scripts/sync_wheelhouse.py` and resolved
-through `[tool.uv] find-links` — never from PyPI.
-
-Auth is ADC, with one substitution: on the VM the sync uses the read-only key named by `REPLICATOR_WHEELHOUSE_CREDENTIALS` (`/etc/replicator/co-pypi-reader.json`) rather than the worker's own `GOOGLE_APPLICATION_CREDENTIALS`, which is the writer (`/etc/replicator/co-gcs-replicator-writer.json`, #29, #114); in CI it is a keyless WIF token. Pin the current minor — `>=0.41.0,<0.42`, on all three. The **patch** floor is load-bearing, not tidiness: the change-bus payloads are `extra="ignore"`, so on an older wheel a model constructed with fields it does not have yet succeeds and silently discards them. Raise the floor with every co-core feature the code starts depending on, or a version skew publishes facts that look right and carry nothing (#10). Both floors since fail *loudly* instead — a ValidationError at construction (0.8.0 requires `info_source_id` on all three fetch payloads, #19/#28) or an ImportError at load, never reaching a running worker (0.9.4 cuts the replicate contracts, #29; 0.19.3 ships the shared `BlobStore`, #114; 0.19.6 cuts the persist contract, #114 step 6).
-
-**The 0.10 → 0.13 jump (#77) was the first departure from "pin the current minor", and what justified it is evidence rather than judgement.** The hazard that rule guards is payload fields moving under `extra="ignore"`; every module this service imports proved byte-identical between the two wheels — `pure/models/changes.py`, `pure/adapters/bus/{envelope,exceptions}.py`, `effects/{bus,fetch,gcs}.py`, `pure/util/{hashing,gcs}.py`, and all of `co_core_aio` bar its `__version__`. Only `streams.py` gained anything (`group_name`, `stream_kind` — cannobserv#384), and Replicator imports no `co_v1` adapter, which is where 0.13.2's other changes landed. That `diff -rq` of both wheels from `.wheelhouse/` took a minute and turned a deferred change into a safe one.
-
-**Diff the import closure before every pin move**, a single minor included: #136 needed it for one. The version distance is not the risk, the moved surface is, and the import lines are not the surface. At 0.19 → 0.36 (#140), `changes.py`'s import of `extract.canonical` brought in the `pure/extract` package, which had changed (cannobserv#523), and no import line in Replicator names it. `scripts/co_core_closure_diff.py OLD NEW` (#145) walks the closure from `src/` and `scripts/` through all three wheels at each version, after the wheel sync. It prints the counts, a verdict per file that isn't identical, the Requires-Dist delta and the closure's third-party imports, and `--diff` adds each changed file's code diff. Paste the report into the pin comment and write the reasons around it by hand. `version-only` and `docstrings-only` need no reading. `changed` does, a model under `extra="ignore"` above all. `added` and `removed` are modules joining or leaving the closure. An **Unresolved imports** line names a module that is imported but isn't in the wheel, which fails at import. A **Not parsed** line names a file whose imports the walk couldn't follow. Each prints only when there's something to list. The walk follows `TYPE_CHECKING` imports and lists dynamic ones without following them. At 0.41.0 that's co-core-sync's two lazy `__getattr__` sites in `drivers/` and `drivers/blobstore/`. Both are expected, because each target is named again under `TYPE_CHECKING`. A new site whose targets aren't named there is a gap to read by hand. Flags: `--root`, `--package`, `--wheelhouse`; the defaults are this repo's.
-
-**Sync the wheelhouse before concluding a version is unavailable.** The #77 review reported 0.13.1 "not mirrored" from a local `ls` while the private index already carried it; the mirror had simply not been synced, and what silently fixed it was `replicator.service`'s own non-fatal `ExecStartPre` running `sync_wheelhouse.py` on the next restart. A local listing is a cache, not the index.
-
-**Lock from a wheels-only wheelhouse.** With the `.tar.gz` files in `./.wheelhouse`, `uv lock` writes `sdist = { path = … }` into the three co-core entries; without them it doesn't. `uv lock --check` passes either way, so the lines are churn in an unrelated diff. Lock in a worktree whose `.wheelhouse/` links `*.whl` only, as #160 and #76 did. Either shape keeps the CI cache prune's premise, that every co-core package is locked to a wheel (`tests/ci/test_workflow_pins.py`).
 
 ### The checkout guard — the service refuses to start off `main` (#37), or off unpushed commits (#48)
 
@@ -138,7 +123,7 @@ including an empty namespace after a flush:
 
 ### Dependabot proposes the action bumps (#76)
 
-`.github/dependabot.yml` proposes **action bumps only**, weekly. Every `uses:` in `ci.yml` pins a commit SHA with a `# vX.Y.Z` comment, and Dependabot moves both. `context-cadence.yml` is excluded, because the installer re-renders it (gregoryfoster/skills#373). `uv` is out until Dependabot's updater can reach the wheelhouse (CannObserv/cannobserv#554). Guarded by `tests/ci/`.
+`.github/dependabot.yml` proposes **action bumps only**, weekly. Every `uses:` in `ci.yml` pins a commit SHA with a `# vX.Y.Z` comment, and Dependabot moves both. `context-cadence.yml` is excluded, because the installer re-renders it (gregoryfoster/skills#373). `uv` stays parked under #169, until an org owner admits Dependabot to the co-pypi index (CannObserv/cannobserv#615). Guarded by `tests/ci/`.
 
 A bot PR touches only `.github/`, so it needs **no deploy and no restart**. Merging it on GitHub puts `origin/main` ahead of this checkout: `git pull --ff-only` before the next local commit. If a bot PR is red at the WIF auth step, suspect the Dependabot run's OIDC token before the bump (the verdict table on #76). Read the action's release notes, not the diff: setup-uv v9 flipped `prune-cache` silently. A bump that changes behaviour takes fix commits pushed onto its branch.
 

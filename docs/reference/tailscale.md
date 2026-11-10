@@ -198,7 +198,7 @@ build that followed moved every key and env file over stdin for this reason.
 | exe.dev **API token** (`exe1.…`) | agent → `POST https://exe.dev/exec` | repo `.env` as `EXE_API_TOKEN`; scope `new`/`ls`/`whoami`, no `rm` |
 | Redis password (inside `REPLICATOR_REDIS_URL`) | worker → broker, as the `replicator` ACL user | `/etc/replicator/.env`, unit-scoped |
 | Notifier tenant key (`nk_…`) | `OnFailure=` handler → `notifier:9000/api/v1/dispatch`, as `X-API-Key` for tenant `replicator` | `/etc/replicator/.env` as `REPLICATOR_NOTIFY_TOKEN`. Minted by notifier's operator, never handled by an agent (#108) |
-| GCS service-account keys | worker, wheelhouse step, `gcs`-marked tests | `/etc/replicator/*.json`, `root:exedev 0640` |
+| GCS service-account keys | worker, the deploy's `scripts/co-pypi.sh`, `gcs`-marked tests | `/etc/replicator/*.json`, `root:exedev 0640` |
 
 Independent secrets for independent hops: a tailnet key never authenticates a
 Redis connection, and the Redis password is not what gets a host onto the tailnet.

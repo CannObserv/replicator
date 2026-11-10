@@ -13,15 +13,10 @@ wheels/
 .env
 env
 
-# cannobserv package index mirror — populated by scripts/sync_wheelhouse.py from
-# the private GCS index (gs://co-gcs-pypi). Wheels are never committed; the
-# directory itself is tracked so `[tool.uv] find-links = ["./.wheelhouse"]`
-# resolves on a fresh clone before the first sync.
-# NB: `.wheelhouse/*`, not `.wheelhouse/` — git cannot re-include a file whose
-# parent directory is excluded, so a directory-level ignore would make the
-# negation below a no-op and leave .gitkeep untracked.
-.wheelhouse/*
-!.wheelhouse/.gitkeep
+# The retired cannobserv wheelhouse (#183: co-core now resolves from the co-pypi
+# index). Its files stay on the host until one restart on the index has passed;
+# this line goes with them.
+.wheelhouse/
 
 # Temporary blob storage (REPLICATOR_BLOB_DIR default) — content-addressed
 # fetched bytes awaiting durable replication. Never committed.

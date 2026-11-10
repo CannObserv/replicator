@@ -21,6 +21,7 @@ test-only variables, defined in `tests/conftest.py`.
 - `REPLICATOR_TEST_BLOB_BUCKET` — the temp-blob bucket `@pytest.mark.gcs` may write to (#7); `co-gcs-test-blobs`, provisioned 2026-08-20. **No default**, same rule as above, and deliberately a *second* variable: the two destinations carry opposite grants — the replicate SA holds no `delete` at all, which is what puts T4 at IAM rather than only in our code, while the temp-store tests create objects and clean up after themselves. One bucket serving both would mean either the temp tests cannot tidy or the permanent store can be erased
 - `REPLICATOR_TEST_PERMANENT_BUCKET` — the permanent-store test twin `@pytest.mark.gcs` may write to and replicate from (#114); `co-gcs-test-replicator`. **No default**, same rule; the store guard admits it beside `REPLICATOR_TEST_BLOB_BUCKET`
 - `REPLICATOR_TEST_GCS_CREDENTIALS` — path to the test SA key (`/etc/replicator/co-gcs-test-replicator-writer.json` here, the WIF credentials file in CI). Also no default, and mapped onto `GOOGLE_APPLICATION_CREDENTIALS` for marked tests only — the bucket name alone cannot catch a run pointed at the right bucket with the production identity, which is reachable because AGENTS.md's Common Commands snippet loads `/etc/replicator/.env`
+- `REPLICATOR_TEST_CLOSURE_WHEELS` — a directory `bash scripts/co-pypi.sh wheels 0.36.0 0.37.0 DIR` filled, read by `tests/test_co_core_closure_diff.py`'s real-wheel check alone (not `conftest.py`). Without it that check skips, CI included (#183)
 
   All four GCS ones belong in the repo `.env` or the invoking shell, **never in `/etc/replicator/.env`** — that is the file the service reads, and a delete-capable identity is precisely the grant T4 exists to withhold from the worker. The resource itself: [**The GCS test bucket**](INFRASTRUCTURE.md#the-gcs-test-bucket--the-opposite-grant-on-purpose-38-50)
 
@@ -82,7 +83,7 @@ makes production untestable (#38).
   permanent store's bucket name) in a string
   literal. AST-based, docstrings included, and it excludes only itself. Unit
   tests use `example-replication-bucket` and `example-internal-bucket`; the
-  wheelhouse reader `co-pypi-reader.json` stays legal, because
+  co-pypi reader `co-pypi-reader.json` stays legal, because
   `test_replicate_guards.py` names it on purpose to prove the path guard refuses
   a real secret.
 - **The fixtures** (`tests/conftest.py`, autouse). These variables are removed from

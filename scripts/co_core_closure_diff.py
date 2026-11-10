@@ -7,7 +7,9 @@ line here names. So this walks the closure from the roots instead, through every
 module of the named packages it reaches, and compares the two versions file by
 file::
 
-    uv run --no-project python scripts/co_core_closure_diff.py 0.36.0 0.37.0 [--diff]
+    bash scripts/co-pypi.sh wheels 0.36.0 0.37.0 /tmp/co-core-wheels
+    uv run --no-project python scripts/co_core_closure_diff.py 0.36.0 0.37.0 \
+        --wheels /tmp/co-core-wheels [--diff]
 
 The output is Markdown for the ``pyproject.toml`` pin comment: the file count at
 each version, one line per file that isn't ``identical``, the Requires-Dist delta,
@@ -30,15 +32,18 @@ module, class and function docstrings stripped; comments and formatting never
 reach the AST), ``version-only`` (equal once ``__version__`` is masked too),
 ``changed``, and ``added`` / ``removed``.
 
-Nothing in it is Replicator's: roots, packages and the wheelhouse are flags, and
-the defaults are this repo's. A ``--package`` names both the import package and
-the wheel's distribution, which co-core's three share. It reads the wheels in
-place with ``zipfile`` and installs nothing, and it's standard library only, so
-``uv run --no-project`` works too. The wheel is what the venv installs, so it's
-the wheel that's read, never the sdist.
+Nothing in it is Replicator's: roots, packages and the wheel directory are flags,
+and the defaults are this repo's. The directory has no default: the wheels come
+from the co-pypi index through the wrapper's ``wheels`` verb (#183), which
+checks each against the index's sha256, into any scratch directory. A
+``--package`` names both the import package and the wheel's distribution, which
+co-core's three share. It reads the wheels in place with ``zipfile`` and
+installs nothing, and it's standard library only, so ``uv run --no-project``
+works too. The wheel is what the venv installs, so it's the wheel that's read,
+never the sdist.
 
 Exit codes: ``0`` a report was written, whatever it found · ``2`` a usage error,
-a missing root, or a wheel missing from the wheelhouse or unreadable in it.
+a missing root, or a wheel missing from the directory or unreadable in it.
 """
 
 from __future__ import annotations
@@ -54,11 +59,10 @@ from pathlib import Path
 
 DEFAULT_ROOTS = ["src", "scripts"]
 DEFAULT_PACKAGES = ["co_core", "co_core_aio", "co_core_sync"]
-DEFAULT_WHEELHOUSE = ".wheelhouse"
 
 
 class MissingWheelError(Exception):
-    """A wheel the diff needs isn't in the wheelhouse."""
+    """A wheel the diff needs isn't in the wheel directory."""
 
 
 @dataclass(frozen=True)
@@ -99,28 +103,28 @@ def _normalize(package: str) -> str:
     return package.replace("-", "_")
 
 
-def wheel_path(wheelhouse: Path, package: str, version: str) -> Path:
-    return wheelhouse / f"{_normalize(package)}-{version}-py3-none-any.whl"
+def wheel_path(wheels: Path, package: str, version: str) -> Path:
+    return wheels / f"{_normalize(package)}-{version}-py3-none-any.whl"
 
 
-def load_wheels(wheelhouse: Path, packages: Sequence[str], version: str) -> Wheels:
+def load_wheels(wheels: Path, packages: Sequence[str], version: str) -> Wheels:
     """Read every package's wheel at ``version``, in place."""
-    missing = [p for p in packages if not wheel_path(wheelhouse, p, version).is_file()]
+    missing = [p for p in packages if not wheel_path(wheels, p, version).is_file()]
     if missing:
-        names = ", ".join(str(wheel_path(wheelhouse, p, version)) for p in missing)
+        names = ", ".join(str(wheel_path(wheels, p, version)) for p in missing)
         raise MissingWheelError(
-            f"missing from the wheelhouse: {names}. Run scripts/sync_wheelhouse.py first."
+            f"missing: {names}. Fetch them first: bash scripts/co-pypi.sh wheels OLD NEW {wheels}"
         )
     files: dict[str, bytes] = {}
     requires: dict[str, frozenset[str]] = {}
     for package in packages:
-        path = wheel_path(wheelhouse, package, version)
+        path = wheel_path(wheels, package, version)
         try:
             z = zipfile.ZipFile(path)
         except zipfile.BadZipFile as exc:
-            # The sync re-downloads any file whose size doesn't match the index's.
+            # The fetch verifies each file's sha256, so this is a hand-placed file.
             raise MissingWheelError(
-                f"not a readable wheel: {path}. Run scripts/sync_wheelhouse.py again."
+                f"not a readable wheel: {path}. Fetch it again: bash scripts/co-pypi.sh wheels"
             ) from exc
         with z:
             for name in z.namelist():
@@ -335,13 +339,13 @@ def build_report(
     *,
     roots: Sequence[Path],
     packages: Sequence[str],
-    wheelhouse: Path,
+    wheels: Path,
     show_diff: bool = False,
 ) -> str:
     """The Markdown report for one pin move."""
     packages = [_normalize(p) for p in packages]
-    old = load_wheels(wheelhouse, packages, old_version)
-    new = load_wheels(wheelhouse, packages, new_version)
+    old = load_wheels(wheels, packages, old_version)
+    new = load_wheels(wheels, packages, new_version)
     seeds = root_imports(roots)
     old_c, new_c = closure(old.files, packages, seeds), closure(new.files, packages, seeds)
 
@@ -416,7 +420,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--package", action="append", help=f"repeatable; default {DEFAULT_PACKAGES}"
     )
-    parser.add_argument("--wheelhouse", default=DEFAULT_WHEELHOUSE)
+    parser.add_argument(
+        "--wheels", required=True, help="the directory `co-pypi.sh wheels OLD NEW DIR` filled"
+    )
     parser.add_argument("--diff", action="store_true", help="add each changed file's code diff")
     args = parser.parse_args(argv)
 
@@ -431,7 +437,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.new,
             roots=roots,
             packages=args.package or DEFAULT_PACKAGES,
-            wheelhouse=Path(args.wheelhouse),
+            wheels=Path(args.wheels),
             show_diff=args.diff,
         )
     except MissingWheelError as exc:

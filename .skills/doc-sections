@@ -15,7 +15,8 @@
 # (gregoryfoster/skills#284).
 
 AGENTS.md: Project Layout (a new package under src/), the co-core pin under Environment & Tooling (pyproject.toml), Server Lifecycle (deploy/), and the Detail Docs roster of docs/*.md
-docs/DEPLOYMENT.md: the co-core pin and wheelhouse story (pyproject.toml, uv.lock); the systemd unit and its guards, which README.md's Deploy section restates (deploy/)
+docs/DEPENDENCIES.md: the co-pypi index, its wrapper and token, and the co-core pin (pyproject.toml, uv.lock, scripts/co-pypi.sh)
+docs/DEPLOYMENT.md: the systemd unit and its guards, which README.md's Deploy section restates (deploy/)
 docs/MEMORY-PROTECTION.md: OOMScoreAdjust= on both units and tailscaled, swap and vm.min_free_kbytes, the MemoryLow= slice grant, earlyoom declined (deploy/)
 docs/ARCHITECTURE.md: Project Layout, one line per module (src/, scripts/)
 docs/ENVIRONMENT.md: every REPLICATOR_* variable, its default and the reasoning behind it (src/core/config.py)

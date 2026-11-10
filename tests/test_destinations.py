@@ -70,9 +70,8 @@ SCANNED = (REPO / "src", REPO / "tests")
 # The literals no module under `src/` or `tests/` may contain. Both halves of the
 # production identity, because either one alone is enough to write:
 #
-# `co-gcs-replication` — the bucket. Named in `docs/INFRASTRUCTURE.md` and in
-# `scripts/sync_wheelhouse.py`'s docstring, neither of which is scanned; nowhere
-# a runtime value can come from.
+# `co-gcs-replication` — the bucket. Named in `docs/INFRASTRUCTURE.md`, which
+# is not scanned; nowhere a runtime value can come from.
 #
 # `co-gcs-replicator` — the old writer SA (deleted 2026-10-05, #123), which was
 # also its key file's basename and the local part of its email. The substring
@@ -86,7 +85,7 @@ SCANNED = (REPO / "src", REPO / "tests")
 # which puts the writer's key (`co-gcs-replicator-writer.json`) into the
 # environment `uv run pytest` inherits.
 #
-# Deliberately *not* forbidden: `co-pypi-reader.json`, the wheelhouse reader,
+# Deliberately *not* forbidden: `co-pypi-reader.json`, the co-pypi index reader,
 # which `tests/worker/test_replicate_guards.py` names on purpose to prove the
 # path guard refuses a real secret. Refusing every `/etc/replicator/` path would
 # have taken that test with it.
@@ -177,7 +176,7 @@ def test_the_destination_detector_sees_a_planted_literal(source):
     [
         pytest.param(f'BUCKET = "{TEST_BUCKET}"', id="the-test-bucket"),
         pytest.param('BUCKET = "example-replication-bucket"', id="the-neutral-fake"),
-        pytest.param('KEY = "file:///etc/replicator/co-pypi-reader.json"', id="the-wheelhouse-key"),
+        pytest.param('KEY = "file:///etc/replicator/co-pypi-reader.json"', id="the-co-pypi-key"),
         pytest.param(
             'SA = "co-gcs-test-replicator-writer@co-gcs.iam.gserviceaccount.com"',
             id="the-test-identity",

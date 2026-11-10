@@ -14,7 +14,7 @@ skills-vendor/
 skills/
 .claude/skills/
 
-# Local mirror of the private cannobserv package index. Already covered by
+# The retired wheelhouse (#183), until the host's copies go. Already covered by
 # .gitignore, listed here so the exclusion survives RESPECT_GITIGNORE=false.
 .wheelhouse/
 

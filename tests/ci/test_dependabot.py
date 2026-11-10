@@ -5,10 +5,10 @@ missing schedule stops producing PRs without erroring anywhere a person looks,
 and a quiet bot reads like "no updates available". Ported from
 CannObserv/archiver#192 (``c5a7a22``), assertions only:
 
-* **``github-actions`` only.** ``uv`` waits on #76's blocker 2: co-core
-  resolves only from the private wheelhouse, which Dependabot's updater cannot
-  sync (CannObserv/cannobserv#554). ``skills-vendor/``'s deliberate submodule
-  bumps stay out too. Any second block fails here.
+* **``github-actions`` only.** ``uv`` stays parked under #169: co-core
+  resolves from the private co-pypi index (#183), which Dependabot's updater
+  reaches only once an org owner admits it (CannObserv/cannobserv#615).
+  ``skills-vendor/``'s deliberate submodule bumps stay out too. Any second block fails here.
 * **``context-cadence.yml`` is excluded.** ``install-cadence.sh`` generates it,
   and a re-render reverts any bump made in it (gregoryfoster/skills#373). Its
   pin moves with the installer.
@@ -78,8 +78,8 @@ def test_only_github_actions_is_configured():
     ecosystems = [u.get("package-ecosystem") for u in _updates()]
     assert ecosystems == ["github-actions"], (
         f"ecosystems {ecosystems}: #76 ships github-actions alone. A `uv` block "
-        "needs the private wheelhouse reachable from Dependabot's updater "
-        "(CannObserv/cannobserv#554); gitsubmodule is its own decision"
+        "is #169's, parked until an org owner admits Dependabot to the co-pypi index "
+        "(CannObserv/cannobserv#615); gitsubmodule is its own decision"
     )
 
 

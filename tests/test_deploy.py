@@ -151,9 +151,9 @@ def test_the_unit_absorbs_the_worst_outage_this_cluster_has_had():
     or a manual restart's as well, so a unit started within the window before
     the outage has one restart fewer to spend (#134 CR 1). Each restart is
     preceded by ``RestartSec`` and the floor check's wait — which a refusing
-    broker spends in full, being an 'unreachable' probe. The guard, the
-    wheelhouse sync and interpreter start are left out: real, unmeasured, and
-    only ever additions to a floor.
+    broker spends in full, being an 'unreachable' probe. The guard and
+    interpreter start are left out: real, unmeasured, and only ever additions
+    to a floor.
     """
     settings = Settings()
     burst = int(_directive("StartLimitBurst"))
@@ -271,9 +271,8 @@ def test_the_floor_checks_boot_wait_leaves_most_of_the_start_budget():
     """``After=`` alone was measured insufficient (#88), so the floor check now
     waits out an unreachable broker itself — inside the start.
 
-    Every ExecStartPre shares one TimeoutStartSec, and the wheelhouse sync that
-    follows goes to the network. A wait that could eat the budget would turn a
-    slow tailnet into a start timeout: a failure, counted against the three
+    Every ExecStartPre shares one TimeoutStartSec. A wait that could eat the
+    budget would turn a slow tailnet into a start timeout: a failure, counted against the three
     starts an hour. The last probe can begin just before the wait expires, so
     the bound is the wait plus one probe's timeout.
     """
@@ -285,6 +284,22 @@ def test_the_floor_checks_boot_wait_leaves_most_of_the_start_budget():
     assert "TimeoutStartSec" not in UNIT.read_text(), (
         "the unit now sets TimeoutStartSec; compare against it instead of the default"
     )
+
+
+def test_a_start_needs_no_package_index():
+    """Dependency sync is a deploy step, never a start side effect (#183, design
+    option A). No ``ExecStartPre`` runs ``uv`` or reaches the co-pypi index, so a
+    cold boot behind a late tailnet needs no network or token for packages, and
+    nothing at start changes the venv the worker imports from. The retired
+    wheelhouse refresh was the last step that did."""
+    starting = [*_exec_start_pre(), _directive("ExecStart")]
+    offenders = [
+        v
+        for v in starting
+        if re.search(r"sync_wheelhouse|co-pypi|co_pypi|\buv (sync|lock|pip)\b", v)
+    ]
+    assert offenders == []
+    assert _directive("ExecStart").startswith("/usr/local/bin/uv run --frozen --no-sync ")
 
 
 def test_the_unit_does_not_depend_on_tailscaled():
