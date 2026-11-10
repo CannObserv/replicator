@@ -377,8 +377,10 @@ async def test_the_browser_runs_sandboxed_capped_and_ranked_below_the_worker(
     render = asyncio.create_task(
         renderer.render(_request(site.url("/"), wait=Wait("delay", seconds=2)))
     )
-    procs = await _last_readings(cgroup, render)
-    await render
+    try:
+        procs = await _last_readings(cgroup, render)
+    finally:
+        await render  # an observer that failed must not orphan the browser
     renderers = [p for p in procs if p["renderer"]]
     adj = {p["adj"] for p in procs}
 
