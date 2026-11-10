@@ -99,10 +99,16 @@ async def test_redis_answers_nogroup(real_redis):
         await real_redis.xpending("replicator.itest.inflight-absent", "nobody")
 
 
-def _shape(redis_url: str) -> tuple[str | None, int | None, str, bool]:
-    """Host, port, db path, and whether a password is present — nothing secret."""
+def _shape(redis_url: str) -> tuple[str, str | None, int | None, str, bool]:
+    """Scheme, host, port, db path, and whether a password is present — nothing secret."""
     parts = urlsplit(redis_url)
-    return parts.hostname, parts.port, parts.path, parts.password is not None
+    return parts.scheme, parts.hostname, parts.port, parts.path, parts.password is not None
+
+
+# Distinctive, so a match proves the value came from the file and not a default
+# or a shell (#187 CR 2).
+FILE_URL = "redis://from-the-env-file:6379/7"
+FILE_SHAPE = ("redis", "from-the-env-file", 6379, "/7", False)
 
 
 def _env_file(tmp_path: Path, *lines: str) -> Path:
@@ -119,7 +125,7 @@ def test_main_prints_the_count(tmp_path, capsys, fake_redis_factory):
 
 def test_main_reads_the_env_file(tmp_path, capsys, fake_redis_factory):
     """The reboot chain runs it through ``runuser`` with no session environment."""
-    env = _env_file(tmp_path, "REPLICATOR_REDIS_URL=redis://broker:6379/0")
+    env = _env_file(tmp_path, f"REPLICATOR_REDIS_URL={FILE_URL}")
     seen = []
 
     def factory(settings):
@@ -130,7 +136,7 @@ def test_main_reads_the_env_file(tmp_path, capsys, fake_redis_factory):
     # Its shape, never the URL: a diff of the URL printed the broker password
     # from a loaded shell (#187). Locals, so no ``+ where`` line shows a repr.
     shapes = [_shape(url) for url in seen]
-    assert shapes == [("broker", 6379, "/0", False)]
+    assert shapes == [FILE_SHAPE]
 
 
 def test_the_env_file_outranks_the_shell(tmp_path, monkeypatch, fake_redis_factory):
@@ -143,7 +149,7 @@ def test_the_env_file_outranks_the_shell(tmp_path, monkeypatch, fake_redis_facto
     """
     monkeypatch.setenv("REPLICATOR_REDIS_URL", "redis://localhost:6379/15")
     monkeypatch.setenv("REPLICATOR_CONSUMER_GROUP", "someone-elses.fetch")
-    env = _env_file(tmp_path, "REPLICATOR_REDIS_URL=redis://broker:6379/0")
+    env = _env_file(tmp_path, f"REPLICATOR_REDIS_URL={FILE_URL}")
     seen = []
 
     def factory(settings):
@@ -151,7 +157,7 @@ def test_the_env_file_outranks_the_shell(tmp_path, monkeypatch, fake_redis_facto
         return fake_redis_factory(settings)
 
     main(["--env-file", str(env)], client_factory=factory)
-    assert seen == [(("broker", 6379, "/0", False), "replicator.fetch")]
+    assert seen == [(FILE_SHAPE, "replicator.fetch")]
 
 
 def test_a_missing_env_file_fails_closed(tmp_path, capsys, fake_redis_factory):
