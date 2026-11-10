@@ -16,6 +16,7 @@ not the guard, is what stops it.
 import asyncio
 import os
 import socket
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -325,7 +326,18 @@ def _field(status: str, name: str) -> str:
     return ""
 
 
-def _reading(pid: int) -> dict[str, object] | None:
+@dataclass(frozen=True)
+class _Reading:
+    """One browser process, as ``/proc`` showed it."""
+
+    no_sandbox: bool
+    renderer: bool
+    seccomp: str
+    nested: bool  # the namespace sandbox: a renderer sees itself in a nested PID namespace
+    adj: int
+
+
+def _reading(pid: int) -> _Reading | None:
     """One browser process, read from ``/proc``; ``None`` once it has exited."""
     try:
         cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
@@ -336,17 +348,16 @@ def _reading(pid: int) -> dict[str, object] | None:
     if not cmdline:  # a zombie: what it reads now is not what it ran as
         return None
     # Chromium rewrites a child's argv in place, NULs to spaces: search the whole buffer.
-    return {
-        "no_sandbox": b"--no-sandbox" in cmdline,
-        "renderer": b"--type=renderer" in cmdline,
-        "seccomp": _field(status, "Seccomp"),
-        # The namespace sandbox: a renderer sees itself in a nested PID namespace.
-        "nested": len(_field(status, "NSpid").split()) > 1,
-        "adj": adj,
-    }
+    return _Reading(
+        no_sandbox=b"--no-sandbox" in cmdline,
+        renderer=b"--type=renderer" in cmdline,
+        seccomp=_field(status, "Seccomp"),
+        nested=len(_field(status, "NSpid").split()) > 1,
+        adj=adj,
+    )
 
 
-async def _last_readings(cgroup: BrowserCgroup, render: asyncio.Task) -> list[dict[str, object]]:
+async def _last_readings(cgroup: BrowserCgroup, render: asyncio.Task) -> list[_Reading]:
     """Each browser process's last reading before it exited, polled until the render ends (#186).
 
     Not the first sight, and not a snapshot. A renderer is listed before it engages
@@ -354,7 +365,7 @@ async def _last_readings(cgroup: BrowserCgroup, render: asyncio.Task) -> list[di
     cgroup a moment before it writes its own ``oom_score_adj``. Bounded by the render, not a
     count: a cold first launch shows its renderer seconds late.
     """
-    last: dict[int, dict[str, object]] = {}
+    last: dict[int, _Reading] = {}
     while not render.done():
         try:
             pids = [int(p) for p in cgroup.procs_file.read_text().split()]
@@ -381,16 +392,16 @@ async def test_the_browser_runs_sandboxed_capped_and_ranked_below_the_worker(
         procs = await _last_readings(cgroup, render)
     finally:
         await render  # an observer that failed must not orphan the browser
-    renderers = [p for p in procs if p["renderer"]]
-    adj = {p["adj"] for p in procs}
+    renderers = [p for p in procs if p.renderer]
+    adj = {p.adj for p in procs}
 
     assert procs, "no browser process was in the browser cgroup"
-    assert not any(p["no_sandbox"] for p in procs), "the browser launched with --no-sandbox"
+    assert not any(p.no_sandbox for p in procs), "the browser launched with --no-sandbox"
     assert renderers, "no renderer process was found"
-    assert [r["seccomp"] for r in renderers] == ["2"] * len(renderers), (
+    assert [r.seccomp for r in renderers] == ["2"] * len(renderers), (
         "a renderer runs without seccomp-bpf"
     )
-    assert all(r["nested"] for r in renderers), "a renderer is outside the namespace sandbox"
+    assert all(r.nested for r in renderers), "a renderer is outside the namespace sandbox"
     # The wrapper sets 500 on the browser; Chromium then ranks its own children (renderers
     # 300 and up, utilities 200). All of them sit far above the worker's -900.
     assert 500 in adj
