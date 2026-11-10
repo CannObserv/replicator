@@ -2,7 +2,7 @@
 
 The three packages move together: `co-core-aio` and `co-core-sync` each require
 `co-core` at their own minor, so a skewed specifier fails at resolve time at
-best. The prose sites are worse. AGENTS.md, docs/DEPLOYMENT.md and the
+best. The prose sites are worse. AGENTS.md, docs/DEPENDENCIES.md and the
 SocratiCode manifest each name the current pin, nothing reads them, and a
 bump that forgets one stays green while an agent is told the wrong minor. The
 manifest is the costliest to leave stale: its description is what semantic
@@ -52,8 +52,9 @@ def test_agents_md_names_the_pin():
     assert f"Pin the current minor — `{the_pin()}`" in (REPO_ROOT / "AGENTS.md").read_text()
 
 
-def test_deployment_md_names_the_pin():
-    text = (REPO_ROOT / "docs" / "DEPLOYMENT.md").read_text()
+def test_dependencies_md_names_the_pin():
+    """The pin section moved from DEPLOYMENT.md with the co-pypi index (#183)."""
+    text = (REPO_ROOT / "docs" / "DEPENDENCIES.md").read_text()
     assert f"Pin the current minor — `{the_pin()}`, on all three" in text
 
 

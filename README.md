@@ -72,11 +72,10 @@ reads `XAUTOCLAIM`'s three-element reply, added in Redis server 7.0.
 ## Setup
 
 ```bash
-# Mirror the private cannobserv package index into ./.wheelhouse (co-core, co-core-aio, co-core-sync).
-# Requires GOOGLE_APPLICATION_CREDENTIALS (see Environment below).
-uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
-
-uv sync
+# co-core, co-core-aio and co-core-sync come from the private co-pypi index, whose token
+# the wrapper mints from REPLICATOR_CO_PYPI_CREDENTIALS (docs/DEPENDENCIES.md).
+. scripts/load_env.sh
+bash scripts/co-pypi.sh uv sync
 uv run pre-commit install
 ```
 
@@ -117,8 +116,8 @@ rather than deleting bytes a consumer was promised.
 
 | Variable | Set on this VM | Purpose |
 |---|---|---|
-| `GOOGLE_APPLICATION_CREDENTIALS` | `/etc/replicator/co-gcs-replicator-writer.json` | The worker's ADC — the writer SA (`co-gcs-replicator-writer@co-gcs`, #114), never the wheelhouse reader |
-| `REPLICATOR_WHEELHOUSE_CREDENTIALS` | `/etc/replicator/co-pypi-reader.json` | Read-only key for the wheelhouse mirror, so the boot step never holds the writer |
+| `GOOGLE_APPLICATION_CREDENTIALS` | `/etc/replicator/co-gcs-replicator-writer.json` | The worker's ADC — the writer SA (`co-gcs-replicator-writer@co-gcs`, #114), never the co-pypi reader |
+| `REPLICATOR_CO_PYPI_CREDENTIALS` | `/etc/replicator/co-pypi-reader.json` | Read-only key for the co-pypi index, read by `scripts/co-pypi.sh` in the deploy shell, never by the worker |
 | `REPLICATOR_REDIS_URL` | `redis://replicator:<password>@broker:6379/0` | Change-bus client URL — the `replicator` ACL user on `co-broker`, over the tailnet |
 | `REPLICATOR_BLOB_BACKEND` | `gcs` | Temp blobs live in an object store — **not** the `local` default |
 | `REPLICATOR_BLOB_BUCKET` | `co-gcs-blobs` | The temp-blob bucket that backend writes into |
@@ -224,12 +223,12 @@ reported is read with `journalctl -t replicator-failure`, never `-u`
 
 Production secrets live in `/etc/replicator/.env` (managed manually on the VM, not in the repo).
 The unit's `ExecStartPre` writes the current git SHA to `/run/replicator/build-id` and exposes it
-as `BUILD_ID`, asserts the Redis `>=7.0` floor via `scripts/check_redis_floor.sh`, and refreshes the
-wheelhouse via `scripts/sync_wheelhouse.py` — whose journald output is **plain text, not JSON**, by
-design (see [docs/STYLE.md](docs/STYLE.md), "Not everything in the journal is JSON").
+as `BUILD_ID` and asserts the Redis `>=7.0` floor via `scripts/check_redis_floor.sh` — whose
+journald output is **plain text, not JSON**, by design (see [docs/STYLE.md](docs/STYLE.md), "Not
+everything in the journal is JSON").
 
-Because `ExecStart` runs `--frozen --no-sync`, run `uv sync --frozen` as part of the deploy, before
-`systemctl restart`.
+Because `ExecStart` runs `--frozen --no-sync`, run `bash scripts/co-pypi.sh uv sync --frozen` as part
+of the deploy, before `systemctl restart`; nothing at start reaches the package index.
 
 `ExecStartPre` also refuses the start outright if this checkout is not on `main`, or if `main`
 carries commits that were never pushed (#37, #48) — the deployed code has to be code someone else

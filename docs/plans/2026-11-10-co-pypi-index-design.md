@@ -161,6 +161,22 @@ Watcher's shape.**
   checkout guard ignores untracked files (`check_main_checkout.sh:174`), so this is noise, not
   an outage. Both lines go in a one-line follow-up commit after step 6.
 
+### The proof, measured [2026-11-10]
+
+The relock ran through the wrapper from an empty cache: `Resolved 80 packages`, and only the three
+co-core entries moved. Each 0.41.0 file's `uv.lock` sha256 equals `sha256sum` of the host's
+`.wheelhouse/` copy. `e913486` held the one-shot test, green in CI run 42867724249, and `67c3f2e`
+deleted it.
+
+| File | sha256 (lock = index = host `.wheelhouse/`) |
+|---|---|
+| `co_core-0.41.0-py3-none-any.whl` | `77d96c77940396319f8333c3e27aa6162fd9674aad28694cefdb0ff421f4afb5` |
+| `co_core-0.41.0.tar.gz` | `d19cb46b7b09cb7d59a144161b82fbdd43676c15dee868252033ae7050862ecb` |
+| `co_core_aio-0.41.0-py3-none-any.whl` | `6c4f970dd8491bec0163ae03da54e8cc794450dbdad86974596e93ebdd9051e9` |
+| `co_core_aio-0.41.0.tar.gz` | `1b50cc29654f4d8f1575456b74562b95666000888fdb0923662afd57e3e86239` |
+| `co_core_sync-0.41.0-py3-none-any.whl` | `cbdb2be8aadd3bc0c5729e0c368f16fb28fc7b30f0716c51587e7c3e87402e6d` |
+| `co_core_sync-0.41.0.tar.gz` | `474cbce6e56aac69ae4a4c140663036d2f0c6f48f81c19fb5fae938c905e25c0` |
+
 ## The rest of the surface
 
 ### `pyproject.toml` and `uv.lock`

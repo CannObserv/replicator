@@ -3,22 +3,17 @@
 ## Setup
 
 ```bash
-# Mirror the private cannobserv index into ./.wheelhouse. Run BEFORE uv sync on a
-# fresh clone and after any co-core version bump — co-core / co-core-aio / co-core-sync resolve
-# from that directory via [tool.uv] find-links, not from PyPI.
-uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
-uv run --no-project python scripts/co_core_closure_diff.py OLD NEW   # every pin move: DEPLOYMENT.md, the co-core pin
-
-uv sync
+. scripts/load_env.sh                           # REPLICATOR_CO_PYPI_CREDENTIALS, the index's read-only key
+bash scripts/co-pypi.sh uv sync                 # co-core comes from the private co-pypi index
+bash scripts/co-pypi.sh uv lock                 # every relock, even a PyPI-only one
+bash scripts/co-pypi.sh wheels OLD NEW DIR      # every pin move: fetch, then diff the closure
+uv run --no-project python scripts/co_core_closure_diff.py OLD NEW --wheels DIR
 uv run pre-commit install
 ```
 
-The sync authenticates as the read-only key named by `REPLICATOR_WHEELHOUSE_CREDENTIALS`
-when that is set (`/etc/replicator/co-pypi-reader.json` on the VM), else Application
-Default Credentials — in CI the keyless WIF token written by `google-github-actions/auth`.
-Either identity needs only `roles/storage.objectViewer`. The VM's
-`GOOGLE_APPLICATION_CREDENTIALS` is the replication *writer*, which is why the sync has
-a variable of its own.
+The wrapper, the token and why the writer's `GOOGLE_APPLICATION_CREDENTIALS` never
+reaches uv: [DEPENDENCIES.md](DEPENDENCIES.md). A warm cache needs no token: `uv run`
+and `uv sync` with co-core installed or cached work bare.
 
 ## Environment
 
@@ -427,8 +422,8 @@ sudo systemctl enable --now replicator
 # adj 0 and both MemoryLow= are inert, and only the live checks in
 # tests/test_deploy.py notice.
 
-git pull --ff-only && uv sync --frozen && sudo systemctl restart replicator  # merged on GitHub
-git push && uv sync --frozen && sudo systemctl restart replicator            # merged locally
+git pull --ff-only && bash scripts/co-pypi.sh uv sync --frozen && sudo systemctl restart replicator  # merged on GitHub
+git push && bash scripts/co-pypi.sh uv sync --frozen && sudo systemctl restart replicator            # merged locally
 # Getting main level with origin is not optional: the guard refuses to start a
 # `main` that is ahead of origin/main, because unpushed commits are on no shared
 # branch (#48). Which command does it depends on where the merge happened.
