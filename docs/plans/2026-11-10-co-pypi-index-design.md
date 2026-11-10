@@ -268,8 +268,10 @@ Historical design docs under `docs/plans/` stay as written.
 1. **Operator:** in `/etc/replicator/.env`, rename `REPLICATOR_WHEELHOUSE_CREDENTIALS` to
    `REPLICATOR_CO_PYPI_CREDENTIALS`, keeping the value.
 2. `sudo cp deploy/replicator.service /etc/systemd/system/ && sudo systemctl daemon-reload`.
-3. `. scripts/load_env.sh && bash scripts/co-pypi.sh uv sync --frozen`. Expect only the three
-   co-core packages to be reinstalled (the source moved, the bytes didn't).
+3. `. scripts/load_env.sh && bash scripts/co-pypi.sh uv sync --frozen`. Expect only `replicator`
+   itself rebuilt: uv keeps the installed co-core 0.41.0 even though its source moved, because
+   the bytes didn't [measured in the worktree's venv, CR 2]. `uv pip show` still gives 0.41.0
+   for all three.
 4. `sudo systemctl restart replicator`.
 5. **Read-back, from the body's "Done when":**
    - `worker ready` with all three features `enabled`;
