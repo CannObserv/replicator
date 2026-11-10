@@ -14,9 +14,5 @@ skills-vendor/
 skills/
 .claude/skills/
 
-# The retired wheelhouse (#183), until the host's copies go. Already covered by
-# .gitignore, listed here so the exclusion survives RESPECT_GITIGNORE=false.
-.wheelhouse/
-
 # Content-addressed fetched bytes — opaque blobs, never source.
 blobs/

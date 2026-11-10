@@ -278,7 +278,7 @@ Historical design docs under `docs/plans/` stay as written.
    - `uv pip show co-core co-core-aio co-core-sync` → 0.41.0;
    - the replay is clean;
    - `diff deploy/replicator.service /etc/systemd/system/replicator.service` is empty.
-6. After that restart, retire the host's `.wheelhouse/` files. A one-line commit then drops the
+6. **Done 2026-11-10:** after that restart, retire the host's `.wheelhouse/` files. A one-line commit then drops the
    `.gitignore` and `.socraticodeignore` lines.
 7. **SocratiCode re-embed (CR 3).** The manifest changed: nine descriptions, a renamed artifact
    and a new one. From the main checkout, run the capped

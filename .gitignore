@@ -13,11 +13,6 @@ wheels/
 .env
 env
 
-# The retired cannobserv wheelhouse (#183: co-core now resolves from the co-pypi
-# index). Its files stay on the host until one restart on the index has passed;
-# this line goes with them.
-.wheelhouse/
-
 # Temporary blob storage (REPLICATOR_BLOB_DIR default) — content-addressed
 # fetched bytes awaiting durable replication. Never committed.
 blobs/
