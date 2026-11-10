@@ -10,6 +10,7 @@ wrapped ``uv`` — not merely "not be read".
 import hashlib
 import http.client
 import io
+import json
 import os
 import re
 import stat
@@ -131,29 +132,63 @@ def test_a_blank_key_variable_is_unset(capsys):
     assert cp.main(["uv", "lock"], environ, mint=_mint_from([]), execvpe=Exec()) == 2
 
 
-def test_the_mint_reads_the_named_file_and_never_adc(monkeypatch, tmp_path):
-    """``from_service_account_file`` takes the path; google-auth's ADC search,
-    which would find GOOGLE_APPLICATION_CREDENTIALS, is never entered."""
-    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", WRITER)
-    seen: dict = {}
+def _service_account_key(path: Path, email: str) -> str:
+    """A throwaway service-account key file, real enough for google-auth to load."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
 
-    class Creds:
-        token = TOKEN
+    pem = (
+        rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        .private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+        .decode()
+    )
+    key = {
+        "type": "service_account",
+        "project_id": "test",
+        "private_key_id": "0",
+        "private_key": pem,
+        "client_email": email,
+        "client_id": "0",
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }
+    path.write_text(json.dumps(key))
+    return str(path)
 
-        def refresh(self, request):
-            seen["refreshed"] = True
 
-    def from_file(path, scopes):
-        seen["path"], seen["scopes"] = path, scopes
-        return Creds()
+def test_the_mint_loads_the_named_key_even_with_a_real_writer_key_in_adc(monkeypatch, tmp_path):
+    """The real loader runs, and only the token exchange is faked (CR 7). A real
+    writer key sits where ADC would look: the token is the reader's whatever
+    GOOGLE_APPLICATION_CREDENTIALS holds, and google.auth.default never runs."""
+    reader = _service_account_key(tmp_path / "reader.json", "co-pypi-reader@test.iam")
+    writer = _service_account_key(tmp_path / "writer.json", "the-writer@test.iam")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", writer)
+    minted_for: list[tuple[str, tuple]] = []
+
+    def refresh(self, request):
+        minted_for.append((self.service_account_email, tuple(self.scopes)))
+        self.token = TOKEN
 
     def adc(*a, **k):
         raise AssertionError("google.auth.default() must not run")
 
-    monkeypatch.setattr(cp.service_account.Credentials, "from_service_account_file", from_file)
+    monkeypatch.setattr(cp.service_account.Credentials, "refresh", refresh)
     monkeypatch.setattr("google.auth.default", adc)
-    assert cp.mint_token(READER) == TOKEN
-    assert seen == {"path": READER, "scopes": cp.SCOPES, "refreshed": True}
+    assert cp.mint_token(reader) == TOKEN
+    assert minted_for == [("co-pypi-reader@test.iam", tuple(cp.SCOPES))]
+
+
+def test_a_key_that_is_not_a_key_fails_the_mint(tmp_path, capsys):
+    bad = tmp_path / "not-a-key.json"
+    bad.write_text("{}")
+    environ = {**LOADED, cp.KEY_VAR: str(bad)}
+    execvpe = Exec()
+    assert cp.main(["uv", "lock"], environ, execvpe=execvpe) == 1
+    assert execvpe.calls == []
+    assert str(bad) in capsys.readouterr().err
 
 
 # --- refusals and failures -------------------------------------------------
