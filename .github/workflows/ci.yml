@@ -49,7 +49,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     # WIF: mint an OIDC token for google-github-actions/auth to impersonate the
-    # read-only co-pypi-reader SA and pull the cannobserv wheelhouse.
+    # read-only co-pypi-reader SA, for the co-pypi index's access token.
     permissions:
       contents: read
       id-token: write
@@ -61,23 +61,24 @@ jobs:
         with:
           enable-cache: true
           # Stated, not defaulted: v9 flipped it to false, and the cache holds
-          # co-core from the private wheelhouse in a public repo (#76).
+          # co-core from the private co-pypi index in a public repo (#76).
           prune-cache: true
 
       - name: Install Python
         run: uv python install 3.12
 
-      # co-core / co-core-aio / co-core-sync resolve from a wheelhouse mirrored from the
-      # private GCS index. Authenticate keyless via Workload Identity Federation
-      # — the read-scoped provider impersonating the objectViewer-only
-      # co-pypi-reader SA — then sync before `uv sync`.
+      # co-core / co-core-aio / co-core-sync resolve from the private co-pypi
+      # index (#183). Authenticate keyless via Workload Identity Federation as
+      # the read-only co-pypi-reader SA and mint an access token, which the
+      # `uv sync` step alone receives, masked. No credentials file: the reader's
+      # ADC never reaches a later step (pytest, ruff).
       # Fail fast and legibly when the org variable is not visible to this repo.
       # google-github-actions/auth validates its own inputs before contacting
       # Google, so an empty provider surfaces as "must specify exactly one of
       # workload_identity_provider or credentials_json" — which reads like a
       # workflow-authoring bug and sends you looking at GCP IAM, where the
       # problem is not. Assert the precondition here instead.
-      - name: Assert wheelhouse auth is configured
+      - name: Assert co-pypi auth is configured
         env:
           WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
         run: |
@@ -89,15 +90,18 @@ jobs:
           echo "If the auth step below fails on a Dependabot PR, suspect the OIDC token (id-token: write on a fork-like run), not IAM (#76)."
 
       - name: Authenticate to Google Cloud (WIF, read-only)
+        id: co_pypi
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: co-pypi-reader@co-gcs.iam.gserviceaccount.com
-
-      - name: Sync cannobserv wheelhouse
-        run: uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
+          token_format: access_token
+          create_credentials_file: false
 
       - name: uv sync
+        env:
+          UV_INDEX_CO_PYPI_USERNAME: oauth2accesstoken
+          UV_INDEX_CO_PYPI_PASSWORD: ${{ steps.co_pypi.outputs.access_token }}
         run: uv sync --locked --group dev
 
       - name: ruff check
@@ -143,7 +147,7 @@ jobs:
       # workload_identity_provider or credentials_json" — which reads like a
       # workflow-authoring bug and sends you looking at GCP IAM, where the
       # problem is not. Assert the precondition here instead.
-      - name: Assert wheelhouse auth is configured
+      - name: Assert co-pypi auth is configured
         env:
           WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
         run: |
@@ -155,25 +159,28 @@ jobs:
           echo "If the auth step below fails on a Dependabot PR, suspect the OIDC token (id-token: write on a fork-like run), not IAM (#76)."
 
       - name: Authenticate to Google Cloud (WIF, read-only)
+        id: co_pypi
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: co-pypi-reader@co-gcs.iam.gserviceaccount.com
-
-      - name: Sync cannobserv wheelhouse
-        run: uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
+          token_format: access_token
+          create_credentials_file: false
 
       - name: uv sync
+        env:
+          UV_INDEX_CO_PYPI_USERNAME: oauth2accesstoken
+          UV_INDEX_CO_PYPI_PASSWORD: ${{ steps.co_pypi.outputs.access_token }}
         run: uv sync --locked --group dev
 
-      # Validates the wheelhouse end to end: the extras the loop depends on
+      # Validates the index end to end: the extras the loop depends on
       # ([bus] for the Redis Streams driver, and co-core-sync's [gcs] for the
       # shared blob store, #114) must import, not merely resolve. GcsBlobStore
       # resolves lazily, so it is named explicitly: importing the package alone
       # would pass without the extra. `simhash` needs no extra — only hashlib and
       # re — so co-core takes none (#142): its [extract] brought parsers nothing
       # here imports. The capture types (#138) are named because co-core 0.39 is
-      # the first release carrying them: an older wheel in the mirror fails here.
+      # the first release carrying them: an older wheel fails here.
       - name: co-core import smoke (bus and gcs extras wired)
         run: |
           uv run python -c "
@@ -203,8 +210,8 @@ jobs:
       # which no runner has; `test_oom_integration.py` spawns its own
       # `redis-server` on a loopback port it picks, so its only requirement is
       # this binary. A step in this job rather than a job of its own: the
-      # wheelhouse is already mirrored and the venv already synced here, and a
-      # second job would pay both again to run 13 tests.
+      # venv is already synced here, and a second job would pay that again to
+      # run 13 tests.
       #
       # `apt-get update` is deliberately not fatal. Runner images carry
       # third-party sources this job has no interest in — the first run of this
@@ -269,16 +276,29 @@ jobs:
       - name: Install Python
         run: uv python install 3.12
 
+      - name: Assert co-pypi auth is configured
+        env:
+          WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+        run: |
+          if [ -z "$WIF_PROVIDER" ]; then
+            echo "::error::vars.GCP_WIF_PROVIDER is empty for this repo. GCP is not the problem — the org variable is not visible here. Fix under Org Settings > Secrets and variables > Actions > Variables > GCP_WIF_PROVIDER > Repository access. (Row 1 of the verdict table on #76; row 2, this step green and the auth step red, is OIDC.)"
+            exit 1
+          fi
+          echo "If the auth step below fails on a Dependabot PR, suspect the OIDC token (id-token: write on a fork-like run), not IAM (#76)."
+
       - name: Authenticate to Google Cloud (WIF, read-only)
+        id: co_pypi
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: co-pypi-reader@co-gcs.iam.gserviceaccount.com
-
-      - name: Sync cannobserv wheelhouse
-        run: uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
+          token_format: access_token
+          create_credentials_file: false
 
       - name: uv sync
+        env:
+          UV_INDEX_CO_PYPI_USERNAME: oauth2accesstoken
+          UV_INDEX_CO_PYPI_PASSWORD: ${{ steps.co_pypi.outputs.access_token }}
         run: uv sync --locked --group dev
 
       # The revision is the one uv.lock's Playwright pins. Not --with-deps: that
@@ -373,7 +393,7 @@ jobs:
       - name: Install Python
         run: uv python install 3.12
 
-      - name: Assert wheelhouse auth is configured
+      - name: Assert co-pypi auth is configured
         env:
           WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
         run: |
@@ -383,20 +403,23 @@ jobs:
           fi
           echo "If the auth step below fails on a Dependabot PR, suspect the OIDC token (id-token: write on a fork-like run), not IAM (#76)."
 
-      # First identity: read-only, and only to mirror the wheelhouse.
+      # First identity: read-only, and only for the co-pypi token.
       - name: Authenticate to Google Cloud (WIF, read-only)
+        id: co_pypi
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: co-pypi-reader@co-gcs.iam.gserviceaccount.com
-
-      - name: Sync cannobserv wheelhouse
-        run: uv run --no-project --with 'google-cloud-storage>=2,<4' python scripts/sync_wheelhouse.py
+          token_format: access_token
+          create_credentials_file: false
 
       - name: uv sync
+        env:
+          UV_INDEX_CO_PYPI_USERNAME: oauth2accesstoken
+          UV_INDEX_CO_PYPI_PASSWORD: ${{ steps.co_pypi.outputs.access_token }}
         run: uv sync --locked --group dev
 
-      # Second identity, after the wheelhouse is already mirrored: objectAdmin on
+      # Second identity, after the venv is already synced: objectAdmin on
       # co-gcs-test-replication and co-gcs-test-blobs, and no write on production
       # (docs/INFRASTRUCTURE.md, "The GCS test bucket").
       - name: Authenticate to Google Cloud (WIF, test bucket writer)

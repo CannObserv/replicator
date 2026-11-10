@@ -25,7 +25,7 @@ REPO = Path(__file__).resolve().parent.parent
 WRAPPER = REPO / "scripts" / "co-pypi.sh"
 TOKEN = "ya29.SECRET-TOKEN-VALUE"
 READER = "/etc/replicator/co-pypi-reader.json"
-WRITER = "/etc/replicator/co-gcs-replicator-writer.json"
+WRITER = "/etc/replicator/the-writer.json"  # a placeholder: test_destinations.py
 
 # What `. scripts/load_env.sh` leaves in a deploy shell, abridged.
 LOADED = {

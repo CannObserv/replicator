@@ -410,12 +410,21 @@ dev = [
     "ty",  # beta — deliberately unpinned; non-gating advisory checker
 ]
 
-# cannobserv workspace packages (co-core, co-core-aio) resolve from the local
-# wheelhouse, mirrored from the private GCS index gs://co-gcs-pypi by
-# scripts/sync_wheelhouse.py before `uv sync`/`uv run`. Plain version floors
-# above + find-links here; no hashes, because find-links locks by filename.
-[tool.uv]
-find-links = ["./.wheelhouse"]
+# co-core, co-core-aio and co-core-sync resolve from cannobserv's co-pypi
+# Artifact Registry index ("Path C", #183), and only they do: `explicit` means
+# uv asks it for a package only when [tool.uv.sources] names it, so neither side
+# can shadow the other. It needs a token, so `uv lock` and a `uv sync` that must
+# download run through `bash scripts/co-pypi.sh uv …` (docs/DEPENDENCIES.md).
+# The lock records each file's sha256 (tests/test_dependency_index.py).
+[[tool.uv.index]]
+name = "co-pypi"
+url = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/simple/"
+explicit = true
+
+[tool.uv.sources]
+co-core = { index = "co-pypi" }
+co-core-aio = { index = "co-pypi" }
+co-core-sync = { index = "co-pypi" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
