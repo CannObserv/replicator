@@ -133,6 +133,27 @@ def test_main_reads_the_env_file(tmp_path, capsys, fake_redis_factory):
     assert shapes == [("broker", 6379, "/0", False)]
 
 
+def test_the_env_file_outranks_the_shell(tmp_path, monkeypatch, fake_redis_factory):
+    """A shell's own settings never replace the file's (#187 CR 1).
+
+    The pre-apply ``inflight`` line runs in the agent's shell, not under
+    ``runuser``. Pointed at any reachable redis without the groups, every
+    ``XPENDING`` answers ``NOGROUP`` and the gate prints ``0`` for a worker it
+    never asked about: fail-open, the one thing a gate must not do.
+    """
+    monkeypatch.setenv("REPLICATOR_REDIS_URL", "redis://localhost:6379/15")
+    monkeypatch.setenv("REPLICATOR_CONSUMER_GROUP", "someone-elses.fetch")
+    env = _env_file(tmp_path, "REPLICATOR_REDIS_URL=redis://broker:6379/0")
+    seen = []
+
+    def factory(settings):
+        seen.append((_shape(settings.redis_url), settings.consumer_group))
+        return fake_redis_factory(settings)
+
+    main(["--env-file", str(env)], client_factory=factory)
+    assert seen == [(("broker", 6379, "/0", False), "replicator.fetch")]
+
+
 def test_a_missing_env_file_fails_closed(tmp_path, capsys, fake_redis_factory):
     """Without it the defaults point at localhost, and a 0 from there means nothing."""
     code = main(["--env-file", str(tmp_path / "absent")], client_factory=fake_redis_factory)
