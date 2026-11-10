@@ -11,9 +11,9 @@ reasoning as the prune rule in ``test_workflow_pins.py``.
 **The step rule** is derived, not named: a step whose ``run:`` calls
 ``apt-get`` or ``playwright install`` carries its own bound, so the next such
 step is caught when it is added. Its bound must sit below its job's, or it
-never fires. The wheelhouse sync and ``uv sync`` are left under the job bound
-on purpose. The sizes, and why those two are excluded, are in the comment
-above ``jobs:`` in ``ci.yml``.
+never fires. ``uv sync`` is left under the job bound on purpose. The sizes,
+the re-measure after #183 retired the wheelhouse sync, and why the bounds held,
+are in the comment above ``jobs:`` in ``ci.yml``.
 
 **``apt-get update`` stays non-fatal.** A bound answers a hang, not an exit,
 so it is no reason to make an unrelated vendor's index a gate.

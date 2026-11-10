@@ -39,9 +39,15 @@ concurrency:
 #   (tests/ci/test_workflow_timeouts.py). Max without the apt step, in minutes:
 #     lint   3x3.7      = 11.0 -> 15     test     15 + 3x4.4 = 28.2 -> 30
 #     gcs    3x4.4      = 13.1 -> 15     browser  15 + 3x3.8 = 26.2 -> 30
-# - The wheelhouse sync (median 2.0, max 3.6 min, most of every job) and
-#   `uv sync` stay under the job bound. A step bound on the sync would sit at
-#   the job's own number in lint and gcs.
+# - #183 took the wheelhouse sync out, which was most of every job (median 2.0,
+#   max 3.6 min). On the new shape, from 2 runs (42867724249, 42869513942),
+#   whole job / max without the apt step, in minutes:
+#     lint 0.2 / 0.2   test 2.0 / 1.5   browser 1.4 / 1.0   gcs 0.9 / 0.9
+#   and `uv sync` takes 1-2 s. The rule would give lint 5, gcs 5, test 20 and
+#   browser 20. The bounds stay as sized until about 20 green `main` runs on
+#   this shape, the evidence base they were sized from. Two runs can't size a
+#   bound, and a cold uv cache is untested here. `uv sync` stays under the
+#   job bound.
 # Re-size from `gh run view <id> --json jobs` when a job's shape changes.
 jobs:
   lint:
