@@ -280,6 +280,11 @@ Historical design docs under `docs/plans/` stay as written.
    - `diff deploy/replicator.service /etc/systemd/system/replicator.service` is empty.
 6. After that restart, retire the host's `.wheelhouse/` files. A one-line commit then drops the
    `.gitignore` and `.socraticodeignore` lines.
+7. **SocratiCode re-embed (CR 3).** The manifest changed: nine descriptions, a renamed artifact
+   and a new one. From the main checkout, run the capped
+   `node "$SOCRATICODE_DRIVER" update .` (docs/COMMANDS.md), because a worktree run would index
+   another path. Exit 1 usually means another session holds the lock; check its
+   `codebase_status`.
 
 ## Verification (gates)
 
