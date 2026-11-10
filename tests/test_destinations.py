@@ -281,9 +281,9 @@ def test_every_switch_on_settings_is_scrubbed():
     assert {name: alias for name, alias in switches.items() if alias not in PRODUCTION_ENV} == {}
 
 
-# A field name that says the value may carry a secret: a URL's userinfo, or a
-# credential, token, password or secret by name (#187).
-_CREDENTIAL_FIELD = re.compile(r"_url$|credential|token|password|secret")
+# A field name that says the value may carry a secret: a URL, URI or DSN's
+# userinfo, or a credential, token, password or secret by name (#187).
+_CREDENTIAL_FIELD = re.compile(r"_(url|uri|dsn)$|credential|token|password|secret")
 
 
 def test_every_credential_setting_is_scrubbed():
