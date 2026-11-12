@@ -43,7 +43,7 @@ async def drive(monkeypatch, sweeper, settings, usage=None, deadline: float = 5)
     monkeypatch.setattr("src.worker.retention.sweep", sweeper)
     async with asyncio.timeout(deadline):
         await run_sweeper(
-            root=settings.blob_dir,
+            roots=(settings.blob_dir,),
             settings=settings,
             usage=usage if usage is not None else BlobUsage(),
             stop=sweeper.stop,
@@ -114,7 +114,7 @@ async def test_a_failing_sweep_does_not_stop_the_worker(monkeypatch, retention_s
     monkeypatch.setattr("src.worker.retention.sweep", failing_then_stopping)
     async with asyncio.timeout(5):
         await run_sweeper(
-            root=retention_settings.blob_dir,
+            roots=(retention_settings.blob_dir,),
             settings=retention_settings,
             usage=BlobUsage(),
             stop=stop,
@@ -136,7 +136,10 @@ async def test_a_failing_sweep_leaves_the_last_measurement_alone(monkeypatch, re
     monkeypatch.setattr("src.worker.retention.sweep", failing)
     async with asyncio.timeout(5):
         await run_sweeper(
-            root=retention_settings.blob_dir, settings=retention_settings, usage=usage, stop=stop
+            roots=(retention_settings.blob_dir,),
+            settings=retention_settings,
+            usage=usage,
+            stop=stop,
         )
 
     assert usage.total_bytes == 5_000
@@ -156,7 +159,7 @@ async def test_stopping_mid_interval_does_not_wait_it_out(monkeypatch, retention
 
     monkeypatch.setattr("src.worker.retention.sweep", observing)
     task = asyncio.create_task(
-        run_sweeper(root=settings.blob_dir, settings=settings, usage=BlobUsage(), stop=stop)
+        run_sweeper(roots=(settings.blob_dir,), settings=settings, usage=BlobUsage(), stop=stop)
     )
     await asyncio.wait_for(swept.wait(), 5)
 
@@ -239,7 +242,7 @@ async def test_the_walk_does_not_run_on_the_event_loop_thread(monkeypatch, reten
     monkeypatch.setattr("src.worker.retention.sweep", observing)
     async with asyncio.timeout(5):
         await run_sweeper(
-            root=retention_settings.blob_dir,
+            roots=(retention_settings.blob_dir,),
             settings=retention_settings,
             usage=BlobUsage(),
             stop=stop,

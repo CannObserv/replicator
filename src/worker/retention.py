@@ -12,20 +12,24 @@ thread — a tree of any size walks for long enough to stall a poll otherwise.
 """
 
 import asyncio
+from collections.abc import Sequence
 from pathlib import Path
 
 from src.core.config import Settings
 from src.core.logging import get_logger
-from src.storage.sweeper import BlobUsage, sweep
+from src.storage.sweeper import BlobUsage, SweepResult, combine, sweep
 from src.worker.loop import park
 
 logger = get_logger(__name__)
 
 
 async def run_sweeper(
-    *, root: Path, settings: Settings, usage: BlobUsage, stop: asyncio.Event
+    *, roots: Sequence[Path], settings: Settings, usage: BlobUsage, stop: asyncio.Event
 ) -> None:
-    """Sweep ``root`` until ``stop`` is set, keeping ``usage`` measured.
+    """Sweep ``roots`` until ``stop`` is set, keeping ``usage`` measured.
+
+    Every root in one pass, into one ``usage``: the raw tree and the captures
+    root nested under it (#189) share a disk, so the ceiling reads their sum.
 
     The first sweep runs immediately rather than after one interval: a worker
     restarting behind a long outage should reclaim on boot, not a quarter of an
@@ -34,11 +38,23 @@ async def run_sweeper(
     is briefly optimistic. Sub-second in practice, and erring toward fetching.
     """
     while not stop.is_set():
-        await _sweep_once(root, settings=settings, usage=usage)
+        await _sweep_once(roots, settings=settings, usage=usage)
         await park(stop, settings.blob_sweep_interval_seconds)
 
 
-async def _sweep_once(root: Path, *, settings: Settings, usage: BlobUsage) -> None:
+def _sweep_roots(
+    roots: Sequence[Path], *, ttl_seconds: float, temp_grace_seconds: float
+) -> SweepResult:
+    """Each root swept, the results summed (#189). Blocking: run off the loop."""
+    return combine(
+        [
+            sweep(root, ttl_seconds=ttl_seconds, temp_grace_seconds=temp_grace_seconds)
+            for root in roots
+        ]
+    )
+
+
+async def _sweep_once(roots: Sequence[Path], *, settings: Settings, usage: BlobUsage) -> None:
     """One pass, with its outcome logged and its failure absorbed.
 
     A failing sweep is not a reason to take the worker down. Retention is not
@@ -56,15 +72,15 @@ async def _sweep_once(root: Path, *, settings: Settings, usage: BlobUsage) -> No
         # of any size would otherwise stall a poll — turning retention into a
         # source of consume-path latency, which is exactly backwards.
         result = await asyncio.to_thread(
-            sweep,
-            root,
+            _sweep_roots,
+            roots,
             ttl_seconds=settings.blob_ttl_seconds,
             temp_grace_seconds=settings.blob_temp_grace_seconds,
         )
     except OSError as exc:
         logger.warning(
             "blob sweep failed — retrying next cycle",
-            extra={"blob_dir": str(root), "errno": exc.errno},
+            extra={"blob_dir": str(roots[0]), "errno": exc.errno},
         )
         return
 
