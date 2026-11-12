@@ -329,6 +329,20 @@ class CaptureStores(NamedTuple):
             return None
         return StoreFamily(temp=self.temp, kept=self.kept)
 
+    def writer(self) -> BlobStore:
+        """The store capture writes, which the settings guarantee wherever it is on.
+
+        Raised rather than passed on as ``None``: a broken guarantee would
+        otherwise surface mid-capture as an ``AttributeError``, closed as
+        ``handler_error``, instead of at the boot that wired it.
+        """
+        if self.temp is None:
+            raise RuntimeError(
+                "capture is on with no captures store — the settings must refuse this "
+                "(REPLICATOR_CAPTURE_BUCKET under gcs)"
+            )
+        return self.temp
+
     @property
     def refused(self) -> tuple[BlobStore, ...]:
         """Replicate's refused sources: every captures store this host has."""
@@ -1238,9 +1252,8 @@ async def run(
                         settings=settings,
                         handler=build_capture_handler(
                             renderer=renderer,
-                            # Never the raw store (#189): the captures temp tier,
-                            # which the settings guarantee wherever capture is on.
-                            store=captures.temp,
+                            # Never the raw store (#189): the captures temp tier.
+                            store=captures.writer(),
                             settings=settings,
                             pacer=pacer,
                             usage=usage,

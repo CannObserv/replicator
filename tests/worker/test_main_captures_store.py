@@ -298,3 +298,10 @@ async def test_a_capture_directory_that_cannot_be_made_stops_the_boot(
     ]
     assert line["capture_dir"] == str((tmp_path / "blobs").resolve() / "captures")
     assert line["errno"] == 13
+
+
+def test_capture_on_with_no_captures_store_fails_at_wiring_not_mid_capture():
+    from src.worker.main import CaptureStores
+
+    with pytest.raises(RuntimeError, match="REPLICATOR_CAPTURE_BUCKET"):
+        CaptureStores(temp=None, kept=None).writer()
