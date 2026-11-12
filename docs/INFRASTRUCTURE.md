@@ -229,8 +229,9 @@ The alias table, `REPLICATOR_REPLICATION_ALIASES_FILE` ([ENVIRONMENT.md](ENVIRON
 
 ## The captures bucket (#189)
 
-**Not yet provisioned.** Every capture byte lives here and no raw blob does, so Archiver can be
-granted this bucket alone (archiver#380 D4). Reasoning: [the design](plans/2026-11-12-capture-bucket-design.md).
+Provisioned 2026-11-12 ([design](plans/2026-11-12-capture-bucket-design.md)), live from `ba37286`.
+Every capture byte, no raw blob: Archiver may read it alone (archiver#380 D4). Probed
+as the writer: `customTime` patch ok in `temp/`, 403 elsewhere; delete 403.
 
 | | `gs://co-gcs-captures` |
 |---|---|
