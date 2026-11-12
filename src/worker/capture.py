@@ -12,7 +12,8 @@ Fetch's shape with a browser in place of the HTTP driver:
    budget gains no term. The renderer says what happened to the page; this module
    says what that means on the wire (``docs/contracts/content-capture-issuer-contract.md``).
 4. **Store, then publish** ``capture_stored``: a fact naming absent bytes would be
-   unrepairable by the issuer.
+   unrepairable by the issuer. ``store`` is the captures temp tier, never fetch's
+   (#189): the captures bucket is the one Archiver may read.
 
 No ``content.blobs`` fact and no change fingerprint: a render varies with fonts,
 ads and clocks, so its digest is an address and nothing more.

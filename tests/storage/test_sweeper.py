@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from co_core_sync.drivers.blobstore import LocalBlobStore
 
-from src.storage.sweeper import BLOB_GLOB, TEMP_GLOB, BlobUsage, sweep
+from src.storage.sweeper import BLOB_GLOB, TEMP_GLOB, BlobUsage, SweepResult, combine, sweep
 
 TTL = 600.0
 TEMP_GRACE = 3600.0
@@ -485,3 +485,60 @@ def test_surviving_temporaries_are_reported_separately_from_blobs(store, tmp_pat
     assert (result.blobs_remaining, result.temps_remaining) == (1, 1)
     assert result.temp_bytes_remaining == len(b"partial")
     assert result.bytes_remaining == len(FRESH_DATA) + len(b"partial")
+
+
+# Two roots, one disk (#189): the local captures root nests under `blob_dir`.
+
+
+def test_the_shard_globs_never_reach_into_a_nested_captures_root(tmp_path):
+    """`captures` is not two characters, so the raw root's own sweep cannot see —
+    or reap, or rmdir — a nested captures tree. It has to be swept as a root."""
+    captures = LocalBlobStore(tmp_path / "captures", touch_on_rereference=True)
+    captures.store(AGED_DATA, AGED, "image/png")
+    age(blob_path(tmp_path / "captures", AGED), TTL + 1)
+
+    result = run(tmp_path)
+
+    assert blob_path(tmp_path / "captures", AGED).exists()
+    assert result.blobs_remaining == 0
+
+
+def test_one_pass_over_both_roots_reaps_each_and_sums_what_is_left(tmp_path):
+    raw = LocalBlobStore(tmp_path, touch_on_rereference=True)
+    captures = LocalBlobStore(tmp_path / "captures", touch_on_rereference=True)
+    raw.store(AGED_DATA, AGED, "text/plain")
+    raw.store(FRESH_DATA, FRESH, "text/plain")
+    captures.store(AGED_DATA, AGED, "image/png")
+    captures.store(FRESH_DATA, FRESH, "image/png")
+    age(blob_path(tmp_path, AGED), TTL + 1)
+    age(blob_path(tmp_path / "captures", AGED), TTL + 1)
+
+    result = combine([run(tmp_path), run(tmp_path / "captures")])
+
+    assert not blob_path(tmp_path, AGED).exists()
+    assert not blob_path(tmp_path / "captures", AGED).exists()
+    assert result.blobs_reaped == 2
+    assert result.bytes_reclaimed == 2 * len(AGED_DATA)
+    assert result.blobs_remaining == 2
+    assert result.bytes_remaining == 2 * len(FRESH_DATA), "the ceiling reads one disk"
+
+
+def test_a_missing_second_root_sweeps_to_nothing(tmp_path):
+    """Capture off under `local`: the captures root is never made."""
+    LocalBlobStore(tmp_path, touch_on_rereference=True).store(FRESH_DATA, FRESH, "text/plain")
+
+    result = combine([run(tmp_path), run(tmp_path / "captures")])
+
+    assert result.bytes_remaining == len(FRESH_DATA)
+
+
+def test_the_first_failure_sample_survives_the_sum():
+    result = combine(
+        [
+            SweepResult(reap_failures=1, reap_failure_sample="first"),
+            SweepResult(),
+            SweepResult(reap_failures=1, reap_failure_sample="second"),
+        ]
+    )
+
+    assert (result.reap_failures, result.reap_failure_sample) == (2, "first")

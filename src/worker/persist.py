@@ -5,9 +5,12 @@ and no URL to report. What the handler must prove is that the command names
 bytes this host holds under that digest, and then put them in the permanent
 store under the same one:
 
+0. **The family** (#189): raw or captures, whichever's store minted ``blob_uri``.
+   Every later step takes its temp and kept stores from it, so a capture is kept
+   in the captures bucket and a raw blob never is.
 1. **T3a on the source**, the replicate guard reused: ``blob_uri`` must be one a
-   store here minted — the temp store, or the permanent store itself — matched
-   exactly, never parsed into a path.
+   store here minted — the family's temp store, or its kept store itself —
+   matched exactly, never parsed into a path.
 2. **The two digests agree.** The URI's fingerprint must be
    ``content_fingerprint``; a disagreement, or a malformed digest, is
    ``invalid_source``, and the consumer decides that rather than the issuer.
@@ -32,6 +35,7 @@ revision whose bytes hash to it, so the issuer correlates on ``command_id``.
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
+from typing import NamedTuple
 
 from co_core.pure.models.changes import ContentPersistCommand
 from co_core.pure.util.blobstore import BlobStore, FingerprintMismatch
@@ -68,33 +72,61 @@ _FROM_LOCATE = {
 }
 
 
+class StoreFamily(NamedTuple):
+    """A temp store and the store its bytes are kept in (#189).
+
+    Two on a host that captures: raw (the temp bucket → the permanent bucket) and
+    captures (the capture bucket's ``temp/`` → its ``blobs/``). A persist is served
+    by exactly one, chosen from ``blob_uri`` before anything is read.
+    """
+
+    temp: BlobStore
+    kept: BlobStore
+
+
 def build_persist_handler(
     *,
     store: BlobStore,
     permanent: BlobStore,
     complete: PersistedPublisher,
+    captures: StoreFamily | None = None,
 ) -> PersistHandler:
-    """Wire the persist byte path: T3a, the digest check, the copy, the fact.
+    """Wire the persist byte path: the family, T3a, the digest check, the copy, the fact.
 
     ``store`` is the temp store. ``permanent`` is where bytes are kept, built with
     touch off; it is also a source, for a ``blob_uri`` that already names it.
-    """
+    ``captures`` is the captures family, on a host with a capture bucket (#189).
 
-    async def already_kept(command: ContentPersistCommand) -> bool:
+    **Neither family reaches the other's kept store.** The family is the one whose
+    store minted ``blob_uri`` — the exact ``uri_for`` comparison T3a makes — and
+    every later step takes its stores from it. Archiver may read the captures
+    bucket and never a raw blob, so a crossing in either direction is a breach.
+    A URI neither family minted goes to the raw one, whose refusals are today's.
+    """
+    raw = StoreFamily(temp=store, kept=permanent)
+
+    def family_of(command: ContentPersistCommand) -> StoreFamily:
+        fingerprint = fingerprint_in(command.blob_uri)
+        if captures is None or fingerprint is None:
+            return raw
+        minted = (captures.temp.uri_for(fingerprint), captures.kept.uri_for(fingerprint))
+        return captures if command.blob_uri in minted else raw
+
+    async def already_kept(command: ContentPersistCommand, kept: BlobStore) -> bool:
         # Its own classification: raised inside the refusal's handler, a failure
         # here would otherwise escape the one below it unclassified.
         try:
-            return await asyncio.to_thread(permanent.exists, command.content_fingerprint)
+            return await asyncio.to_thread(kept.exists, command.content_fingerprint)
         except _DEFECTS:
             raise
         except Exception as exc:
             raise _classify(exc, "the permanent store could not be checked") from exc
 
-    async def keep(data: bytes, command: ContentPersistCommand) -> None:
+    async def keep(data: bytes, command: ContentPersistCommand, kept: BlobStore) -> None:
         # Create-if-absent, touch off; the store re-hashes `data` first (#492).
         try:
             await asyncio.to_thread(
-                permanent.store, data, command.content_fingerprint, command.media_type
+                kept.store, data, command.content_fingerprint, command.media_type
             )
         except FingerprintMismatch as exc:
             raise PermanentPersistError(
@@ -125,19 +157,21 @@ def build_persist_handler(
                 "blob_uri names a different digest from content_fingerprint",
                 reason=PersistReason.INVALID_SOURCE,
             )
+        family = family_of(command)
+        kept = family.kept
         # Off the loop thread: `exists` is a network round trip on the object store.
         try:
             source = await asyncio.to_thread(
-                locate_blob, command.blob_uri, store=store, permanent=(permanent,)
+                locate_blob, command.blob_uri, store=family.temp, permanent=(kept,)
             )
         except PermanentReplicateError as exc:
             reason = _FROM_LOCATE[exc.reason]
-            if reason is not PersistReason.BLOB_EXPIRED or not await already_kept(command):
+            if reason is not PersistReason.BLOB_EXPIRED or not await already_kept(command, kept):
                 raise PermanentPersistError(str(exc), reason=reason) from exc
             # Gone from where the command pointed, but already kept (#114 CR 2):
             # the permanent store is the authority on the outcome this command
             # asks for, and `blob_expired` would tell the issuer its bytes are lost.
-            source = LocatedBlob(command.content_fingerprint, permanent)
+            source = LocatedBlob(command.content_fingerprint, kept)
         except _DEFECTS:
             raise
         except Exception as exc:
@@ -161,8 +195,8 @@ def build_persist_handler(
         # Read from the permanent store — the URI named it, or the temp blob had
         # expired — means already kept: the create-if-absent is a known no-op, and
         # skipping it saves a full re-hash and a 412 round trip (#114 CR 6).
-        if source.store is not permanent:
-            await keep(data, command)
+        if source.store is not kept:
+            await keep(data, command, kept)
 
         # After the object exists. A failed publish re-raises: the command stays
         # pending and the redelivery re-runs a no-op, so the fact gets another
@@ -174,6 +208,8 @@ def build_persist_handler(
                 "command_id": command.command_id,
                 "content_fingerprint": source.fingerprint,
                 "size_bytes": len(data),
+                # Which family kept it (#189): the captures bucket or the permanent one.
+                "kept_uri": kept.uri_for(source.fingerprint),
                 "duration_ms": round((time.monotonic() - started) * 1000, 1),
             },
         )

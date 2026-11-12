@@ -208,6 +208,7 @@ only in code. Design: [the plan](plans/2026-09-25-content-addressed-persist-and-
 | `co-gcs-blobs` | temp tier (above) | `co-gcs-replicator-writer` | the custom temp role: create, get, list, update | `co-gcs-test-blobs` |
 | `co-gcs-replicator` | permanent content-addressed store, private, public access prevented, 7-day soft delete, no lifecycle | `co-gcs-replicator-writer` | `objectCreator` + `objectViewer`: create, get, list, never update or delete | `co-gcs-test-replicator` |
 | `co-gcs-publication` | public citable copies (`allUsers` read) | `co-gcs-publication-writer` | `objectCreator`; plus `objectViewer` on `co-gcs-blobs` and `co-gcs-replicator`, the sources of its server-side copy (#114 item 5, [runbook](plans/2026-09-26-server-side-copy-runbook.md)) | `co-gcs-test-publication` |
+| `co-gcs-captures` | every capture byte (#189), [below](#the-captures-bucket-189) | `co-gcs-replicator-writer` | below | none (`-m gcs` uses `co-gcs-test-replicator`) |
 | `co-gcs-replication` | legacy public bucket; publication left it at the cutover (2026-09-25) | no Replicator identity since the [cutover runbook](plans/2026-09-25-publication-cutover-runbook.md)'s phase C (2026-09-26). `co-gcs-cli-writer` (CannObserv/cli) keeps `objectCreator` until the CLI moves onto the Archiver cohort | — | `co-gcs-test-replication` |
 
 The test twins are prevented from public access, have soft delete off and a 1-day age rule, and
@@ -225,6 +226,21 @@ The alias table, `REPLICATOR_REPLICATION_ALIASES_FILE` ([ENVIRONMENT.md](ENVIRON
 **On this VM** it is `/etc/replicator/replication-aliases.json`, `root:exedev 640` like the key files beside it, provisioned 2026-09-10 with one binding, `primary` → `co-gcs-replication`, for the first real `content.replicate` write, after the unprovisioned rehearsal had exercised both streams with zero permanent writes (#86, archiver#197; #81 closes on the write). **Since the publication cutover on 2026-09-25 (#114) it holds two**, `gcs-publication` and `primary`, both binding `co-gcs-publication` with `credentials_file` `/etc/replicator/co-gcs-publication-writer.json`; the previous table is kept beside it as `replication-aliases.json.bak-pre-cutover`. **Since 2026-09-27 it holds `gcs-publication` alone**: `primary` was removed once Archiver's RepSpecs named `gcs-publication` (archiver#281), with the two-alias table kept as `replication-aliases.json.bak-pre-primary-removal`. The alias had been named `primary` because `credentials_alias` is part of archiver's RepSpec document, which freezes on assignment — a different name here means a second RepSpec there, not an edit.
 
 **`prefix` is deliberately empty, and the consequence is worth knowing.** The old bucket held `organizations/` and `console_workspace/`, and the new one takes the same layout; binding the alias to `organizations` would have made the other unreachable, but content may need to live outside that hierarchy, so the alias root is the whole bucket. What that costs is narrower than it sounds: GCS keys are flat, so a prefix was never preventing traversal *out* of anywhere — it would only have stopped a rendered destination landing beside `console_workspace/`. And T4's create-if-absent, backed by `roles/storage.objectCreator` **without** delete, means a stray destination can add an object but can never destroy one. The residual risk is clutter, not loss. Narrow the prefix later if the layout settles; the guard reads it per binding and nothing else changes.
+
+## The captures bucket (#189)
+
+**Not yet provisioned.** Every capture byte lives here and no raw blob does, so Archiver can be
+granted this bucket alone (archiver#380 D4). Reasoning: [the design](plans/2026-11-12-capture-bucket-design.md).
+
+| | `gs://co-gcs-captures` |
+|---|---|
+| Location / class | `US-WEST1` / `STANDARD`; UBLA on, public access prevented |
+| Keys | temp `temp/<sha256>.bin` (touch on), kept `blobs/<sha256>.bin` (touch off) |
+| Lifecycle | `daysSinceCustomTime: 8` and `age: 365`, **each `matchesPrefix: ["temp/"]`**: unscoped, `age` deletes kept captures |
+| Soft delete | 7 days, for the kept tier |
+| Writer | `co-gcs-replicator-writer`: `objectCreator` + `objectViewer`; `replicatorTempBlobWriter` conditioned to `objects/temp/` (verified by an object-level probe, not `testIamPermissions`) |
+| Reader | `archiver-capture-reader`, `objectViewer` (archiver#380); no other identity |
+| Variable | `REPLICATOR_CAPTURE_BUCKET=co-gcs-captures` |
 
 ## The GCS test bucket — the opposite grant, on purpose (#38, #50)
 

@@ -34,7 +34,8 @@ is enforced instead by ``BlobUsage``, which the byte path reads to stop fetching
 
 import stat
 import time
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 # Finished blobs. Two levels of two characters mirrors the shared store's sharding
@@ -155,6 +156,24 @@ def sweep(root: Path, *, ttl_seconds: float, temp_grace_seconds: float) -> Sweep
         reap_failures=blobs.failures + temps.failures,
         reap_failure_sample=blobs.failure_sample or temps.failure_sample,
     )
+
+
+def combine(results: Sequence[SweepResult]) -> SweepResult:
+    """Several roots' passes as one result: one disk, one ceiling (#189).
+
+    The local captures root nests under ``blob_dir``, and ``BLOB_GLOB``'s two-
+    character shard levels can never reach into it — ``captures`` is not a shard
+    — so it is swept as a root of its own. Summed, because ``bytes_remaining`` is
+    what the ceiling reads and the disk does not care which population holds the
+    bytes. The first failure sample is kept, as within one root.
+    """
+    counts = {
+        field.name: sum(getattr(result, field.name) for result in results)
+        for field in fields(SweepResult)
+        if field.name != "reap_failure_sample"
+    }
+    sample = next((r.reap_failure_sample for r in results if r.reap_failure_sample), None)
+    return SweepResult(**counts, reap_failure_sample=sample)
 
 
 def _reap_older_than(root: Path, pattern: str, *, cutoff: float) -> _PassResult:

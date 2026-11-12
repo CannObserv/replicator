@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Literal
 
 from co_core.pure.adapters.bus import streams
+from co_core.pure.util.blobstore import DEFAULT_PREFIX
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -38,6 +39,16 @@ DEFAULT_WRITE_TIMEOUT_SECONDS = 120
 # but the worker still passes this one explicitly — it is the number in the
 # unit's shutdown budget, and the setting below is what an operator tunes.
 DEFAULT_BLOB_TIMEOUT_SECONDS = 30.0
+
+# The two prefixes inside ``REPLICATOR_CAPTURE_BUCKET`` (#189). **Constants, not
+# settings**, because the provisioning repeats each one somewhere this process
+# cannot see: ``temp/`` is the lifecycle rule's ``matchesPrefix`` and the IAM
+# condition that grants the temp tier's ``update``; ``blobs`` is co-core's
+# ``DEFAULT_PREFIX``, so a kept capture is ``gcs_uri(bucket, digest)`` — the
+# persist contract's rule — and Archiver derives it that way. A knob would be a
+# second place to disagree with each (``permanent_bucket``'s argument, twice).
+CAPTURE_TEMP_PREFIX = "temp"
+CAPTURE_KEPT_PREFIX = DEFAULT_PREFIX
 
 
 class Settings(BaseSettings):
@@ -109,6 +120,14 @@ class Settings(BaseSettings):
     # readers derive the location with co-core's ``gcs_uri(bucket, digest)``, whose
     # default it is too, and a second knob would be a second place to disagree.
     permanent_bucket: str = Field(default="", validation_alias="REPLICATOR_PERMANENT_BUCKET")
+
+    # The captures bucket (#189, archiver#380 D4): every capture byte, temp under
+    # ``temp/`` and kept under ``blobs/``, and never a raw blob. Archiver is granted
+    # to read this bucket and no other, which is why it is a third bucket and not a
+    # prefix in either of the two above. Empty means no captures family: required
+    # by the validators below wherever a capture would otherwise land, or be kept,
+    # beside raw bytes. Read under any backend, like ``permanent_bucket``.
+    capture_bucket: str = Field(default="", validation_alias="REPLICATOR_CAPTURE_BUCKET")
 
     # How long one object-store operation may block before it gives up. A
     # setting rather than a constant in the store (CR #8) for the reason every
@@ -655,6 +674,41 @@ class Settings(BaseSettings):
             raise ValueError(
                 "REPLICATOR_PERSIST_ENABLED needs REPLICATOR_PERMANENT_BUCKET — "
                 "persisting copies bytes into the permanent store, and none is configured"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _captures_never_share_a_raw_store(self) -> "Settings":
+        """Every capture byte lands in the captures bucket, and no raw byte does (#189).
+
+        Refused at boot rather than per command, in three shapes. Capture on the
+        object store with no capture bucket has nowhere to land; capture with
+        persist on, on either backend, has no kept store but the raw one; and a
+        capture bucket that *is* a raw bucket makes requirement 1 false by
+        configuration, whatever the code does.
+        """
+        bucket = self.capture_bucket
+        for name, raw in (
+            ("REPLICATOR_BLOB_BUCKET", self.blob_bucket),
+            ("REPLICATOR_PERMANENT_BUCKET", self.permanent_bucket),
+        ):
+            if bucket and bucket == raw:
+                raise ValueError(
+                    f"REPLICATOR_CAPTURE_BUCKET may not be {name} ({raw!r}) — "
+                    "the captures bucket is the one Archiver may read, "
+                    "so no raw blob may land there"
+                )
+        if not self.capture_enabled or bucket:
+            return self
+        if self.blob_backend == "gcs":
+            raise ValueError(
+                "REPLICATOR_CAPTURE_ENABLED with REPLICATOR_BLOB_BACKEND=gcs needs "
+                "REPLICATOR_CAPTURE_BUCKET — captures may not land in the raw temp bucket"
+            )
+        if self.persist_enabled:
+            raise ValueError(
+                "REPLICATOR_CAPTURE_ENABLED with REPLICATOR_PERSIST_ENABLED needs "
+                "REPLICATOR_CAPTURE_BUCKET — a capture may not be kept in the raw permanent store"
             )
         return self
 

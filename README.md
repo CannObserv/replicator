@@ -52,7 +52,8 @@ a command with no fact is a command still being retried, not one that failed.
 **Issuing `content.capture`?** Read
 [`docs/contracts/content-capture-issuer-contract.md`](docs/contracts/content-capture-issuer-contract.md):
 the `reason` registry, the limits, and why a capture's digest is an address, not a change signal.
-The loop is off on every host until the operator enables it; don't issue before `capture: enabled`.
+The loop is off by default; don't issue before a host's `worker ready` says `capture: enabled`.
+Every capture byte lands in its own bucket, `co-gcs-captures`, never beside raw blobs (#189).
 
 **Issuing `content.persist`?** Read
 [`docs/contracts/content-persist-issuer-contract.md`](docs/contracts/content-persist-issuer-contract.md).
@@ -122,7 +123,8 @@ rather than deleting bytes a consumer was promised.
 | `REPLICATOR_BLOB_BACKEND` | `gcs` | Temp blobs live in an object store — **not** the `local` default |
 | `REPLICATOR_BLOB_BUCKET` | `co-gcs-blobs` | The temp-blob bucket that backend writes into |
 | `REPLICATOR_PERSIST_ENABLED` | `true`, since 2026-09-26 | Whether this worker consumes `content.persist` (#114). Default off; turned on here after the broker granted the stream (broker#64). Needs `REPLICATOR_PERMANENT_BUCKET` |
-| `REPLICATOR_CAPTURE_ENABLED` | unset (off) | Whether this worker consumes `content.capture` (#138). Install the browser first (the runbook) |
+| `REPLICATOR_CAPTURE_ENABLED` | `true`, since 2026-10-26 | Whether this worker consumes `content.capture` (#138). Install the browser first (the runbook). Needs `REPLICATOR_CAPTURE_BUCKET` under `gcs` |
+| `REPLICATOR_CAPTURE_BUCKET` | `co-gcs-captures`, since #189 | Every capture byte: temp under `temp/`, kept under `blobs/`; never a raw blob (archiver#380 D4) |
 | `REPLICATOR_PERMANENT_BUCKET` | `co-gcs-replicator`, set at the #114 step 5 deploy | The permanent content-addressed store: a second replicate source, and where `content.persist` writes (#114); unset ⇒ none |
 | `REPLICATOR_BLOB_DIR` | `/var/lib/replicator/blobs` | Temp-storage root; **unused under `gcs`**, kept against a flip back to `local` |
 | `REPLICATOR_REPLICATION_ALIASES_FILE` | `/etc/replicator/replication-aliases.json` | The alias table: `gcs-publication` → `gs://co-gcs-publication` with the publication writer's `credentials_file`, empty prefix — since the #114 cutover (2026-09-25). `primary` bound the same bucket until it was retired on 2026-09-27, and `gs://co-gcs-replication` before that (#86). `root:exedev 640`, like the key files beside it. Unset ⇒ nothing provisioned, every `content.replicate` command refused `alias_unknown` |

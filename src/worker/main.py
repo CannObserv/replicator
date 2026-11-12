@@ -19,7 +19,7 @@ import signal
 import stat
 from collections.abc import Coroutine
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import httpx
 from co_core.pure.adapters.bus import streams
@@ -32,7 +32,12 @@ from google.oauth2 import service_account
 from redis.asyncio import Redis
 
 from src.core.bus_client import build_bus_client
-from src.core.config import Settings, get_settings
+from src.core.config import (
+    CAPTURE_KEPT_PREFIX,
+    CAPTURE_TEMP_PREFIX,
+    Settings,
+    get_settings,
+)
 from src.core.logging import configure_logging, get_logger
 from src.storage.local_store import SweepSafeLocalBlobStore
 from src.storage.sweeper import BlobUsage
@@ -59,7 +64,7 @@ from src.worker.loop import (
     run_loop,
 )
 from src.worker.pacing import HostPacer
-from src.worker.persist import build_persist_handler
+from src.worker.persist import StoreFamily, build_persist_handler
 from src.worker.persist_reporter import build_persist_reporter, build_persisted_publisher
 from src.worker.policy import (
     FetchPolicyMap,
@@ -299,6 +304,118 @@ def build_permanent_stores(settings: Settings) -> tuple[BlobStore, ...]:
         extra={"permanent_bucket": settings.permanent_bucket},
     )
     return (store,)
+
+
+# The captures root under the ``local`` backend (#189): beside the raw shards,
+# never one of them — two characters would make it a shard the raw sweep reaps.
+LOCAL_CAPTURES_DIR = "captures"
+
+
+class CaptureStores(NamedTuple):
+    """Where captures land and are kept on this host (#189, archiver#380 D4).
+
+    ``temp`` is what the capture handler writes, or ``None`` on an object-store
+    host with no capture bucket (where the settings refuse capture). ``kept`` is
+    the captures family's kept store, or ``None`` with no capture bucket.
+    """
+
+    temp: BlobStore | None
+    kept: BlobStore | None
+
+    @property
+    def family(self) -> StoreFamily | None:
+        """Persist's captures family, when both tiers exist."""
+        if self.temp is None or self.kept is None:
+            return None
+        return StoreFamily(temp=self.temp, kept=self.kept)
+
+    def writer(self) -> BlobStore:
+        """The store capture writes, which the settings guarantee wherever it is on.
+
+        Raised rather than passed on as ``None``: a broken guarantee would
+        otherwise surface mid-capture as an ``AttributeError``, closed as
+        ``handler_error``, instead of at the boot that wired it.
+        """
+        if self.temp is None:
+            raise RuntimeError(
+                "capture is on with no captures store — the settings must refuse this "
+                "(REPLICATOR_CAPTURE_BUCKET under gcs)"
+            )
+        return self.temp
+
+    @property
+    def refused(self) -> tuple[BlobStore, ...]:
+        """Replicate's refused sources: every captures store this host has."""
+        return tuple(store for store in self if store is not None)
+
+
+def build_capture_stores(settings: Settings, blob_dir: Path | None) -> CaptureStores:
+    """The captures stores, apart from every raw one, preflighted (#189).
+
+    **Every capture byte in the captures bucket, and no raw one**: the temp tier
+    under ``temp/`` with touch on (its lifecycle rule reads ``customTime``, and
+    the grant's ``update`` is conditioned to that prefix), the kept tier under
+    co-core's default prefix with touch off (append-only, no ``update``).
+
+    Under ``local`` the temp tier is its own root, ``<blob_dir>/captures``, so a
+    capture's ``file://`` URI is never a raw blob's and persist can route it. The
+    directory is made only while capture is on; the store always exists, and a
+    URI under a missing root simply does not.
+    """
+    bucket = settings.capture_bucket
+    temp: BlobStore | None = None
+    kept: BlobStore | None = None
+    if blob_dir is not None:
+        root = blob_dir / LOCAL_CAPTURES_DIR
+        if settings.capture_enabled:
+            try:
+                ensure_directory(root)
+            except OSError as exc:
+                logger.error(
+                    "capture directory is not usable",
+                    extra={"capture_dir": str(root), "errno": exc.errno},
+                )
+                raise
+        temp = SweepSafeLocalBlobStore(root, touch_on_rereference=True)
+    elif bucket:
+        temp = GcsBlobStore(
+            bucket,
+            prefix=CAPTURE_TEMP_PREFIX,
+            timeout_seconds=settings.blob_timeout_seconds,
+            touch_on_rereference=True,
+        )
+    if not bucket:
+        return CaptureStores(temp=temp, kept=None)
+    kept = GcsBlobStore(
+        bucket, prefix=CAPTURE_KEPT_PREFIX, timeout_seconds=settings.blob_timeout_seconds
+    )
+    # One bucket, so one listing proves it for both tiers.
+    try:
+        kept.preflight()
+    except Exception as exc:
+        logger.error(
+            "capture bucket is not usable",
+            extra={"capture_bucket": bucket, "error": f"{type(exc).__name__}: {exc}"},
+        )
+        raise
+    logger.info(
+        "storing captures in their own bucket",
+        extra={
+            "capture_bucket": bucket,
+            # Each is repeated by the provisioning, where nothing here can check
+            # it: `temp/` by the lifecycle rule's matchesPrefix and the IAM
+            # condition, `blobs` by Archiver's kept-location derivation.
+            "capture_temp_prefix": None if blob_dir is not None else CAPTURE_TEMP_PREFIX,
+            "capture_kept_prefix": CAPTURE_KEPT_PREFIX,
+            "capture_dir": None if blob_dir is None else str(blob_dir / LOCAL_CAPTURES_DIR),
+            "blob_ttl_seconds": settings.blob_ttl_seconds,
+            "detail_lifecycle": (
+                "the temp tier is reaped by a daysSinceCustomTime rule scoped to temp/; "
+                "an unscoped rule would reach kept captures"
+            ),
+        },
+    )
+    return CaptureStores(temp=temp, kept=kept)
 
 
 def _unreachable_levels(blob_dir: Path) -> list[tuple[Path, int]]:
@@ -766,6 +883,7 @@ async def run(
     # step goes with it: the directory, the traversal warning, and the sweep.
     store, blob_dir = _prepare_storage(settings)
     permanent_stores = build_permanent_stores(settings)
+    captures = build_capture_stores(settings, blob_dir)
 
     owns_signals = stop is None
     # Explicit connection policy (CannObserv/broker#1 R7). The bare from_url
@@ -845,7 +963,11 @@ async def run(
         aliases = load_alias_table(
             settings.replication_aliases_file,
             # No alias may bind a bucket this host keeps blobs in (#114).
-            host_stores=tuple(b for b in (settings.blob_bucket, settings.permanent_bucket) if b),
+            host_stores=tuple(
+                b
+                for b in (settings.blob_bucket, settings.permanent_bucket, settings.capture_bucket)
+                if b
+            ),
         )
         # One driver per provisioned binding, built **here** and not per command:
         # ``storage.Client()`` resolves ADC synchronously — key files, and on a
@@ -913,7 +1035,9 @@ async def run(
         # wired twice, each half would be individually correct and any state a
         # backend holds — the object store's client pool (#7) — would silently be
         # two (CR #18). Built above, before the broker client, because a storage
-        # misconfiguration should fail the boot before anything is opened.
+        # misconfiguration should fail the boot before anything is opened. The
+        # one deliberate second store is capture's (#189): a different bucket,
+        # because Archiver may read captures and never a raw blob.
         # Rebuilt from the stream *before* the consume loop starts, not as the
         # first pass of the tail task (#19). Started as a peer, the loop would
         # fetch its opening commands against an empty map and pace every host at
@@ -1074,6 +1198,9 @@ async def run(
                 handler=build_replicate_handler(
                     store=store,
                     permanent_stores=permanent_stores,
+                    # Captures are not published (archiver#411): refused by name,
+                    # not by being absent from the sources (#189).
+                    refused_stores=captures.refused,
                     aliases=aliases,
                     writers=writers,
                     # The success fact is the handler's to publish, exactly as
@@ -1099,6 +1226,9 @@ async def run(
                         handler=build_persist_handler(
                             store=store,
                             permanent=permanent_stores[0],
+                            # A capture is kept with captures, never in the raw
+                            # permanent store (#189).
+                            captures=captures.family,
                             complete=build_persisted_publisher(client=client),
                         ),
                         reporter=build_persist_reporter(client=client),
@@ -1108,8 +1238,9 @@ async def run(
                 ]
             ),
             # The fourth command loop (#138), when enabled and the browser
-            # started. Fetch's pacer, store, usage and ceiling: a capture is an
-            # origin request that lands bytes in the same tree.
+            # started. Fetch's pacer, usage and ceiling: a capture is an origin
+            # request on the same disk. **Not fetch's store** (#189): every capture
+            # byte lands in the captures bucket, or the local captures root.
             *(
                 []
                 if capture_consumer is None or renderer is None
@@ -1121,7 +1252,8 @@ async def run(
                         settings=settings,
                         handler=build_capture_handler(
                             renderer=renderer,
-                            store=store,
+                            # Never the raw store (#189): the captures temp tier.
+                            store=captures.writer(),
                             settings=settings,
                             pacer=pacer,
                             usage=usage,
@@ -1145,7 +1277,15 @@ async def run(
             *(
                 []
                 if blob_dir is None
-                else [run_sweeper(root=blob_dir, settings=settings, usage=usage, stop=stop)]
+                else [
+                    run_sweeper(
+                        # The captures root too (#189): one disk, one ceiling.
+                        roots=(blob_dir, blob_dir / LOCAL_CAPTURES_DIR),
+                        settings=settings,
+                        usage=usage,
+                        stop=stop,
+                    )
+                ]
             ),
             # Passed last: `_exit_failure` picks the raised failure by argument
             # order, and this task absorbs its own errors anyway, so it should

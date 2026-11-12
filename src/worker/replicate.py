@@ -103,7 +103,11 @@ class LocatedBlob(NamedTuple):
 
 
 def locate_blob(
-    blob_uri: str, *, store: BlobStore, permanent: Sequence[BlobStore] = ()
+    blob_uri: str,
+    *,
+    store: BlobStore,
+    permanent: Sequence[BlobStore] = (),
+    refused: Sequence[BlobStore] = (),
 ) -> LocatedBlob:
     """The blob ``blob_uri`` names and the store holding it, or a terminal refusal (T3a).
 
@@ -129,8 +133,20 @@ def locate_blob(
     and re-fetching fixes nothing; ``blob_expired`` means it named the right blob
     too late, which a fresh fetch under a new ``command_id`` does fix (MUST-7
     inverted — for replicate the scheduling obligation is the issuer's).
+
+    **``refused`` are stores this host keeps bytes in that may not be a source**
+    — the captures stores, for replicate (#189). A URI one of them minted is
+    ``invalid_source``, said as a capture, before anything else is asked: on a
+    ``local`` host with no permanent store, ``gs://`` is a scheme no source mints,
+    and the backend-flip branch below would answer ``blob_expired`` — telling the
+    issuer to re-fetch something no fetch makes publishable.
     """
     fingerprint = fingerprint_in(blob_uri)
+    if fingerprint is not None and any(r.uri_for(fingerprint) == blob_uri for r in refused):
+        raise _refuse(
+            "blob_uri names a capture; captures are not replicated (archiver#411)",
+            ReplicateReason.INVALID_SOURCE,
+        )
     stores = (store, *permanent)
     # Each store's URI for this fingerprint, temp first. At most one can match:
     # a URI names a bucket (or a root) and a prefix, and no two stores share both.
@@ -359,6 +375,7 @@ def build_replicate_handler(
     *,
     store: BlobStore,
     permanent_stores: Sequence[BlobStore] = (),
+    refused_stores: Sequence[BlobStore] = (),
     aliases: AliasTable,
     writers: Mapping[str, ConditionalWriter],
     complete: CompletePublisher,
@@ -388,7 +405,8 @@ def build_replicate_handler(
     path owns ``blob_available``, because the loop's seam sees failures only.
 
     ``permanent_stores`` are the other stores a ``blob_uri`` may name (#114); the
-    bytes are read from whichever one minted it.
+    bytes are read from whichever one minted it. ``refused_stores`` are the
+    captures stores (#189): a ``blob_uri`` they minted is ``invalid_source``.
     """
 
     async def handle(command: ContentReplicateCommand) -> None:
@@ -433,7 +451,11 @@ def build_replicate_handler(
         # rule as the byte path — ``tests/worker/test_storage_offloop.py``.
         try:
             source = await asyncio.to_thread(
-                locate_blob, command.blob_uri, store=store, permanent=permanent_stores
+                locate_blob,
+                command.blob_uri,
+                store=store,
+                permanent=permanent_stores,
+                refused=refused_stores,
             )
         except (PermanentReplicateError, ValueError, TypeError, AttributeError, LookupError):
             # A refusal is already classified; the rest are defects on this side

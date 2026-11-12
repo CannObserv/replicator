@@ -477,3 +477,50 @@ def test_a_stranger_bucket_is_invalid_even_beside_a_local_temp_store(store, perm
         locate_blob(stranger, store=store, permanent=(permanent_store,))
 
     assert caught.value.reason is ReplicateReason.INVALID_SOURCE
+
+
+# --------------------------------------------------------------------------
+# T3a refuses a capture (#189, archiver#380 D4) — on purpose, not by accident
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def captures_temp():
+    """The captures temp tier's shape: its own bucket, the ``temp`` prefix, touch on."""
+    return GcsBlobStore(
+        "a-captures-bucket",
+        prefix="temp",
+        touch_on_rereference=True,
+        client=FakeClient(FakeBucket("a-captures-bucket")),
+    )
+
+
+def test_a_capture_is_refused_invalid_even_where_its_bytes_are_present(
+    gcs_store, permanent_store, captures_temp
+):
+    """Publishing captures is archiver#411's decision. Until then a capture's URI is
+    named as one and refused before any read — not refused because its store moved."""
+    minted = captures_temp.store(b"artifact bytes", FINGERPRINT, "image/png")
+
+    with pytest.raises(PermanentReplicateError) as caught:
+        locate_blob(minted, store=gcs_store, permanent=(permanent_store,), refused=(captures_temp,))
+
+    assert caught.value.reason is ReplicateReason.INVALID_SOURCE
+    assert "capture" in str(caught.value)
+
+
+def test_a_capture_is_invalid_not_expired_on_a_local_host_with_no_permanent_store(
+    store, captures_temp
+):
+    """Without the explicit check, `gs://` is a scheme no store here mints, and the
+    #7 flip branch would answer `blob_expired` — telling the issuer to re-fetch."""
+    minted = captures_temp.uri_for(FINGERPRINT)
+
+    with pytest.raises(PermanentReplicateError) as caught:
+        locate_blob(minted, store=store, refused=(captures_temp,))
+
+    assert caught.value.reason is ReplicateReason.INVALID_SOURCE
+
+
+def test_a_refused_store_does_not_widen_or_narrow_the_others(store, stored, captures_temp):
+    assert locate_blob(stored, store=store, refused=(captures_temp,)).fingerprint == FINGERPRINT

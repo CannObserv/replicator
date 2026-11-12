@@ -111,7 +111,7 @@ This is the cheap part, taken because it is cheap. It is **not** a substitute fo
 provider, and a `gcs-<role>` alias binds `co-gcs-<role>` or its test twin `co-gcs-test-<role>` and no
 other bucket. The name therefore determines the bucket, and one typo can no longer bind the public
 bucket under a private name or the reverse. No alias may bind a bucket the host keeps blobs in, the
-temp or the permanent store, because aliases are publication destinations. A binding that breaks
+temp, the permanent or (since #189) the captures bucket, because aliases are publication destinations. A binding that breaks
 either rule is dropped at load, so commands naming it are refused `alias_unknown`. co-core will export the pattern (cannobserv#493) so
 Archiver's RepSpec schema validates `credentials_alias` against the same text and a bad name fails
 when the RepSpec is saved.
@@ -178,6 +178,9 @@ echo scan reached after three rounds of an incomplete deny-list. Anything else i
 `invalid_source`. This also keeps [#7](https://github.com/CannObserv/replicator/issues/7) honest: the
 scheme is deliberately "the consumer's business", so an object-store backend re-states this guard
 rather than inheriting a path-shaped one.
+
+⚙ **A capture is not a source (#189).** A captures-bucket URI is refused `invalid_source` by name,
+first: publishing captures is archiver#411's call, and a `local` host would otherwise answer `blob_expired`.
 
 ### T4 — Overwrite: a redelivery must never destroy an artifact
 
@@ -334,7 +337,7 @@ token on the failure fact. Following the precedent in
 | the rendered path escapes the alias root, or `object_options` names a container the alias does not allow | `invalid_destination` |
 | the destination exists with different bytes | `destination_conflict` |
 | the blob is gone — a temp blob past its window, or a permanent URI with nothing behind it (never persisted, or deleted) | `blob_expired` |
-| `blob_uri` is not a reference any store this host reads minted (T3a): the temp store, or the permanent store if configured | `invalid_source` |
+| `blob_uri` is not a reference any store this host reads minted (T3a): the temp store, or the permanent store if configured; a capture's, always (#189) | `invalid_source` |
 
 `invalid_destination` covers both the path guard and the container guard for the reason
 `invalid_request_options` covers two fields on the fetch side: the issuer's remedy is identical

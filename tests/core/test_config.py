@@ -713,3 +713,82 @@ def test_the_capture_group_may_not_collide_with_another(monkeypatch, other):
 
     with pytest.raises(ValidationError, match="different groups"):
         get_settings()
+
+
+# The captures bucket (#189, archiver#380 D4).
+
+
+def test_there_is_no_default_capture_bucket(monkeypatch):
+    monkeypatch.delenv("REPLICATOR_CAPTURE_BUCKET", raising=False)
+
+    assert get_settings().capture_bucket == ""
+
+
+def test_the_capture_prefixes_are_constants_the_provisioning_repeats():
+    """Not settings: the lifecycle rule and the IAM condition carry ``temp/``, and
+    Archiver's derivation carries ``blobs`` — a knob would disagree with each."""
+    assert config_module.CAPTURE_TEMP_PREFIX == "temp"
+    assert config_module.CAPTURE_KEPT_PREFIX == "blobs"
+
+
+def test_capture_on_the_object_store_needs_a_capture_bucket(monkeypatch):
+    """Captures would otherwise have nowhere to land but the raw bucket."""
+    monkeypatch.setenv("REPLICATOR_CAPTURE_ENABLED", "true")
+    monkeypatch.setenv("REPLICATOR_BLOB_BACKEND", "gcs")
+    monkeypatch.setenv("REPLICATOR_BLOB_BUCKET", "a-temp-bucket")
+    monkeypatch.delenv("REPLICATOR_CAPTURE_BUCKET", raising=False)
+
+    with pytest.raises(ValidationError, match="REPLICATOR_CAPTURE_BUCKET"):
+        get_settings()
+
+
+def test_capture_and_persist_need_a_capture_bucket_on_any_backend(monkeypatch):
+    """Under ``local`` too: the only other kept store is the raw one."""
+    monkeypatch.setenv("REPLICATOR_CAPTURE_ENABLED", "true")
+    monkeypatch.setenv("REPLICATOR_PERSIST_ENABLED", "true")
+    monkeypatch.setenv("REPLICATOR_PERMANENT_BUCKET", "a-permanent-bucket")
+    monkeypatch.delenv("REPLICATOR_BLOB_BACKEND", raising=False)
+    monkeypatch.delenv("REPLICATOR_CAPTURE_BUCKET", raising=False)
+
+    with pytest.raises(ValidationError, match="REPLICATOR_CAPTURE_BUCKET"):
+        get_settings()
+
+
+def test_capture_on_the_local_backend_without_persist_needs_no_bucket(monkeypatch):
+    """Dev and tests: captures land in the local captures root and nothing keeps them."""
+    monkeypatch.setenv("REPLICATOR_CAPTURE_ENABLED", "true")
+    monkeypatch.delenv("REPLICATOR_BLOB_BACKEND", raising=False)
+    monkeypatch.delenv("REPLICATOR_PERSIST_ENABLED", raising=False)
+    monkeypatch.delenv("REPLICATOR_CAPTURE_BUCKET", raising=False)
+
+    assert get_settings().capture_enabled is True
+
+
+def test_production_shaped_capture_settings_are_accepted(monkeypatch):
+    monkeypatch.setenv("REPLICATOR_CAPTURE_ENABLED", "true")
+    monkeypatch.setenv("REPLICATOR_PERSIST_ENABLED", "true")
+    monkeypatch.setenv("REPLICATOR_BLOB_BACKEND", "gcs")
+    monkeypatch.setenv("REPLICATOR_BLOB_BUCKET", "a-temp-bucket")
+    monkeypatch.setenv("REPLICATOR_PERMANENT_BUCKET", "a-permanent-bucket")
+    monkeypatch.setenv("REPLICATOR_CAPTURE_BUCKET", "a-captures-bucket")
+
+    assert get_settings().capture_bucket == "a-captures-bucket"
+
+
+@pytest.mark.parametrize("other", ["REPLICATOR_BLOB_BUCKET", "REPLICATOR_PERMANENT_BUCKET"])
+def test_the_capture_bucket_is_never_a_raw_bucket(monkeypatch, other):
+    """Equal to either, requirement 1 is false by configuration: a raw blob and a
+    capture would share the bucket Archiver is granted to read."""
+    monkeypatch.setenv("REPLICATOR_BLOB_BACKEND", "gcs")
+    monkeypatch.setenv("REPLICATOR_BLOB_BUCKET", "a-temp-bucket")
+    monkeypatch.setenv("REPLICATOR_PERMANENT_BUCKET", "a-permanent-bucket")
+    monkeypatch.setenv(
+        "REPLICATOR_CAPTURE_BUCKET",
+        {
+            "REPLICATOR_BLOB_BUCKET": "a-temp-bucket",
+            "REPLICATOR_PERMANENT_BUCKET": "a-permanent-bucket",
+        }[other],
+    )
+
+    with pytest.raises(ValidationError, match=other):
+        get_settings()

@@ -926,7 +926,8 @@ async def test_run_sweeps_alongside_the_consume_loop(monkeypatch, fake_redis, tm
     async with asyncio.timeout(5):
         await run(stop)
 
-    assert swept == [blob_dir.resolve()]
+    # Both roots in the one pass: the raw tree and the captures root (#189).
+    assert swept == [blob_dir.resolve(), blob_dir.resolve() / "captures"]
 
 
 async def test_the_sweeper_and_the_byte_path_share_one_measurement(
@@ -1144,7 +1145,7 @@ async def test_the_sweeper_is_given_an_absolute_root(monkeypatch, fake_redis, tm
     roots = []
 
     async def recording_run_sweeper(**kwargs):
-        roots.append(kwargs["root"])
+        roots.append(kwargs["roots"][0])
 
     monkeypatch.setattr("src.worker.main.run_sweeper", recording_run_sweeper)
 
@@ -1295,7 +1296,9 @@ async def test_the_local_backend_is_what_a_bare_environment_gets(monkeypatch, fa
 
     await run(_stopped())
 
-    assert built == [(tmp_path / "blobs").resolve()]
+    # The raw store first; the captures root's store is built under any local
+    # host (#189) and is `test_main_captures_store.py`'s.
+    assert built == [(tmp_path / "blobs").resolve(), (tmp_path / "blobs").resolve() / "captures"]
 
 
 async def test_the_local_backend_restarts_the_retention_clock_on_a_re_store(
@@ -1324,7 +1327,9 @@ async def test_the_local_backend_restarts_the_retention_clock_on_a_re_store(
 
     await run(_stopped())
 
-    (store,) = built
+    # The fetch store; the captures root's is `test_main_captures_store.py`'s (#189).
+    store = built[0]
+    assert store.root == (tmp_path / "blobs").resolve()
     fingerprint = hashlib.sha256(b"bytes").hexdigest()
     path = tmp_path / "blobs" / fingerprint[0:2] / fingerprint[2:4] / f"{fingerprint}.bin"
     store.store(b"bytes", fingerprint, "text/plain")
