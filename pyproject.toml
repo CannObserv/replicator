@@ -42,8 +42,9 @@ dependencies = [
     # Read by hand: `changes.py` moved in `FetchPolicyState`'s docstring alone
     # (cannobserv#640). Since broker#95 revoked Watcher's publish grant, an
     # unordered frame is a replayed pre-F1 Watcher frame or an Archiver frame
-    # without `generation`, and the ratchet drops either without a sound. No
-    # code moved, so `fetch_policy_supersedes` is unchanged. #189's blobstore
+    # without `generation`, and where an ordered frame holds the slot the ratchet
+    # drops either without a sound. No code moved, so `fetch_policy_supersedes`
+    # is unchanged. #189's blobstore
     # surface (`pure/util/blobstore.py`, `drivers/blobstore/` and
     # `drivers/__init__.py`) is byte-identical, so `gcs_uri(bucket, digest,
     # prefix)`, `GcsBlobStore(prefix=…)` and both lazy `__getattr__` tables are
