@@ -80,8 +80,7 @@ makes production untestable (#38).
 - **The scan.** No module under `src/` or `tests/` may contain
   `co-gcs-replication` (the bucket) or `co-gcs-replicator` (the old writer SA, deleted 2026-10-05, whose
   key file's basename and email local part it also was; since #114 also the
-  permanent store's bucket name), or since #189 `co-gcs-captures` (the bucket Archiver
-  reads), in a string literal. AST-based, docstrings included, and it excludes only itself. Unit
+  permanent store's bucket name), or `co-gcs-captures` (#189), in a string literal. AST-based, docstrings included, and it excludes only itself. Unit
   tests use `example-replication-bucket` and `example-internal-bucket`; the
   co-pypi reader `co-pypi-reader.json` stays legal, because
   `test_replicate_guards.py` names it on purpose to prove the path guard refuses
@@ -96,8 +95,7 @@ makes production untestable (#38).
   unscrubbed switches failed 5 tests after `load_env` (#182);
   `test_every_switch_on_settings_is_scrubbed` now derives them from `Settings`, and
   `test_every_credential_setting_is_scrubbed` each credential, `REPLICATOR_REDIS_URL`
-  among them (#187), and `test_every_bucket_setting_is_scrubbed` each `*_bucket`,
-  `REPLICATOR_CAPTURE_BUCKET` among them (#189). The blob pair was
+  among them (#187), and `test_every_bucket_setting_is_scrubbed` each `*_bucket` (#189). The blob pair was
   added in #77 CR round 2, when loading that file and then running this document's
   own `-m integration` command failed the policy-replay test on `constructed a real
   GcsBlobStore('co-gcs-blobs')` — the construction guard working, but only after
@@ -148,7 +146,7 @@ REPLICATOR_TEST_PERMANENT_BUCKET=co-gcs-test-replicator \
 ```
 
 **Run it explicitly after touching `_no_production_destination` or
-`PRODUCTION_ENV`.** With those three variables unset every marked test skips (17 at #189),
+`PRODUCTION_ENV`.** With those three variables unset every marked test skips,
 and a plain `uv run pytest` then reports a clean pass with nothing saying a whole
 population was never exercised. That fixture is exactly the code whose blast radius
 *is* the skipped population: #77 CR round 2 widened `PRODUCTION_ENV` to scrub

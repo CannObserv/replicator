@@ -17,7 +17,7 @@ adopters had built.
 | T1 — no credential travels, and none reaches the journal | shipped; `AliasBinding` holds at most a host key-file *path* (`credentials_file`, #114), never key material, asserted structurally |
 | T2 — an alias resolves only if provisioned on this host | shipped (`REPLICATOR_REPLICATION_ALIASES_FILE`); names follow [the alias naming rule](#alias-names) since #114 |
 | T3 — containment, and the path guard | shipped for `gcs`; the `gdrive`/`ia` rows arrive with those providers |
-| T3a — resolve by fingerprint, never by path | shipped; since #114 a `blob_uri` may name the temp store **or** the host's permanent store. Since #189 a capture's URI is refused by name |
+| T3a — resolve by fingerprint, never by path | shipped; since #114 a `blob_uri` may name the temp store **or** the host's permanent store |
 | T4 — the absent/matching/differing table | shipped for `gcs`, and **verified in CI** against `co-gcs-test-replication` — all three rows, every push (#53), through the upload and, since #114, the server-side copy. Was a hand-run against production, which could never be repeated: that bucket grants no `delete`, so the conflict row could not reset itself (#38) |
 | T5 — `ia` gated on an operator act | shipped by construction: `ia` cannot be provisioned at all yet |
 | T6 — `public_url` never echoed from the command | shipped, **reworded** — see below (#36) |
@@ -179,13 +179,8 @@ echo scan reached after three rounds of an incomplete deny-list. Anything else i
 scheme is deliberately "the consumer's business", so an object-store backend re-states this guard
 rather than inheriting a path-shaped one.
 
-⚙ **A capture is not a source (#189).** Since captures moved to their own bucket
-(`co-gcs-captures`, archiver#380 D4), a `blob_uri` the captures store minted, temporary or kept, is
-refused `invalid_source` **by name** ("names a capture"), before anything else is asked. Before #189 a
-capture's temporary URI passed T3a, because the temp store had minted it; that was an accident of
-sharing a store, not a decision. Publishing captures is archiver#411's to decide. The check comes
-first on purpose: on a `local` host with no permanent store, a `gs://` capture URI would otherwise
-reach the backend-flip rule and be refused `blob_expired`, telling the issuer to re-fetch.
+⚙ **A capture is not a source (#189).** A captures-bucket URI is refused `invalid_source` by name,
+first: publishing captures is archiver#411's call, and a `local` host would otherwise answer `blob_expired`.
 
 ### T4 — Overwrite: a redelivery must never destroy an artifact
 
@@ -342,7 +337,7 @@ token on the failure fact. Following the precedent in
 | the rendered path escapes the alias root, or `object_options` names a container the alias does not allow | `invalid_destination` |
 | the destination exists with different bytes | `destination_conflict` |
 | the blob is gone — a temp blob past its window, or a permanent URI with nothing behind it (never persisted, or deleted) | `blob_expired` |
-| `blob_uri` is not a reference any store this host reads minted (T3a): the temp store, or the permanent store if configured. A capture's URI is always this row (#189) | `invalid_source` |
+| `blob_uri` is not a reference any store this host reads minted (T3a): the temp store, or the permanent store if configured; a capture's, always (#189) | `invalid_source` |
 
 `invalid_destination` covers both the path guard and the container guard for the reason
 `invalid_request_options` covers two fields on the fetch side: the issuer's remedy is identical
