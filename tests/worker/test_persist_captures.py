@@ -131,3 +131,14 @@ async def test_without_a_captures_family_a_captures_uri_is_not_ours(raw, capture
 
     assert caught.value.reason is PersistReason.INVALID_SOURCE
     assert not raw.kept.exists(FINGERPRINT)
+
+
+async def test_the_journal_says_where_a_persist_kept_the_bytes(raw, captures, caplog):
+    """The read-back after go-live proves a capture landed with captures (#189)."""
+    uri = captures.temp.store(DATA, FINGERPRINT, "image/png")
+
+    with caplog.at_level("INFO", logger="src.worker.persist"):
+        await handler(raw, captures, [])(command(uri))
+
+    (record,) = [r for r in caplog.records if r.getMessage() == "persisted a blob"]
+    assert record.kept_uri == captures.kept.uri_for(FINGERPRINT)

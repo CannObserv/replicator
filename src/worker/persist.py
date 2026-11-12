@@ -208,6 +208,8 @@ def build_persist_handler(
                 "command_id": command.command_id,
                 "content_fingerprint": source.fingerprint,
                 "size_bytes": len(data),
+                # Which family kept it (#189): the captures bucket or the permanent one.
+                "kept_uri": kept.uri_for(source.fingerprint),
                 "duration_ms": round((time.monotonic() - started) * 1000, 1),
             },
         )
