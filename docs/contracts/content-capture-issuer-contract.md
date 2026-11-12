@@ -1,12 +1,18 @@
 # The `content.capture` issuer contract
 
-**Status: built, off by default, not yet enabled on any host.** `src/` runs a `content.capture` loop
-when `REPLICATOR_CAPTURE_ENABLED` is set. The broker grant is live since 2026-10-20T15:06Z
-(broker#114); the pinned browser has to be installed first
-([runbook](../plans/2026-10-25-viewport-capture-runbook.md)). **Archiver issues only after this host
-reports `capture: enabled`**: Replicator creates the group, then Archiver writes the stream (broker#116).
-The loop renders a page in a confined headless browser, stores the PNG in the temporary store and
-reports the outcome on `content.artifacts` (#138, cannobserv#571).
+**Status: shipped, and live on `co-replicator` since 2026-10-26T16:42:36Z** (the journal's first
+`worker ready` with `capture: enabled`). `src/` runs a `content.capture` loop when
+`REPLICATOR_CAPTURE_ENABLED` is set. It is off by default on every host: the pinned browser has to be
+installed first ([runbook](../plans/2026-10-25-viewport-capture-runbook.md)), and the loop creates its
+group at boot. The broker grant is live since 2026-10-20T15:06Z (broker#114). **Archiver may issue**,
+on a host whose `worker ready` reports `capture: enabled`: Replicator creates the group, then Archiver
+writes the stream (broker#116). The loop renders a page in a confined headless browser, stores the PNG
+in **the captures bucket** and reports the outcome on `content.artifacts` (#138, cannobserv#571).
+
+**Since #189, every capture byte lives in `gs://co-gcs-captures`, and no raw fetched blob does**
+(archiver#380 D4). A capture's temporary copy is at `temp/<sha256>.bin` there, and its kept copy, once
+persisted, at `blobs/<sha256>.bin`. Captures stored before #189 stay where they were, in
+`co-gcs-blobs` and `co-gcs-replicator`, and are not migrated.
 
 **Audience:** Archiver, the sole issuer ([archiver#380](https://github.com/CannObserv/archiver/issues/380)).
 
@@ -46,8 +52,9 @@ bound is refused up front. The whole render, launch to screenshot, sits inside
    its own, and **every TCP connection the page opens** checked against the same blocked destinations
    as a fetch (#89, #95): the navigation, each redirect hop, subresources, scripts, WebSockets,
    beacons. UDP (QUIC, WebRTC) is off. The user agent is Chromium's own `HeadlessChrome`.
-4. **Stores, then publishes `capture_stored`.** The PNG lands in the temporary store under its sha256,
-   with fetched blobs' TTL. A fact never names absent bytes.
+4. **Stores, then publishes `capture_stored`.** The PNG lands in the captures bucket's temporary tier
+   under its sha256, with fetched blobs' TTL. A fact never names absent bytes. A capture and a fetched
+   blob with the same bytes are two objects in two buckets (#189).
 
 **What `capture_stored` says:**
 
@@ -56,6 +63,9 @@ bound is refused up front. The whole render, launch to screenshot, sits inside
 - `media_type` is `image/png`; `image_width` and `image_height` are read from the PNG, not the viewport.
 - `final_url` is the main frame's URL when the screenshot was taken.
 - `captured_at` is when the screenshot returned; `blob_expires_at` is the earliest the bytes may go.
+- `blob_uri` names the temporary object: `gs://co-gcs-captures/temp/<sha256>.bin` in production.
+  Under the `local` backend it is a `file://` URI under the worker's own captures root,
+  `<REPLICATOR_BLOB_DIR>/captures/`, never a fetched blob's.
 
 **A capture is not a fetch occasion.** No `content.blobs` fact, no change fingerprint, no
 conditional request.
@@ -73,8 +83,14 @@ reaper** that re-issues under a fresh `command_id`, as the fetch contract's MUST
 
 **C3 — Persist what you keep before `blob_expires_at`.** Send `content.persist` with the fact's
 `content_fingerprint`, `blob_uri` and `media_type`, verbatim
-([persist contract](content-persist-issuer-contract.md), P1, P4). The temp store mints the URI, so
-persist's source guard accepts it as it accepts a fetched blob's.
+([persist contract](content-persist-issuer-contract.md), P1, P4). The captures temp tier mints the
+URI, so persist's source guard accepts it, and **keeps the image in the captures bucket**, at
+`gcs_uri("co-gcs-captures", digest)` (prefix `blobs`, the default). A capture's pre-#189 URI, in
+`co-gcs-blobs`, is kept in `co-gcs-replicator` as before.
+
+**A capture is not a replicate source.** `content.replicate` naming a capture's URI, temporary or kept,
+is refused `invalid_source` ([replicate contract](content-replicate-issuer-contract.md)). Publishing
+captures is archiver#411's decision.
 
 **C4 — Send resolved values.** The command carries no headers and no credential, and Replicator adds
 none. A page behind a login captures its login page.
@@ -122,6 +138,11 @@ disk ceiling, are retried with no fact, exempt from the delivery ceiling, as for
   page usually closes as `wait_timeout`. Launch and the screenshot share the 30 s, so a page that
   uses all three waits *and* takes a long screenshot (31 s measured for a 28108 px page) can still
   overrun into the deadline's `handler_error`.
+- **`REPLICATOR_CAPTURE_BUCKET`** names the captures bucket (#189). Settings construction refuses
+  capture without it on the `gcs` backend, and capture with persist on any backend. It may not be
+  `REPLICATOR_BLOB_BUCKET` or `REPLICATOR_PERMANENT_BUCKET`. The boot line `storing captures in their
+  own bucket` names it and both prefixes. The bucket and its grants are in
+  [INFRASTRUCTURE.md](../INFRASTRUCTURE.md#the-captures-bucket-189).
 - `worker ready` reports `capture: enabled` with its group and consumer, `capture: unavailable`, or
   `capture: disabled`.
 
@@ -130,7 +151,8 @@ disk ceiling, are retried with no fact, exempt from the delivery ceiling, as for
 Against the three tests in [replicator-boundaries.md](replicator-boundaries.md#the-three-tests):
 
 1. **No durable per-resource history.** The image is temporary and rebuildable by rendering again;
-   keeping it is the issuer's `content.persist`.
+   keeping it is the issuer's `content.persist`. Which bucket a capture lands in is storage layout, not
+   history: the bucket is chosen by command stream, never by anything the command says.
 2. **Cross-command coordination over resources only the fetcher sees**, twice: the browser (one render
    at a time, its memory cap) and the host's tolerance (the shared pacer). Both are Replicator's.
 3. **No domain vocabulary read.** `info_source_id` is echoed, so `capture_reporter.py` is on

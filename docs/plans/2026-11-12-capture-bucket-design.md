@@ -1,7 +1,7 @@
 ---
 title: Captures in their own bucket, co-gcs-captures (archiver#380 D4)
 date: 2026-11-12
-status: proposed — awaiting operator approval
+status: approved 2026-11-12 (operator)
 issue: "#189 (epic #154)"
 ---
 

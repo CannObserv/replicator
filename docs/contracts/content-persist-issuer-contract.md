@@ -31,10 +31,20 @@ and the refusal vocabulary.
 | `blob_uri` | Where to read the bytes. It is resolved by fingerprint and never parsed as a path (T3a). |
 | `media_type` | Stored as object metadata on the first write. Replicator holds only bytes and cannot recover it. |
 
-**The digest is the address.** The object lands at `gs://<permanent bucket>/blobs/<sha256>.bin`. The
+**The digest is the address.** The object lands at `gs://<kept bucket>/blobs/<sha256>.bin`. The
 success fact carries no URL, and a reader derives the location with co-core's
-`blobstore.gcs_uri(bucket, digest)`, from the bucket it is configured with: `co-gcs-replicator` in
-production. **Record the digest, never a URL.**
+`blobstore.gcs_uri(bucket, digest)`. **Record the digest, never a URL.**
+
+**Which bucket depends on where `blob_uri` points (#189, archiver#380 D4).** Two families, each a
+temporary tier and the bucket its bytes are kept in, and neither ever reaches the other's:
+
+| `blob_uri` was minted by | Kept in (production) |
+|---|---|
+| the captures bucket, `temp/` or `blobs/` (a capture since #189) | `co-gcs-captures` |
+| the raw temp store, or the permanent store (every fetched blob, and a capture stored before #189) | `co-gcs-replicator` |
+
+So the bucket a reader derives from is the one `blob_uri` named: a `blob_uri` in `co-gcs-captures` is
+kept in `co-gcs-captures`, and anything else in `co-gcs-replicator`. `blob_persisted` does not say which.
 
 **No domain echo, on either fact.** A persisted blob belongs to every revision whose bytes hash to it,
 so an echoed domain key would claim a one-to-one link that is false. Correlate on `command_id` and map
@@ -42,19 +52,20 @@ it to your own revision rows.
 
 ## What Replicator does
 
-1. **T3a on the source.** `blob_uri` must be a URI one of this host's stores minted: the temp store, or
-   the permanent store itself. It is matched exactly, by deriving the URI from the fingerprint, and the
-   message's path is never read.
+1. **The family, then T3a on the source.** The family is the one whose store minted `blob_uri`; a URI
+   neither minted is the raw family's to refuse. `blob_uri` must then be a URI one of the family's stores
+   minted: its temporary tier, or its kept store itself. It is matched exactly, by deriving the URI from
+   the fingerprint, and the message's path is never read.
 2. **The two digests must agree.** The fingerprint in `blob_uri` must equal `content_fingerprint`.
-3. **Read, then create if absent,** into the permanent store. The store hashes the bytes it is about to
+3. **Read, then create if absent,** into the family's kept store. The store hashes the bytes it is about to
    write (cannobserv#492), so bytes that do not match their name never reach the tier nothing may
    delete from. Touch is off: a permanent object has no retention clock.
 4. **Then `blob_persisted`**, with the digest and the stored size. A fact is never published for absent
    bytes.
 
 **A second persist of the same bytes is a no-op success** that publishes `blob_persisted` again, and so
-is a persist whose `blob_uri` already names the permanent store. So is one whose temp blob has expired
-when the permanent store already holds its digest: the permanent store decides whether the bytes are
+is a persist whose `blob_uri` already names the kept store. So is one whose temp blob has expired
+when the family's kept store already holds its digest: the kept store decides whether the bytes are
 kept, and a temp blob gone *after* a persist is not a loss. An object already at the address holds
 these bytes by construction, so no conflict outcome exists. A later persist under another `media_type`
 is still a success and does not change the stored type.
@@ -96,10 +107,10 @@ co-core's contract shape.
 
 | Condition | `reason` | Issuer's remedy |
 |---|---|---|
-| `blob_uri` is not a URI this host's stores minted, `content_fingerprint` is malformed, or the two name different digests | `invalid_source` | Fix the plumbing; re-fetching fixes nothing |
-| The bytes left the temp tier before the persist ran, and the permanent store does not hold the digest | `blob_expired` | A fresh fetch, then a persist of what it returns |
-| The stored bytes do not hash to their own fingerprint, so the permanent store refused them | `source_corrupt` | A fresh fetch, as for `blob_expired`. It is a storage fault on Replicator's side, and its journal records it |
-| The permanent store refused the write with a terminal status (403, 404) | `store_refused` | Wait for the operator, then re-issue under a fresh `command_id`. The host cannot write there |
+| `blob_uri` is not a URI this host's stores minted, `content_fingerprint` is malformed, or the two name different digests. A captures URI on a host with no captures bucket is one | `invalid_source` | Fix the plumbing; re-fetching fixes nothing |
+| The bytes left the temp tier before the persist ran, and the family's kept store does not hold the digest | `blob_expired` | A fresh fetch, then a persist of what it returns |
+| The stored bytes do not hash to their own fingerprint, so the kept store refused them | `source_corrupt` | A fresh fetch, as for `blob_expired`. It is a storage fault on Replicator's side, and its journal records it |
+| The kept store refused the write with a terminal status (403, 404) | `store_refused` | Wait for the operator, then re-issue under a fresh `command_id`. The host cannot write there |
 
 The loop's own two apply to this stream as to the others: **`unsupported_schema_version`** (a command
 this version cannot read) and **`handler_error`** (a defect on Replicator's side, after the delivery
@@ -119,6 +130,10 @@ temp store".
   Before that, the boot-time group creation is refused and the worker does not start.
 - The worker's identity needs `create` and `get` on the permanent bucket (`objectCreator` +
   `objectViewer`), and never `update` or `delete`. It also needs `get` on the temp bucket.
+- **`REPLICATOR_CAPTURE_BUCKET`** gives the host a captures family (#189). Settings construction refuses
+  persist and capture on together without it, so a capture is never kept in the permanent bucket. On
+  it, the worker holds `objectCreator` + `objectViewer`, and `update` only under `temp/`
+  ([INFRASTRUCTURE.md](../INFRASTRUCTURE.md#the-captures-bucket-189)).
 - `worker ready` reports `persist: enabled` with its group and consumer, or `persist: disabled`.
 
 ## Charter check
