@@ -60,8 +60,8 @@ def test_every_file_from_the_index_is_hashed_and_there_is_a_wheel():
 
 
 def test_the_locked_versions_sit_inside_the_pin():
-    """The index lists 0.43.0 and 0.44.0 [measured 2026-11-12, #184]; the pin's
-    upper bound keeps them out until the change that moves it."""
+    """The index lists nothing past 0.44.0 [measured 2026-11-12, #184]; the pin's
+    upper bound keeps the next minor out until the change that moves it."""
     pins = {
         (r := Requirement(spec)).name: r.specifier
         for spec in PYPROJECT["project"]["dependencies"]
@@ -69,7 +69,7 @@ def test_the_locked_versions_sit_inside_the_pin():
     }
     for package in _from_index():
         assert package["version"] in pins[package["name"]], package
-        assert package["version"] not in SpecifierSet(">=0.43"), package
+        assert package["version"] not in SpecifierSet(">=0.45"), package
 
 
 def test_no_other_source_kind_names_a_wheelhouse():

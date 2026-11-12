@@ -26,7 +26,7 @@ Override vendored `brainstorming`'s defaults:
 
 Python ≥3.12, uv, pytest, ruff. `ty` (`uv run ty check`) is a **non-gating** type checker — no pre-commit or CI gate.
 
-**co-core comes from the private co-pypi index, not PyPI.** `uv lock` and a cold `uv sync` need its token: `bash scripts/co-pypi.sh uv …`, never the writer's ADC. Pin the current minor — `>=0.42.0,<0.43` — and raise the **patch** floor with every co-core feature the code starts depending on. Both, and each skew so far: [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md).
+**co-core comes from the private co-pypi index, not PyPI.** `uv lock` and a cold `uv sync` need its token: `bash scripts/co-pypi.sh uv …`, never the writer's ADC. Pin the current minor — `>=0.44.0,<0.45` — and raise the **patch** floor with every co-core feature the code starts depending on. Both, and each skew so far: [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md).
 
 <!-- BEGIN socraticode-policy -->
 ## Code Exploration Policy
