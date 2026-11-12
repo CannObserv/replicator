@@ -61,6 +61,9 @@ PRODUCTION_ENV = (
     "REPLICATOR_BLOB_BACKEND",
     "REPLICATOR_BLOB_BUCKET",
     "REPLICATOR_PERMANENT_BUCKET",
+    # Production sets it (#189). Every `*_bucket` setting must be here, and
+    # test_every_bucket_setting_is_scrubbed fails on one that is not.
+    "REPLICATOR_CAPTURE_BUCKET",
     # Scrubbed with the bucket it requires, or the day an operator turns persist
     # on, every `Settings()` here refuses persist-without-a-bucket (#114 CR 3).
     "REPLICATOR_PERSIST_ENABLED",

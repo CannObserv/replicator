@@ -91,7 +91,11 @@ SCANNED = (REPO / "src", REPO / "tests")
 # which `tests/worker/test_replicate_guards.py` names on purpose to prove the
 # path guard refuses a real secret. Refusing every `/etc/replicator/` path would
 # have taken that test with it.
-FORBIDDEN_DESTINATIONS = ("co-gcs-replication", "co-gcs-replicator")
+#
+# `co-gcs-captures` — the captures bucket (#189), the one Archiver is granted to
+# read. A test writing there puts fixture bytes in front of the dashboard, and
+# its test stand-in is the permanent twin, `co-gcs-test-replicator`.
+FORBIDDEN_DESTINATIONS = ("co-gcs-replication", "co-gcs-replicator", "co-gcs-captures")
 
 # The test bucket is `co-gcs-test-replication` and not `co-gcs-replication-test`
 # precisely so the check above can stay a substring match. A suffixed name
@@ -307,6 +311,24 @@ def test_every_credential_setting_is_scrubbed():
     assert "redis_url" in credentials, "the derivation is broken, not the scrub"
     assert all(isinstance(alias, str) for alias in credentials.values()), credentials
     assert {n: alias for n, alias in credentials.items() if alias not in PRODUCTION_ENV} == {}
+
+
+def test_every_bucket_setting_is_scrubbed():
+    """Each ``*_bucket`` setting's variable is in ``PRODUCTION_ENV`` (#189).
+
+    A bucket chooses where bytes land, so one inherited from the production shell
+    points a test's ``Settings()`` at a production bucket. Neither guard above
+    matches the name: the switch guard derives ``bool`` fields and the credential
+    guard secrets. Derived like both, so the next bucket fails here.
+    """
+    buckets = {
+        name: field.validation_alias
+        for name, field in Settings.model_fields.items()
+        if name.endswith("_bucket")
+    }
+    assert {"blob_bucket", "permanent_bucket"} <= set(buckets), "the derivation is broken"
+    assert all(isinstance(alias, str) for alias in buckets.values()), buckets
+    assert {n: alias for n, alias in buckets.items() if alias not in PRODUCTION_ENV} == {}
 
 
 def test_the_test_bucket_variable_has_no_fallback():
