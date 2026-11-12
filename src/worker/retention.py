@@ -80,7 +80,8 @@ async def _sweep_once(roots: Sequence[Path], *, settings: Settings, usage: BlobU
     except OSError as exc:
         logger.warning(
             "blob sweep failed — retrying next cycle",
-            extra={"blob_dir": str(roots[0]), "errno": exc.errno},
+            # `path` because there are two roots (#189): the one that failed.
+            extra={"blob_dir": str(roots[0]), "path": exc.filename, "errno": exc.errno},
         )
         return
 

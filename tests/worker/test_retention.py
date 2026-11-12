@@ -280,3 +280,30 @@ async def test_a_sweep_with_nothing_to_report_stays_silent(monkeypatch, retentio
         await drive(monkeypatch, sweeper, retention_settings)
 
     assert caplog.records == []
+
+
+async def test_a_failure_under_the_captures_root_names_that_root(
+    monkeypatch, retention_settings, caplog
+):
+    """Two roots since #189: the warning names the path that failed, not the first root."""
+    stop = asyncio.Event()
+    captures = retention_settings.blob_dir / "captures"
+
+    def failing_under_captures(root, **kwargs):
+        if root == captures:
+            stop.set()
+            raise PermissionError(13, "Permission denied", str(captures / "ab"))
+        return SweepResult()
+
+    monkeypatch.setattr("src.worker.retention.sweep", failing_under_captures)
+    with caplog.at_level("WARNING", logger="src.worker.retention"):
+        async with asyncio.timeout(5):
+            await run_sweeper(
+                roots=(retention_settings.blob_dir, captures),
+                settings=retention_settings,
+                usage=BlobUsage(),
+                stop=stop,
+            )
+
+    (record,) = [r for r in caplog.records if r.getMessage().startswith("blob sweep failed")]
+    assert record.path == str(captures / "ab")
