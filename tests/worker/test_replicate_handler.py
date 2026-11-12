@@ -147,6 +147,21 @@ async def test_a_blob_uri_this_store_did_not_mint_is_refused(store, aliases):
     assert exc.reason is ReplicateReason.INVALID_SOURCE
 
 
+async def test_a_capture_is_refused_as_one_before_any_write(store, aliases, tmp_path):
+    """Captures are not published (#189, archiver#411): refused by name, its bytes
+    present and every other guard passed, with the writer never reached."""
+    captures = LocalBlobStore(tmp_path / "captures", touch_on_rereference=True)
+    minted = captures.store(b"artifact bytes", FINGERPRINT, "image/png")
+    handler = build_replicate_handler(
+        store=store, refused_stores=(captures,), aliases=aliases, writers=WRITERS, complete=_unused
+    )
+
+    exc = await refusal(handler, command(minted))
+
+    assert exc.reason is ReplicateReason.INVALID_SOURCE
+    assert "capture" in str(exc)
+
+
 async def test_a_blob_that_has_been_swept_is_expired(store, aliases):
     """The distinguishable terminal reason #29 asks for.
 
