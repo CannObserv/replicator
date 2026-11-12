@@ -10,8 +10,9 @@ dependencies = [
     # Floor is 0.42.0, and it carries no new feature: a one-minor catch-up
     # (#184), in #179's shape, and the first pin move on the co-pypi index
     # (#183). `co-core-aio` and `co-core-sync` 0.42.0 require
-    # `co-core>=0.42,<0.43`, so the three move together. 0.42.0's breaks are all
-    # in the WordPress facades (cannobserv#547, Phase Z of cannobserv#229).
+    # `co-core>=0.42,<0.43`, so the three move together. 0.42.0's breaks are
+    # Phase Z's removals (cannobserv#547, of cannobserv#229): the WordPress
+    # facades and the models, mixins and workflows only they used.
     #
     # **`scripts/co_core_closure_diff.py 0.41.0 0.42.0`** (#145), verbatim:
     #
