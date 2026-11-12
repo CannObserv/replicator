@@ -330,7 +330,9 @@ Full ordered host steps are posted on #189.
 - **Nothing keeps the lifecycle rule, the IAM condition and the `temp` constant in step.** Only the
   boot line and the provisioning record name them together. That is the same limit as the raw temp
   tier's rule against `REPLICATOR_BLOB_TTL_SECONDS`.
-- **A capture in the PEL at the restart** was rendered by the old code and stored in `co-gcs-blobs`.
-  It completes with that URI. Archiver treats it as pre-split, metadata only.
+- **No fact names the old bucket after the restart.** A capture still in the PEL wasn't published,
+  so its redelivery renders again under the new code and lands in `co-gcs-captures`. One that did
+  publish was already acked. What stays old is a persist of a pre-split URI: it is kept in
+  `co-gcs-replicator`, which is Archiver's derivation (corrected in CR 4).
 - **Archiver's reader is verified on Archiver's side.** Nothing here can see the
   `archiver-capture-reader` grant.
