@@ -1,7 +1,8 @@
 # Dependencies
 
-Where co-core comes from, how to reach it, and its pin. `AGENTS.md` keeps the
-rule; the reasoning is here. The unit and the deploy recipe are in
+Where co-core comes from, how to reach it, and its pin; then the `uv_build` bound and
+CI's uv. `AGENTS.md` keeps the co-core rule and `[build-system]`'s comment keeps the
+bound's; the reasoning is here. The unit and the deploy recipe are in
 [DEPLOYMENT.md](DEPLOYMENT.md); every variable is in [ENVIRONMENT.md](ENVIRONMENT.md).
 
 ## The co-pypi index
@@ -84,3 +85,37 @@ Pin the current minor — `>=0.45.0,<0.46`, on all three. The **patch** floor is
 **The 0.10 → 0.13 jump (#77) was the first departure from "pin the current minor", and what justified it is evidence rather than judgement.** The hazard that rule guards is payload fields moving under `extra="ignore"`; every module this service imports proved byte-identical between the two wheels — `pure/models/changes.py`, `pure/adapters/bus/{envelope,exceptions}.py`, `effects/{bus,fetch,gcs}.py`, `pure/util/{hashing,gcs}.py`, and all of `co_core_aio` bar its `__version__`. Only `streams.py` gained anything (`group_name`, `stream_kind` — cannobserv#384), and Replicator imports no `co_v1` adapter, which is where 0.13.2's other changes landed. That `diff -rq` of both wheels from the then-wheelhouse took a minute and turned a deferred change into a safe one.
 
 **Diff the import closure before every pin move**, a single minor included: #136 needed it for one. The version distance is not the risk, the moved surface is, and the import lines are not the surface. At 0.19 → 0.36 (#140), `changes.py`'s import of `extract.canonical` brought in the `pure/extract` package, which had changed (cannobserv#523), and no import line in Replicator names it. `scripts/co_core_closure_diff.py OLD NEW` (#145) walks the closure from `src/` and `scripts/` through all three wheels at each version, fetched first ([Moving the pin](#moving-the-pin)). It prints the counts, a verdict per file that isn't identical, the Requires-Dist delta and the closure's third-party imports, and `--diff` adds each changed file's code diff. Paste the report into the pin comment and write the reasons around it by hand. `version-only` and `docstrings-only` need no reading. `changed` does, a model under `extra="ignore"` above all. `added` and `removed` are modules joining or leaving the closure. An **Unresolved imports** line names a module that is imported but isn't in the wheel, which fails at import. A **Not parsed** line names a file whose imports the walk couldn't follow. Each prints only when there's something to list. The walk follows `TYPE_CHECKING` imports and lists dynamic ones without following them. At 0.45.0 that's co-core-sync's two lazy `__getattr__` sites in `drivers/` and `drivers/blobstore/`. Both are expected, because each target is named again under `TYPE_CHECKING`. A new site whose targets aren't named there is a gap to read by hand. Flags: `--root`, `--package`, `--wheels` (required); the defaults are this repo's.
+
+## The build backend's bound, and CI's uv
+
+`[build-system]` requires `uv_build>=0.13.0,<0.14`: **one minor, the host's uv's.**
+ci.yml's four `setup-uv` steps take the same range as `version:`, verbatim.
+setup-uv installs the newest uv inside it (`resolution-strategy: highest`), so
+patches arrive on their own and a minor needs a deliberate bump.
+`tests/ci/test_workflow_pins.py` holds the five strings equal and the range to
+one minor.
+
+**When to bump:** the host's `/usr/local/bin/uv`, which the operator installs, is
+past the bound when the deploy sync prints
+`build_system.requires = [...] does not contain the current uv version`. Read
+uv's changelog for the new minor's `[tool.uv.build-backend]` notes (this repo
+sets `module-name` and `module-root`), then move all five strings. `uv.lock`
+doesn't record build requirements, so nothing relocks.
+
+**What the warning costs: noise, not a fetch** [measured, #195]. Out of bound,
+uv 0.13.5 still builds the editable install with its built-in backend: `-v`
+logs `Performing direct build` before the warning, and makes no network request.
+The bound sat unchanged from #1 until #195. It printed on every sync from uv 0.13's
+release (CI, 2026-10-09) or the host's upgrade (2026-10-22), in the output a deploy
+reads to see which packages moved.
+
+**Rejected:**
+
+- **`[tool.uv] required-version`.** setup-uv would read it, which leaves one
+  string. But uv enforces it on every command, the unit's
+  `uv run --frozen --no-sync` included. A host uv upgrade would refuse service
+  start (measured: exit 2).
+- **An exact CI pin.** Nothing moves `with.version`. Dependabot's
+  `github-actions` updater rewrites the SHA only, and `uv` is parked (#169).
+- **Unpinned.** CI took each new minor the day it shipped, which is how the
+  warning got into CI logs.

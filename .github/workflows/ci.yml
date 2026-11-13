@@ -69,6 +69,10 @@ jobs:
           # Stated, not defaulted: v9 flipped it to false, and the cache holds
           # co-core from the private co-pypi index in a public repo (#76).
           prune-cache: true
+          # uv_build's bound in pyproject.toml, verbatim: CI takes the newest
+          # patch inside it and never a minor it excludes (#195). The bump
+          # rule is in docs/DEPENDENCIES.md.
+          version: ">=0.13.0,<0.14"
 
       - name: Install Python
         run: uv python install 3.12
@@ -143,6 +147,7 @@ jobs:
         with:
           enable-cache: true
           prune-cache: true
+          version: ">=0.13.0,<0.14"
 
       - name: Install Python
         run: uv python install 3.12
@@ -278,6 +283,7 @@ jobs:
         with:
           enable-cache: true
           prune-cache: true
+          version: ">=0.13.0,<0.14"
 
       - name: Install Python
         run: uv python install 3.12
@@ -395,6 +401,7 @@ jobs:
         with:
           enable-cache: true
           prune-cache: true
+          version: ">=0.13.0,<0.14"
 
       - name: Install Python
         run: uv python install 3.12
