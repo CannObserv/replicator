@@ -571,8 +571,9 @@ async def run_policy_reader(
             # A frame the broker served fine and co-core could not decode. That
             # is evidence the broker is answering, so it clears the outage
             # counter rather than leaving the next real failure to resume
-            # backoff from an exponent nothing is still waiting on (CR #9).
-            consecutive_failures = 0
+            # backoff from an exponent nothing is still waiting on (CR #9) —
+            # and says so, or a run ending here recovers unlogged (#188).
+            consecutive_failures = _recovered(consecutive_failures)
             skips += 1
             # Which is exactly why the run needs its own bound (CR #14): with
             # backoff cleared and no blocking read reached, a producer emitting
@@ -601,7 +602,7 @@ async def run_policy_reader(
             )
             await _backoff(stop, settings, consecutive_failures)
             continue
-        consecutive_failures = 0
+        consecutive_failures = _recovered(consecutive_failures)
         skips = 0
         for message in messages:
             policies.apply(message.payload)
@@ -610,6 +611,27 @@ async def run_policy_reader(
             # the consume loop's idle tick is: fakeredis returns from a blocking
             # read immediately, which would busy-spin this loop in tests.
             await park(stop, IDLE_SLEEP_SECONDS)
+
+
+def _recovered(consecutive_failures: int) -> int:
+    """Log the end of a failure run, if there was one, and return the reset counter.
+
+    The consume loop's ``poll cycle recovered`` for this task (#188): without
+    it the journal shows when the tail's failures stopped, never that it came
+    back. Called from both places a run ends — a good read, and a malformed frame
+    skipped, which is the same evidence that the broker answered.
+
+    ``after_failures`` counts every failure in the run, including stuck-cursor
+    passes (an id-less frame ``_skip_poison`` refused). Those log an ERROR
+    rather than the cycle WARNING, so the count can exceed the WARNINGs
+    before it.
+    """
+    if consecutive_failures:
+        logger.info(
+            "fetch policy poll cycle recovered",
+            extra={"after_failures": consecutive_failures},
+        )
+    return 0
 
 
 async def _backoff(stop: asyncio.Event, settings: Settings, consecutive_failures: int) -> None:
