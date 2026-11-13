@@ -213,8 +213,14 @@ def test_range_check_bites(tmp_path):
         "jobs:\n  a:\n    steps:\n      - uses: " + pin + "\n"
         "  b:\n    steps:\n      - uses: " + pin + "\n"
         "        with:\n          version: '>=0.14.0,<0.15'\n"
+        # A half-done bump: one step left on the old range.
+        "  c:\n    steps:\n      - uses: " + pin + "\n"
+        "        with:\n          version: '>=0.13.0,<0.14'\n"
     )
-    assert _off_range_setup_uv_steps([other], ">=0.14.0,<0.15") == [("other.yml", None)]
+    assert _off_range_setup_uv_steps([other], ">=0.14.0,<0.15") == [
+        ("other.yml", None),
+        ("other.yml", ">=0.13.0,<0.14"),
+    ]
 
 
 # What the co-pypi index resolves (#183): the packages the prune must keep out of the cache.
