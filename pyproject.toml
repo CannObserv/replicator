@@ -7,7 +7,48 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
-    # Floor is 0.44.0, and it carries no new feature: **three minors (0.41 ->
+    # Floor is 0.45.0, and it carries no new feature: a one-minor catch-up
+    # (#192), in #184's shape. `co-core-aio` and `co-core-sync` 0.45.0 require
+    # `co-core>=0.45,<0.46`, so the three move together. 0.45.0's one library
+    # change is co/v1's `EventModel.url`, which reads the Event's `website` link
+    # and falls back to `link`, and a malformed `links` embed now raises
+    # `CoV1ResponseAnomaly` (cannobserv#663). Both sit outside this closure.
+    #
+    # **`scripts/co_core_closure_diff.py 0.44.0 0.45.0`** (#145), verbatim:
+    #
+    # ## Import closure, 0.44.0 → 0.45.0
+    #
+    # Roots `src`, `scripts`; packages `co_core`, `co_core_aio`, `co_core_sync`.
+    #
+    # 58 files at 0.44.0, 58 at 0.45.0. 3 not identical:
+    #
+    # - `version-only` co_core/__init__.py
+    # - `version-only` co_core_aio/__init__.py
+    # - `version-only` co_core_sync/__init__.py
+    #
+    # **Requires-Dist:**
+    #
+    # - co_core: unchanged
+    # - co_core_aio: removed `co-core<0.45,>=0.44`; added `co-core<0.46,>=0.45`
+    # - co_core_sync: removed `co-core<0.45,>=0.44`; added `co-core<0.46,>=0.45`
+    #
+    # **Third-party imports** (at 0.45.0): `google`, `google_auth_oauthlib`, `googleapiclient`, `httpx`, `pydantic`, `redis`, `requests`, `urllib3`.
+    #
+    # **Dynamic imports, not followed:**
+    #
+    # - co_core_sync/drivers/__init__.py:89 `import_module(f"{__name__}.{module}")`
+    # - co_core_sync/drivers/blobstore/__init__.py:32 `import_module(f"{__name__}.{module}")`
+    #
+    # Nothing to read by hand: the three files are `version-only`, and the
+    # closure is the same with `tests/` as a root. The dynamic imports are the
+    # same two as at 0.44.0. Outside the closure, 0.45.0 changed eight co/v1
+    # adapter modules, `pure/models/link.py` and `co_core_sync/services/`'s
+    # `event.py` and `transcript.py`, and added or removed no module. Nothing in
+    # `src/`, `scripts/` or `tests/` reaches any of them.
+    #
+    # Previously:
+    #
+    # Floor was 0.44.0, and it carried no new feature: **three minors (0.41 ->
     # 0.44)** caught up at once (#184), the first pin move on the co-pypi index
     # (#183). `co-core-aio` and `co-core-sync` 0.44.0 require
     # `co-core>=0.44,<0.45`, so the three move together. Each minor's break
@@ -18,33 +59,9 @@ dependencies = [
     # `wa_legislature_id` rule (cannobserv#637, #653) and the Emit-side header
     # refusal read below (cannobserv#635).
     #
-    # **`scripts/co_core_closure_diff.py 0.41.0 0.44.0`** (#145), verbatim:
-    #
-    # ## Import closure, 0.41.0 → 0.44.0
-    #
-    # Roots `src`, `scripts`; packages `co_core`, `co_core_aio`, `co_core_sync`.
-    #
-    # 58 files at 0.41.0, 58 at 0.44.0. 4 not identical:
-    #
-    # - `version-only` co_core/__init__.py
-    # - `changed` co_core/pure/models/changes.py
-    # - `version-only` co_core_aio/__init__.py
-    # - `version-only` co_core_sync/__init__.py
-    #
-    # **Requires-Dist:**
-    #
-    # - co_core: unchanged
-    # - co_core_aio: removed `co-core<0.42,>=0.41`; added `co-core<0.45,>=0.44`
-    # - co_core_sync: removed `co-core<0.42,>=0.41`; added `co-core<0.45,>=0.44`
-    #
-    # **Third-party imports** (at 0.44.0): `google`, `google_auth_oauthlib`, `googleapiclient`, `httpx`, `pydantic`, `redis`, `requests`, `urllib3`.
-    #
-    # **Dynamic imports, not followed:**
-    #
-    # - co_core_sync/drivers/__init__.py:89 `import_module(f"{__name__}.{module}")`
-    # - co_core_sync/drivers/blobstore/__init__.py:32 `import_module(f"{__name__}.{module}")`
-    #
-    # Read by hand, the one `changed` file, `pure/models/changes.py`:
+    # **Diffing the closure, 0.41.0 → 0.44.0** (58 files, both sides): 4 not
+    # identical, 3 of them `version-only`. Read by hand, the one `changed` file,
+    # `pure/models/changes.py`:
     #
     # - `ContentFetchCommandEmit` (0.44.0, cannobserv#635) refuses any header but
     #   `user-agent` beside `render="browser"`, where it refused only the two
@@ -405,9 +422,9 @@ dependencies = [
     # at module load, so a skew cannot reach a running worker at all. Additive over
     # 0.8.0 for everything the fetch path uses — no field on ContentFetchCommand,
     # BlobAvailableEvent or FetchFailedEvent moved between the two.
-    "co-core>=0.44.0,<0.45",
-    "co-core-aio[bus,gcs]>=0.44.0,<0.45",
-    "co-core-sync[gcs]>=0.44.0,<0.45",
+    "co-core>=0.45.0,<0.46",
+    "co-core-aio[bus,gcs]>=0.45.0,<0.46",
+    "co-core-sync[gcs]>=0.45.0,<0.46",
     "fastapi>=0.126.0,<1",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.5.0,<3",
