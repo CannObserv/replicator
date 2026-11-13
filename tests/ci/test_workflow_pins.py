@@ -19,6 +19,11 @@ on GitHub-hosted runners. ``uv cache prune --ci`` drops pre-built wheels and
 keeps wheels *built from source*, so the prune covers co-core only while
 uv.lock pins it to a wheel: the lock check below holds that premise.
 
+**The uv version.** Each setup-uv step's ``version:`` is ``uv_build``'s
+``[build-system]`` bound, verbatim and one minor wide. Unpinned, CI took uv 0.13
+the day it shipped, and every ``uv sync`` then warned that the bound excluded it
+(#195). The bump rule is in docs/DEPENDENCIES.md.
+
 **The runner.** ``ubuntu-24.04``, not ``ubuntu-latest``: CI matches the host's
 distro. ``ubuntu-latest`` moves to 26.04 between 2026-10-19 and 2026-11-19
 (actions/runner-images#14748). When the host moves, CI moves with it: on the
@@ -158,6 +163,58 @@ def test_prune_check_reads_a_second_workflow(tmp_path):
         "jobs:\n  build:\n    steps:\n      - uses: astral-sh/setup-uv@" + "0" * 40 + " # v10.3.3\n"
     )
     assert _unpruned_setup_uv_steps([CI, other]) == [("other.yml", {})]
+
+
+PYPROJECT = REPO_ROOT / "pyproject.toml"
+# `>=X.Y.Z,<X.(Y+1)`: one minor, the shape the rule asks for.
+_ONE_MINOR = re.compile(r"^>=(\d+)\.(\d+)\.\d+,<(\d+)\.(\d+)$")
+
+
+def _backend_range(pyproject: Path) -> str:
+    """The ``uv_build`` specifier in ``[build-system].requires``, spaces dropped."""
+    requires = tomllib.loads(pyproject.read_text(encoding="utf-8"))["build-system"]["requires"]
+    (spec,) = [r.removeprefix("uv_build") for r in requires if r.startswith("uv_build")]
+    return spec.replace(" ", "")
+
+
+def _off_range_setup_uv_steps(workflows: list[Path], wanted: str) -> list[tuple[str, object]]:
+    return [
+        (name, step.get("with", {}).get("version"))
+        for name, step in _setup_uv_steps(workflows)
+        if step.get("with", {}).get("version") != wanted
+    ]
+
+
+def test_the_backend_bound_is_one_minor():
+    """An open top (``>=0.13``) would let CI take every uv minor unannounced,
+    the drift #195 found."""
+    m = _ONE_MINOR.match(_backend_range(PYPROJECT))
+    assert m, f"uv_build bound is not `>=X.Y.Z,<X.(Y+1)`: {_backend_range(PYPROJECT)!r}"
+    major, minor, top_major, top_minor = map(int, m.groups())
+    assert (top_major, top_minor) == (major, minor + 1), m.group(0)
+
+
+def test_every_setup_uv_step_installs_the_backends_range():
+    """CI's uv stays inside the build backend's bound, so its ``uv sync`` never
+    warns that the bound excludes the running uv (#195)."""
+    workflows = sorted(WORKFLOWS.glob("*.y*ml"))
+    assert _setup_uv_steps(workflows), "no setup-uv step found: the derivation broke"
+    bad = _off_range_setup_uv_steps(workflows, _backend_range(PYPROJECT))
+    assert not bad, f"setup-uv `version:` differs from uv_build's bound: {bad}"
+
+
+def test_range_check_bites(tmp_path):
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[build-system]\nrequires = ["uv_build >= 0.14.0, < 0.15"]\n')
+    assert _backend_range(pyproject) == ">=0.14.0,<0.15"
+    other = tmp_path / "other.yml"
+    pin = "astral-sh/setup-uv@" + "0" * 40
+    other.write_text(
+        "jobs:\n  a:\n    steps:\n      - uses: " + pin + "\n"
+        "  b:\n    steps:\n      - uses: " + pin + "\n"
+        "        with:\n          version: '>=0.14.0,<0.15'\n"
+    )
+    assert _off_range_setup_uv_steps([other], ">=0.14.0,<0.15") == [("other.yml", None)]
 
 
 # What the co-pypi index resolves (#183): the packages the prune must keep out of the cache.
