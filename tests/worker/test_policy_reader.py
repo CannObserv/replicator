@@ -464,6 +464,107 @@ async def test_the_tail_escalates_when_the_cursor_cannot_advance(
 
 
 # --------------------------------------------------------------------------- #
+# The tail logs its recovery, as the consume loop does (#188).
+# --------------------------------------------------------------------------- #
+
+RECOVERED = "fetch policy poll cycle recovered"
+
+
+class ScriptedReader:
+    """A reader that plays a script, one entry per read, then reads empty.
+
+    An exception in the script is raised; anything else is returned as the
+    batch. Counts reads so a test can wait for the script to have played out.
+    """
+
+    def __init__(self, *script) -> None:
+        self._script = list(script)
+        self.reads = 0
+        self.seeks: list[str] = []
+
+    async def read(self, *, count: int, block_ms: int | None = None):
+        self.reads += 1
+        if not self._script:
+            return []
+        step = self._script.pop(0)
+        if isinstance(step, BaseException):
+            raise step
+        return step
+
+    def seek(self, message_id: str) -> None:
+        self.seeks.append(message_id)
+
+
+async def play(reader: ScriptedReader, policies, settings, monkeypatch, caplog, *, reads: int):
+    """Run the tail until ``reads`` reads have happened, and return its recovery records."""
+    monkeypatch.setattr("src.worker.policy.error_backoff_seconds", lambda *_a, **_k: 0.0)
+    stop = asyncio.Event()
+    with caplog.at_level("INFO", logger="src.worker.policy"):
+        task = asyncio.create_task(
+            run_policy_reader(reader, policies=policies, settings=settings, stop=stop)
+        )
+        try:
+            await until(lambda: reader.reads >= reads)
+        finally:
+            stop.set()
+            await task
+    return [r for r in caplog.records if r.message == RECOVERED]
+
+
+async def test_a_good_read_after_failures_logs_one_recovery(
+    policies, fast_settings, monkeypatch, caplog
+):
+    """Without it the journal shows when the tail's failures stopped, never that it
+    came back: after the 2026-11-11 broker reboot the consume loops logged their
+    recovery and the tail's could only be inferred from the code."""
+    reader = ScriptedReader(ConnectionError("gone"), ConnectionError("gone"), [], [])
+
+    records = await play(reader, policies, fast_settings, monkeypatch, caplog, reads=5)
+
+    assert len(records) == 1
+    assert records[0].levelname == "INFO"
+    assert records[0].after_failures == 2
+
+
+async def test_a_skipped_malformed_frame_after_failures_logs_the_recovery(
+    policies, fast_settings, monkeypatch, caplog
+):
+    """The second way a failure run ends (#188 pre-flight): a frame the broker
+    served and co-core could not decode clears the outage counter (CR #9). It is
+    the same evidence — the broker answered — so it says so, or the next good
+    read finds nothing to report and the recovery goes unlogged by this path."""
+    reader = ScriptedReader(
+        ConnectionError("gone"),
+        BusMessageAnomaly("undecodable", topic=TOPIC, message_id="1-1"),
+        # A second run after the skip: two records of one apiece prove the skip
+        # both logged and reset. One record of two would mean it did neither.
+        ConnectionError("gone"),
+        [],
+    )
+
+    records = await play(reader, policies, fast_settings, monkeypatch, caplog, reads=5)
+
+    assert reader.seeks == ["1-1"]
+    assert [r.after_failures for r in records] == [1, 1]
+
+
+async def test_no_recovery_is_logged_without_a_failure_before_it(
+    policies, fast_settings, monkeypatch, caplog
+):
+    """A steady tail, good reads and skipped frames alike, is not a recovery."""
+    reader = ScriptedReader(
+        [],
+        BusMessageAnomaly("undecodable", topic=TOPIC, message_id="1-1"),
+        [],
+    )
+
+    records = await play(reader, policies, fast_settings, monkeypatch, caplog, reads=4)
+
+    assert reader.seeks == ["1-1"]
+    assert records == []
+
+
+# --------------------------------------------------------------------------- #
 # The boot replay reads in batches (#85).
 # --------------------------------------------------------------------------- #
 
