@@ -11,8 +11,9 @@ dependencies = [
     # (#192), in #184's shape. `co-core-aio` and `co-core-sync` 0.45.0 require
     # `co-core>=0.45,<0.46`, so the three move together. 0.45.0's one library
     # change is co/v1's `EventModel.url`, which reads the Event's `website` link
-    # and falls back to `link`, and a malformed `links` embed now raises
-    # `CoV1ResponseAnomaly` (cannobserv#663). Both sit outside this closure.
+    # and falls back to its `event_url` link, and a malformed `links` embed now
+    # raises `CoV1ResponseAnomaly` (cannobserv#663). Both sit outside this
+    # closure.
     #
     # **`scripts/co_core_closure_diff.py 0.44.0 0.45.0`** (#145), verbatim:
     #
