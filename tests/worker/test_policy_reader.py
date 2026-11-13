@@ -526,6 +526,16 @@ async def test_a_good_read_after_failures_logs_one_recovery(
     assert records[0].after_failures == 2
 
 
+async def test_each_failure_run_gets_its_own_recovery(policies, fast_settings, monkeypatch, caplog):
+    """The reset holds: a second run counts from zero, not from where the first
+    left off. Two records of one apiece; a missed reset would read ``[1, 2]``."""
+    reader = ScriptedReader(ConnectionError("gone"), [], ConnectionError("gone"), [])
+
+    records = await play(reader, policies, fast_settings, monkeypatch, caplog, reads=5)
+
+    assert [r.after_failures for r in records] == [1, 1]
+
+
 async def test_a_skipped_malformed_frame_after_failures_logs_the_recovery(
     policies, fast_settings, monkeypatch, caplog
 ):
