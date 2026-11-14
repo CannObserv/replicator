@@ -42,4 +42,8 @@ health cd /home/exedev/replicator && .venv/bin/python -m scripts.inflight >/dev/
 origin pkgs.tailscale.com follow
 hold tailscale tailscale
 
+# exe.dev redelivers /exe.dev/setup at every boot; the key it carried was
+# revoked 2026-10-06 (#131, gregoryfoster/skills#352). Owner's call (#198).
+exception setup-script:redelivered 2027-02-14 key revoked 2026-10-06 (#131); the platform redelivers the script every boot
+
 records CannObserv/replicator
