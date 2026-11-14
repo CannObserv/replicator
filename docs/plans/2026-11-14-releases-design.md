@@ -1,7 +1,7 @@
 ---
 title: replicator runs releases, not its checkout
 date: 2026-11-14
-status: approved 2026-11-14 (all six operator decisions as recommended)
+status: done 2026-11-14 (cutover verified on 98f7bf25c47c; all six operator decisions as recommended)
 ---
 
 # replicator on releases
@@ -97,6 +97,11 @@ The core builds `--no-dev`. The dev venv's 309 MiB is not the figure.
 | `KEEP=2`, steady | 4 | 85.3% |
 
 So `KEEP=0`. Even then, root sits at the patching ceiling for the minute a build takes, and above the sensor's clear line for good.
+
+**Measured at the cutover, and higher than the table.**
+- After step 5, root was **82.49%** against the table's ~81.4%: uv's cache grew to 440 MB building the releases, and `uv cache prune` freed 2 MiB.
+- With `C` added for the drill, root is **~83.8%**: under the 84.0% ceiling, but with no room left for a patch run's download.
+- The operator chose to go ahead (2026-11-14). The reclaim belongs to the Disk follow-ups.
 
 **The nightly disk GC** already runs. Its last pass freed 197.5 MB and kept two things on policy:
 - a 675 MB staged VS Code server ("the newest");

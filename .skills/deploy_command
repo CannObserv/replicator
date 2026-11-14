@@ -1,0 +1,3 @@
+# shipping-work deploys through this (#151): the deploying-releases core, run
+# from the primary checkout with the pushed SHA appended. setsid -w keeps its exit code.
+setsid -w scripts/deploy.sh
