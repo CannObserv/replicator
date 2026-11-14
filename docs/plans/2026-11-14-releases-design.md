@@ -1,7 +1,7 @@
 ---
 title: replicator runs releases, not its checkout
 date: 2026-11-14
-status: draft
+status: approved 2026-11-14 (all six operator decisions as recommended)
 ---
 
 # replicator on releases
@@ -74,7 +74,7 @@ Measured 2026-11-14 ~20:40Z.
 
 **Today:** root is 16.29 GB used of 19.93 GB usable, **81.7%**; df shows 82%.
 
-**A release is ~259 MB (247 MiB):**
+**A release is ~259 MB (247 MiB), 260 MB on disk in the branch's trial build:**
 - the venv is 243 MiB, 140 MiB of it playwright;
 - the tree is 4.2 MiB.
 
@@ -92,7 +92,7 @@ The core builds `--no-dev`. The dev venv's 309 MiB is not the figure.
 |---|---|---|
 | Before the cutover | 0 | 80.1% |
 | `KEEP=0`, steady | 2 | **82.7%** |
-| `KEEP=0`, mid-build | 3 | **84.0%** |
+| `KEEP=0`, mid-build | 3 | **84.0%** (the pickup comment said ~83.9%) |
 | `KEEP=1`, steady | 3 | 84.0% |
 | `KEEP=2`, steady | 4 | 85.3% |
 
@@ -193,34 +193,45 @@ Left alone:
 
 ## Cutover
 
-The runbook follows retrofit.md §5. It is posted on #151 before it runs, and it runs in the host's own session. Every root write is the operator's.
+retrofit.md §5, as the runbook posted on #151 before it runs. It runs in the host's own session, and every root write is the operator's (the deploy's own `sudo -n` writes included).
+
+**Order matters, for one reason measured on the branch.** The *installed* unit runs `ExecStartPre=/bin/bash /home/exedev/replicator/scripts/check_main_checkout.sh`, which this branch deletes. If the main checkout is fast-forwarded to `M` before the new units are installed, any `Restart=on-failure` in that window fails to start: the script is gone, and the step is fatal. And a failed cutover's switch-back restores the old units, which need the old tree. So:
+- `M` reaches `origin/main` from the worktree;
+- the deploy runs from the worktree, which holds the same `M`;
+- the main checkout moves only once the worker is verified on the release.
 
 0. **Preconditions.**
-   - The branch is merged and pushed, and CI is green on the merge commit `M`.
-   - This worktree is removed (−321 MB).
-   - Root is ≤ 80.5%.
-   - `git status -sb` in `/home/exedev/replicator` shows `main`, level with origin.
-1. **One-time root steps.**
+   - `M` is pushed (`git push origin 151-releases:main`, a fast-forward, after a fetch: the weekly bot can race it).
+   - CI is green on `M` as its own push.
+   - Root is ≤ 82% (~83.0% during the build, with the worktree's venv still present).
+1. **Root.**
    - `sudo install -d -o root -g root -m 755 /srv/replicator`.
-   - Nothing under `/etc/replicator/` changes, and no credential lives in the old tree, so retrofit.md §5.2 has nothing to move [measured: every key path is under `/etc/replicator/`].
-2. **`scripts/deploy.sh --no-restart M`.**
-   - It builds the release, switches `live`, and installs both units (the replaced copies are kept aside).
-   - The running worker is untouched: it is still the checkout's process.
-   - Expect a `HOST_CONFIGS` note for the sysctl comment drift.
-3. **`scripts/deploy.sh --verify <M sha12>`.** It restarts the worker onto the release, then runs `verify_started_on` and the start record.
+   - No credential lives in the old tree [measured: every key path is under `/etc/replicator/`], so §5.2 has nothing to move.
+2. **`scripts/deploy.sh --no-restart M`, from the worktree.**
+   - It builds the release, switches `live`, and installs both units with one `daemon-reload`.
+   - The running worker is untouched. From here on, any restart runs the release.
+   - Expect a `HOST_CONFIGS` note for the sysctl drop-in's comment drift.
+3. **`scripts/deploy.sh --verify <M sha12>`.** It restarts the worker onto the release (a drain of up to 180 s), then runs `verify_started_on` and checks the `"worker ready"` record names `M`.
 4. **Prove it.**
-   - `systemctl show -p MainPID replicator`, then `/proc/<pid>/cwd` → `/srv/replicator/releases/<M>`.
+   - `/proc/<pid>/cwd` → `/srv/replicator/releases/<M>`.
    - `sudo grep -c /home/ /proc/<pid>/maps` → 0.
-   - `cat /run/replicator/build-id` → `BUILD_ID=<M sha12>`.
-   - `journalctl -u replicator -o cat | grep '"worker ready"'` → `"build": "<M sha12>"` and `replication_aliases` as before, with no "refusing to build a provider writer".
-5. **The branch-switch proof** (decision 6).
-6. **The failure handler from the release.**
-   - `systemctl cat replicator-failure-notify@.service` shows `/srv/replicator/live`.
-   - Firing it is optional. The #94 rehearsal (`scripts/rehearse_reconnect.sh`) is the safe way, if the operator wants a live test.
-7. **The rollback drill,** after the §6 cleanup commit `C` is merged and green.
-   - `scripts/deploy.sh C` (forward), then `scripts/deploy.sh M` (back), then `scripts/deploy.sh C` (forward).
-   - Each is verified by the core, and step 4's checks are repeated on the last one.
-   - With `KEEP=0`, after the drill `/srv/replicator/releases` holds exactly `C` and `M`.
+   - `/run/replicator/build-id` → `BUILD_ID=<M>`.
+   - `"worker ready"` lists the same `replication_aliases` as before, with no `refusing to build a provider writer`.
+   - This replaces §5.5's branch switch (decision 6).
+5. **Move the main checkout.**
+   - `git -C /home/exedev/replicator merge --ff-only origin/main`, then the dev venv's `uv sync`.
+   - Remove the worktree (−321 MB).
+6. **The rollback drill,** on the §6 cleanup commit `C`, pushed alone and green.
+   - `scripts/deploy.sh` (→ `C`), then `scripts/deploy.sh <M>` (back), then `scripts/deploy.sh <C>` (forward).
+   - Each step reuses its release: no rebuild.
+   - Step 4's checks are repeated on the last one.
+   - Afterwards, `/srv/replicator/releases` holds exactly `C` and `M`.
+
+**If step 3 fails** and the core's own switch-back reports exit 4:
+1. Put back the units from `M^` with `git show <M^>:deploy/<unit> | sudo tee /etc/systemd/system/<unit>`.
+2. `sudo systemctl daemon-reload && sudo systemctl restart replicator`.
+
+The main checkout is still on the old tree at that point, so it starts as before.
 
 ### §6 cleanup
 
