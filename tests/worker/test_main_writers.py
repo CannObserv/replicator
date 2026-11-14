@@ -239,12 +239,11 @@ async def test_a_writer_that_fails_to_close_does_not_leak_the_redis_client(
 # The checkout guard (#52)
 # --------------------------------------------------------------------------
 
-# `scripts/check_main_checkout.sh` keeps the *service* off unmerged code, as an
-# `ExecStartPre`. A dev worker is started with `uv run python -m src.worker.main`
-# and runs no `ExecStartPre` at all — while inheriting, per AGENTS.md's own shell
-# snippet, the production ADC and (once #50 provisions it) the production alias
-# table. So the question gets asked again here, at the moment a binding becomes a
-# live write identity.
+# The service runs a release (#151), which the deploy built from a CI-green main
+# commit. A dev worker is started from a checkout with `uv run python -m
+# src.worker.main` — while inheriting, per AGENTS.md's own shell snippet, the
+# production ADC and the production alias table. So the question is asked here,
+# at the moment a binding becomes a live write identity: is this a release?
 #
 # Skip, don't raise: the posture two tests above, and for the same reason —
 # a replicate misconfiguration must not take down a worker whose job is
@@ -255,7 +254,7 @@ async def test_a_writer_that_fails_to_close_does_not_leak_the_redis_client(
 async def test_a_refused_checkout_builds_no_writer(monkeypatch, alias_file, wired, capsys):
     monkeypatch.setattr(
         "src.worker.main.checkout_refusal",
-        lambda: "check_main_checkout: HEAD is on 'wip', not 'main'",
+        lambda: "/home/x/replicator is not a release (no REVISION): a checkout builds no writer",
     )
     monkeypatch.setenv(
         "REPLICATOR_REPLICATION_ALIASES_FILE",
@@ -267,8 +266,8 @@ async def test_a_refused_checkout_builds_no_writer(monkeypatch, alias_file, wire
     assert wired["writers"] == {}
     assert StubDriver.built == []
     out = capsys.readouterr().out
-    assert "not main's code" in out
-    assert "not 'main'" in out
+    assert "this code is not a release" in out
+    assert "no REVISION" in out
 
 
 async def test_a_refused_checkout_withholds_the_writer_and_nothing_else(
@@ -294,11 +293,10 @@ async def test_a_refused_checkout_withholds_the_writer_and_nothing_else(
 
 
 async def test_the_guard_is_not_consulted_without_a_binding_to_build(monkeypatch):
-    """No provider binding, no question to ask — and no subprocess.
+    """No provider binding, no question to ask.
 
-    A worker that replicates nothing is every worker on this VM today. Asking git
-    on each of their startups would be a cost paid by the case the guard is not
-    about.
+    A worker that replicates nothing pays nothing for a question about a write it
+    will never attempt.
     """
     asked = []
     monkeypatch.setattr("src.worker.main.checkout_refusal", lambda: asked.append(True))
@@ -312,7 +310,7 @@ async def test_an_accepted_checkout_is_asked_once_for_the_whole_table(monkeypatc
     """One verdict per startup, not one per binding.
 
     The answer cannot differ between two bindings read from the same table in the
-    same process, and `checkout_refusal` shells out to `bash` to get it.
+    same process, and a second ``lstat`` would only be able to disagree.
     """
     asked = []
     monkeypatch.setattr("src.worker.main.checkout_refusal", lambda: asked.append(True) or None)

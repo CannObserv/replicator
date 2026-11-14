@@ -7,18 +7,16 @@ here — raising the ceiling without widening the window silently restores the
 failure mode the pairing exists to prevent (a permanently unreachable Redis that
 reads as `active (running)` forever).
 
-The second half covers the *wiring* of the preflight that keeps the unit honest
-about which code it starts: `scripts/check_main_checkout.sh` (#37) is invoked, is
-unprefixed, and runs ahead of the `BUILD_ID` stamp. All three are properties of
-this ini file, reached by parsing it.
+The second half covers what the unit starts (#151): the live release under
+`/srv/replicator`, never a checkout. The build id comes from that release's
+`REVISION`, and the interpreter is the release's own, resolved before `exec` so
+a worker draining through a deploy never loads the next release's packages.
+Both are reached by running the unit's own command lines against a fake release
+tree. The deploy itself (`scripts/deploy.sh`, the deploying-releases core) is
+held by `tests/deploy/`.
 
 The unit is also ordered behind `tailscaled` — ordering, never dependency —
 because the broker it consumes is reached by tailnet name (#88).
-
-Whether the guard then *decides* correctly is a different concern reached by a
-different mechanism — a real process against throwaway repositories — and lives
-in `tests/test_check_main_checkout.py`, per `docs/TESTING.md`'s split-by-concern
-rule.
 """
 
 import os
@@ -36,7 +34,7 @@ from src.worker.loop import error_backoff_seconds
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 UNIT = REPO_ROOT / "deploy" / "replicator.service"
-GUARD = REPO_ROOT / "scripts" / "check_main_checkout.sh"
+RELEASE_LINK = "/srv/replicator/live"
 FLOOR = REPO_ROOT / "scripts" / "check_redis_floor.sh"
 NOTIFY_UNIT = REPO_ROOT / "deploy" / "replicator-failure-notify@.service"
 NOTIFY = REPO_ROOT / "scripts" / "notify_failure.sh"
@@ -72,13 +70,6 @@ def _exec_start_pre() -> list[str]:
     ]
     assert values, f"ExecStartPre is not set in {UNIT.name}"
     return values
-
-
-def _guard_step() -> str:
-    """The single ``ExecStartPre`` that runs the main-checkout guard."""
-    matches = [value for value in _exec_start_pre() if GUARD.name in value]
-    assert len(matches) == 1, f"expected exactly one {GUARD.name} ExecStartPre, got {matches}"
-    return matches[0]
 
 
 def _unit_list(name: str) -> list[str]:
@@ -299,7 +290,7 @@ def test_a_start_needs_no_package_index():
         if re.search(r"sync_wheelhouse|co-pypi|co_pypi|\buv (sync|lock|pip)\b", v)
     ]
     assert offenders == []
-    assert _directive("ExecStart").startswith("/usr/local/bin/uv run --frozen --no-sync ")
+    assert not re.search(r"(^|[/\s])uv(\s|$)", _directive("ExecStart"))
 
 
 def test_the_unit_does_not_depend_on_tailscaled():
@@ -317,46 +308,113 @@ def test_the_unit_does_not_depend_on_tailscaled():
         )
 
 
-# --- The main-checkout guard (#37) -------------------------------------------
+# --- The live release (#151) ---------------------------------------------------
 #
-# "Code committed to main is the deployed code" is the invariant AGENTS.md states
-# and nothing enforced until #37. These assert the unit actually consults the
-# guard, then that the guard actually decides correctly.
+# The unit runs whatever /srv/replicator/live names, a root-owned release the
+# deploy built from a CI-green main commit. The main-checkout guard (#37, #48)
+# that stood here is deleted, not ported: no checkout is started any more.
 
 
-def test_the_unit_runs_the_main_checkout_guard():
-    """The guard has to be wired in, not merely present in ``scripts/``."""
-    assert GUARD.exists(), f"{GUARD.name} is missing"
-    assert GUARD.name in "\n".join(_exec_start_pre())
+def _stamp_step() -> str:
+    """The single ``ExecStartPre`` that writes the build id."""
+    matches = [value for value in _exec_start_pre() if "build-id" in value]
+    assert len(matches) == 1, f"expected exactly one build-id ExecStartPre, got {matches}"
+    return matches[0]
 
 
-def test_the_main_checkout_guard_is_fatal():
-    """A ``-``-prefixed guard is not a guard — its refusal would be logged and ignored."""
-    step = _guard_step()
+def _fake_release(root: Path, build: str = "0123456789ab") -> Path:
+    """``root/releases/<build>`` with a REVISION and a stand-in interpreter, and
+    ``root/live`` linked to it, as the deploy leaves them."""
+    release = root / "releases" / build
+    python = release / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text('#!/bin/sh\necho "$0 $*"\n')
+    python.chmod(0o755)
+    (release / "REVISION").write_text(build + "\n")
+    (root / "live").symlink_to(release)
+    return release
 
-    assert not step.startswith("-"), (
-        f"{GUARD.name} is '-' prefixed, so its refusal would not stop the start"
+
+def test_the_unit_runs_the_live_release():
+    assert _directive("WorkingDirectory") == RELEASE_LINK
+
+
+def test_nothing_the_unit_starts_is_in_a_checkout():
+    starting = [*_exec_start_pre(), _directive("ExecStart")]
+    assert [v for v in starting if "/home/" in v or "check_main_checkout" in v] == []
+
+
+def test_the_start_runs_the_release_it_resolved_not_the_link(tmp_path):
+    """``sys.prefix`` follows the path the interpreter was started by, so a worker
+    started as ``live/.venv/bin/python`` reads site-packages through the link and,
+    once a deploy moves it, imports the next release's packages while it drains
+    (measured 2026-11-14). The start resolves the link once, then ``exec``s, so the
+    interpreter is the main PID that ``KillMode=mixed`` signals."""
+    release = _fake_release(tmp_path)
+    command = _directive("ExecStart")
+    assert command.startswith("/bin/sh -c "), command
+    script = command.removeprefix("/bin/sh -c ").strip("'")
+    assert script.startswith("exec "), "without exec, sh would be the main PID"
+
+    ran = subprocess.run(
+        ["/bin/sh", "-c", script], cwd=tmp_path / "live", capture_output=True, text=True, check=True
     )
-    # `-` is the prefix that matters, but asserting on an absolute path rules out
-    # every systemd prefix character at once (`-`, `@`, `:`, `+`, `!`, `!!`), so a
-    # future edit cannot weaken this by reaching for a different one.
-    assert step.startswith("/"), f"expected an unprefixed absolute path, got {step!r}"
+
+    assert ran.stdout.split() == [
+        str(release / ".venv" / "bin" / "python"),
+        "-m",
+        "src.worker.main",
+    ]
 
 
-def test_the_main_checkout_guard_runs_before_the_build_id_stamp():
-    """A refused start must not leave a misleading build id behind in /run.
+def test_the_build_id_is_the_releases_revision(tmp_path):
+    release = _fake_release(tmp_path)
+    step = _stamp_step().replace("/run/replicator", str(tmp_path))
+    assert step.startswith("/bin/bash -ec "), step
 
-    ``/run/replicator/build-id`` outlives the failed start (nothing removes it),
-    so stamping the branch SHA first would leave the journal describing code that
-    never ran — the same "looks correct, is not" failure #37 exists to close.
-    """
+    subprocess.run(
+        ["/bin/bash", "-ec", step.removeprefix("/bin/bash -ec ").strip("'")],
+        cwd=tmp_path / "live",
+        check=True,
+    )
+
+    assert (tmp_path / "build-id").read_text() == f"BUILD_ID={release.name}\n"
+
+
+def test_a_release_without_a_revision_fails_the_start(tmp_path):
+    """The core never links a release without ``REVISION``; one made by hand must
+    not start under an empty ``BUILD_ID``. Unprefixed, so the failure stops it."""
+    _fake_release(tmp_path)
+    (tmp_path / "live" / "REVISION").unlink()
+    step = _stamp_step()
+    assert step.startswith("/"), f"a prefixed stamp would not stop the start: {step!r}"
+
+    ran = subprocess.run(
+        [
+            "/bin/bash",
+            "-ec",
+            step.replace("/run/replicator", str(tmp_path))
+            .removeprefix("/bin/bash -ec ")
+            .strip("'"),
+        ],
+        cwd=tmp_path / "live",
+        capture_output=True,
+    )
+
+    assert ran.returncode != 0
+    assert not (tmp_path / "build-id").exists()
+
+
+def test_the_runtime_directory_exists_before_the_stamp():
     steps = _exec_start_pre()
-    guard_at = next(i for i, step in enumerate(steps) if GUARD.name in step)
-    stamp_at = next(i for i, step in enumerate(steps) if "build-id" in step)
+    made_at = next(i for i, step in enumerate(steps) if "mkdir -p /run/replicator" in step)
+    assert made_at < steps.index(_stamp_step())
 
-    assert guard_at < stamp_at, (
-        f"{GUARD.name} runs at ExecStartPre #{guard_at}, after the BUILD_ID stamp at #{stamp_at}"
-    )
+
+def test_the_handler_runs_the_live_release():
+    assert _directive("WorkingDirectory", NOTIFY_UNIT) == RELEASE_LINK
+    notify = f"/bin/bash {RELEASE_LINK}/scripts/notify_failure.sh %i"
+    assert _directive("ExecStart", NOTIFY_UNIT) == notify
 
 
 # The unit bounds its restart loops and then stays `failed` on purpose, so the
@@ -783,8 +841,9 @@ class TestHostMemoryTunables:
     """The host's memory posture is config, so it belongs in the repo.
 
     `deploy/` is where this repo keeps host configuration of record — both
-    units, and since #108 `notifier-template.json` — because a VM rebuild
-    restores from here. `vm.swappiness` and `vm.min_free_kbytes` were set on
+    units, and the host configs the deploy compares but never installs
+    (`HOST_CONFIGS`, #151) — because a VM rebuild restores from here.
+    `vm.swappiness` and `vm.min_free_kbytes` were set on
     co-replicator on 2026-09-23 (#99) and existed only on the host until this
     file, which a rebuild would have lost silently: the host would come back
     with a ~11 MB atomic reserve and nothing naming that as wrong.

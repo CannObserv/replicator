@@ -14,7 +14,8 @@ Description=Report that %i entered a failed state
 [Service]
 Type=oneshot
 User=exedev
-WorkingDirectory=/home/exedev/replicator
+# The live release, as replicator.service's (#151).
+WorkingDirectory=/srv/replicator/live
 
 # Same reasoning as replicator.service's, and more load-bearing here (#92).
 # Memory exhaustion on this VM is one of the conditions that fires this handler,
@@ -47,9 +48,9 @@ SyslogIdentifier=replicator-failure
 
 # The build that failed. /run/replicator/build-id outlives a failed start —
 # nothing removes it — which is exactly the property an incident record wants,
-# and the reason replicator.service stamps it only after its checkout guard has
-# passed. Optional: a unit that failed in ExecStartPre before the stamp has no
-# file here, and the record then says `<unknown>` rather than failing to write.
+# and replicator.service stamps it from the release it is starting. Optional: a
+# unit that failed in ExecStartPre before the stamp has no file here, and the
+# record then says `<unknown>` rather than failing to write.
 EnvironmentFile=-/run/replicator/build-id
 
 # Production config only, and optional. This is the same env boundary
@@ -59,7 +60,7 @@ EnvironmentFile=-/run/replicator/build-id
 # ('-') so a host without the file still gets the journal record.
 EnvironmentFile=-/etc/replicator/.env
 
-ExecStart=/bin/bash /home/exedev/replicator/scripts/notify_failure.sh %i
+ExecStart=/bin/bash /srv/replicator/live/scripts/notify_failure.sh %i
 
 # The script bounds its own dispatch with REPLICATOR_NOTIFY_TIMEOUT_SECONDS and
 # exits 0 regardless. This is the outer bound for everything else — a DNS lookup

@@ -16,7 +16,7 @@ watched. A pytest guard turns that into a red test at the moment of the rename.
 Precedent for testing a non-Python gate artifact from pytest:
 `ci/test_workflow_runs.py` (workflow concurrency), `test_deploy.py` (the
 systemd unit), `test_skills_hook.py` (the refresh hook),
-`test_check_main_checkout.py` (a shell guard). The list is one more artifact a
+`tests/deploy/` (the release deploy's hooks). The list is one more artifact a
 gate reads and no interpreter validates.
 
 `path_matches` below is a port of the script's matcher, not an approximation.

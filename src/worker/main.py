@@ -558,14 +558,14 @@ def build_writers(aliases: AliasTable) -> dict[str, AsyncGcsDriver]:
     binding rather than all-or-nothing, the same shape ``load_alias_table`` uses
     for one unusable entry in a readable table.
 
-    **And a checkout that is not main's code builds no writer at all** (#52).
-    ``replicator.service`` asks that question as an ``ExecStartPre``; a dev worker
-    started with ``uv run python -m src.worker.main`` runs no ``ExecStartPre`` and
-    inherits, per AGENTS.md's own shell snippet, the production ADC and the
-    production alias table. Refused the same way an unbuildable driver is —
-    skipped and logged, never raised — so the fetch path is untouched and the
+    **And code that is not a release builds no writer at all** (#52, #151).
+    ``replicator.service`` runs a release the deploy built from a CI-green main
+    commit; a dev worker started with ``uv run python -m src.worker.main`` runs a
+    checkout and inherits, per AGENTS.md's own shell snippet, the production ADC
+    and the production alias table. Refused the same way an unbuildable driver
+    is — skipped and logged, never raised — so the fetch path is untouched and the
     handler's reason stays ``provider_disabled``. ``REPLICATOR_ALLOW_ANY_CHECKOUT=1``
-    is the override, read by the script rather than here (``src/worker/checkout.py``).
+    is the override, read in ``src/worker/checkout.py``.
     """
     writers: dict[str, AsyncGcsDriver] = {}
     refusal: str | None = None
@@ -575,15 +575,14 @@ def build_writers(aliases: AliasTable) -> dict[str, AsyncGcsDriver]:
             continue
         # Asked here rather than at the top: a worker with nothing provisioned —
         # every host's posture until an operator writes an alias table, this
-        # VM's until #86 — should not pay a subprocess for a question about a
-        # write it will never attempt. Asked once and cached for
-        # the table, because the answer cannot differ between two bindings read
-        # in the same process.
+        # VM's until #86 — has no write to ask about, and a dev worker's override
+        # warning would be noise. Asked once and cached for the table, because
+        # the answer cannot differ between two bindings read in the same process.
         if not asked:
             refusal, asked = checkout_refusal(), True
         if refusal is not None:
             logger.error(
-                "refusing to build a provider writer — this checkout is not main's code",
+                "refusing to build a provider writer — this code is not a release",
                 extra={
                     "alias": alias,
                     "provider": binding.provider,
@@ -976,16 +975,15 @@ async def run(
         # replicate command. Empty on a host with nothing provisioned, which is
         # every host until an operator writes an alias table.
         #
-        # **Two blocking calls, both deliberate, both only here** (CR #4). The
-        # second is the checkout guard's `subprocess.run`, up to
-        # `GUARD_TIMEOUT_SECONDS`. Neither starves anything: no task exists yet,
-        # so the loop has nothing else to run. What they do cost is shutdown
-        # latency — signal handlers are installed by this point, so a SIGTERM
-        # arriving inside that window sets `stop` but is not *seen* until the
-        # call returns. Bounded, startup-only, and cheaper than the alternative:
-        # `to_thread` here would buy responsiveness during a window in which
-        # there is nothing to respond to. Move either off the loop only if it
-        # ever moves out of startup.
+        # **A blocking call, deliberate, and only here** (CR #4). It starves
+        # nothing: no task exists yet, so the loop has nothing else to run. What
+        # it does cost is shutdown latency — signal handlers are installed by
+        # this point, so a SIGTERM arriving inside that window sets `stop` but is
+        # not *seen* until the call returns. Startup-only, and cheaper than the
+        # alternative: `to_thread` here would buy responsiveness during a window
+        # in which there is nothing to respond to. Move it off the loop only if
+        # it ever moves out of startup. (The release check beside it, #52, is one
+        # `lstat` since #151: the subprocess it replaced was the second call.)
         writers = build_writers(aliases)
         # Default start_id="$" reads only messages added after group creation,
         # and is read only then: ensure_group leaves an existing group alone, so

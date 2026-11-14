@@ -1,98 +1,70 @@
-"""Is this checkout main's code? Asked at the moment a write identity is built.
+"""Is this code a release? Asked at the moment a write identity is built (#52).
 
-``replicator.service`` already asks, as an ``ExecStartPre`` running
-``scripts/check_main_checkout.sh`` (#37, #48). The dev worker never does: the
-documented way to test a branch on this VM is ``uv run python -m
-src.worker.main`` under distinct consumer names — ``REPLICATOR_CONSUMER_NAME``
-*and* ``REPLICATOR_REPLICATE_CONSUMER_NAME``, one per group since CR round 2 —
-which involves no systemd and so runs no ``ExecStartPre``.
+``replicator.service`` runs a release (#151): a root-owned, read-only tree that
+``scripts/deploy.sh`` built from a CI-green ``main`` commit and finished by
+writing ``REVISION`` last, as root. **That file, a regular file owned by root, is
+the proof.** Only the deploy writes one, through ``sudo``, after its gate; an
+``echo > REVISION`` in a checkout is the deploy user's, and a link could name any
+root-owned file.
 
-That was harmless while replication was unprovisioned and every command refused.
-It stopped being harmless on 2026-09-10, when ``primary`` was provisioned on this
-VM (#86): ``AGENTS.md`` instructs loading ``/etc/replicator/.env`` for shell work,
-so a worker started that way inherits the production ADC *and* the production
-alias table, and a feature branch acquires a write identity against a bucket whose
-objects cannot be deleted by anyone who holds it (#38, #52). The guard below is
-what stands between that and a write, so this host is now the case it was written
-for rather than the one it anticipated.
+**A checkout builds no provider writer.** The documented way to test a branch on
+this VM is ``uv run python -m src.worker.main`` under distinct consumer names,
+and ``AGENTS.md`` tells shell work to load ``/etc/replicator/.env``, so a worker
+started that way inherits the production ADC *and* the production alias table:
+a branch would hold a write identity against a bucket whose objects cannot be
+deleted by anyone who holds it (#38, #52). Since #151 that includes a checkout
+on ``main``: the checkout is no longer what production runs.
+``REPLICATOR_ALLOW_ANY_CHECKOUT=1`` builds the writers anyway, and says so.
 
-**The verdict is the script's, not a reimplementation.** The script distinguishes
-seven conditions and argues each: ahead of ``origin/main`` refuses because those
-commits are on no shared branch, behind only warns because a never-fetched ref
-cannot prove staleness, a dubiously-owned repository gets its own message so a
-failed start does not send an operator hunting the wrong hypothesis. Deciding any
-of that again here would be two sources of truth for one question, and the second
-would be the one nobody updates. The ``REPLICATOR_ALLOW_ANY_CHECKOUT=1`` override
-is the script's too, for the same reason — it is read there and nowhere in this
-module.
-
-**Refusal is what an unrunnable guard returns**, matching the script's own stance
-that absence is hard rather than soft: fail-open would make removing ``bash``, or
-the script itself, a silent bypass.
+Until #151 the verdict was ``scripts/check_main_checkout.sh``'s, a git question.
+A release has no ``.git``, and asking it there refused every writer the service
+built; the deploy's ``post_build_check`` now runs this function from each release
+before switching to it, so that trap is refused at build time.
 
 The caller is ``build_writers``, and only when there is a provider binding to
-build — a worker that replicates nothing shells out to nothing.
+build.
 """
 
 import os
-import subprocess
+import stat
 from pathlib import Path
 
+from src.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
-GUARD = REPO_ROOT / "scripts" / "check_main_checkout.sh"
-
-# The script makes no network call by design — that is the whole argument for
-# reading `origin/main` from the cached ref rather than fetching — so this bounds
-# a hang, not a slow answer.
-GUARD_TIMEOUT_SECONDS = 10.0
-
-# Everything the guard needs, and nothing else (CR #2). ``PATH`` to find ``git``,
-# ``HOME`` because git reads the global config there — that is where a
-# ``safe.directory`` entry lives, and the dubious-ownership branch exists to
-# report its absence — and the override the script itself reads.
-#
-# Passing an explicit environment rather than inheriting is the point.
-# ``replicator.service`` reads only ``/etc/replicator/.env``, but a *dev* worker
-# is started from a shell AGENTS.md tells you to load the repo ``.env`` into as
-# well, which carries org-wide PATs. That file's own rule is that handing them to
-# a subprocess "widens the blast radius of any crash dump or subprocess for no
-# benefit", and this is the only subprocess the worker spawns.
-GUARD_ENV_KEYS = ("PATH", "HOME", "REPLICATOR_ALLOW_ANY_CHECKOUT")
+OVERRIDE = "REPLICATOR_ALLOW_ANY_CHECKOUT"
+# Root writes REVISION (scripts/deploy.sh, `sudo -n tee`). A module constant so
+# the tests, which cannot chown, can name their own user instead.
+RELEASE_OWNER_UID = 0
 
 
-def _guard_env() -> dict[str, str]:
-    """``GUARD_ENV_KEYS`` that are actually set, and no others.
-
-    Absent keys are **omitted rather than empty**: the script branches on
-    ``REPLICATOR_ALLOW_ANY_CHECKOUT`` being unset versus ``1`` versus anything
-    else, and its third branch logs "is '', not '1' — not bypassing" on every
-    start. An empty value would make that line permanent noise (#48).
-    """
-    return {key: os.environ[key] for key in GUARD_ENV_KEYS if key in os.environ}
-
-
-def checkout_refusal() -> str | None:
-    """``None`` when this checkout is main's code, else why it is not.
-
-    The returned string is the script's own stderr wherever there is one, so the
-    journal reads the same whether the refusal came from systemd or from here.
-    """
-    if not GUARD.is_file():
-        return f"{GUARD} is missing — cannot verify this checkout is main's code"
-
+def checkout_refusal(root: Path = REPO_ROOT) -> str | None:
+    """``None`` when ``root`` is a release, or the override is set; else why not."""
+    revision = root / "REVISION"
     try:
-        completed = subprocess.run(
-            ["bash", str(GUARD)],
-            cwd=REPO_ROOT,
-            env=_guard_env(),
-            capture_output=True,
-            text=True,
-            timeout=GUARD_TIMEOUT_SECONDS,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        return f"could not run {GUARD.name}: {type(exc).__name__}: {exc}"
+        found = revision.lstat()
+    except FileNotFoundError:
+        found = None
 
-    if completed.returncode == 0:
+    if found is not None and stat.S_ISREG(found.st_mode) and found.st_uid == RELEASE_OWNER_UID:
         return None
-    return completed.stderr.strip() or f"{GUARD.name} exited {completed.returncode}"
+
+    if found is None:
+        why = f"{root} is not a release (no REVISION)"
+    elif not stat.S_ISREG(found.st_mode):
+        why = f"{revision} is not a regular file, so {root} is not a release"
+    else:
+        why = f"{revision} is not owned by root, so {root} is not a release"
+
+    # Exactly "1", as the script that preceded this read it: "true" or "yes" is
+    # someone guessing, and a guess should not grant a write identity.
+    if os.environ.get(OVERRIDE) == "1":
+        logger.warning(
+            "building provider writers from a checkout",
+            extra={"reason": why, "override": f"{OVERRIDE}=1"},
+        )
+        return None
+
+    return f"{why}: a checkout builds no provider writer; set {OVERRIDE}=1 to build one anyway"

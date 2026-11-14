@@ -3,9 +3,7 @@
 Split from `tests/test_deploy.py`, which owns the *wiring* — that the unit sets
 `OnFailure=`, that it names the template, that the template runs this script.
 This file owns the script's own behaviour, reached by a different mechanism
-(`subprocess` against a stub HTTP server rather than a regex over an ini file),
-per the same split `tests/test_check_main_checkout.py` makes for the checkout
-guard.
+(`subprocess` against a stub HTTP server rather than a regex over an ini file).
 
 **The contract under test is "never make the outage worse".** This script runs
 only when `replicator.service` has already failed, so every branch exits 0 and
@@ -35,8 +33,7 @@ UNIT_NAME = "replicator.service"
 
 # Every variable the script reads. Scrubbed from each invocation below so a
 # developer who loaded /etc/replicator/.env into their shell cannot turn an
-# "unconfigured" assertion green by having configured it — the same reasoning
-# tests/test_check_main_checkout.py applies to REPLICATOR_ALLOW_ANY_CHECKOUT.
+# "unconfigured" assertion green by having configured it.
 NOTIFY_VARS = (
     "REPLICATOR_NOTIFY_URL",
     "REPLICATOR_NOTIFY_TOKEN",
@@ -502,7 +499,7 @@ NOTIFIER_MODE = {
 }
 
 # The seven incident fields — the template's variables_schema requires exactly
-# these, so the script and deploy/notifier-template.json must agree on them.
+# these, so the script and docs/reference/notifier-template.json must agree on them.
 INCIDENT_FIELDS = {"level", "event", "unit", "host", "build", "message", "timestamp"}
 
 
@@ -643,10 +640,10 @@ def test_webhook_mode_is_still_the_default(notifier):
     assert set(stub.received[0]["body"]) == INCIDENT_FIELDS, stub.received[0]
 
 
-# The template notifier stores (deploy/notifier-template.json). The operator
+# The template notifier stores (docs/reference/notifier-template.json). The operator
 # POSTs it once; its variables_schema has to accept what the script sends.
 
-TEMPLATE = REPO_ROOT / "deploy" / "notifier-template.json"
+TEMPLATE = REPO_ROOT / "docs" / "reference" / "notifier-template.json"
 
 
 def test_the_template_requires_exactly_the_incident_fields():

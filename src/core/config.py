@@ -149,7 +149,14 @@ class Settings(BaseSettings):
     # Temp-storage root for the local-filesystem blob backend. "Temporary" means
     # the bytes live long enough for durable replication to collect them — see
     # the retention settings below for how long that is and who decided.
-    blob_dir: Path = Field(default=Path("blobs"), validation_alias="REPLICATOR_BLOB_DIR")
+    #
+    # Absolute, and the unit's own StateDirectory= (#151). The service runs a
+    # read-only release, so a relative default would resolve inside it and the
+    # first local-backend store would fail EACCES at runtime. Production sets this
+    # anyway and runs the gcs backend; a dev run that wants its own tree sets it.
+    blob_dir: Path = Field(
+        default=Path("/var/lib/replicator/blobs"), validation_alias="REPLICATOR_BLOB_DIR"
+    )
 
     # How long a blob survives after it was last referenced. Measured from mtime,
     # which the store refreshes on the short-circuit path, so a re-fetch of

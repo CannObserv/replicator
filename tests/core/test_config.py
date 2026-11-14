@@ -28,7 +28,9 @@ def test_defaults_match_the_shared_vm(monkeypatch):
 
     settings = get_settings()
     assert settings.redis_url == "redis://localhost:6379/0"
-    assert settings.blob_dir == Path("blobs")
+    # Absolute, the unit's StateDirectory= (#151): a relative default resolves
+    # against the working directory, which is a read-only release.
+    assert settings.blob_dir == Path("/var/lib/replicator/blobs")
     # command semantics => exactly one group cluster-wide
     assert settings.consumer_group == "replicator.fetch"
     assert settings.build_id == "dev"
@@ -36,11 +38,11 @@ def test_defaults_match_the_shared_vm(monkeypatch):
 
 def test_replicator_prefixed_env_overrides(monkeypatch):
     monkeypatch.setenv("REPLICATOR_REDIS_URL", "redis://broker:6379/3")
-    monkeypatch.setenv("REPLICATOR_BLOB_DIR", "/var/lib/replicator/blobs")
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", "/tmp/a-dev-run/blobs")
 
     settings = get_settings()
     assert settings.redis_url == "redis://broker:6379/3"
-    assert settings.blob_dir == Path("/var/lib/replicator/blobs")
+    assert settings.blob_dir == Path("/tmp/a-dev-run/blobs")
 
 
 def test_build_id_is_unprefixed(monkeypatch):

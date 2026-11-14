@@ -75,7 +75,11 @@ OnFailure=replicator-failure-notify@%n.service
 [Service]
 Type=simple
 User=exedev
-WorkingDirectory=/home/exedev/replicator
+# The live release, never a checkout (#151): a root-owned, read-only tree that
+# scripts/deploy.sh built from a CI-green main commit and switched this link to.
+# Nothing here reads /home/exedev/replicator, so the checkout's branch, its venv
+# and its unpushed commits no longer reach production (#37, #48, #94).
+WorkingDirectory=/srv/replicator/live
 
 # Be the LAST thing this VM's OOM killer chooses, not the first (#92).
 #
@@ -124,7 +128,7 @@ MemoryLow=128M
 # the worker moves into the leaf either way. systemd >= 254 for DelegateSubgroup=.
 Delegate=memory pids
 DelegateSubgroup=worker
-# SIGTERM to the main process only (uv forwards it to the worker), SIGKILL to the
+# SIGTERM to the main process only (the worker: ExecStart execs it), SIGKILL to the
 # rest once it exits. The default control-group mode SIGTERMs the browser too and
 # fails the render the worker is finishing (#138 CR 7); teardown kills it anyway.
 KillMode=mixed
@@ -134,35 +138,13 @@ StateDirectory=replicator
 # Create runtime dir (runs as root before User= takes effect with + prefix)
 ExecStartPre=+/bin/bash -c 'mkdir -p /run/replicator && chown exedev:exedev /run/replicator'
 
-# Hard guard: "Code committed to main is the deployed code" (AGENTS.md) was an
-# invariant nothing enforced until #37 — a restart while the checkout sat on a
-# feature branch deployed unmerged code. Refuses a non-main or detached HEAD, and
-# a main carrying commits that were never pushed (#48) — unpushed is unshared, and
-# unlike 'behind' that verdict does not need the cached origin/main to be fresh.
-# Warns only on a stale or dirty tree. Not '-' prefixed: a guard whose refusal is
-# logged and ignored is not a guard.
-#
-# Placed BEFORE the BUILD_ID stamp on purpose. /run/replicator/build-id outlives a
-# failed start, so stamping the branch SHA first would leave the journal
-# describing code that never ran — the same "looks correct, is not" failure the
-# guard exists to close.
-#
-# REPLICATOR_ALLOW_ANY_CHECKOUT=1 in /etc/replicator/.env bypasses it. That is not
-# the documented way to test a branch on this VM (run the worker directly under
-# distinct REPLICATOR_CONSUMER_NAME and REPLICATOR_REPLICATE_CONSUMER_NAME, one
-# per group) — it is for testing this unit itself. The
-# override still reaches this step even though the EnvironmentFile= lines appear
-# below it: EnvironmentFile= is a unit-level setting applied to every Exec*
-# process, not a sequential instruction, so its position in the file is not an
-# ordering.
-#
-# The checkout it inspects is WorkingDirectory= (systemd's cwd for every Exec*),
-# which is the same tree the stamp below reads and ExecStart runs from — so the
-# guard cannot end up verifying a different tree than the one that starts.
-ExecStartPre=/bin/bash /home/exedev/replicator/scripts/check_main_checkout.sh
-
-# Write current git SHA to a runtime env file before starting
-ExecStartPre=/bin/bash -c 'echo BUILD_ID=$(git rev-parse --short HEAD) > /run/replicator/build-id'
+# The build id is the release's REVISION (the sha12 the deploy wrote last, as
+# root), stamped where the OnFailure= handler can still read it after a failed
+# start: /run/replicator/build-id outlives one on purpose. -e: a tree with no
+# REVISION is no release, and must not start under an empty BUILD_ID. The
+# main-checkout guard that stood before this line is deleted, not ported: the
+# deploy now decides which code runs, before the switch (#151).
+ExecStartPre=/bin/bash -ec 'build=$(cat REVISION); echo "BUILD_ID=$build" > /run/replicator/build-id'
 
 # Load BUILD_ID, then system secrets. Order matters: later EnvironmentFiles
 # override earlier ones, so BUILD_ID (read-only state from ExecStartPre) is the
@@ -180,13 +162,18 @@ EnvironmentFile=/etc/replicator/.env
 # broker — after retrying it for REPLICATOR_REDIS_FLOOR_WAIT (default 30 s), which
 # is what lets it see the broker on a cold boot (#88) — and fatal on a genuine
 # downgrade. Not '-' prefixed — that exit 1 must stop the start.
-ExecStartPre=/bin/bash /home/exedev/replicator/scripts/check_redis_floor.sh
+ExecStartPre=/bin/bash /srv/replicator/live/scripts/check_redis_floor.sh
 
-# --frozen --no-sync: run exactly the committed lockfile; dependency sync is a
-# deploy step, not a service-start side effect. So no step here reaches the
-# co-pypi index or needs its token: the deploy's `bash scripts/co-pypi.sh uv
-# sync --frozen` does (#183, which retired the wheelhouse refresh that stood here).
-ExecStart=/usr/local/bin/uv run --frozen --no-sync python -m src.worker.main
+# The release's own interpreter, its venv built by the deploy (`uv sync --locked
+# --no-dev`), so a start syncs nothing and reaches no package index (#183).
+#
+# Resolved before exec, not run as live/.venv/bin/python (#151). Python takes
+# sys.prefix, and so site-packages, from the path it was started by: through the
+# link, a worker still draining after a deploy moved it would import the NEXT
+# release's packages for anything it loads lazily (playwright's driver, for one).
+# `pwd -P` is the release this start resolved, and `exec` keeps the interpreter
+# the main PID, which KillMode=mixed signals and the deploy's verify reads.
+ExecStart=/bin/sh -c 'exec "$(pwd -P)/.venv/bin/python" -m src.worker.main'
 Restart=on-failure
 RestartSec=5
 

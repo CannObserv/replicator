@@ -48,7 +48,7 @@
 # lets the handler serve a plain webhook. Notifier mode wraps the same seven
 # fields in the cohort notifier's /dispatch request (agreed on
 # CannObserv/notifier#70): they become `variables`, rendered by the template in
-# deploy/notifier-template.json, and delivery is scored on the 202 body's
+# docs/reference/notifier-template.json, and delivery is scored on the 202 body's
 # `status` rather than on the 202.
 #
 # Exit codes:
