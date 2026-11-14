@@ -23,11 +23,13 @@ package: uv asks it for those three only, so neither side can shadow the other.
 | `uv sync` whose co-core files are installed or cached | none |
 | any `uv lock`, even a PyPI-only bump; `uv sync` on a cold cache | **required**: a 401 on co-core without it |
 
-So the deploy step and every relock go through the wrapper:
+So every release build, a dev venv's sync and every relock go through the wrapper.
+`scripts/deploy.sh` runs it as `UV_WRAPPER`, and `scripts/deploy_hooks.sh` names the
+key, so a deploy needs no `load_env.sh` (#151):
 
 ```bash
 . scripts/load_env.sh                      # REPLICATOR_CO_PYPI_CREDENTIALS
-bash scripts/co-pypi.sh uv sync --frozen   # the deploy step
+bash scripts/co-pypi.sh uv sync --frozen   # a dev venv
 bash scripts/co-pypi.sh uv lock
 ```
 
@@ -113,8 +115,9 @@ reads to see which packages moved.
 
 - **`[tool.uv] required-version`.** setup-uv would read it, which leaves one
   string. But uv enforces it on every command, the unit's
-  `uv run --frozen --no-sync` included. A host uv upgrade would refuse service
-  start (measured: exit 2).
+  `uv run --frozen --no-sync` included (measured: exit 2), so a host uv upgrade
+  would have refused service start. Since #151 no unit runs `uv`; the deploy's
+  build still would refuse.
 - **An exact CI pin.** Nothing moves `with.version`. Dependabot's
   `github-actions` updater rewrites the SHA only, and `uv` is parked (#169).
 - **Unpinned.** CI took each new minor the day it shipped, which is how the

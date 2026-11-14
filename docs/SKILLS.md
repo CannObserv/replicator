@@ -41,6 +41,7 @@ Every override's `SKILL.md` must declare `overrides:` and `override-reason:` in 
 |---|---|
 | `coordinating-epics` | Serial, operator-paced epic burn-down: verifies each child from evidence, hands off the next (`coordinate the epic`, `check-in`, `next issue`) |
 | `curating-context` | Curates `AGENTS.md` and its live reference docs against a token budget |
+| `deploying-releases` | The release-deploy core: installs and updates `scripts/deploy.sh`, whose hooks are `scripts/deploy_hooks.sh` (#151) |
 | `enforcing-architecture` | Turns an accepted architecture finding into an executable fitness function |
 | `init-project-fastapi` | Bootstraps a CannObserv FastAPI service (this repo's own foundation) |
 | `init-socraticode` | Installs and indexes SocratiCode semantic code search |
@@ -75,6 +76,14 @@ so a GC update reaches this host through the submodule refresh, and then the ins
 the owner's approval. Never edit the installed copy: the installer refuses one that has drifted.
 Raise a change with Provisioner. Nothing flags a pin the refresh moved past the host: compare
 `DISK_GC_VERSION` in `_pin.sh` with `/usr/local/lib/cannobserv/disk-gc/VERSION`. The host side: [INFRASTRUCTURE.md](INFRASTRUCTURE.md#the-hosts-disk-gc-is-the-cohorts-148).
+
+`deploying-releases` (#151) installed `scripts/deploy.sh` as a **copy** with a version and sha256
+marker, never a symlink, so a submodule refresh never changes how production deploys. After a refresh,
+`bash skills/deploying-releases/scripts/install.sh --check` names `drift`; the update is
+`install.sh` and a reviewed diff of `scripts/deploy.sh`, committed with any hook change it needs. Never
+edit the installed core — `tests/deploy/test_deploy_contract.py` and `--check` both catch it. What the
+hooks can't express is raised on gregoryfoster/skills. The co-pypi wrapper it can also install stays
+this repo's own until #201.
 
 **The table lists what is linked, which is a subset of what is vendored.** The `3fc7b71` → `2e1cf28`
 bump (#41) published skills this repo has not evaluated — `vendoring-openapi-client` is the one with
@@ -254,13 +263,13 @@ any branch if deleted. Logs to `.git/skills-update.log`.
 
 **It pushes the commit it makes, and rolls it back if the push fails**
 ([skills#293](https://github.com/gregoryfoster/skills/issues/293)); a commit it left unpushed is
-retried at the next session start. Until then it committed and stopped, and that commit met a guard
-with no other symptom: `scripts/check_main_checkout.sh` **refuses to start `replicator.service`** off
-a `main` carrying unpushed commits (#48), so the first sign was a service that would not start —
-#72 found `b29efcf` unpushed for a day. The harness can still kill the hook between commit and push,
-so the state is now rare rather than impossible.
+retried at the next session start. Until then it committed and stopped, and while the service ran
+the checkout (before #151) that commit stopped it starting: the main-checkout guard refused a `main`
+carrying unpushed commits (#48) — #72 found `b29efcf` unpushed for a day. The service runs a release
+now, so a stranded commit costs nothing but a `git push`. The harness can still kill the hook between
+commit and push, so the state is rare rather than impossible.
 
-Cheap habit, worth having before any restart:
+Cheap habit, worth having before a deploy (`scripts/deploy.sh` deploys only what is on `origin/main`):
 
 ```bash
 git status -sb | head -1        # "## main...origin/main [ahead 1]" is the tell

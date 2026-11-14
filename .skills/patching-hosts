@@ -23,12 +23,12 @@ quiet 05:15-06:15
 
 # This worker's own unacked commands across the groups it consumes; fails
 # closed. scripts/inflight.py says why it reads this consumer, not the group.
-inflight cd /home/exedev/replicator && .venv/bin/python -m scripts.inflight
+inflight cd /srv/replicator/live && .venv/bin/python -m scripts.inflight
 
 service replicator.service
 health systemctl is-active --quiet replicator.service
 # The broker round-trip: the same read exits non-zero when co-broker is unreachable.
-health cd /home/exedev/replicator && .venv/bin/python -m scripts.inflight >/dev/null
+health cd /srv/replicator/live && .venv/bin/python -m scripts.inflight >/dev/null
 
 # No restarter: Restart=on-failure is the unit's own, and OnFailure= only
 # notifies (FAILURE-NOTIFICATION.md). No caller: producers reach this host

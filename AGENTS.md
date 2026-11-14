@@ -76,22 +76,22 @@ critical, guarded by `scripts/check_redis_floor.sh`. Why, ports, redis-py pin:
 
 ## Server Lifecycle
 
-`replicator.service` runs the worker. Deploy committed code with `git pull --ff-only
-&& bash scripts/co-pypi.sh uv sync --frozen && sudo systemctl restart replicator`
-— `git push` instead of the pull when the merge happened here.
+`replicator.service` runs the worker from `/srv/replicator/live`, a root-owned
+release (#151). Deploy merged main with `scripts/deploy.sh` (`shipping-work` runs
+it); roll back with `scripts/deploy.sh <sha12>`. Nothing in the checkout — branch,
+venv, unpushed commits — reaches the service.
 
 Two that bite, silently until they matter:
 
-- **The service refuses to start off `main`, or off unpushed commits** (#37, #48).
-  `REPLICATOR_ALLOW_ANY_CHECKOUT=1` overrides; a dev worker asks the same question
-  at the writer (#52).
-- **Everything installed from `deploy/` is a copy** — `cp` after every edit;
-  `daemon-reload` re-reads the old file, the sysctl drop-in needs
-  `sysctl --system`, and tailscaled's a tailscaled restart (#113). The
-  `OnFailure=` handler's missed `cp` is invisible until the first failure; read
-  what it recorded with `journalctl -t replicator-failure`, never `-u`.
+- **Only a release builds a provider writer** (#52): a checkout, `main` included,
+  refuses them. `REPLICATOR_ALLOW_ANY_CHECKOUT=1` overrides, for a dev worker
+  against the test bucket.
+- **The deploy never installs a host config from `deploy/`** — it names drift; `cp`
+  by hand: the sysctl drop-in needs `sysctl --system`, tailscaled's a tailscaled
+  restart (#113). Read the `OnFailure=` handler's record with
+  `journalctl -t replicator-failure`, never `-u`.
 
-Every deploy situation and the guard's verdict table:
+The deploy, rollback, disk budget and the release check:
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Environment Variables
@@ -221,7 +221,7 @@ source — with rationale and ruff gates: [docs/STYLE.md](docs/STYLE.md).
 - [POLITENESS.md](docs/POLITENESS.md) — per-host pacing: the policy stream, sleep vs park, 429/503 escalation
 - [CONVENTIONS.md](docs/CONVENTIONS.md) — rules common to every stream: idempotency, validation, DLQ, `claim_stale`, the `replicator:cmd:*` keys (#80)
 - [STORAGE.md](docs/STORAGE.md) — blob paths and modes, the populations under `REPLICATOR_BLOB_DIR`, TTL and ceilings
-- [DEPLOYMENT.md](docs/DEPLOYMENT.md) — the unit's lifecycle and its start guards
+- [DEPLOYMENT.md](docs/DEPLOYMENT.md) — the release deploy, the unit's lifecycle and its start guards
 - [DEPENDENCIES.md](docs/DEPENDENCIES.md) — the co-pypi index, its token wrapper, the co-core pin
 - [MEMORY-PROTECTION.md](docs/MEMORY-PROTECTION.md) — the host's memory tunables
 - [FAILURE-NOTIFICATION.md](docs/FAILURE-NOTIFICATION.md) — the `OnFailure=` handler: `REPLICATOR_NOTIFY_*`, notifier mode, delivery scoring

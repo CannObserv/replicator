@@ -190,18 +190,23 @@ output: plain-text access lines interleaved with JSON app records.
 ## Deploy
 
 The systemd unit lives at [`deploy/replicator.service`](deploy/replicator.service) and runs the
-**worker**, not the API. To install on a fresh host:
+**worker**, not the API, from `/srv/replicator/live`: a root-owned release that
+`scripts/deploy.sh` builds from a CI-green `main` commit, never the checkout (#151). The deploy
+installs both units; the host configs beside them it compares and never installs. To set up a
+fresh host:
 
 ```bash
-# Copy into systemd's path — all four, they are copies and not symlinks
-sudo cp deploy/replicator.service /etc/systemd/system/replicator.service
-sudo cp 'deploy/replicator-failure-notify@.service' /etc/systemd/system/
-# tailscaled's -900, and the slice grant without which MemoryLow= is inert (#113)
+# The release root, root's alone; then the first deploy (units installed, nothing restarted)
+sudo install -d -o root -g root -m 755 /srv/replicator
+scripts/deploy.sh --no-restart
+sudo systemctl enable replicator
+scripts/deploy.sh --verify <sha12>  # restarts and verifies the worker on that build
+
+# tailscaled's -950, and the slice grant without which MemoryLow= is inert (#113)
 sudo install -D -m 644 deploy/tailscaled.service.d/memory.conf /etc/systemd/system/tailscaled.service.d/memory.conf
 sudo install -D -m 644 deploy/system.slice.d/replicator-memory.conf /etc/systemd/system/system.slice.d/replicator-memory.conf
 sudo systemctl daemon-reload
 sudo systemctl restart tailscaled   # OOMScoreAdjust= applies at exec only
-sudo systemctl enable --now replicator
 
 # The host's memory tunables, which sysctl reads — not systemd
 sudo cp deploy/99-co-replicator-memory.conf /etc/sysctl.d/
@@ -212,28 +217,21 @@ sudo install -D -m 644 deploy/needrestart.conf.d/replicator.conf /etc/needrestar
 
 # Proof it took: the live checks read /proc and /sys/fs/cgroup, where
 # `systemctl show` would report values the running processes may not have
-uv run pytest --no-cov tests/test_deploy.py
+uv run pytest --no-cov tests/test_deploy.py tests/deploy
 
 # Tail logs
 sudo journalctl -u replicator -f
 ```
 
-The `OnFailure=` handler is easy to skip and silent when missing: nothing runs it
-until something fails, which is the one moment it was supposed to help. What it
-reported is read with `journalctl -t replicator-failure`, never `-u`
+After that, every merge deploys with `scripts/deploy.sh` (`shipping-work` runs it), and a
+rollback is `scripts/deploy.sh <sha12>`. What the handler reported is read with
+`journalctl -t replicator-failure`, never `-u`
 ([docs/FAILURE-NOTIFICATION.md](docs/FAILURE-NOTIFICATION.md)).
 
 Production secrets live in `/etc/replicator/.env` (managed manually on the VM, not in the repo).
-The unit's `ExecStartPre` writes the current git SHA to `/run/replicator/build-id` and exposes it
+The unit's `ExecStartPre` writes the release's `REVISION` to `/run/replicator/build-id` and exposes it
 as `BUILD_ID` and asserts the Redis `>=7.0` floor via `scripts/check_redis_floor.sh` — whose
 journald output is **plain text, not JSON**, by design (see [docs/STYLE.md](docs/STYLE.md), "Not
-everything in the journal is JSON").
-
-Because `ExecStart` runs `--frozen --no-sync`, run `bash scripts/co-pypi.sh uv sync --frozen` as part
-of the deploy, before `systemctl restart`; nothing at start reaches the package index.
-
-`ExecStartPre` also refuses the start outright if this checkout is not on `main`, or if `main`
-carries commits that were never pushed (#37, #48) — the deployed code has to be code someone else
-can see. So get level with `origin/main` first: `git pull --ff-only` when the merge happened on
-GitHub, `git push` when it happened here. Full verdict table and the escape hatch:
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+everything in the journal is JSON"). A start syncs nothing: the release's venv was built by the
+deploy. Every situation, the release check that keeps a checkout from writing, and the disk
+budget: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).

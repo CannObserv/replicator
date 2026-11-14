@@ -1,7 +1,7 @@
 """Run one ``uv`` command, or fetch co-core wheels, with a co-pypi access token (#183).
 
     . scripts/load_env.sh                      # REPLICATOR_CO_PYPI_CREDENTIALS
-    bash scripts/co-pypi.sh uv sync --frozen   # the deploy step
+    bash scripts/co-pypi.sh uv sync --frozen   # a dev venv; deploys build through it (UV_WRAPPER)
     bash scripts/co-pypi.sh uv lock
     bash scripts/co-pypi.sh wheels OLD NEW DIR # the closure diff's wheels
 

@@ -3,7 +3,7 @@
 The ``patching-hosts`` knob's ``inflight`` line runs this before every apply step
 and again inside the reboot chain, and the gate passes only on a printed ``0``::
 
-    cd /home/exedev/replicator && .venv/bin/python -m scripts.inflight
+    cd /srv/replicator/live && .venv/bin/python -m scripts.inflight
 
 **This worker's entries, not the group's.** ``XPENDING``'s summary form names
 each consumer's count, and only the names ``consumer_name_for`` gives this

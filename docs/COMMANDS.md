@@ -404,39 +404,34 @@ how two were leaked during notifier#57.
 
 ## Deploy
 
+The release deploy (#151); every situation, and what one deploy does:
+[DEPLOYMENT.md](DEPLOYMENT.md#releases-151).
+
 ```bash
-bash scripts/check_main_checkout.sh                     # what the unit asserts before it starts
+scripts/deploy.sh                                       # merged main, once CI is green; shipping-work runs it
+scripts/deploy.sh <sha12>                               # roll back (ls /srv/replicator/releases)
+scripts/deploy.sh --build-only                          # build releases/<sha12>, switch nothing
+scripts/deploy.sh --no-restart <sha12>                  # switch and install units, restart nothing (the cutover)
+scripts/deploy.sh --verify <sha12>                      # restart and verify a build already live
+journalctl -t replicator-deploy -n 20                   # what the deploys did
+readlink /srv/replicator/live; cat /run/replicator/build-id   # which build is live, and which one started
+bash skills/deploying-releases/scripts/install.sh --check     # the installed core against the vendored skill
+
 bash scripts/notify_failure.sh replicator.service       # what OnFailure= runs; records, never dispatches unset
 
-sudo cp deploy/replicator.service /etc/systemd/system/replicator.service
-sudo cp 'deploy/replicator-failure-notify@.service' /etc/systemd/system/
+# Host configs: the deploy compares them and never installs them.
 sudo install -D -m 644 deploy/tailscaled.service.d/memory.conf /etc/systemd/system/tailscaled.service.d/memory.conf
 sudo install -D -m 644 deploy/system.slice.d/replicator-memory.conf /etc/systemd/system/system.slice.d/replicator-memory.conf
 sudo systemctl daemon-reload
 sudo systemctl restart tailscaled                       # its OOMScoreAdjust= applies at exec only (#113)
-sudo systemctl enable --now replicator
-# BOTH unit files, and the second one has no restart to pair with it — it is a
-# template nothing runs until a unit fails. Which is also why skipping it is
-# silent: the miss surfaces at the first incident, the one moment it was meant
-# to help (#94). The two drop-ins are as quiet: without them tailscaled sits at
-# adj 0 and both MemoryLow= are inert, and only the live checks in
-# tests/test_deploy.py notice.
-
-git pull --ff-only && bash scripts/co-pypi.sh uv sync --frozen && sudo systemctl restart replicator  # merged on GitHub
-git push && bash scripts/co-pypi.sh uv sync --frozen && sudo systemctl restart replicator            # merged locally
-# Getting main level with origin is not optional: the guard refuses to start a
-# `main` that is ahead of origin/main, because unpushed commits are on no shared
-# branch (#48). Which command does it depends on where the merge happened.
-
-# The installed unit is a COPY, not a symlink — a merge that touched
-# deploy/replicator.service needs the cp above re-run before the reload, or the
-# worker comes up on new code under the old unit with nothing to show for it.
-diff /etc/systemd/system/replicator.service deploy/replicator.service
-diff '/etc/systemd/system/replicator-failure-notify@.service' 'deploy/replicator-failure-notify@.service'
+# Without the two drop-ins tailscaled sits at adj 0 and both MemoryLow= are
+# inert, and only the live checks in tests/test_deploy.py notice. The others
+# and their reload: DEPLOYMENT.md's lifecycle table.
 diff /etc/systemd/system/tailscaled.service.d/memory.conf deploy/tailscaled.service.d/memory.conf
 diff /etc/systemd/system/system.slice.d/replicator-memory.conf deploy/system.slice.d/replicator-memory.conf
 diff /etc/needrestart/conf.d/replicator.conf deploy/needrestart.conf.d/replicator.conf
 diff /etc/apt/preferences.d/tailscale.pref deploy/apt/preferences.d/tailscale.pref
+diff /etc/sysctl.d/99-co-replicator-memory.conf deploy/99-co-replicator-memory.conf
 
 sudo journalctl -u replicator -f
 journalctl -t replicator-failure                        # what the OnFailure= handler reported

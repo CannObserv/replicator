@@ -1,17 +1,90 @@
 # Replicator Deployment
 
-The systemd unit's lifecycle and the guards it starts behind. Where co-core comes
-from, and its pin, are in [DEPENDENCIES.md](DEPENDENCIES.md).
+How code reaches `replicator.service`: the release deploy, the unit's lifecycle and
+the guards it starts behind. Where co-core comes from, and its pin, are in
+[DEPENDENCIES.md](DEPENDENCIES.md).
 What it reports when it *fails* is in
 [FAILURE-NOTIFICATION.md](FAILURE-NOTIFICATION.md); the host's memory tunables
 are in [MEMORY-PROTECTION.md](MEMORY-PROTECTION.md).
 `AGENTS.md` keeps the two-env-file boundary and
-the restart command; the reasoning behind each of them is here. The variables
+the deploy command; the reasoning behind each of them is here. The variables
 themselves are in [ENVIRONMENT.md](ENVIRONMENT.md), which indexes every one and
 sends the blob and temp-store settings on to [STORAGE.md](STORAGE.md); the VM,
 broker and bucket topology this unit runs on is in
 [INFRASTRUCTURE.md](INFRASTRUCTURE.md).
 The start guards' own variables are the exception, kept [below](#environment-variables) (#146).
+The design, its decisions and the measured disk budget: [the #151 design doc](plans/2026-11-14-releases-design.md).
+
+## Releases (#151)
+
+Both units run `/srv/replicator/live`, a link into `releases/<sha12>`: a read-only,
+root-owned `git archive` of one commit on `origin/main`, with its own venv
+(`uv sync --locked --no-dev`, through `scripts/co-pypi.sh`). **Nothing done in the
+checkout reaches the service** until `scripts/deploy.sh` puts it there: not its
+branch, not its venv, not an unpushed commit. The script is the deploying-releases
+core (gregoryfoster/skills#372), installed, **never edited here** —
+`tests/deploy/test_deploy_contract.py` checks its sha256 marker. This repo's half is
+`scripts/deploy_hooks.sh`; a change the hooks can't express is raised on
+gregoryfoster/skills.
+
+### Deploying
+
+From `/home/exedev/replicator`, as `exedev`. `shipping-work` runs the first form
+itself (`.skills/deploy_command`):
+
+```bash
+scripts/deploy.sh                   # origin/main, once its CI passed
+scripts/deploy.sh <sha12>           # an older build: this is how to roll back
+scripts/deploy.sh --skip-ci         # GitHub can't answer: an emergency, journaled
+scripts/deploy.sh --build-only      # build releases/<sha12>, switch nothing
+scripts/deploy.sh --verify <sha12>  # restart and verify every unit on a build already live
+journalctl -t replicator-deploy -n 20
+```
+
+Exit 0: deployed and verified. 1: refused, or failed and switched back to a build
+that answers. 4: left on a build that does not answer; the message says what to run.
+
+**What one deploy does**, in order: waits for CI on the commit (all four jobs,
+`CI_JOBS`); builds `releases/<sha12>` and imports `src.worker.main` from it;
+`post_build_check` asks the release's own writer guard (#52, below), refusing a
+release that would build no writer; switches `live`; installs whichever unit
+differs (keeping the old copy for a switch-back); restarts the worker, which
+drains for up to `TimeoutStopSec=180`; and verifies it: a new main PID whose cwd
+is the release, then its own `"worker ready"` line naming the build. A failed
+verify switches back and restarts the old build. The restart counts toward
+`StartLimitBurst=8`, as a manual one always did.
+
+**Not the weekly measurement commit.** `github-actions[bot]` pushes get no CI run,
+so the core refuses them: deploy the commit under it.
+
+**Only commits from #151's merge on are deployable.** An older commit's units name
+no `/srv/replicator/live`, and the core refuses it before switching anything.
+
+**Two releases on disk, three for the minute a build takes.** `KEEP=0`: the core
+always keeps the live release and the one it replaced, so a one-step rollback needs
+no spare. Each is ~259 MB, and root is near the patching run's 84.0% ceiling —
+the budget is the design doc's *Disk* table.
+
+### Once, before the first deploy (the operator)
+
+1. The root, root's alone: `sudo install -d -o root -g root -m 755 /srv/replicator`.
+2. Nothing else is new. The service user is `exedev` to start (a dedicated user is a
+   follow-up). `/etc/replicator/.env`, the keys beside it and `co-pypi-reader.json`
+   stay where they are; the hooks name the reader key's path.
+3. The cutover: `scripts/deploy.sh --no-restart <sha12>`, then
+   `scripts/deploy.sh --verify <sha12>`. The runbook is on #151.
+
+The deploy user needs `sudo -n` for `install`, `ln`, `mv`, `chmod`, `chown`, `tee`,
+`touch`, `rm` under `/srv/replicator` and `/etc/systemd/system`, `readlink` under
+`/proc`, and `systemctl`. `exedev` has it.
+
+### What a deploy never does
+
+- Install a host config. The five in `deploy/` (`HOST_CONFIGS` in the hooks) are
+  compared after every deploy and named when they differ; the operator installs
+  them, with the commands below.
+- Enable a new unit (`ENABLE_NEW` is empty), or remove one the release lacks.
+- Restart anything under `--no-restart`.
 
 ## Server Lifecycle
 
@@ -19,28 +92,37 @@ The start guards' own variables are the exception, kept [below](#environment-var
 
 | Situation | Action |
 |---|---|
-| Code merged to main **on GitHub** (the usual path) | `git pull --ff-only && bash scripts/co-pypi.sh uv sync --frozen && sudo systemctl restart replicator`, in a shell that ran `. scripts/load_env.sh` (the sync's token: [DEPENDENCIES.md](DEPENDENCIES.md)) |
-| Code merged to main **locally** | `git push && bash scripts/co-pypi.sh uv sync --frozen && sudo systemctl restart replicator` |
-| Testing a worktree/branch | `uv run python -m src.worker.main` (set distinct `REPLICATOR_CONSUMER_NAME` **and** `REPLICATOR_REPLICATE_CONSUMER_NAME` — **required** while the service runs, since #77 makes both loops derive the names the unit registers under) |
+| Code merged to main | `scripts/deploy.sh` — or `shipping-work`, which runs it. No `uv sync`, no `cp`, no restart by hand |
+| Rolling back | `scripts/deploy.sh <sha12>` of the build to return to (`ls /srv/replicator/releases`) |
+| Which build is live | `readlink /srv/replicator/live`, `cat /run/replicator/build-id`, or the `"worker ready"` line's `build` |
+| Testing a worktree/branch | `uv run python -m src.worker.main` (set distinct `REPLICATOR_CONSUMER_NAME` **and** `REPLICATOR_REPLICATE_CONSUMER_NAME` — **required** while the service runs, since #77 makes both loops derive the names the unit registers under). It builds no provider writer: see [the release check](#the-release-check--only-a-release-builds-a-writer-52-151) |
 | Debugging the live service | `sudo journalctl -u replicator -f` |
-| After editing `deploy/replicator.service` | `sudo cp deploy/replicator.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart replicator` |
-| After editing `deploy/replicator-failure-notify@.service` | `sudo cp 'deploy/replicator-failure-notify@.service' /etc/systemd/system/ && sudo systemctl daemon-reload` — **no restart**, it is a template nothing runs until a unit fails |
+| After editing either unit in `deploy/` | Merge it and deploy: the core installs every unit that differs, `daemon-reload`s, and restarts the worker (never the handler, a template nothing runs until a unit fails) |
 | After editing `deploy/99-co-replicator-memory.conf` | `sudo cp deploy/99-co-replicator-memory.conf /etc/sysctl.d/ && sudo sysctl --system` — **`sysctl --system`, not `daemon-reload`**, which does not read this file |
 | After editing `deploy/tailscaled.service.d/memory.conf` | `sudo install -D -m 644 deploy/tailscaled.service.d/memory.conf /etc/systemd/system/tailscaled.service.d/memory.conf && sudo systemctl daemon-reload && sudo systemctl restart tailscaled` — the **restart** is for `OOMScoreAdjust=`, which applies at exec; read `/proc/$(systemctl show -p MainPID --value tailscaled)/oom_score_adj`, never `systemctl show -p OOMScoreAdjust`. It drops the tailnet briefly — 3 s on 2026-09-24, and the worker logged nothing |
 | After editing `deploy/system.slice.d/replicator-memory.conf` | `sudo install -D -m 644 deploy/system.slice.d/replicator-memory.conf /etc/systemd/system/system.slice.d/replicator-memory.conf && sudo systemctl daemon-reload` — **no restart**; read `/sys/fs/cgroup/system.slice/memory.low` |
 | After editing `deploy/apt/preferences.d/tailscale.pref` | `sudo install -D -m 644 deploy/apt/preferences.d/tailscale.pref /etc/apt/preferences.d/tailscale.pref` — **no reload**; `apt-cache policy tailscale` showing 600 over the site's 100 proves it. It scopes the Tailscale origin the `patching-hosts` maintenance lane follows (#131) |
 | After editing `deploy/needrestart.conf.d/replicator.conf` | `sudo install -D -m 644 deploy/needrestart.conf.d/replicator.conf /etc/needrestart/conf.d/replicator.conf` — **no reload**, apt's hook reads it at the next dpkg run; `sudo needrestart -m u -r l -b` printing `Disabling Ubuntu mode` proves it loads. Without it a security apply restarts the worker mid-apply, outside any window (#122) |
 | Reading what the failure handler reported | `journalctl -t replicator-failure` — **not** `journalctl -u`; why, in [FAILURE-NOTIFICATION.md](FAILURE-NOTIFICATION.md) |
-| After a co-core pin move | the procedure in [DEPENDENCIES.md](DEPENDENCIES.md#moving-the-pin) |
+| After a co-core pin move | the procedure in [DEPENDENCIES.md](DEPENDENCIES.md#moving-the-pin), then deploy |
 | `Start request repeated too quickly` | `sudo systemctl reset-failed replicator && sudo systemctl start replicator` — the rate limit, not a broken build |
 
-`ExecStart` uses `--frozen --no-sync`, so dependency sync is a deploy step, not a service-start side effect: no step at start reaches the package index or needs its token (#183, `tests/test_deploy.py`).
+**A start syncs nothing.** `ExecStart` runs the release's own `.venv`, built at deploy
+time, so no step at start reaches the package index or needs its token (#183,
+`tests/test_deploy.py`). It resolves `live` before `exec`ing the interpreter: Python
+reads `sys.prefix` from the path it was started by, so a worker started through the
+link would, once a deploy moved it, import the next release's packages while it
+drains.
 
-**`/etc/systemd/system/replicator.service` is a *copy*, not a symlink to `deploy/`.** So the `cp` above is load-bearing and `daemon-reload` alone silently does nothing — systemd re-reads the installed file, which is still the old one. The failure has no symptom at restart: the worker comes up on the new code under the *old* unit, and the mismatch only surfaces the first time a directive actually matters. Little guards it, either — `tests/test_deploy.py` reads the repo file, which is exactly the copy that is still correct; only its live checks of `OOMScoreAdjust=` and `MemoryLow=` (#113) read what the host holds. Diff the two when a restart follows a unit edit (#11 deploy).
+**The build id is the release's `REVISION`**, a 12-character sha since #151 (a
+7-character `git rev-parse --short` before). The unit stamps it into
+`/run/replicator/build-id`, which outlives a failed start so the failure handler
+can still name the build.
 
-The copy is deliberate, for the same reason `/etc/replicator/.env` is not read from the repo: the live unit must survive a repo reset, a worktree switch, or a branch checkout that happens to be mid-edit.
-
-**Two unit files now, and the second one is easy to forget.** `deploy/replicator-failure-notify@.service` is the `OnFailure=` handler, and it is a copy under `/etc/systemd/system/` exactly like the worker's unit — with one difference that makes its absence quieter: nothing runs it until something fails, so a missed `cp` is invisible until the first incident, which is the one moment it was supposed to help. `systemctl status replicator-failure-notify@replicator.service.service` answering `Unit ... not found` is how that looks. There is no restart to pair with the copy.
+**The installed units are copies the deploy keeps in step.** Off the host, nothing
+compares them; on it, `tests/deploy/test_deploy_units.py` checks each installed unit
+against the **live release's** copy, never the working tree's, so a merge not yet
+deployed is not drift. A hand edit under `/etc/systemd/system` is.
 
 **Eight starts in two hours, and an iterative session will spend them.** `StartLimitIntervalSec=7200` with `StartLimitBurst=8` is sized against `worst_case_outage_seconds` so a permanently unreachable Redis surfaces as a *stopped unit* rather than a hot restart loop. The cost is that a ninth `systemctl restart` inside two hours — ordinary when shipping several commits in one sitting — fails with `Start request repeated too quickly` and `Result: start-limit-hit`, which reads as a broken deploy and is not one: the previous instance stops cleanly and logs `worker stopped` on its way out. `sudo systemctl reset-failed replicator` clears the counter; then `start` as normal. Check `systemctl status` for `start-limit-hit` before debugging the build — #77 hit this twice in one session.
 
@@ -67,34 +149,30 @@ notifier mode and its delivery scoring:
 `vm.min_free_kbytes`, the `MemoryLow=` slice grant, and why `earlyoom` is
 declined: [MEMORY-PROTECTION.md](MEMORY-PROTECTION.md).
 
-### The checkout guard — the service refuses to start off `main` (#37), or off unpushed commits (#48)
+### The release check — only a release builds a writer (#52, #151)
 
-"Code committed to main is the deployed code" was an invariant AGENTS.md asserted and nothing enforced. On 2026-08-14, during #29, a restart to verify a credential change deployed branch `29-replicate-refusals` as build `7d6f195` while `main` was at `b69771a`. The blast radius was small — the replicate loop had nothing provisioned and refused everything — but the service ran unmerged code, and it was noticed only because someone read the build stamp carefully. That is the point: a branch deploy stamps `BUILD_ID` with the branch commit, so the journal *looks* correct while describing code that is on no shared branch.
+A dev worker started from a checkout (the *Testing a worktree/branch* row) inherits,
+through the shell snippet under **Environment Variables**, the production ADC *and*
+the production alias table, and would acquire a write identity against a bucket
+whose objects it cannot delete (#38). So `build_writers` asks
+`src/worker/checkout.py` first: **a release is a tree whose `REVISION` is a regular
+file owned by root**, which only the deploy writes, through `sudo`, after its CI
+gate. Anything else — a checkout on any branch, `main` included, or a `REVISION`
+someone wrote by hand — builds **no provider writer**, logs `refusing to build a
+provider writer — this code is not a release` at `error`, and changes nothing else:
+the fetch path runs, the alias table is still read, and commands naming the alias
+are refused `provider_disabled`. `REPLICATOR_ALLOW_ANY_CHECKOUT=1` builds the writers
+anyway, which is how a branch is tested against the **test** bucket (#50).
 
-`scripts/check_main_checkout.sh` is now a fatal `ExecStartPre` (no `-` prefix), placed **before** the `BUILD_ID` stamp so a refused start cannot leave a misleading build id in `/run/replicator/build-id`, which outlives the failed start. It checks the unit's `WorkingDirectory` rather than a hardcoded path, so the guard, the stamp, and `ExecStart` can never disagree about which tree is under test.
+The deploy asks the same function from each release before switching to it
+(`post_build_check`), so a release that would refuse its own writers never goes live.
 
-| Condition | Verdict |
-|---|---|
-| HEAD on `main`, clean, in sync | start |
-| HEAD on any other branch | **refuse** — the case that motivated it |
-| detached HEAD | **refuse**, named as such rather than as "on 'HEAD'" |
-| unborn HEAD, or not a git work tree | **refuse** — no evidence to check, and soft-passing would make `rm -rf .git` a silent bypass |
-| `main` ahead of `origin/main` | **refuse** (#48) — unpushed commits are the same "on no shared branch" case, and unlike *behind* the verdict does not depend on the ref being fresh (below). `git push`, or `git reset --hard origin/main` |
-| `main` behind `origin/main` | warn — a stale-but-shared commit is a different problem from an unshared one, and `origin/main` is only as fresh as the last fetch, so refusing would make the service unstartable during a network outage. The guard never fetches |
-| no `origin/main` ref at all | warn — absence of evidence, not evidence of an unshared commit: HEAD is already proven to be `main`. Named out loud only because ahead now refuses, so silence would make `git remote remove origin` a quiet bypass |
-| dirty working tree (tracked files) | warn — refusing would block an operator mid-incident. Untracked files **and submodule state** are ignored, on the same reasoning both times: scratch files and a `skills-vendor/` refresh would otherwise keep this warning permanently lit over things the worker never loads, and a warning nobody reads is no warning |
-
-**Why *ahead* refuses while *behind* warns, on the same cached ref.** `origin/main` is updated by `git fetch` **and** by a successful `git push` from this repository. A never-fetched ref can therefore hide *behind*-ness — remote commits this checkout cannot see, which is why refusing there would fail an operator whose only sin is a network outage — but it cannot manufacture *ahead*-ness for commits this checkout pushed, because the push would have moved the ref. "Ahead" is **local** evidence: the commits are here and nothing here published them, assertable without the network call an `ExecStartPre` must not make. The one false positive needs someone to publish the identical SHAs from another clone; through a PR merge the SHAs differ, so the tree reads as *diverged* — the refusal still fires, and the behind warning prints alongside it so both sides get named.
-
-The practical cost is one `git push` before the restart, in a flow that already meant to push — which is why the lifecycle table above splits the two merge paths. Merging on GitHub leaves this checkout *behind* rather than ahead, so that path pulls and never pushes; a deploy line whose first command routinely prints `Everything up-to-date` is one an operator learns to skip, and skipping it is the whole failure this guard now refuses. The network-partition case (a hotfix committed while the remote is unreachable) is what `REPLICATOR_ALLOW_ANY_CHECKOUT=1` is for, and that is a documented use of the override rather than an erosion of the guard.
-
-Verify it by hand with `bash scripts/check_main_checkout.sh` (exit 0 starts, non-zero refuses). `REPLICATOR_ALLOW_ANY_CHECKOUT=1` is the escape hatch — see **Environment Variables**.
-
-**The dev worker asks the same question, at the writer (#52).** The `ExecStartPre` covers the service and nothing else; the documented way to test a branch here — `uv run python -m src.worker.main` under distinct `REPLICATOR_CONSUMER_NAME` and `REPLICATOR_REPLICATE_CONSUMER_NAME` — involves no systemd, so it runs no guard at all. That was free while replication was unprovisioned and every command refused. **It stopped being free on 2026-09-10**, when `primary` was provisioned here (#86): the shell snippet under **Environment Variables** loads `/etc/replicator/.env`, so a worker started from a feature branch inherits the production ADC *and* the production alias table, and acquires a write identity against a bucket whose objects it cannot delete (#38). That is today's condition on this VM, not a future one — a dev worker testing a replicate branch here reaches the production bucket unless it is pointed at the test one.
-
-So `build_writers` calls `src/worker/checkout.py`, which runs the same script and takes its verdict wholesale — same seven conditions, same override, one source of truth. A refused checkout builds **no provider writer**, logs `refusing to build a provider writer` at `error`, and changes nothing else: the fetch path runs, the alias table is still read, and commands naming the alias are refused `provider_disabled` — accurate, and the reason whose remedy is the operator act that fixes it. It is asked only when there is a `gcs` binding to build, so a worker that replicates nothing (this VM's, until #86 provisioned `primary` on 2026-09-10) pays no subprocess. `REPLICATOR_ALLOW_ANY_CHECKOUT=1` builds the writers anyway, which is how a branch is tested against the **test** bucket (#50).
-
-**The guard reaches the live service only after the `cp`.** It ships in `deploy/replicator.service`, and the installed unit is a copy — so until `sudo cp deploy/replicator.service /etc/systemd/system/ && sudo systemctl daemon-reload`, the running service is still ungated. A guard that exists only in the repo's copy of the unit is the same failure mode one level up.
+**What it replaced.** Until #151 the service ran the checkout, and
+`scripts/check_main_checkout.sh` (#37, #48) refused to start it off `main` or off
+unpushed commits, after a 2026-08-14 restart deployed a feature branch. That guard
+turned a mis-deploy into a failed start, which is still an outage (#94). It was
+deleted, not ported: the release is the evidence now, and the git verdicts it drew
+could not be asked of a tree with no `.git`.
 
 ### Required fields make a co-core bump a two-repo deploy
 
@@ -135,8 +213,8 @@ and the boundary between them: [ENVIRONMENT.md](ENVIRONMENT.md).
 The variables the unit's start guards read are the exception, kept here with the unit they gate
 and indexed there by name (#146): the Redis floor check's timeout and wait — the floor itself is
 [INFRASTRUCTURE.md](INFRASTRUCTURE.md#the-broker-is-co-broker--replicator-connects-it-does-not-run-one)'s
-— and the checkout guard's override. They live in `/etc/replicator/.env` like the rest:
+— and the release check's override. They live in `/etc/replicator/.env` like the rest:
 
 - `REPLICATOR_REDIS_FLOOR_TIMEOUT` — seconds one `check_redis_floor.sh` probe may run before it is killed; default `5`. Read by the unit's `ExecStartPre` only, never by the worker. Exists because `redis-cli` has no connect timeout, and a `rediss://` URL against a plaintext endpoint hangs on the TLS handshake
 - `REPLICATOR_REDIS_FLOOR_WAIT` — how long `check_redis_floor.sh` keeps retrying a broker it cannot reach before reporting the floor `UNVERIFIED`; default `30`, and `0` probes once. Exists because on a cold boot MagicDNS answers `broker` with no address for a moment after tailscaled starts, which `After=tailscaled.service` cannot see (#88; a wait for the tailnet *address* was tried and did not help). Only `unreachable` is retried — an auth refusal is an answer, and a silent failure has already spent the timeout. `WAIT + TIMEOUT` is held to half the unit's 90 s start budget by `tests/test_deploy.py`, because every `ExecStartPre` shares it. A non-integer is named at start and the default used
-- `REPLICATOR_ALLOW_ANY_CHECKOUT` — bypasses the `main`-checkout guard; **unset by default, which is the enforcing posture**. `scripts/check_main_checkout.sh` runs as the unit's first non-privileged `ExecStartPre` and refuses to start on any branch but `main` — see [**The checkout guard**](DEPLOYMENT.md#the-checkout-guard--the-service-refuses-to-start-off-main-37-or-off-unpushed-commits-48). Only the literal `1` bypasses it; anything else non-empty logs that it is *not* bypassing rather than silently failing to, because an override that quietly does nothing is worse than none. Exists at all because a guard with no override gets removed rather than overridden — but it is not the way to test a branch on this VM. That is `uv run python -m src.worker.main` under distinct `REPLICATOR_CONSUMER_NAME` and `REPLICATOR_REPLICATE_CONSUMER_NAME`, which never touches the unit and never needs this. Set it only when the thing under test *is* the unit — or when `main` carries a commit that cannot be pushed because the remote is unreachable, which is the one incident-time use the ahead refusal leaves (#37, #48). It has a second reader since #52: `build_writers` refuses to build a provider writer on a checkout the same script rejects, so this is also what a dev worker needs before it can write to the test bucket from a branch
+- `REPLICATOR_ALLOW_ANY_CHECKOUT` — builds provider writers from code that is not a release; **unset by default, which is the enforcing posture**. See [**The release check**](#the-release-check--only-a-release-builds-a-writer-52-151). Only the literal `1` overrides, and the worker logs a warning when it does. Production never sets it: the service runs a release, which needs none. A dev worker needs it before it can write to the test bucket from a branch (#50, #52)
