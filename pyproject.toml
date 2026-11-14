@@ -7,21 +7,25 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
-    # Floor is 0.45.0, and it carries no new feature: a one-minor catch-up
-    # (#192), in #184's shape. `co-core-aio` and `co-core-sync` 0.45.0 require
-    # `co-core>=0.45,<0.46`, so the three move together. 0.45.0's one library
-    # change is co/v1's `EventModel.url`, which reads the Event's `website` link
-    # and falls back to its `event_url` link, and a malformed `links` embed now
-    # raises `CoV1ResponseAnomaly` (cannobserv#663). Both sit outside this
-    # closure.
+    # Floor is 0.46.0, and it carries no new feature: a one-minor catch-up
+    # (#199), in #192's shape. The lock takes 0.46.1, the index's newest. The
+    # floor stays at .0 because nothing here depends on 0.46.1's one change,
+    # `co-core[extract]`'s soupsieve floor (cannobserv#667), an extra this
+    # project doesn't declare. `co-core-aio` and `co-core-sync` 0.46.x require
+    # `co-core>=0.46,<0.47`, so the three move together. 0.46.0's library
+    # changes are both on co/v1's read path, outside this closure: a CPT-backed
+    # record's `PostModel.wp_link` reads the server's `permalink`
+    # (cannobserv#664), and `EventModel.url` drops its `link` fallback
+    # (cannobserv#663). Its breaking removal, `WordPressMetadata`'s three
+    # `wp_view_*_url` templates, ships in none of the three wheels locked here.
     #
-    # **`scripts/co_core_closure_diff.py 0.44.0 0.45.0`** (#145), verbatim:
+    # **`scripts/co_core_closure_diff.py 0.45.0 0.46.1`** (#145), verbatim:
     #
-    # ## Import closure, 0.44.0 → 0.45.0
+    # ## Import closure, 0.45.0 → 0.46.1
     #
     # Roots `src`, `scripts`; packages `co_core`, `co_core_aio`, `co_core_sync`.
     #
-    # 58 files at 0.44.0, 58 at 0.45.0. 3 not identical:
+    # 58 files at 0.45.0, 58 at 0.46.1. 3 not identical:
     #
     # - `version-only` co_core/__init__.py
     # - `version-only` co_core_aio/__init__.py
@@ -29,11 +33,11 @@ dependencies = [
     #
     # **Requires-Dist:**
     #
-    # - co_core: unchanged
-    # - co_core_aio: removed `co-core<0.45,>=0.44`; added `co-core<0.46,>=0.45`
-    # - co_core_sync: removed `co-core<0.45,>=0.44`; added `co-core<0.46,>=0.45`
+    # - co_core: removed `soupsieve<3,>=2.0; extra == 'extract'`; added `soupsieve<5,>=4.1; extra == 'extract'`
+    # - co_core_aio: removed `co-core<0.46,>=0.45`; added `co-core<0.47,>=0.46`
+    # - co_core_sync: removed `co-core<0.46,>=0.45`; added `co-core<0.47,>=0.46`
     #
-    # **Third-party imports** (at 0.45.0): `google`, `google_auth_oauthlib`, `googleapiclient`, `httpx`, `pydantic`, `redis`, `requests`, `urllib3`.
+    # **Third-party imports** (at 0.46.1): `google`, `google_auth_oauthlib`, `googleapiclient`, `httpx`, `pydantic`, `redis`, `requests`, `urllib3`.
     #
     # **Dynamic imports, not followed:**
     #
@@ -42,10 +46,27 @@ dependencies = [
     #
     # Nothing to read by hand: the three files are `version-only`, and the
     # closure is the same with `tests/` as a root. The dynamic imports are the
-    # same two as at 0.44.0. Outside the closure, 0.45.0 changed eight co/v1
-    # adapter modules, `pure/models/link.py` and `co_core_sync/services/`'s
-    # `event.py` and `transcript.py`, and added or removed no module. Nothing in
-    # `src/`, `scripts/` or `tests/` reaches any of them.
+    # same two as at 0.45.0. The soupsieve change is under `[extract]`, and
+    # soupsieve is not in `uv.lock`. Outside the closure, 0.46.x changed
+    # `pure/adapters/co_v1/`'s `event.py` and `responses.py`,
+    # `pure/models/link.py` (docstring) and `co_core_sync/services/event.py`
+    # (docstring), and added or removed no module. Nothing in `src/`,
+    # `scripts/` or `tests/` reaches any of them.
+    #
+    # Previously:
+    #
+    # Floor was 0.45.0, and it carried no new feature: a one-minor catch-up
+    # (#192), in #184's shape. 0.45.0's one library change was co/v1's
+    # `EventModel.url`, which read the Event's `website` link and fell back to
+    # its `event_url` link, and a malformed `links` embed began raising
+    # `CoV1ResponseAnomaly` (cannobserv#663). Both sat outside this closure.
+    #
+    # **Diffing the closure, 0.44.0 → 0.45.0** (58 files, both sides): 3 not
+    # identical, all `version-only`; Requires-Dist moved only the aio/sync
+    # `co-core` bound. Outside the closure, 0.45.0 changed eight co/v1 adapter
+    # modules, `pure/models/link.py` and `co_core_sync/services/`'s `event.py`
+    # and `transcript.py`. Nothing in `src/`, `scripts/` or `tests/` reached any
+    # of them.
     #
     # Previously:
     #
@@ -423,9 +444,9 @@ dependencies = [
     # at module load, so a skew cannot reach a running worker at all. Additive over
     # 0.8.0 for everything the fetch path uses — no field on ContentFetchCommand,
     # BlobAvailableEvent or FetchFailedEvent moved between the two.
-    "co-core>=0.45.0,<0.46",
-    "co-core-aio[bus,gcs]>=0.45.0,<0.46",
-    "co-core-sync[gcs]>=0.45.0,<0.46",
+    "co-core>=0.46.0,<0.47",
+    "co-core-aio[bus,gcs]>=0.46.0,<0.47",
+    "co-core-sync[gcs]>=0.46.0,<0.47",
     "fastapi>=0.126.0,<1",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.5.0,<3",
