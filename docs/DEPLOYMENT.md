@@ -96,6 +96,10 @@ with `sg replicator -c '<command>'`. `sg replicator -c 'id -nG'` names `replicat
 works. `sg` runs `sh`, so a bash-only line goes through `bash -c` inside it:
 `sg replicator -c 'bash -c ". scripts/load_env.sh && …"'`. A script with a bash
 shebang, `scripts/deploy.sh` among them, needs nothing extra (measured 2026-11-15).
+`shipping-work`'s `.skills/deploy_command` and patching-hosts' `scripts.inflight` run
+with the calling session's groups too: from an older session the deploy's build stops at
+`could not mint a co-pypi access token … PermissionError`. Run them under `sg`, or from a
+new login.
 
 **Confinement.** Both units set `NoNewPrivileges=yes`, `ProtectSystem=strict`,
 `ProtectHome=yes` and `PrivateTmp=yes`. That makes `/home` invisible, the system
