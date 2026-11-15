@@ -34,9 +34,9 @@ The token is never printed, logged, put in argv or written. Standard library
 only, so ``uv run --no-project`` resolves nothing.
 
 Exit codes: ``0`` every wheel fetched and verified · ``1`` a fetch failed (a
-missing version or package, a sha256 mismatch, the network), naming the file or
-URL; files verified before it stay · ``2`` usage, no co-pypi index in
-``pyproject.toml``, or not run under the wrapper.
+missing version or package, a sha256 mismatch, the network, an unusable ``DIR``),
+naming the file, URL or directory; files verified before it stay · ``2`` usage, no
+co-pypi index in ``pyproject.toml``, or not run under the wrapper.
 """
 
 from __future__ import annotations
@@ -148,12 +148,18 @@ def fetch_wheels(
             # failure, never the request's headers.
             raise FetchError(f"{url}: {type(exc).__name__}: {exc}") from exc
 
-    dest.mkdir(parents=True, exist_ok=True)
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise FetchError(f"{dest}: {type(exc).__name__}: {exc}") from exc
     fetched: list[Path] = []
     for package in packages:
         page = f"{index}{page_name(package)}/"
         parser = _Links()
-        parser.feed(get(page).decode())
+        try:
+            parser.feed(get(page).decode())
+        except UnicodeDecodeError as exc:
+            raise FetchError(f"{page}: not a UTF-8 index page") from exc
         links = {}
         for href in parser.hrefs:
             url, _, fragment = urljoin(page, href).partition("#")
@@ -168,13 +174,16 @@ def fetch_wheels(
                 raise FetchError(
                     f"sha256 mismatch for {name}: the index says {digest or 'nothing'}"
                 )
-            fd, tmp = tempfile.mkstemp(dir=dest, prefix=f".{name}.", suffix=".part")
             try:
-                with os.fdopen(fd, "wb") as f:
-                    f.write(data)
-                os.replace(tmp, dest / name)
-            finally:
-                Path(tmp).unlink(missing_ok=True)
+                fd, tmp = tempfile.mkstemp(dir=dest, prefix=f".{name}.", suffix=".part")
+                try:
+                    with os.fdopen(fd, "wb") as f:
+                        f.write(data)
+                    os.replace(tmp, dest / name)
+                finally:
+                    Path(tmp).unlink(missing_ok=True)
+            except OSError as exc:
+                raise FetchError(f"{dest / name}: {type(exc).__name__}: {exc}") from exc
             fetched.append(dest / name)
     return fetched
 

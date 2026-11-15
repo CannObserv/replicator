@@ -202,6 +202,22 @@ def test_a_dropped_connection_is_a_fetch_error_not_a_traceback(fw, tmp_path, err
         _fetch(fw, tmp_path, opener, versions=["0.1.0"])
 
 
+def test_an_unusable_destination_is_a_fetch_error_naming_it(fw, tmp_path):
+    """A file where the directory should be: the error names it, no traceback."""
+    opener, _, _ = _index(CO_CORE, ["0.1.0"])
+    (tmp_path / "wheels").write_text("not a directory")
+    with pytest.raises(fw.FetchError, match=str(tmp_path / "wheels")):
+        _fetch(fw, tmp_path, opener, versions=["0.1.0"])
+
+
+def test_a_page_that_is_not_utf8_is_a_fetch_error_naming_it(fw, tmp_path):
+    def opener(request):
+        return io.BytesIO(b"\xff\xfe<a href=x>")
+
+    with pytest.raises(fw.FetchError, match=f"{INDEX}co-core/"):
+        _fetch(fw, tmp_path, opener, packages=["co-core"], versions=["0.1.0"])
+
+
 # --- the index URL -----------------------------------------------------------
 
 
