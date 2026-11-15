@@ -74,7 +74,7 @@ reads `XAUTOCLAIM`'s three-element reply, added in Redis server 7.0.
 
 ```bash
 # co-core, co-core-aio and co-core-sync come from the private co-pypi index, whose token
-# the wrapper mints from REPLICATOR_CO_PYPI_CREDENTIALS (docs/DEPENDENCIES.md).
+# the shared wrapper mints from /etc/replicator/co-pypi-reader.json (docs/DEPENDENCIES.md).
 . scripts/load_env.sh
 bash scripts/co-pypi.sh uv sync
 uv run pre-commit install
@@ -118,7 +118,7 @@ rather than deleting bytes a consumer was promised.
 | Variable | Set on this VM | Purpose |
 |---|---|---|
 | `GOOGLE_APPLICATION_CREDENTIALS` | `/etc/replicator/co-gcs-replicator-writer.json` | The worker's ADC — the writer SA (`co-gcs-replicator-writer@co-gcs`, #114), never the co-pypi reader |
-| `REPLICATOR_CO_PYPI_CREDENTIALS` | `/etc/replicator/co-pypi-reader.json` | Read-only key for the co-pypi index, read by `scripts/co-pypi.sh` in the deploy shell, never by the worker |
+| `CO_PYPI_KEY` | unset: the wrapper's default, `/etc/replicator/co-pypi-reader.json`, is the key | Read-only key for the co-pypi index, read by the shared `scripts/co-pypi.sh`, never by the worker (#201) |
 | `REPLICATOR_REDIS_URL` | `redis://replicator:<password>@broker:6379/0` | Change-bus client URL — the `replicator` ACL user on `co-broker`, over the tailnet |
 | `REPLICATOR_BLOB_BACKEND` | `gcs` | Temp blobs live in an object store — **not** the `local` default |
 | `REPLICATOR_BLOB_BUCKET` | `co-gcs-blobs` | The temp-blob bucket that backend writes into |

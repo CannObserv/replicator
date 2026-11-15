@@ -3,10 +3,11 @@
 ## Setup
 
 ```bash
-. scripts/load_env.sh                           # REPLICATOR_CO_PYPI_CREDENTIALS, the index's read-only key
 bash scripts/co-pypi.sh uv sync                 # co-core comes from the private co-pypi index
 bash scripts/co-pypi.sh uv lock                 # every relock, even a PyPI-only one
-bash scripts/co-pypi.sh wheels OLD NEW DIR      # every pin move: fetch, then diff the closure
+# every pin move: fetch the wheels, then diff the closure
+bash scripts/co-pypi.sh uv run --no-project python scripts/co_pypi_wheels.py \
+  --dest DIR --version OLD --version NEW co-core co-core-aio co-core-sync
 uv run --no-project python scripts/co_core_closure_diff.py OLD NEW --wheels DIR
 uv run pre-commit install
 ```

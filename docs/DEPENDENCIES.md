@@ -24,39 +24,43 @@ package: uv asks it for those three only, so neither side can shadow the other.
 | any `uv lock`, even a PyPI-only bump; `uv sync` on a cold cache | **required**: a 401 on co-core without it |
 
 So every release build, a dev venv's sync and every relock go through the wrapper.
-`scripts/deploy.sh` runs it as `UV_WRAPPER`, and `scripts/deploy_hooks.sh` names the
-key, so a deploy needs no `load_env.sh` (#151):
+`scripts/deploy.sh` runs it as `UV_WRAPPER` (#151); neither it nor a shell needs an
+env file for the key:
 
 ```bash
-. scripts/load_env.sh                      # REPLICATOR_CO_PYPI_CREDENTIALS
 bash scripts/co-pypi.sh uv sync --frozen   # a dev venv
 bash scripts/co-pypi.sh uv lock
 ```
 
-**The wrapper.** `scripts/co-pypi.sh` runs `scripts/co_pypi_token.py`, which mints an
-access token from the read-only key `REPLICATOR_CO_PYPI_CREDENTIALS` names
-(`co-pypi-reader@`, `/etc/replicator/co-pypi-reader.json`) and `exec`s uv with
-`UV_INDEX_CO_PYPI_USERNAME` / `_PASSWORD`. Each rule is tested
-(`tests/test_co_pypi_token.py`):
+**The wrapper is the cohort's, never edited here** (#201). `scripts/co-pypi.sh` and
+`scripts/co_pypi_token.py` are deploying-releases' marked copies, installed with
+`install.sh --co-pypi`; a change goes upstream, then a reinstall, and
+`tests/test_co_pypi.py` fails on a hand edit. The minter mints an access token from
+the read-only `co-pypi-reader@` key and `exec`s uv with `UV_INDEX_CO_PYPI_USERNAME` /
+`_PASSWORD`. Its rules are tested in the skill's own suite:
 
-- **One key, no fallback.** Never `GOOGLE_APPLICATION_CREDENTIALS`: on this host
-  that is the worker's *writer* (#114). Unset, the wrapper exits 2 and names the
-  variable.
+- **One key, never the writer's.** `CO_PYPI_KEY` when set, else
+  `/etc/<[project].name>/co-pypi-reader.json` — here `/etc/replicator/co-pypi-reader.json`,
+  so nothing sets it. Never `GOOGLE_APPLICATION_CREDENTIALS`: on this host that is the
+  worker's *writer* (#114).
 - **An allowlisted environment.** The deploy shell carries the writer's key path
   and the repo `.env`'s org-wide PATs, and uv (with the `uv_build` backend it runs)
-  starts with neither. The shell script and the Python hold the same list; a
-  variable uv turns out to need goes on both.
+  starts with neither.
 - **The token is never printed, logged, put in argv or written.** Anything but
-  `uv` or `wheels` is refused before a mint.
+  `uv` is refused before a mint.
+- **It runs from the lock's `co-pypi` group** (`google-auth[requests]`), `--frozen`,
+  so nothing in the process holding the key resolves at run time. The group is not a
+  default one: neither a release nor CI syncs it. ruff excludes the minter, whose
+  marker a `--fix` would break.
 
 **CI never runs it.** Each job's read-only WIF step mints the token
 (`token_format: access_token`, id `co_pypi`) and writes no credentials file; the
 `uv sync` step alone receives it, masked (`tests/ci/test_workflow_pins.py`).
 
-**Limits.** The token reaches what the wrapped uv spawns (the build backend),
-bounded by the reader's role and the token's hour. The `wheels` verb sends it to
-`urllib`, for the index host alone and across same-host redirects only: the index
-answers a file with a 307.
+**Limits.** The token reaches what the wrapped uv spawns (the build backend, and
+the wheel fetcher below), bounded by the reader's role and the token's hour. The
+fetcher sends it to `urllib`, for the index host alone and across same-host
+redirects only: the index answers a file with a 307.
 
 ## Moving the pin
 
@@ -66,19 +70,26 @@ answers a file with a 307.
 3. Diff the import closure ([below](#the-co-core-pin-and-why-the-patch-floor-is-load-bearing)):
 
    ```bash
-   bash scripts/co-pypi.sh wheels OLD NEW /tmp/co-core-wheels
+   bash scripts/co-pypi.sh uv run --no-project python scripts/co_pypi_wheels.py \
+     --dest /tmp/co-core-wheels --version OLD --version NEW co-core co-core-aio co-core-sync
    uv run --no-project python scripts/co_core_closure_diff.py OLD NEW --wheels /tmp/co-core-wheels
    ```
 
 4. Paste the report into the pin comment and raise the floor by the rules below.
 
-`wheels` checks each file against the index's sha256. The closure diff's
-real-wheel test reads `REPLICATOR_TEST_CLOSURE_WHEELS`, a directory `wheels 0.36.0
-0.37.0` filled, and skips without it, in CI too.
+**The fetcher** (#201) exists because uv has no download command and leaves no `.whl`
+behind [measured, uv 0.13.5]. It runs under the wrapper and reads the pair the wrapper
+hands uv, so it holds no key of its own; packages and versions are arguments, the
+index is `pyproject.toml`'s `co-pypi`. Each file is checked against the index's sha256
+and renamed into place; a missing version or a mismatch exits 1 naming the file. It is
+standard library only and names nothing of this repo's, built to be proposed to
+deploying-releases beside the wrapper. The closure diff's real-wheel test reads
+`REPLICATOR_TEST_CLOSURE_WHEELS`, a directory it filled at 0.36.0 and 0.37.0, and
+skips without it, in CI too.
 
 **Ask the index, not a cache.** The #77 review reported 0.13.1 "not mirrored" from a
-local `ls` while the index already carried it. Anything local is a cache; `wheels`
-or `uv lock` asks the index.
+local `ls` while the index already carried it. Anything local is a cache; the
+fetcher or `uv lock` asks the index.
 
 ## The co-core pin, and why the patch floor is load-bearing
 
