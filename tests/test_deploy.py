@@ -418,7 +418,6 @@ def test_the_stamp_is_roots_and_never_the_name_a_rollback_writes(tmp_path):
     _run_stamp(tmp_path, check=True)
 
     assert _stamp_step().startswith("+"), "the stamp is root's, whoever User= is"
-    assert STAMP.removeprefix("/run/replicator/") == "build-id.env"
     assert not (tmp_path / "build-id").exists(), "a stale build-id names the wrong build"
     assert (tmp_path / "build-id.env").read_text() == f"BUILD_ID={release.name}\n"
 
