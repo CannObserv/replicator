@@ -38,14 +38,11 @@ CI_JOBS=(
 )
 
 PYTHON=/usr/bin/python3.12
-# co-core resolves from the private co-pypi index (#183), through this repo's own
-# wrapper until #201 swaps in the shared one (install.sh --co-pypi --replace).
+# co-core resolves from the private co-pypi index (#183), through the shared
+# wrapper (install.sh --co-pypi, #201). A deploy's shell loads no env file, and
+# needs none: the wrapper's key defaults to /etc/<[project].name>/co-pypi-reader.json,
+# this host's /etc/replicator/co-pypi-reader.json.
 UV_WRAPPER=scripts/co-pypi.sh
-# This wrapper has no default key path (scripts/co_pypi_token.py refuses an unset
-# variable), and a deploy's shell loads no env file: shipping-work runs the deploy
-# command bare. The shared wrapper defaults to this same path, so this line goes
-# with #201.
-export REPLICATOR_CO_PYPI_CREDENTIALS="${REPLICATOR_CO_PYPI_CREDENTIALS:-/etc/replicator/co-pypi-reader.json}"
 # scripts/ too: patching-hosts runs scripts.inflight from the live release.
 SOURCE_DIRS=(src scripts)
 IMPORT_MODULES=(src.worker.main scripts.inflight)

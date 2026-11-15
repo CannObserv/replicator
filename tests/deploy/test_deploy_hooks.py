@@ -8,6 +8,7 @@ worker actually logs. Design: docs/plans/2026-11-14-releases-design.md.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 from pathlib import Path
@@ -63,11 +64,17 @@ def test_keep_is_zero_spares():
 
 
 def test_the_wrapper_finds_its_key_without_an_env_file():
-    assert (REPO / sourced('printf "%s\\n" "$UV_WRAPPER"')[0]).is_file()
-    assert sourced(
-        'env -u REPLICATOR_CO_PYPI_CREDENTIALS bash -c \'source "$0"; '
-        'printenv REPLICATOR_CO_PYPI_CREDENTIALS\' "$1"'
-    ) == ["/etc/replicator/co-pypi-reader.json"]
+    """A deploy loads no env file, so the shared wrapper's own default must name
+    the host's key (#201): the hooks export no key variable at all."""
+    wrapper = sourced('printf "%s\\n" "$UV_WRAPPER"')[0]
+    assert wrapper == "scripts/co-pypi.sh" and (REPO / wrapper).is_file()
+    # From an empty environment, so a loaded shell's own variables don't count.
+    exported = sourced('env -i PATH="$PATH" bash -c \'source "$0"; compgen -e\' "$1"')
+    assert not [v for v in exported if "CO_PYPI" in v], "the wrapper's default is the key"
+    spec = importlib.util.spec_from_file_location("minter", REPO / "scripts" / "co_pypi_token.py")
+    minter = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(minter)
+    assert minter.key_path({}) == "/etc/replicator/co-pypi-reader.json"
 
 
 WANT = "0123456789ab"
