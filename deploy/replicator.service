@@ -161,8 +161,10 @@ KillMode=mixed
 # moves it back. Measured both ways on a nested tree, modes kept (#202 CR 2).
 StateDirectory=replicator
 
-# The runtime dir, root's (`+`) and chowned to no one: the worker never writes it.
-ExecStartPre=+/bin/bash -c 'mkdir -p /run/replicator'
+# The runtime dir, root's (`+`): the worker never writes it. Taken back to root at
+# every start, because a pre-#202 start leaves it exedev's, and root writes the stamp
+# below into it (#202 CR 4). A rollback's own start chowns it to exedev first.
+ExecStartPre=+/bin/bash -c 'mkdir -p /run/replicator && chown root:root /run/replicator'
 
 # The build id is the release's REVISION (the sha12 the deploy wrote last, as
 # root), stamped where the OnFailure= handler can still read it after a failed

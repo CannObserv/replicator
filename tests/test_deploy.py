@@ -431,13 +431,19 @@ def test_both_units_read_the_stamp_this_release_writes(unit: Path):
 
 
 def test_the_worker_never_writes_the_runtime_directory():
-    """Only root's ``+`` steps write ``/run/replicator``, so it is chowned to no one:
-    a chown to ``User=`` is a second place the user is named, and under
-    ``ProtectSystem=strict`` the worker could not write there anyway."""
+    """Only root's ``+`` steps write ``/run/replicator``, and the directory is root's.
+    Never chowned to ``User=``: that is a second place the user is named, and under
+    ``ProtectSystem=strict`` the worker could not write there anyway. Taken back to
+    root (#202 CR 4): a pre-#202 start leaves it exedev's, and root then writes the
+    stamp into a directory the dev user could plant a symlink in."""
+    steps = [s for s in _exec_start_pre() if "/run/replicator" in s]
+    for step in steps:
+        assert step.startswith("+"), f"a /run/replicator step that is not root's: {step!r}"
+    made = next(s for s in steps if "mkdir -p /run/replicator" in s)
+    assert "chown root:root /run/replicator" in made, made
     for step in _exec_start_pre():
-        if "/run/replicator" in step:
-            assert step.startswith("+"), f"a /run/replicator step that is not root's: {step!r}"
-        assert "chown" not in step, f"nothing is chowned at start: {step!r}"
+        for target in re.findall(r"chown\s+(\S+)", step):
+            assert target == "root:root", f"chowned to someone other than root: {step!r}"
 
 
 def test_the_runtime_directory_exists_before_the_stamp():
