@@ -62,8 +62,9 @@ no `/srv/replicator/live`, and the core refuses it before switching anything.
 
 **Two releases on disk, three for the minute a build takes.** `KEEP=0`: the core
 always keeps the live release and the one it replaced, so a one-step rollback needs
-no spare. Each is ~259 MB, and root is near the patching run's 84.0% ceiling —
-the budget is the design doc's *Disk* table.
+no spare. Each is ~259 MB, under 1% of the 30 GiB root (#204): two put root near
+54%, against the patching run's 84.0% ceiling. `KEEP=0` was chosen at 20 GiB, by
+the design doc's *Disk* table.
 
 ### Once, before the first deploy (the operator)
 

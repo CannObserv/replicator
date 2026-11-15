@@ -70,7 +70,9 @@ The rows answer CannObserv/broker#22's design questions. "As the core" means its
 
 ### Disk
 
-Measured 2026-11-14 ~20:40Z.
+Measured 2026-11-14 ~20:40Z, on the 20 GiB root.
+
+**Since #204 (2026-11-14 ~23:55Z) root is 30 GiB:** 16.35 GB used of 30.05 GB usable, **54.4%**, with both releases on disk. A release is now 0.86%, so mid-build is ~55.3%. The patching ceiling of 84.0% is ~8.9 GB away, the sensor's 80% clear line ~7.7 GB. The table below is the 20 GiB record that chose `KEEP=0`.
 
 **Today:** root is 16.29 GB used of 19.93 GB usable, **81.7%**; df shows 82%.
 
