@@ -90,8 +90,10 @@ WorkingDirectory=/srv/replicator/live
 
 # Confinement (#202). Each was proven against the pinned headless shell before it
 # landed: tests/worker/test_browser_real.py (`-m browser`) in a transient system
-# service carrying all four, as a uid with no home and no groups, plus a live
-# public render. Chromium's sandbox is namespaces and seccomp, not a setuid
+# service carrying all four, as `replicator`, plus a live public render, and the
+# worker's own boot under them against a scratch broker: the floor check, `worker
+# ready` with capture and browser fetch enabled (so the boot preflight launched),
+# StateDirectory= written, a clean stop (#202 CR 1). Chromium's sandbox is namespaces and seccomp, not a setuid
 # helper, so NoNewPrivileges= costs it nothing; the renderer's HOME and TMPDIR are
 # a per-render tempdir under the private /tmp. ProtectSystem=strict leaves
 # StateDirectory= writable and /sys/fs/cgroup too, which Delegate= needs
