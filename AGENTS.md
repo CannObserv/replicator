@@ -103,9 +103,8 @@ Two env files, split by a security boundary, not a convention:
 
 **The service must never load the repo `.env`.** Those PATs carry write access the
 worker has no use for, and a fetcher of public URLs must not widen their blast
-radius. Anything the service needs goes in `/etc/replicator/.env`. Since #202 the
-worker runs as `replicator`, which can't reach `/home`; `exedev` reads
-`/etc/replicator` as a group member ([DEPLOYMENT.md](docs/DEPLOYMENT.md#the-service-user-202)).
+radius. Anything the service needs goes in `/etc/replicator/.env`. The worker runs as
+`replicator`, which can't reach `/home` ([#202](docs/DEPLOYMENT.md#the-service-user-202)).
 
 New settings take the `REPLICATOR_` prefix (cohort convention). `BUILD_ID` is the
 one deliberate exception, stamped generically by the unit.
