@@ -9,7 +9,7 @@ verdict that tells a docstring or ``__version__`` edit from a code change.
 
 The synthetic wheels are built in ``tmp_path``, so none of this needs the
 index. The one real-wheel check reads the directory ``REPLICATOR_TEST_CLOSURE_WHEELS``
-names, filled by ``bash scripts/co-pypi.sh wheels 0.36.0 0.37.0 DIR`` (#183),
+names, filled by ``scripts/co_pypi_wheels.py`` at 0.36.0 and 0.37.0 (#183, #201),
 and skips without it.
 """
 
@@ -32,6 +32,8 @@ from scripts.co_core_closure_diff import (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGES = ["co_core", "co_core_aio"]
+# The fetch the error messages name (#201): the wheels fetcher, under the shared wrapper.
+FETCH = "bash scripts/co-pypi.sh uv run --no-project python scripts/co_pypi_wheels.py"
 
 
 def _wheel(wheels: Path, package: str, version: str, files: dict, requires=()) -> None:
@@ -350,8 +352,10 @@ def test_diff_adds_a_code_level_diff_of_each_changed_file_only(repo):
 
 
 def test_a_missing_wheel_names_the_fetch(repo):
-    with pytest.raises(MissingWheelError, match="co-pypi.sh wheels"):
+    with pytest.raises(MissingWheelError, match="scripts/co_pypi_wheels.py") as exc:
         load_wheels(repo / "wheels", PACKAGES, "9.9.9")
+    # The command to run, whole: the wrapper, this directory, the version, the packages.
+    assert f"{FETCH} --dest {repo / 'wheels'} --version 9.9.9 " in str(exc.value)
 
 
 # --- the CLI ------------------------------------------------------------------
@@ -380,7 +384,8 @@ def test_main_exits_two_on_a_missing_wheel(repo, capsys):
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "co_core-9.9.9-py3-none-any.whl" in captured.err
-    assert "bash scripts/co-pypi.sh wheels" in captured.err
+    assert FETCH in captured.err
+    assert "co-pypi.sh wheels" not in captured.err
 
 
 def test_main_exits_two_on_a_corrupt_wheel(repo, capsys):
@@ -388,7 +393,7 @@ def test_main_exits_two_on_a_corrupt_wheel(repo, capsys):
     assert _main(repo, "1.0.0", "1.1.0") == 2
     err = capsys.readouterr().err
     assert "co_core-1.1.0-py3-none-any.whl" in err
-    assert "bash scripts/co-pypi.sh wheels" in err
+    assert f"{FETCH} --dest {repo / 'wheels'} --version 1.1.0 co_core" in err
 
 
 def test_main_exits_two_on_a_missing_root(repo, capsys):
@@ -428,7 +433,7 @@ _REAL_WHEELS = [
 @pytest.mark.skipif(
     not all(w.exists() for w in _REAL_WHEELS),
     reason="REPLICATOR_TEST_CLOSURE_WHEELS has no 0.36.0/0.37.0 wheels"
-    " (bash scripts/co-pypi.sh wheels 0.36.0 0.37.0 DIR)",
+    " (scripts/co_pypi_wheels.py --version 0.36.0 --version 0.37.0, under co-pypi.sh)",
 )
 def test_reproduces_136_for_0_36_to_0_37():
     """#136's result: 57 files at each version, six not identical.

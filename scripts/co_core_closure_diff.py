@@ -7,7 +7,9 @@ line here names. So this walks the closure from the roots instead, through every
 module of the named packages it reaches, and compares the two versions file by
 file::
 
-    bash scripts/co-pypi.sh wheels 0.36.0 0.37.0 /tmp/co-core-wheels
+    bash scripts/co-pypi.sh uv run --no-project python scripts/co_pypi_wheels.py \
+        --dest /tmp/co-core-wheels --version 0.36.0 --version 0.37.0 \
+        co-core co-core-aio co-core-sync
     uv run --no-project python scripts/co_core_closure_diff.py 0.36.0 0.37.0 \
         --wheels /tmp/co-core-wheels [--diff]
 
@@ -59,6 +61,8 @@ from pathlib import Path
 
 DEFAULT_ROOTS = ["src", "scripts"]
 DEFAULT_PACKAGES = ["co_core", "co_core_aio", "co_core_sync"]
+# What the error messages tell you to run: the wheels fetcher, under the co-pypi wrapper (#201).
+FETCH = "bash scripts/co-pypi.sh uv run --no-project python scripts/co_pypi_wheels.py"
 
 
 class MissingWheelError(Exception):
@@ -113,7 +117,8 @@ def load_wheels(wheels: Path, packages: Sequence[str], version: str) -> Wheels:
     if missing:
         names = ", ".join(str(wheel_path(wheels, p, version)) for p in missing)
         raise MissingWheelError(
-            f"missing: {names}. Fetch them first: bash scripts/co-pypi.sh wheels OLD NEW {wheels}"
+            f"missing: {names}. Fetch them first: {FETCH} --dest {wheels} --version {version}"
+            f" {' '.join(packages)}"
         )
     files: dict[str, bytes] = {}
     requires: dict[str, frozenset[str]] = {}
@@ -124,7 +129,8 @@ def load_wheels(wheels: Path, packages: Sequence[str], version: str) -> Wheels:
         except zipfile.BadZipFile as exc:
             # The fetch verifies each file's sha256, so this is a hand-placed file.
             raise MissingWheelError(
-                f"not a readable wheel: {path}. Fetch it again: bash scripts/co-pypi.sh wheels"
+                f"not a readable wheel: {path}. Fetch it again:"
+                f" {FETCH} --dest {wheels} --version {version} {package}"
             ) from exc
         with z:
             for name in z.namelist():
@@ -421,7 +427,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--package", action="append", help=f"repeatable; default {DEFAULT_PACKAGES}"
     )
     parser.add_argument(
-        "--wheels", required=True, help="the directory `co-pypi.sh wheels OLD NEW DIR` filled"
+        "--wheels", required=True, help="the directory scripts/co_pypi_wheels.py --dest filled"
     )
     parser.add_argument("--diff", action="store_true", help="add each changed file's code diff")
     args = parser.parse_args(argv)
