@@ -557,6 +557,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/bc/b3/6117b2f24065cd7e2c4f140e9a193e215f089ca8ba314cf91eb9d0b7fe0a/google_auth-2.56.3-py3-none-any.whl", hash = "sha256:8ec438808f813ad034535000261eed1067475d229d05bbf4216e78c3f2362e53", size = 259116, upload-time = "2026-08-06T06:22:51.788Z" },
 ]
 
+[package.optional-dependencies]
+requests = [
+    { name = "requests" },
+]
+
 [[package]]
 name = "google-cloud-core"
 version = "2.6.1"
@@ -1330,6 +1335,9 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
+co-pypi = [
+    { name = "google-auth", extra = ["requests"] },
+]
 dev = [
     { name = "anyio" },
     { name = "fakeredis" },
@@ -1359,6 +1367,7 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
+co-pypi = [{ name = "google-auth", extras = ["requests"], specifier = ">=2,<3" }]
 dev = [
     { name = "anyio", specifier = ">=4.0,<5" },
     { name = "fakeredis", specifier = ">=2.26,<3" },

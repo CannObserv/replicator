@@ -483,6 +483,10 @@ dev = [
     "ruff>=0.16,<0.17",
     "ty",  # beta — deliberately unpinned; non-gating advisory checker
 ]
+# The shared co-pypi wrapper's minter runs from this group alone, --frozen,
+# before any token exists, so it holds nothing from the index (#201,
+# tests/test_co_pypi.py). Not a default group: neither a release nor CI syncs it.
+co-pypi = ["google-auth[requests]>=2,<3"]
 
 # co-core, co-core-aio and co-core-sync resolve from cannobserv's co-pypi
 # Artifact Registry index ("Path C", #183), and only they do: `explicit` means
@@ -545,7 +549,8 @@ module-root = ""
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["skills-vendor/"]
+# The installed co-pypi minter is a marked copy: a --fix or format would break its marker.
+extend-exclude = ["skills-vendor/", "scripts/co_pypi_token.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP", "B904", "PLC0415", "FAST", "ASYNC"]
@@ -558,6 +563,6 @@ known-first-party = ["src"]
 
 # ty walks the whole tree by default. skills-vendor/ is read-only third-party
 # skill content — 9 of 10 diagnostics came from there, drowning the one real
-# signal. Mirrors ruff's extend-exclude.
+# signal. Mirrors ruff's skills-vendor/ exclude.
 [tool.ty.src]
 exclude = ["skills-vendor/"]
