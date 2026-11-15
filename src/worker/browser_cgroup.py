@@ -2,9 +2,9 @@
 
 ``deploy/replicator.service`` carries ``Delegate=memory pids`` and
 ``DelegateSubgroup=worker``: systemd starts the worker in ``<unit>/worker`` and hands the
-unit's cgroup to ``exedev``. This module makes the sibling ``<unit>/browser`` and writes
-its limits; ``scripts/browser_exec.sh`` moves each launched browser into it before
-``exec``, so every Chromium child is born there.
+unit's cgroup to ``User=``, ``replicator`` since #202. This module makes the sibling
+``<unit>/browser`` and writes its limits; ``scripts/browser_exec.sh`` moves each launched
+browser into it before ``exec``, so every Chromium child is born there.
 
 - ``memory.max`` — ``REPLICATOR_CAPTURE_MEMORY_MAX_BYTES``. The spike's longest page peaked at
   768 MiB of browser; the default is twice that.
