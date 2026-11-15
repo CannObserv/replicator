@@ -10,7 +10,9 @@ fallback host interval in [POLITENESS.md](POLITENESS.md#variables), the
 files carry them, and the boundary between the two is hard:
 `/etc/replicator/.env` is the **only** file `replicator.service` reads, and the
 repo `.env` holds dev/agent secrets the worker has no use for — org-wide PATs
-whose blast radius a process that fetches public URLs must not widen. Lifecycle
+whose blast radius a process that fetches public URLs must not widen. Since #202
+the uid holds that line too: the worker runs as `replicator`, which can't reach `/home`
+([DEPLOYMENT.md](DEPLOYMENT.md#the-service-user-202)). Lifecycle
 and the unit itself are in [DEPLOYMENT.md](DEPLOYMENT.md).
 
 In `.env` (dev/agent only — never read by the service):

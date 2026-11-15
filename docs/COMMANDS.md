@@ -415,7 +415,7 @@ scripts/deploy.sh --build-only                          # build releases/<sha12>
 scripts/deploy.sh --no-restart <sha12>                  # switch and install units, restart nothing (the cutover)
 scripts/deploy.sh --verify <sha12>                      # restart and verify a build already live
 journalctl -t replicator-deploy -n 20                   # what the deploys did
-readlink /srv/replicator/live; cat /run/replicator/build-id   # which build is live, and which one started
+readlink /srv/replicator/live; cat /run/replicator/build-id.env   # which build is live, and which one started
 bash skills/deploying-releases/scripts/install.sh --check     # the installed core against the vendored skill
 
 bash scripts/notify_failure.sh replicator.service       # what OnFailure= runs; records, never dispatches unset

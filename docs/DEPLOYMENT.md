@@ -69,15 +69,69 @@ the design doc's *Disk* table.
 ### Once, before the first deploy (the operator)
 
 1. The root, root's alone: `sudo install -d -o root -g root -m 755 /srv/replicator`.
-2. Nothing else is new. The service user is `exedev` to start (a dedicated user is a
-   follow-up). `/etc/replicator/.env`, the keys beside it and `co-pypi-reader.json`
-   stay where they are; the hooks name the reader key's path.
+2. Nothing else is new at #151. `/etc/replicator/.env`, the keys beside it and
+   `co-pypi-reader.json` stay where they are; the hooks name the reader key's path.
+   The service user came later ([below](#the-service-user-202)).
 3. The cutover: `scripts/deploy.sh --no-restart <sha12>`, then
    `scripts/deploy.sh --verify <sha12>`. The runbook is on #151.
 
 The deploy user needs `sudo -n` for `install`, `ln`, `mv`, `chmod`, `chown`, `tee`,
 `touch`, `rm` under `/srv/replicator` and `/etc/systemd/system`, `readlink` under
-`/proc`, and `systemctl`. `exedev` has it.
+`/proc`, and `systemctl`. `exedev` has it. The deploy user is not the service user.
+
+### The service user (#202)
+
+Both units run as `replicator`, a system user with no home, no shell, no sudo and no
+docker. Until #202 they ran as `exedev`, whose passwordless sudo made a compromised
+fetch or render root on the host, with `/home/exedev/replicator/.env`'s org-wide PATs in
+reach. The account owns `/var/lib/replicator` (`StateDirectory=`, which systemd chowns to
+`User=` at start) and nothing else.
+
+**One group, shared.** `/etc/replicator` is `root:replicator 750` and its files
+`root:replicator 640`. `exedev` is a member, so `scripts/load_env.sh`, the `gcs` tests,
+`scripts/co-pypi.sh` and the deploy read it as before, and `exedev` can read nothing it
+couldn't before. **A process holds the groups it started with:** a session older than
+`usermod -aG` can't read the directory. Log in again, restart the VS Code server, or bridge
+with `sg replicator -c '<command>'`. `sg replicator -c 'id -nG'` names `replicator` when it
+works.
+
+**Confinement.** Both units set `NoNewPrivileges=yes`, `ProtectSystem=strict`,
+`ProtectHome=yes` and `PrivateTmp=yes`. That makes `/home` invisible, the system
+read-only, and `/tmp` and `/var/tmp` private. Each was proven before it landed: `-m browser`
+in a transient system service with all four, as a uid with no home, a live public render
+and browser fetch, and the handler delivering a webhook. `RestrictNamespaces=` is ruled out
+by measurement: Chromium's sandbox is user namespaces, and with them restricted every launch
+fails `No usable sandbox!` (`tests/test_deploy.py`). Commands and logs are on #202.
+
+**Making the account** comes before the first deploy that names it. The core's
+`check_users` refuses a release whose `User=` doesn't exist, with nothing switched. As
+root, once:
+
+```bash
+useradd --system --user-group --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin replicator
+usermod -aG replicator exedev
+chgrp -R replicator /etc/replicator   # modes unchanged: 750 and 640
+```
+
+Then deploy from a session that has the group: `sg replicator -c 'scripts/deploy.sh'`. Its
+build reads `/etc/replicator/co-pypi-reader.json`.
+
+**Rolling back past #202** (`scripts/deploy.sh <sha12>` of an older build) puts
+`User=exedev` back. `exedev` lost nothing, because only the group changed, and systemd
+chowns the state directory back at start. The runtime stamp moved from `build-id` to
+`build-id.env` for exactly this. Root writes it, under a name the older unit never
+truncates, and removes the old name for the older unit to recreate as its own.
+
+**A Playwright bump's shell** goes into the state directory as its owner, from the live
+release's venv:
+
+```bash
+sudo -u replicator env PLAYWRIGHT_BROWSERS_PATH=/var/lib/replicator/ms-playwright \
+  /srv/replicator/live/.venv/bin/playwright install chromium-headless-shell
+```
+
+The capture runbook's `exedev` install predates the account. Everything the shell needs is
+world-readable, so `-m browser` still runs as `exedev`.
 
 ### What a deploy never does
 
@@ -95,9 +149,9 @@ The deploy user needs `sudo -n` for `install`, `ln`, `mv`, `chmod`, `chown`, `te
 |---|---|
 | Code merged to main | `scripts/deploy.sh` — or `shipping-work`, which runs it. No `uv sync`, no `cp`, no restart by hand |
 | Rolling back | `scripts/deploy.sh <sha12>` of the build to return to (`ls /srv/replicator/releases`) |
-| Which build is live | `readlink /srv/replicator/live`, `cat /run/replicator/build-id`, or the `"worker ready"` line's `build` |
+| Which build is live | `readlink /srv/replicator/live`, `cat /run/replicator/build-id.env`, or the `"worker ready"` line's `build` |
 | Testing a worktree/branch | `uv run python -m src.worker.main` (set distinct `REPLICATOR_CONSUMER_NAME` **and** `REPLICATOR_REPLICATE_CONSUMER_NAME` — **required** while the service runs, since #77 makes both loops derive the names the unit registers under). It builds no provider writer: see [the release check](#the-release-check--only-a-release-builds-a-writer-52-151) |
-| Debugging the live service | `sudo journalctl -u replicator -f` |
+| Debugging the live service | `journalctl -u replicator -f` (`exedev` reads the system journal through `adm`) |
 | After editing either unit in `deploy/` | Merge it and deploy: the core installs every unit that differs, `daemon-reload`s, and restarts the worker (never the handler, a template nothing runs until a unit fails) |
 | After editing `deploy/99-co-replicator-memory.conf` | `sudo cp deploy/99-co-replicator-memory.conf /etc/sysctl.d/ && sudo sysctl --system` — **`sysctl --system`, not `daemon-reload`**, which does not read this file |
 | After editing `deploy/tailscaled.service.d/memory.conf` | `sudo install -D -m 644 deploy/tailscaled.service.d/memory.conf /etc/systemd/system/tailscaled.service.d/memory.conf && sudo systemctl daemon-reload && sudo systemctl restart tailscaled` — the **restart** is for `OOMScoreAdjust=`, which applies at exec; read `/proc/$(systemctl show -p MainPID --value tailscaled)/oom_score_adj`, never `systemctl show -p OOMScoreAdjust`. It drops the tailnet briefly — 3 s on 2026-09-24, and the worker logged nothing |
@@ -117,8 +171,8 @@ drains.
 
 **The build id is the release's `REVISION`**, a 12-character sha since #151 (a
 7-character `git rev-parse --short` before). The unit stamps it into
-`/run/replicator/build-id`, which outlives a failed start so the failure handler
-can still name the build.
+`/run/replicator/build-id.env` (`build-id` before #202, [above](#the-service-user-202)),
+which outlives a failed start so the failure handler can still name the build.
 
 **The installed units are copies the deploy keeps in step.** Off the host, nothing
 compares them; on it, `tests/deploy/test_deploy_units.py` checks each installed unit

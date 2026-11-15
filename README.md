@@ -126,7 +126,7 @@ rather than deleting bytes a consumer was promised.
 | `REPLICATOR_CAPTURE_BUCKET` | `co-gcs-captures`, since #189 | Every capture byte: temp under `temp/`, kept under `blobs/`; never a raw blob (archiver#380 D4) |
 | `REPLICATOR_PERMANENT_BUCKET` | `co-gcs-replicator`, set at the #114 step 5 deploy | The permanent content-addressed store: a second replicate source, and where `content.persist` writes (#114); unset ⇒ none |
 | `REPLICATOR_BLOB_DIR` | `/var/lib/replicator/blobs` | Temp-storage root; **unused under `gcs`**, kept against a flip back to `local` |
-| `REPLICATOR_REPLICATION_ALIASES_FILE` | `/etc/replicator/replication-aliases.json` | The alias table: `gcs-publication` → `gs://co-gcs-publication` with the publication writer's `credentials_file`, empty prefix — since the #114 cutover (2026-09-25). `primary` bound the same bucket until it was retired on 2026-09-27, and `gs://co-gcs-replication` before that (#86). `root:exedev 640`, like the key files beside it. Unset ⇒ nothing provisioned, every `content.replicate` command refused `alias_unknown` |
+| `REPLICATOR_REPLICATION_ALIASES_FILE` | `/etc/replicator/replication-aliases.json` | The alias table: `gcs-publication` → `gs://co-gcs-publication` with the publication writer's `credentials_file`, empty prefix — since the #114 cutover (2026-09-25). `primary` bound the same bucket until it was retired on 2026-09-27, and `gs://co-gcs-replication` before that (#86). `root:replicator 640` (since #202), like the key files beside it. Unset ⇒ nothing provisioned, every `content.replicate` command refused `alias_unknown` |
 | `REPLICATOR_CONSUMER_NAME` | *(unset)* | Per-group override; the name is derived from the group — `replicator-fetch-1` — and never shared |
 | `REPLICATOR_REPLICATE_CONSUMER_NAME` | *(unset)* | The same, for `replicator.replicate` — derives `replicator-replicate-1` |
 | `REPLICATOR_PERSIST_CONSUMER_NAME` | *(unset)* | The same, for `replicator.persist` — derives `replicator-persist-1` |
@@ -228,7 +228,7 @@ rollback is `scripts/deploy.sh <sha12>`. What the handler reported is read with
 ([docs/FAILURE-NOTIFICATION.md](docs/FAILURE-NOTIFICATION.md)).
 
 Production secrets live in `/etc/replicator/.env` (managed manually on the VM, not in the repo).
-The unit's `ExecStartPre` writes the release's `REVISION` to `/run/replicator/build-id` and exposes it
+The unit's `ExecStartPre` writes the release's `REVISION` to `/run/replicator/build-id.env` and exposes it
 as `BUILD_ID` and asserts the Redis `>=7.0` floor via `scripts/check_redis_floor.sh` — whose
 journald output is **plain text, not JSON**, by design (see [docs/STYLE.md](docs/STYLE.md), "Not
 everything in the journal is JSON"). A start syncs nothing: the release's venv was built by the
