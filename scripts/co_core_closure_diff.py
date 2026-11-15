@@ -36,8 +36,8 @@ reach the AST), ``version-only`` (equal once ``__version__`` is masked too),
 
 Nothing in it is Replicator's: roots, packages and the wheel directory are flags,
 and the defaults are this repo's. The directory has no default: the wheels come
-from the co-pypi index through the wrapper's ``wheels`` verb (#183), which
-checks each against the index's sha256, into any scratch directory. A
+from the co-pypi index through ``scripts/co_pypi_wheels.py`` under the wrapper
+(#183, #201), which checks each against the index's sha256, into any scratch directory. A
 ``--package`` names both the import package and the wheel's distribution, which
 co-core's three share. It reads the wheels in place with ``zipfile`` and
 installs nothing, and it's standard library only, so ``uv run --no-project``
