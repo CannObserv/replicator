@@ -60,7 +60,7 @@ def test_every_file_from_the_index_is_hashed_and_there_is_a_wheel():
 
 
 def test_the_locked_versions_sit_inside_the_pin():
-    """The index lists nothing past 0.46.1 [measured 2026-11-14, #199]; the pin's
+    """The index lists nothing past 0.48.2 [measured 2026-11-15, #206]; the pin's
     upper bound keeps the next minor out until the change that moves it."""
     pins = {
         (r := Requirement(spec)).name: r.specifier
@@ -69,7 +69,7 @@ def test_the_locked_versions_sit_inside_the_pin():
     }
     for package in _from_index():
         assert package["version"] in pins[package["name"]], package
-        assert package["version"] not in SpecifierSet(">=0.47"), package
+        assert package["version"] not in SpecifierSet(">=0.49"), package
 
 
 def test_no_other_source_kind_names_a_wheelhouse():

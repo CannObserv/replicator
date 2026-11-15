@@ -7,51 +7,89 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
-    # Floor is 0.46.0, and it carries no new feature: a one-minor catch-up
-    # (#199), in #192's shape. The lock takes 0.46.1, the index's newest. The
-    # floor stays at .0 because nothing here depends on 0.46.1's one change,
-    # `co-core[extract]`'s soupsieve floor (cannobserv#667), an extra this
-    # project doesn't declare. `co-core-aio` and `co-core-sync` 0.46.x require
-    # `co-core>=0.46,<0.47`, so the three move together. 0.46.0's library
-    # changes are both on co/v1's read path, outside this closure: a CPT-backed
-    # record's `PostModel.wp_link` reads the server's `permalink`
-    # (cannobserv#664), and `EventModel.url` drops its `link` fallback
-    # (cannobserv#663). Its breaking removal, `WordPressMetadata`'s three
-    # `wp_view_*_url` templates, ships in none of the three wheels locked here.
+    # Floor is 0.48.0, and it carries no new feature: a two-minor catch-up
+    # (#206), in #199's shape. The lock takes 0.48.2, the index's newest with the
+    # bound opened to `<1` [measured 2026-11-15]. The floor stays at .0 because
+    # nothing here depends on 0.48.1's or 0.48.2's changes, Drive-only inside this
+    # closure. `co-core-aio` and `co-core-sync` 0.48.x require
+    # `co-core>=0.48,<0.49`, so the three move together. Each minor's break misses
+    # this closure. 0.47.0 renames `TranscriptSpeakerModel.relationship_id` to
+    # `role_assignment_id`, still reading the old name (cannobserv#469), and its
+    # WordPress disclosure-block removals (cannobserv#672) ship in none of the
+    # three wheels. 0.48.0's catalog-only `DisclosureServiceModel.service_type`
+    # (cannobserv#678) is on a model these wheels didn't have at 0.46.1.
     #
-    # **`scripts/co_core_closure_diff.py 0.45.0 0.46.1`** (#145), verbatim:
+    # **`scripts/co_core_closure_diff.py 0.46.1 0.48.2`** (#145), verbatim, from
+    # the wheels this lock pins (their sha256 matched against `uv.lock`):
     #
-    # ## Import closure, 0.45.0 → 0.46.1
+    # ## Import closure, 0.46.1 → 0.48.2
     #
     # Roots `src`, `scripts`; packages `co_core`, `co_core_aio`, `co_core_sync`.
     #
-    # 58 files at 0.45.0, 58 at 0.46.1. 3 not identical:
+    # 58 files at 0.46.1, 58 at 0.48.2. 5 not identical:
     #
     # - `version-only` co_core/__init__.py
+    # - `changed` co_core/effects/gdrive.py
     # - `version-only` co_core_aio/__init__.py
     # - `version-only` co_core_sync/__init__.py
+    # - `changed` co_core_sync/drivers/gdrive.py
     #
     # **Requires-Dist:**
     #
-    # - co_core: removed `soupsieve<3,>=2.0; extra == 'extract'`; added `soupsieve<5,>=4.1; extra == 'extract'`
-    # - co_core_aio: removed `co-core<0.46,>=0.45`; added `co-core<0.47,>=0.46`
-    # - co_core_sync: removed `co-core<0.46,>=0.45`; added `co-core<0.47,>=0.46`
+    # - co_core: unchanged
+    # - co_core_aio: removed `co-core<0.47,>=0.46`; added `co-core<0.49,>=0.48`
+    # - co_core_sync: removed `co-core<0.47,>=0.46`; added `co-core<0.49,>=0.48`
     #
-    # **Third-party imports** (at 0.46.1): `google`, `google_auth_oauthlib`, `googleapiclient`, `httpx`, `pydantic`, `redis`, `requests`, `urllib3`.
+    # **Third-party imports** (at 0.48.2): `google`, `google_auth_oauthlib`, `googleapiclient`, `httpx`, `pydantic`, `redis`, `requests`, `urllib3`.
     #
     # **Dynamic imports, not followed:**
     #
     # - co_core_sync/drivers/__init__.py:89 `import_module(f"{__name__}.{module}")`
     # - co_core_sync/drivers/blobstore/__init__.py:32 `import_module(f"{__name__}.{module}")`
     #
-    # Nothing to read by hand: the three files are `version-only`, and the
-    # closure is the same with `tests/` as a root. The dynamic imports are the
-    # same two as at 0.45.0. The soupsieve change is under `[extract]`, and
-    # soupsieve is not in `uv.lock`. Outside the closure, 0.46.x changed
-    # `pure/adapters/co_v1/`'s `event.py` and `responses.py`,
-    # `pure/models/link.py` (docstring) and `co_core_sync/services/event.py`
-    # (docstring), and added or removed no module. Nothing in `src/`,
+    # Read by hand (`--diff`), the two `changed` files are Drive only, and
+    # Replicator has no Drive writer: `KNOWN_PROVIDERS` is `("gcs",)`
+    # (`src/worker/aliases.py`), so a `gdrive-` alias is refused, and this host's
+    # alias table names none.
+    #
+    # - `effects/gdrive.py` adds the `GdriveDeleteIfPresent` effect, the
+    #   `GdriveDeleteOutcome` enum and the effect's member of `GdriveEffect`.
+    # - `drivers/gdrive.py` passes `num_retries=DRIVE_NUM_RETRIES` (3) to
+    #   `files().delete`, `.get` and `.list` (0.48.1, cannobserv#601), and adds
+    #   `delete_if_present`, which maps a 404 to `ALREADY_ABSENT` (0.48.2,
+    #   cannobserv#692).
+    #
+    # Neither can load here, which settles it beyond the provider list: the
+    # closure reaches them only through `drivers/__init__.py`'s `TYPE_CHECKING`
+    # names and lazy `__getattr__`, importing `src.worker.main` and
+    # `src.storage.local_store` loads neither, and `drivers/gdrive.py` imports
+    # `googleapiclient` at module top, which isn't installed (no `[gdrive]`
+    # extra; not in `uv.lock`) [measured, #206 CR 1].
+    #
+    # The closure is the same with `tests/` as a root, and the dynamic imports
+    # are the same two as at 0.46.1. Outside the closure, 0.47 and 0.48 changed
+    # co/v1's `exceptions.py` and `urls.py`, the transcript models,
+    # `workflows/upload.py`, co-core-sync's `runner.py` and seven `services/`
+    # modules, and added the WordPress `blocks`, `disclosure` and `transcript`
+    # adapters and the disclosure catalog and service modules. Nothing in `src/`,
     # `scripts/` or `tests/` reaches any of them.
+    #
+    # Previously:
+    #
+    # Floor was 0.46.0, and it carried no new feature: a one-minor catch-up
+    # (#199), in #192's shape, locked at 0.46.1. 0.46.1's one change was
+    # `co-core[extract]`'s soupsieve floor (cannobserv#667), an extra this
+    # project doesn't declare. 0.46.0's library changes were both on co/v1's read
+    # path, outside this closure (cannobserv#664, cannobserv#663), and its breaking
+    # removal, `WordPressMetadata`'s `wp_view_*_url` templates, shipped in none of
+    # the three wheels.
+    #
+    # **Diffing the closure, 0.45.0 → 0.46.1** (58 files, both sides): 3 not
+    # identical, all `version-only`; Requires-Dist moved the aio/sync `co-core`
+    # bound and the `[extract]` soupsieve floor. Outside the closure, 0.46.x
+    # changed `pure/adapters/co_v1/`'s `event.py` and `responses.py`,
+    # `pure/models/link.py` and `co_core_sync/services/event.py`. Nothing in
+    # `src/`, `scripts/` or `tests/` reached any of them.
     #
     # Previously:
     #
@@ -444,9 +482,9 @@ dependencies = [
     # at module load, so a skew cannot reach a running worker at all. Additive over
     # 0.8.0 for everything the fetch path uses — no field on ContentFetchCommand,
     # BlobAvailableEvent or FetchFailedEvent moved between the two.
-    "co-core>=0.46.0,<0.47",
-    "co-core-aio[bus,gcs]>=0.46.0,<0.47",
-    "co-core-sync[gcs]>=0.46.0,<0.47",
+    "co-core>=0.48.0,<0.49",
+    "co-core-aio[bus,gcs]>=0.48.0,<0.49",
+    "co-core-sync[gcs]>=0.48.0,<0.49",
     "fastapi>=0.126.0,<1",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.5.0,<3",
