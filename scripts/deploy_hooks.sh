@@ -61,9 +61,10 @@ HOST_CONFIGS=(
 )
 ENABLE_NEW=()
 # Zero spares. The core keeps the live release and the one it replaced whatever
-# KEEP says, so a one-step rollback needs none; each release is ~259 MB, and two
-# put root at ~82.7% against the patching run's 84.0% ceiling (the design doc's
-# Disk section, measured 2026-11-14).
+# KEEP says, so a one-step rollback needs none, and any older deployable commit
+# rebuilds (`scripts/deploy.sh <sha12>`). Chosen on the 20 GiB root, where two
+# ~259 MB releases put it at ~82.7% against the patching run's 84.0% ceiling (the
+# design doc's Disk section); kept on the 30 GiB one (#204), where two are ~54%.
 KEEP=0
 
 # --- hooks -------------------------------------------------------------------

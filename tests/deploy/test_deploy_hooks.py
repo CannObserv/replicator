@@ -58,7 +58,7 @@ def test_host_configs_name_the_paths_the_suite_reads(name, installed):
 
 
 def test_keep_is_zero_spares():
-    """Disk, not taste: the design doc's measured table puts one spare at 84.0%."""
+    """A rollback needs no spare; chosen at 20 GiB for disk, kept at 30 (#204)."""
     assert sourced('printf "%s\\n" "$KEEP"') == ["0"]
 
 
