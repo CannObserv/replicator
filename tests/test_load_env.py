@@ -157,11 +157,31 @@ def _source(checkout: Path, after: str = f'printf "%s" "${{{SENTINEL_KEY}-unset}
 
 
 def _names(env_file: Path) -> set[str]:
-    """Key names only, never values: what /etc/replicator/.env may add here."""
-    if not env_file.is_file():
+    """Key names only, never values: what /etc/replicator/.env may add here.
+
+    Absent or unreadable is no names: a session outside the file's group (#202)
+    is the "unreadable here" the skip below names, not an error."""
+    try:
+        text = env_file.read_text()
+    except OSError:
         return set()
     pattern = re.compile(r"^\s*(?:export\s+)?([A-Za-z0-9_]+)=")
-    return {m[1] for ln in env_file.read_text().splitlines() if (m := pattern.match(ln))}
+    return {m[1] for ln in text.splitlines() if (m := pattern.match(ln))}
+
+
+def test_an_etc_this_session_cannot_traverse_reads_as_no_names(tmp_path: Path):
+    """#202: /etc/replicator is root:replicator 750, and a session started before
+    exedev joined that group can't stat the file. ``is_file()`` raised then, at
+    collection, erroring the whole suite instead of skipping the one test that
+    needs the file (measured, as a uid outside the group)."""
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    (etc / ".env").write_text("REPLICATOR_LOG_LEVEL=INFO\n")
+    etc.chmod(0)
+    try:
+        assert _names(etc / ".env") == set()
+    finally:
+        etc.chmod(0o700)
 
 
 class TestTheScriptParses:
