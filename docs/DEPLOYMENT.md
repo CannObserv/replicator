@@ -93,7 +93,9 @@ reach. The account owns `/var/lib/replicator` (`StateDirectory=`, which systemd 
 couldn't before. **A process holds the groups it started with:** a session older than
 `usermod -aG` can't read the directory. Log in again, restart the VS Code server, or bridge
 with `sg replicator -c '<command>'`. `sg replicator -c 'id -nG'` names `replicator` when it
-works.
+works. `sg` runs `sh`, so a bash-only line goes through `bash -c` inside it:
+`sg replicator -c 'bash -c ". scripts/load_env.sh && …"'`. A script with a bash
+shebang, `scripts/deploy.sh` among them, needs nothing extra (measured 2026-11-15).
 
 **Confinement.** Both units set `NoNewPrivileges=yes`, `ProtectSystem=strict`,
 `ProtectHome=yes` and `PrivateTmp=yes`. That makes `/home` invisible, the system
