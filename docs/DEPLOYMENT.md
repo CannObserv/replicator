@@ -120,7 +120,8 @@ build reads `/etc/replicator/co-pypi-reader.json`.
 
 **Rolling back past #202** (`scripts/deploy.sh <sha12>` of an older build) puts
 `User=exedev` back. `exedev` lost nothing, because only the group changed, and systemd
-chowns the state directory back at start. The runtime stamp moved from `build-id` to
+chowns the state directory back at start, recursively, keeping modes (measured both ways,
+2026-11-15). The runtime stamp moved from `build-id` to
 `build-id.env` for exactly this. Root writes it, under a name the older unit never
 truncates, and removes the old name for the older unit to recreate as its own.
 

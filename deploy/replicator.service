@@ -157,8 +157,8 @@ DelegateSubgroup=worker
 KillMode=mixed
 # Creates /var/lib/replicator (REPLICATOR_BLOB_DIR's parent) owned by User=. A
 # directory owned by anyone else is chowned to User=, recursively, at start: that
-# is how ms-playwright/ moved from exedev to replicator (#202), and how a rollback
-# would move it back.
+# is how ms-playwright/ moves from exedev to replicator (#202), and how a rollback
+# moves it back. Measured both ways on a nested tree, modes kept (#202 CR 2).
 StateDirectory=replicator
 
 # The runtime dir, root's (`+`) and chowned to no one: the worker never writes it.
