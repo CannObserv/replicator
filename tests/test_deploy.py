@@ -315,11 +315,24 @@ def test_the_unit_does_not_depend_on_tailscaled():
 # that stood here is deleted, not ported: no checkout is started any more.
 
 
+STAMP = "/run/replicator/build-id.env"
+# The name every release before #202 stamps, as exedev, and its rollback still does.
+PRE_202_STAMP = "/run/replicator/build-id"
+
+
 def _stamp_step() -> str:
     """The single ``ExecStartPre`` that writes the build id."""
     matches = [value for value in _exec_start_pre() if "build-id" in value]
     assert len(matches) == 1, f"expected exactly one build-id ExecStartPre, got {matches}"
     return matches[0]
+
+
+def _run_stamp(root: Path, **kwargs) -> subprocess.CompletedProcess:
+    """The stamp step's script, run from ``root/live`` with ``/run/replicator`` at ``root``."""
+    step = _stamp_step().removeprefix("+")
+    assert step.startswith("/bin/bash -ec "), step
+    script = step.removeprefix("/bin/bash -ec ").strip("'").replace("/run/replicator", str(root))
+    return subprocess.run(["/bin/bash", "-ec", script], cwd=root / "live", **kwargs)
 
 
 def _fake_release(root: Path, build: str = "0123456789ab") -> Path:
@@ -369,40 +382,62 @@ def test_the_start_runs_the_release_it_resolved_not_the_link(tmp_path):
 
 def test_the_build_id_is_the_releases_revision(tmp_path):
     release = _fake_release(tmp_path)
-    step = _stamp_step().replace("/run/replicator", str(tmp_path))
-    assert step.startswith("/bin/bash -ec "), step
 
-    subprocess.run(
-        ["/bin/bash", "-ec", step.removeprefix("/bin/bash -ec ").strip("'")],
-        cwd=tmp_path / "live",
-        check=True,
-    )
+    _run_stamp(tmp_path, check=True)
 
-    assert (tmp_path / "build-id").read_text() == f"BUILD_ID={release.name}\n"
+    assert (tmp_path / "build-id.env").read_text() == f"BUILD_ID={release.name}\n"
 
 
 def test_a_release_without_a_revision_fails_the_start(tmp_path):
     """The core never links a release without ``REVISION``; one made by hand must
-    not start under an empty ``BUILD_ID``. Unprefixed, so the failure stops it."""
+    not start under an empty ``BUILD_ID``. Not ``-``-prefixed, so the failure stops
+    it; ``+`` only says who runs it."""
     _fake_release(tmp_path)
     (tmp_path / "live" / "REVISION").unlink()
     step = _stamp_step()
-    assert step.startswith("/"), f"a prefixed stamp would not stop the start: {step!r}"
-
-    ran = subprocess.run(
-        [
-            "/bin/bash",
-            "-ec",
-            step.replace("/run/replicator", str(tmp_path))
-            .removeprefix("/bin/bash -ec ")
-            .strip("'"),
-        ],
-        cwd=tmp_path / "live",
-        capture_output=True,
+    assert step.removeprefix("+").startswith("/"), (
+        f"a '-'-prefixed stamp would not stop the start: {step!r}"
     )
 
+    ran = _run_stamp(tmp_path, capture_output=True)
+
     assert ran.returncode != 0
-    assert not (tmp_path / "build-id").exists()
+    assert not (tmp_path / "build-id.env").exists()
+
+
+def test_the_stamp_is_roots_and_never_the_name_a_rollback_writes(tmp_path):
+    """A rollback past #202 runs a unit that stamps ``build-id`` as ``exedev``,
+    truncating it in place, and chowns only the directory. Truncation needs write
+    on the *file*: one ``replicator`` or root owned refuses it and the rollback's
+    start fails (measured 2026-11-15). So this release never writes that name. It
+    removes it, which a rollback recreates as its own, and root writes its own
+    stamp, which a reboot can't leave owned by the wrong user."""
+    release = _fake_release(tmp_path)
+    (tmp_path / "build-id").write_text("BUILD_ID=a8900f5d15a2\n")
+
+    _run_stamp(tmp_path, check=True)
+
+    assert _stamp_step().startswith("+"), "the stamp is root's, whoever User= is"
+    assert STAMP.removeprefix("/run/replicator/") == "build-id.env"
+    assert not (tmp_path / "build-id").exists(), "a stale build-id names the wrong build"
+    assert (tmp_path / "build-id.env").read_text() == f"BUILD_ID={release.name}\n"
+
+
+@pytest.mark.parametrize("unit", [UNIT, NOTIFY_UNIT], ids=lambda p: p.name)
+def test_both_units_read_the_stamp_this_release_writes(unit: Path):
+    files = re.findall(r"^EnvironmentFile=(.*)$", unit.read_text(), flags=re.MULTILINE)
+    assert f"-{STAMP}" in [f.strip() for f in files], f"{unit.name} must read {STAMP}, optionally"
+    assert f"-{PRE_202_STAMP}" not in [f.strip() for f in files]
+
+
+def test_the_worker_never_writes_the_runtime_directory():
+    """Only root's ``+`` steps write ``/run/replicator``, so it is chowned to no one:
+    a chown to ``User=`` is a second place the user is named, and under
+    ``ProtectSystem=strict`` the worker could not write there anyway."""
+    for step in _exec_start_pre():
+        if "/run/replicator" in step:
+            assert step.startswith("+"), f"a /run/replicator step that is not root's: {step!r}"
+        assert "chown" not in step, f"nothing is chowned at start: {step!r}"
 
 
 def test_the_runtime_directory_exists_before_the_stamp():
@@ -507,6 +542,61 @@ def test_the_notify_handler_reads_the_production_env_file():
     assert re.search(r"^EnvironmentFile=-/etc/replicator/\.env$", text, flags=re.MULTILINE), (
         f"{NOTIFY_UNIT.name} must read /etc/replicator/.env, optionally"
     )
+
+
+# --- The service user (#202) ----------------------------------------------------
+#
+# Until #202 both units ran as exedev, which has passwordless sudo, docker, and
+# /home/exedev, where the org-wide PATs live, so a compromised fetch or render was
+# root on the host. The worker now runs as the system user `replicator`, which
+# reads /etc/replicator through its group (root:replicator 750/640; exedev is a
+# member, so the agent's shell work is unchanged).
+
+SERVICE_USER = "replicator"
+DEV_USER = "exedev"
+
+# Each directive was proven against the pinned headless shell before it landed:
+# `-m browser` in a transient system service carrying these, as a uid with no home
+# and no groups, and a live public render (#202). The namespace-and-seccomp sandbox
+# needs none of setuid, a home, or a writable system tree.
+CONFINEMENT = {
+    "NoNewPrivileges": "yes",
+    "ProtectSystem": "strict",
+    "ProtectHome": "yes",
+    "PrivateTmp": "yes",
+}
+
+
+@pytest.mark.parametrize("unit", [UNIT, NOTIFY_UNIT], ids=lambda p: p.name)
+def test_both_units_run_as_the_service_user(unit: Path):
+    assert _directive("User", unit) == SERVICE_USER
+    assert _section_of(unit, "User") == "Service"
+
+
+@pytest.mark.parametrize("unit", [UNIT, NOTIFY_UNIT], ids=lambda p: p.name)
+def test_no_production_unit_names_the_dev_user(unit: Path):
+    """Not as ``User=``, not in a chown: one stray mention puts the escalation back."""
+    live = [
+        line
+        for line in unit.read_text().splitlines()
+        if DEV_USER in line and not line.lstrip().startswith("#")
+    ]
+    assert live == [], f"{unit.name} still names {DEV_USER}: {live}"
+
+
+@pytest.mark.parametrize("option", sorted(CONFINEMENT))
+@pytest.mark.parametrize("unit", [UNIT, NOTIFY_UNIT], ids=lambda p: p.name)
+def test_both_units_are_confined(unit: Path, option: str):
+    assert _directive(option, unit) == CONFINEMENT[option]
+    assert _section_of(unit, option) == "Service"
+
+
+def test_the_worker_leaves_chromium_its_user_namespaces():
+    """The control for the proof above: the same run with ``RestrictNamespaces=yes``
+    failed every launch, ``No usable sandbox!``, and Chromium refused to fall back
+    (#202). A namespace restriction here takes capture and browser fetch down, so
+    it is ruled out until the sandbox is something other than user namespaces."""
+    assert not re.search(r"^RestrictNamespaces=", UNIT.read_text(), flags=re.MULTILINE)
 
 
 # The kernel's own ceiling: -1000 makes a process unkillable by the OOM killer

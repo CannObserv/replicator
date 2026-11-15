@@ -100,7 +100,7 @@ if [ "${TIMEOUT}" -gt "${TIMEOUT_MAX}" ]; then
   TIMEOUT="${TIMEOUT_MAX}"
 fi
 
-# Read by the unit from /run/replicator/build-id, which outlives a failed start —
+# Read by the unit from /run/replicator/build-id.env, which outlives a failed start —
 # that persistence is the point here, since the build that failed is exactly what
 # an incident record needs to name.
 BUILD="${BUILD_ID:-<unknown>}"

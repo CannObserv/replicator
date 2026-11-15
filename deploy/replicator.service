@@ -74,12 +74,33 @@ OnFailure=replicator-failure-notify@%n.service
 
 [Service]
 Type=simple
-User=exedev
+# A system user of its own (#202), never the dev user. Until #202 this was exedev,
+# which has passwordless sudo, the docker group and /home/exedev (where the
+# org-wide PATs live), so a compromised fetch or render was root on the host.
+# `replicator` reads /etc/replicator through its group (root:replicator, 750 and
+# 640), and owns nothing else but its StateDirectory=. The account must exist
+# before a deploy installs this line: the core refuses the release otherwise
+# (check_users), with nothing switched. docs/DEPLOYMENT.md has the commands.
+User=replicator
 # The live release, never a checkout (#151): a root-owned, read-only tree that
 # scripts/deploy.sh built from a CI-green main commit and switched this link to.
-# Nothing here reads /home/exedev/replicator, so the checkout's branch, its venv
-# and its unpushed commits no longer reach production (#37, #48, #94).
+# Nothing here reads the development checkout, so its branch, its venv and its
+# unpushed commits no longer reach production (#37, #48, #94).
 WorkingDirectory=/srv/replicator/live
+
+# Confinement (#202). Each was proven against the pinned headless shell before it
+# landed: tests/worker/test_browser_real.py (`-m browser`) in a transient system
+# service carrying all four, as a uid with no home and no groups, plus a live
+# public render. Chromium's sandbox is namespaces and seccomp, not a setuid
+# helper, so NoNewPrivileges= costs it nothing; the renderer's HOME and TMPDIR are
+# a per-render tempdir under the private /tmp. ProtectSystem=strict leaves
+# StateDirectory= writable and /sys/fs/cgroup too, which Delegate= needs
+# (ProtectControlGroups= would not; tests/deploy/ forbids it, observo#696).
+# /run/replicator is written only by root's `+` steps below.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
 
 # Be the LAST thing this VM's OOM killer chooses, not the first (#92).
 #
@@ -132,29 +153,37 @@ DelegateSubgroup=worker
 # rest once it exits. The default control-group mode SIGTERMs the browser too and
 # fails the render the worker is finishing (#138 CR 7); teardown kills it anyway.
 KillMode=mixed
-# Creates /var/lib/replicator (REPLICATOR_BLOB_DIR's parent) owned by User=.
+# Creates /var/lib/replicator (REPLICATOR_BLOB_DIR's parent) owned by User=. A
+# directory owned by anyone else is chowned to User=, recursively, at start: that
+# is how ms-playwright/ moved from exedev to replicator (#202), and how a rollback
+# would move it back.
 StateDirectory=replicator
 
-# Create runtime dir (runs as root before User= takes effect with + prefix)
-ExecStartPre=+/bin/bash -c 'mkdir -p /run/replicator && chown exedev:exedev /run/replicator'
+# The runtime dir, root's (`+`) and chowned to no one: the worker never writes it.
+ExecStartPre=+/bin/bash -c 'mkdir -p /run/replicator'
 
 # The build id is the release's REVISION (the sha12 the deploy wrote last, as
 # root), stamped where the OnFailure= handler can still read it after a failed
-# start: /run/replicator/build-id outlives one on purpose. -e: a tree with no
-# REVISION is no release, and must not start under an empty BUILD_ID. The
-# main-checkout guard that stood before this line is deleted, not ported: the
-# deploy now decides which code runs, before the switch (#151).
-ExecStartPre=/bin/bash -ec 'build=$(cat REVISION); echo "BUILD_ID=$build" > /run/replicator/build-id'
+# start: the stamp outlives one on purpose. -e: a tree with no REVISION is no
+# release, and must not start under an empty BUILD_ID (#151).
+#
+# Root's, and named build-id.env, not build-id, for the rollback (#202). A release
+# from before #202 stamps build-id as exedev, by truncating it in place, and that
+# needs write on the *file*: one this release left owned by replicator or root
+# would refuse it and fail the rollback's start. So this release never writes that
+# name. It removes it, so nothing reads a stale build there, and a rollback
+# recreates it as its own. tests/test_deploy.py runs this line.
+ExecStartPre=+/bin/bash -ec 'rm -f /run/replicator/build-id; build=$(cat REVISION); echo "BUILD_ID=$build" > /run/replicator/build-id.env'
 
 # Load BUILD_ID, then system secrets. Order matters: later EnvironmentFiles
 # override earlier ones, so BUILD_ID (read-only state from ExecStartPre) is the
-# lowest-precedence layer.
+# lowest-precedence layer. systemd reads both as root, before User= applies.
 #
 # The repo-local .env is deliberately NOT loaded. It holds dev/agent secrets —
 # GitHub PATs with org-wide write access that this worker never needs — and
 # sourcing it would hand every one of them to a process whose job is fetching
 # public URLs. Production configuration belongs in /etc/replicator/.env.
-EnvironmentFile=-/run/replicator/build-id
+EnvironmentFile=-/run/replicator/build-id.env
 EnvironmentFile=/etc/replicator/.env
 
 # Hard guard: Replicator is the cluster's first user of claim_stale, which needs

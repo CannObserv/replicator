@@ -42,5 +42,5 @@ coverage.xml
 .worktrees/
 .claude/worktrees/
 
-# Runtime (BUILD_ID stamp target — the systemd unit writes /run/replicator/build-id)
+# Runtime (BUILD_ID stamp target — the systemd unit writes /run/replicator/build-id.env)
 /run/

@@ -136,6 +136,10 @@ StartLimitBurst=${BURST}
 
 [Service]
 Type=simple
+# exedev, not replicator.service's own user (#202): the scratch unit runs the
+# development checkout and its uv venv under /home/exedev, which that user
+# can't traverse (750), against a scratch broker. It rehearses restart behaviour,
+# not confinement; it carries no production config and no key.
 User=exedev
 WorkingDirectory=${REPO}
 Environment=REPLICATOR_REDIS_URL=${URL}

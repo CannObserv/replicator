@@ -757,7 +757,7 @@ def test_a_lowercase_ulid_is_accepted(notifier):
 
 
 def test_another_units_failure_does_not_carry_the_workers_build():
-    """/run/replicator/build-id is the worker's; a smoke test once alerted as `build a85fe5a`."""
+    """/run/replicator/build-id.env is the worker's; a smoke test once alerted `build a85fe5a`."""
     result = _run("notify-smoke-test.service", env={"BUILD_ID": "deadbee"})
 
     record = next(r for r in _records(result) if r.get("event") == "unit_failed")

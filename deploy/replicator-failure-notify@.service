@@ -13,7 +13,14 @@ Description=Report that %i entered a failed state
 
 [Service]
 Type=oneshot
-User=exedev
+# The worker's user and confinement, for the worker's reasons (#202). The handler
+# runs curl and jq and writes nothing but its journal record; it reads the two env
+# files below through systemd, as root, before User= applies.
+User=replicator
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
 # The live release, as replicator.service's (#151).
 WorkingDirectory=/srv/replicator/live
 
@@ -46,12 +53,13 @@ OOMScoreAdjust=-900
 # tests/test_deploy.py pins the presence of this line, not its value.
 SyslogIdentifier=replicator-failure
 
-# The build that failed. /run/replicator/build-id outlives a failed start —
+# The build that failed. /run/replicator/build-id.env outlives a failed start —
 # nothing removes it — which is exactly the property an incident record wants,
-# and replicator.service stamps it from the release it is starting. Optional: a
-# unit that failed in ExecStartPre before the stamp has no file here, and the
-# record then says `<unknown>` rather than failing to write.
-EnvironmentFile=-/run/replicator/build-id
+# and replicator.service stamps it from the release it is starting (build-id
+# before #202; that unit's comment says why the name moved). Optional: a unit
+# that failed in ExecStartPre before the stamp has no file here, and the record
+# then says `<unknown>` rather than failing to write.
+EnvironmentFile=-/run/replicator/build-id.env
 
 # Production config only, and optional. This is the same env boundary
 # replicator.service keeps: the file below is the only one the services read, and
