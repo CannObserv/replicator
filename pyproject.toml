@@ -59,6 +59,13 @@ dependencies = [
     #   `delete_if_present`, which maps a 404 to `ALREADY_ABSENT` (0.48.2,
     #   cannobserv#692).
     #
+    # Neither can load here, which settles it beyond the provider list: the
+    # closure reaches them only through `drivers/__init__.py`'s `TYPE_CHECKING`
+    # names and lazy `__getattr__`, importing `src.worker.main` and
+    # `src.storage.local_store` loads neither, and `drivers/gdrive.py` imports
+    # `googleapiclient` at module top, which isn't installed (no `[gdrive]`
+    # extra; not in `uv.lock`) [measured, #206 CR 1].
+    #
     # The closure is the same with `tests/` as a root, and the dynamic imports
     # are the same two as at 0.46.1. Outside the closure, 0.47 and 0.48 changed
     # co/v1's `exceptions.py` and `urls.py`, the transcript models,
