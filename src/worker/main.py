@@ -257,7 +257,7 @@ def preflight_object_store(store: GcsBlobStore, settings: Settings) -> None:
     limit of it. The coupling #7 removes was a filesystem one and what replaces
     it is an IAM grant on the consumer's service account — auditable, and
     host-independent, but not visible from here. ``warn_if_unreachable`` could at
-    least walk the ancestors; this cannot ask Google whether Watcher may read.
+    least walk the ancestors; this cannot ask Google whether a consumer may read.
     The grant is verified where it is made (docs/INFRASTRUCTURE.md), not at this
     boot.
     """

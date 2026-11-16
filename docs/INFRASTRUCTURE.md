@@ -131,9 +131,8 @@ and any host without this env still get the filesystem backend.
 | Soft delete | disabled (`--soft-delete-duration=0`) | disabled |
 | Public access | prevented; UBLA on | same |
 | Writer | `co-gcs-replicator-writer` via the custom role below | `co-gcs-test-replicator-writer`, `roles/storage.objectAdmin` |
-| Reader | `co-gcs-blob-reader@co-gcs.iam.gserviceaccount.com`, `roles/storage.objectViewer` | — |
+| Reader | retired 2026-11-15 (watcher#420) | — |
 | Key on the VM | `/etc/replicator/co-gcs-replicator-writer.json` | `/etc/replicator/co-gcs-test-replicator-writer.json` |
-| Consumer key | `/etc/watcher/co-gcs-blob-reader.json`, named by `GCS_BLOB_CREDENTIALS` | — |
 
 **The worker's grant is a custom role, because no predefined one fits.**
 `GcsBlobStore`, built with `touch_on_rereference=True` (the shared store's
@@ -188,7 +187,7 @@ What has to exist, and why each part:
 | A lifecycle rule on **`daysSinceCustomTime`** | Not `age`. The store stamps `customTime` on every re-reference, which is what makes "TTL since last referenced" expressible — an age rule would reap a blob announced moments ago, invisibly, because re-fetching unchanged bytes never rewrites the object |
 | The rule's day count ≥ `REPLICATOR_BLOB_TTL_SECONDS` | The two are configured in different places and nothing keeps them in step. A rule shorter than the published horizon announces a window the bucket will not honour |
 | `objectAdmin`-equivalent for the worker's SA | It creates objects, reads them back, and **lists** — the boot preflight is a one-object listing, because an existence check cannot detect a missing bucket (the SDK swallows the 404). `storage.objects.list` is in both `objectViewer` and `objectAdmin`, so this widens nothing. It needs no `delete`: expiry is the lifecycle rule's job, which is also why the preflight is a read rather than a write-and-clean-up |
-| `objectViewer` for **each consumer's** SA | This is the grant that replaces the filesystem coupling, and the one thing the worker cannot verify at boot. Watcher's SA is the one that matters today — it is the service that opens the bytes |
+| `objectViewer` for **each consumer's** SA | This is the grant that replaces the filesystem coupling, and the one thing the worker cannot verify at boot |
 
 Lifecycle granularity is **one day** and enforcement is asynchronous, so a blob
 may outlive its rule by a day or more. That direction is safe and is stated to
