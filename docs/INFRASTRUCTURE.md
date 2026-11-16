@@ -131,7 +131,7 @@ and any host without this env still get the filesystem backend.
 | Soft delete | disabled (`--soft-delete-duration=0`) | disabled |
 | Public access | prevented; UBLA on | same |
 | Writer | `co-gcs-replicator-writer` via the custom role below | `co-gcs-test-replicator-writer`, `roles/storage.objectAdmin` |
-| Reader | retired 2026-11-15 (watcher#420) | — |
+| Readers | `co-gcs-processor-writer`, `co-gcs-publication-writer`: `objectViewer` (#185) | — |
 | Key on the VM | `/etc/replicator/co-gcs-replicator-writer.json` | `/etc/replicator/co-gcs-test-replicator-writer.json` |
 
 **The worker's grant is a custom role, because no predefined one fits.**
