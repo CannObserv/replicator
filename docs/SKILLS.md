@@ -246,8 +246,8 @@ git submodule update --init --recursive
 # The reviewing-* / shipping-* skills invoke this as a Phase 1 preflight.
 bash .skills/doctor.sh
 
-# Pull upstream skill changes and bump the pointers.
-# Normally unnecessary — the SessionStart hook below does this once per UTC day on main.
+# Pull upstream skill changes and bump the pointers, on a branch: main takes PRs (#208).
+# Normally unnecessary — the SessionStart hook below proposes this once per UTC day.
 git submodule update --remote --merge
 git add skills-vendor/ && git commit -m "chore: update skill submodules"
 
@@ -256,29 +256,37 @@ bash skills-vendor/gregoryfoster-skills/skills/managing-skills/scripts/install-r
 ```
 
 A `SessionStart` hook (`.claude/hooks/skills-submodule-update.sh`) refreshes `skills-vendor/` at most
-once per UTC day, on `main` only, auto-commits the pointer bump (and `.skills/doctor.sh` when it
-changed — never `.skills/` wholesale, which holds operator config), and never blocks a session. It
-also re-installs `.skills/doctor.sh` each session, ahead of both gates, so the doctor self-heals on
-any branch if deleted. Logs to `.git/skills-update.log`.
+once per UTC day, on `main` only, proposes the pointer bump (and `.skills/doctor.sh` when it
+changed — never `.skills/` wholesale, which holds operator config) as a pull request, and never
+blocks a session. It also re-installs `.skills/doctor.sh` each session, ahead of both gates, so the
+doctor self-heals on any branch if deleted. Logs to `.git/skills-update.log`.
 
-**It pushes the commit it makes, and rolls it back if the push fails**
-([skills#293](https://github.com/gregoryfoster/skills/issues/293)); a commit it left unpushed is
-retried at the next session start. Until then it committed and stopped, and while the service ran
-the checkout (before #151) that commit stopped it starting: the main-checkout guard refused a `main`
-carrying unpushed commits (#48) — #72 found `b29efcf` unpushed for a day. The service runs a release
-now, so a stranded commit costs nothing but a `git push`. The harness can still kill the hook between
-commit and push, so the state is rare rather than impossible.
+**It never moves `main`** (#208: `.skills/merge_mode` is `pr`; managing-skills'
+`references/auto-refresh-hook/pr-mode.md`). It keeps **one** PR open from `skills/submodule-refresh`,
+which later sessions replace rather than append to. The commit is built with `git commit-tree`, so
+pre-commit never runs on it: the PR's CI is the gate that the direct push lacked when it put a red
+`main` up on 2026-10-30.
 
-Cheap habit, worth having before a deploy (`scripts/deploy.sh` deploys only what is on `origin/main`):
+- **The skills advance only when someone merges that PR.** Until then the main checkout stays on
+  `main`'s pointers. Merge it like any PR ([DEPLOYMENT.md](DEPLOYMENT.md#main-takes-pull-requests-208)),
+  then `git pull --ff-only`. Until the pull, the hook proposes nothing and tells you on stderr to pull.
+- **What it needs:** `gh` on `PATH`, an upstream for `main`, and a token. It reads `GH_TOKEN` from the
+  repo `.env` as data and never exports it. The session-start doctor warns when none of its sources
+  would answer. A missing prerequisite or a refused push is reported once, on stderr, and never retried
+  that day.
+- **Before #208** it committed straight to `main` and pushed
+  ([skills#293](https://github.com/gregoryfoster/skills/issues/293)).
+
+Cheap habit before a deploy (`scripts/deploy.sh` deploys only what is on `origin/main`):
 
 ```bash
-git status -sb | head -1        # "## main...origin/main [ahead 1]" is the tell
-git log --oneline origin/main..main
-git push origin main            # if the only thing ahead is the refresh commit
+git status -sb | head -1        # want "## main...origin/main"
+# [behind N]: a PR merged on GitHub and not yet pulled — git pull --ff-only
+# [ahead N]:  a local commit on main — it belongs on a branch, in a PR
 ```
 
-`git log --oneline -- skills-vendor/` names every refresh the hook has made; `.git/skills-update.log`
-records what it did each day, including the commit it created.
+`git log --oneline -- skills-vendor/` names every refresh that merged; `.git/skills-update.log`
+records what the hook did each day.
 
 **The hook is a symlink into the submodule, not a copy** (`managing-skills` Step 1). That is what
 makes upstream fixes to the script arrive on the normal submodule refresh; a copy freezes at whatever
