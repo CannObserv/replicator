@@ -72,8 +72,8 @@ the design doc's *Disk* table.
 
 `.skills/merge_mode` is `pr`. shipping-work pushes the branch and opens a PR, and the
 merge happens on GitHub. The next "ship it" after the merge runs its post-merge pass:
-`git pull --ff-only` in the main checkout, then the deploy, then the issues it held
-open with `Refs #<n>`. Nothing *enforces* this yet: `main` has no
+`git pull --ff-only` in the main checkout, then an offer to deploy (optional when no
+shipped code changed), then the issues it held open with `Refs #<n>`. Nothing *enforces* this yet: `main` has no
 ruleset, so a by-hand `git push origin main` still lands.
 
 - **Merge with a merge commit.** It keeps each `#<n> type:` commit. Its own title is
