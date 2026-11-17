@@ -25,6 +25,9 @@ on:
 # append-only telemetry, not code.
 permissions:
   contents: write
+  # pull-requests: write because .skills/merge_mode said `pr` when this was
+  # rendered (#560): the row goes to one standing PR, not the default branch.
+  pull-requests: write
 
 concurrency:
   group: context-cadence
@@ -58,6 +61,36 @@ jobs:
       - name: Heal vendored symlinks
         run: '[ ! -x .skills/doctor.sh ] || bash .skills/doctor.sh'
 
+      # .skills/merge_mode (#342), read from this checkout with merge-mode.sh's
+      # grammar: one word, blank lines and whole-line `#` comments ignored.
+      # Inline because a consumer need not vendor shipping-work, which ships
+      # that script. Absent is `direct`. Present but unusable fails HERE, before
+      # the credential is spent, and is never read as `direct` (#560).
+      - name: Read the merge mode
+        run: |
+          K=.skills/merge_mode
+          R="write one word, 'pr' or 'direct', or delete the file for the default ('direct')"
+          M=direct
+          if [ -e "$K" ] || [ -L "$K" ]; then
+            { [ -f "$K" ] && [ -r "$K" ]; } || { echo "::error::$K is present but not a readable file: $R"; exit 2; }
+            M='' N=0
+            while IFS= read -r L || [ -n "$L" ]; do
+              L=${L%$'\r'}
+              read -r -a W <<<"$L"
+              [ "${#W[@]}" -gt 0 ] || continue
+              case ${W[0]} in \#*) continue ;; esac
+              N=$((N + ${#W[@]})) M=${W[0]}
+            done <"$K"
+            [ "$N" -gt 0 ] || { echo "::error::$K names no mode: $R"; exit 2; }
+            [ "$N" -eq 1 ] || { echo "::error::$K has $N words; it takes one: $R"; exit 2; }
+            case $M in
+              pr | direct) ;;
+              *) echo "::error::$K says '$M', which is not a merge mode: $R"; exit 2 ;;
+            esac
+          fi
+          echo "merge mode: $M"
+          echo "MERGE_MODE=$M" >>"$GITHUB_ENV"
+
       # One path per script, each probed on its own and exported under its own
       # name: measure-context.sh as MEASURE_CONTEXT_SH, and so on. Never one
       # directory for all of them — a project scripts/ holding only
@@ -82,6 +115,55 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: bash "$MEASURE_CONTEXT_SH" --check-credential
+
+      # merge_mode pr (#560): the checkout is the default branch, whose ledger
+      # lacks the rows still on context/weekly-measurement. Measured there, a
+      # row took its deltas, and the seam sweep its --base-ledger interval,
+      # from the last MERGED row: the delta check warned on every run while
+      # the PR stayed open, and the merge landed those deltas. So when the
+      # push below would keep the branch, it is merged in before the sweep.
+      # --no-commit: HEAD stays the default branch's tip, so the row's
+      # repo_commit is a commit that branch keeps, and the commit step
+      # records the merge with the row. Which PR is decided as the push
+      # decides it, and the push decides again: a PR can merge mid-run.
+      - name: Take in the measurement PR's rows
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ "${MERGE_MODE:-}" = pr ] || { echo "merge mode ${MERGE_MODE:-unset}: no PR's rows to take in"; exit 0; }
+          BRANCH="${GITHUB_REF_NAME:-$(git branch --show-current)}"
+          PR_BRANCH=context/weekly-measurement
+          PRS=$(gh pr list --head "$PR_BRANCH" --base "$BRANCH" --state all --json number,state,headRefOid,isCrossRepository --jq '.[] | select(.isCrossRepository | not) | "\(.number) \(.state) \(.headRefOid)"') || {
+            echo "::error::gh pr list failed, so which measurement PR is open is unknown — nothing was measured."
+            exit 1; }
+          REMOTE=$(git ls-remote origin "refs/heads/$PR_BRANCH") || {
+            echo "::error::could not read $PR_BRANCH from origin — nothing was measured."
+            exit 1; }
+          TIP=${REMOTE%%[[:space:]]*}
+          OPEN='' ENDED=''
+          while read -r N S OID; do
+            [ -n "$N" ] || continue
+            if [ "$S" = OPEN ]; then
+              OPEN=${OPEN:-$N}
+            elif [ -n "$TIP" ] && [ "$OID" = "$TIP" ]; then
+              ENDED=$N
+            fi
+          done <<<"$PRS"
+          if [ -n "$TIP" ] && { [ -n "$OPEN" ] || [ -z "$ENDED" ]; }; then
+            # The commit step sets these too; the merge needs them now.
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git config merge.ours.driver true
+            git config merge.context-counts.driver "bash \"$MERGE_TOKEN_COUNTS_SH\" %O %A %B %P"
+            { git fetch -q origin "+refs/heads/$PR_BRANCH:refs/remotes/origin/$PR_BRANCH" \
+              && git merge -q --no-commit --no-ff "$TIP"; } || {
+              echo "::error::could not merge $PR_BRANCH in — nothing was measured."
+              git diff --name-only --diff-filter=U | sed 's/^/::error::  conflicted: /'
+              exit 1; }
+            echo "measuring after the rows on $PR_BRANCH${OPEN:+ (PR #$OPEN)}"
+          else
+            echo "no rows on $PR_BRANCH to take in: the row is measured after $BRANCH's"
+          fi
 
       # Exits 3 when there are new seams, which is a finding rather than a
       # failure here — the count goes on the row either way.
@@ -131,6 +213,8 @@ jobs:
               --print-trend </tmp/ctx.json
 
       - name: Commit the row
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -171,6 +255,93 @@ jobs:
           # empty on a detached HEAD and `git push origin ""` fails opaquely.
           BRANCH="${GITHUB_REF_NAME:-$(git branch --show-current)}"
           # --- push ---
+          # merge_mode pr (#560): the row goes to ONE standing PR from
+          # context/weekly-measurement, never straight to $BRANCH, which a
+          # PR-only ruleset refuses. Annotated in curating-context's
+          # references/cadence.md. `direct` falls through to the loop below.
+          case "${MERGE_MODE:-}" in
+            direct) ;;
+            pr)
+              PR_BRANCH=context/weekly-measurement
+              ROW=$(git rev-parse HEAD)
+              # Every PR from the branch, any state, and only this repo's:
+              # --head matches a branch name, a fork's included. gh failing
+              # is not "none".
+              PRS=$(gh pr list --head "$PR_BRANCH" --base "$BRANCH" --state all --json number,state,headRefOid,isCrossRepository --jq '.[] | select(.isCrossRepository | not) | "\(.number) \(.state) \(.headRefOid)"') || {
+                echo "::error::gh pr list failed, so which measurement PR is open is unknown — the row was not pushed."
+                exit 1; }
+              REMOTE=$(git ls-remote origin "refs/heads/$PR_BRANCH") || {
+                echo "::error::could not read $PR_BRANCH from origin — the row was not pushed."
+                exit 1; }
+              TIP=${REMOTE%%[[:space:]]*}
+              OPEN='' ENDED=''
+              while read -r N S OID; do
+                [ -n "$N" ] || continue
+                if [ "$S" = OPEN ]; then
+                  OPEN=${OPEN:-$N}
+                elif [ -n "$TIP" ] && [ "$OID" = "$TIP" ]; then
+                  ENDED=$N
+                fi
+              done <<<"$PRS"
+              # An open PR always wins: one closed and another opened from the
+              # same head leaves a finished PR at the tip of an open one's rows.
+              if [ -n "$TIP" ] && { [ -n "$OPEN" ] || [ -z "$ENDED" ]; }; then
+                # The branch carries rows no finished PR took: an open PR's, or
+                # a run's whose PR was never opened. Merge the row INTO it, so
+                # those rows stay first and in order and $BRANCH comes in with
+                # the row: the PR never conflicts with the branch it targets.
+                # The take-in step merged this tip in before the measurement,
+                # so unless the branch moved since, this is a fast-forward.
+                { git fetch -q origin "+refs/heads/$PR_BRANCH:refs/remotes/origin/$PR_BRANCH" \
+                  && git checkout -q --detach "$TIP"; } || {
+                  echo "::error::could not check out $PR_BRANCH — the row was not pushed."
+                  exit 1; }
+                git merge -q --no-edit -m "chore: weekly context measurement" "$ROW" || {
+                  echo "::error::merging the row into $PR_BRANCH failed — the row was not pushed."
+                  git diff --name-only --diff-filter=U | sed 's/^/::error::  conflicted: /'
+                  exit 1; }
+              fi
+              # Otherwise the branch restarts at $BRANCH plus this row: it is
+              # absent, or no PR is open and its tip was a finished PR's head,
+              # merged (its rows are on $BRANCH; a squash would carry them
+              # twice) or closed.
+              #
+              # The lease is the tip read above; empty means "must not exist".
+              # A refusal is reported once and never retried: it is a rule or a
+              # concurrent push, and rebasing answers neither.
+              PUSH_OUT=$(mktemp)
+              if ! git push --force-with-lease="refs/heads/$PR_BRANCH:$TIP" origin "HEAD:refs/heads/$PR_BRANCH" >"$PUSH_OUT" 2>&1; then
+                cat "$PUSH_OUT"
+                echo "::error::push to $PR_BRANCH refused — the row was not pushed."
+                if grep -qE 'GH013|protected branch' "$PUSH_OUT"; then
+                  echo "::error::A ruleset or branch protection covers $PR_BRANCH too. Exempt it: this job only opens a PR from it."
+                fi
+                exit 1
+              fi
+              cat "$PUSH_OUT"
+              if [ -n "$OPEN" ]; then
+                echo "updated PR #$OPEN with this run's row"
+                exit 0
+              fi
+              # A PR opened with GITHUB_TOKEN starts no pull_request workflow,
+              # so a required check never runs on it until a human acts.
+              CREATE_ERR=$(mktemp)
+              gh pr create --base "$BRANCH" --head "$PR_BRANCH" \
+                --title "chore: weekly context measurement" \
+                --body "Opened by the context-cadence workflow, because .skills/merge_mode is pr. Each run appends its row to this branch while this PR is open. It was opened with GITHUB_TOKEN, so no pull_request workflow runs on it: if a required check blocks the merge, close and reopen this PR to start them." \
+                2>"$CREATE_ERR" && exit 0
+              cat "$CREATE_ERR"
+              echo "::error::the row is on $PR_BRANCH, but no PR was opened for it. The next run keeps it and tries again."
+              if grep -q 'not permitted to create or approve pull requests' "$CREATE_ERR"; then
+                echo "::error::Turn on Settings > Actions > General > Workflow permissions > \"Allow GitHub Actions to create and approve pull requests\" (an organization can hold it off at its own level), then re-run this workflow."
+              fi
+              exit 1
+              ;;
+            *)
+              echo "::error::no merge mode (MERGE_MODE='${MERGE_MODE:-}'): the Read the merge mode step did not run — the row was not pushed."
+              exit 1
+              ;;
+          esac
           for attempt in 1 2 3; do
             git push origin "HEAD:$BRANCH" && exit 0
             echo "push rejected (attempt $attempt) — rebasing onto origin/$BRANCH"
