@@ -1,0 +1,4 @@
+# Work lands on main through a pull request merged on GitHub (#208): docs/DEPLOYMENT.md
+# "main takes pull requests". Read by shipping-work, using-git-worktrees, the skills refresh
+# hook and context-cadence.yml. One word: pr or direct.
+pr

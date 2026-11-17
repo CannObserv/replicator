@@ -54,8 +54,10 @@ is the release, then its own `"worker ready"` line naming the build. A failed
 verify switches back and restarts the old build. The restart counts toward
 `StartLimitBurst=8`, as a manual one always did.
 
-**Not the weekly measurement commit.** `github-actions[bot]` pushes get no CI run,
-so the core refuses them: deploy the commit under it.
+**Not a measurement commit the bot pushed.** Until #208 the weekly cadence pushed its
+row straight to `main` as `github-actions[bot]`, and a `GITHUB_TOKEN` push gets no CI
+run, so the core refuses those commits: deploy the commit under it. Since #208 the row
+reaches `main` through a PR, and the merge commit gets the push's CI run.
 
 **Only commits from #151's merge on are deployable.** An older commit's units name
 no `/srv/replicator/live`, and the core refuses it before switching anything.
@@ -65,6 +67,32 @@ always keeps the live release and the one it replaced, so a one-step rollback ne
 no spare. Each is ~259 MB, under 1% of the 30 GiB root (#204): two put root near
 54%, against the patching run's 84.0% ceiling. `KEEP=0` was chosen at 20 GiB, by
 the design doc's *Disk* table.
+
+### `main` takes pull requests (#208)
+
+`.skills/merge_mode` is `pr`. shipping-work pushes the branch and opens a PR, and the
+merge happens on GitHub. The next "ship it" after the merge runs its post-merge pass:
+`git pull --ff-only` in the main checkout, then an offer to deploy (optional when no
+shipped code changed), then the issues it held open with `Refs #<n>`. Nothing *enforces* this yet: `main` has no
+ruleset, so a by-hand `git push origin main` still lands.
+
+- **Merge with a merge commit.** It keeps each `#<n> type:` commit. Its own title is
+  GitHub's `Merge pull request #N from …`, and nothing here checks that title. A squash
+  title has to be written to the commit convention by hand.
+- **Deploy and roll back to merge commits.** The push to `main` gives the merge commit its
+  CI run. A commit *inside* a merged PR has no push run of its own, because its PR checks ran
+  on GitHub's `refs/pull/N/merge`. So `scripts/deploy.sh <sha12>` refuses it: name a merge
+  commit (from before #208's, a push tip that isn't the cadence bot's).
+- **After any merge on GitHub,** `git pull --ff-only` before the next local commit.
+- **Two bots open PRs too:**
+  - **The skills refresh hook** keeps one PR from `skills/submodule-refresh`
+    ([SKILLS.md](SKILLS.md#maintenance)).
+  - **The weekly cadence** keeps one from `context/weekly-measurement`. It opens that PR with
+    `GITHUB_TOKEN`, so no CI runs on the PR until a human closes and reopens it. GitHub's
+    merge button can't run the `context-counts` merge driver. If the PR shows a conflict,
+    re-run the workflow (`gh workflow run context-cadence.yml`), whose merge does run it.
+    It needs *Allow GitHub Actions to create and approve pull requests* (Settings → Actions →
+    General), on since 2026-11-17 by the operator's word.
 
 ### Once, before the first deploy (the operator)
 
@@ -265,7 +293,7 @@ including an empty namespace after a flush:
 
 `.github/dependabot.yml` proposes **action bumps only**, weekly. Every `uses:` in `ci.yml` pins a commit SHA with a `# vX.Y.Z` comment, and Dependabot moves both. `context-cadence.yml` is excluded, because the installer re-renders it (gregoryfoster/skills#373). `uv` stays parked under #169, until an org owner admits Dependabot to the co-pypi index (CannObserv/cannobserv#615). Guarded by `tests/ci/`.
 
-A bot PR touches only `.github/`, so it needs **no deploy and no restart**. Merging it on GitHub puts `origin/main` ahead of this checkout: `git pull --ff-only` before the next local commit. If a bot PR is red at the WIF auth step, suspect the Dependabot run's OIDC token before the bump (the verdict table on #76). Read the action's release notes, not the diff: setup-uv v9 flipped `prune-cache` silently. A bump that changes behaviour takes fix commits pushed onto its branch.
+A bot PR touches only `.github/`, so it needs **no deploy and no restart**. Merge it [like any PR](#main-takes-pull-requests-208), then `git pull --ff-only` before the next local commit. If a bot PR is red at the WIF auth step, suspect the Dependabot run's OIDC token before the bump (the verdict table on #76). Read the action's release notes, not the diff: setup-uv v9 flipped `prune-cache` silently. A bump that changes behaviour takes fix commits pushed onto its branch.
 
 ## Environment Variables
 
