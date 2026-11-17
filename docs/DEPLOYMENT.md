@@ -91,8 +91,8 @@ ruleset, so a by-hand `git push origin main` still lands.
     `GITHUB_TOKEN`, so no CI runs on the PR until a human closes and reopens it. GitHub's
     merge button can't run the `context-counts` merge driver. If the PR shows a conflict,
     re-run the workflow (`gh workflow run context-cadence.yml`), whose merge does run it.
-    The cadence needs *Allow GitHub Actions to create and approve pull requests* (Settings →
-    Actions → General). The PAT can't read that setting.
+    It needs *Allow GitHub Actions to create and approve pull requests* (Settings → Actions →
+    General), on since 2026-11-17 by the operator's word.
 
 ### Once, before the first deploy (the operator)
 
