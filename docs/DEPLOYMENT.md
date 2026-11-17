@@ -81,8 +81,8 @@ ruleset, so a by-hand `git push origin main` still lands.
   title has to be written to the commit convention by hand.
 - **Deploy and roll back to merge commits.** The push to `main` gives the merge commit its
   CI run. A commit *inside* a merged PR has no push run of its own, because its PR checks ran
-  on GitHub's `refs/pull/N/merge`. So `scripts/deploy.sh <sha12>` refuses it: name the merge
-  commit, or the `main` commit before it.
+  on GitHub's `refs/pull/N/merge`. So `scripts/deploy.sh <sha12>` refuses it: name a merge
+  commit (from before #208's, a push tip that isn't the cadence bot's).
 - **After any merge on GitHub,** `git pull --ff-only` before the next local commit.
 - **Two bots open PRs too:**
   - **The skills refresh hook** keeps one PR from `skills/submodule-refresh`
