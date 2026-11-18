@@ -3,29 +3,29 @@
 # The offline estimators prefer a file's own last exact measurement to the
 # repo-wide figure in .skills/context-token-ratio, falling back to it for a
 # file never counted exactly or since drifted far from the size recorded here.
-13938 5897 AGENTS.md
-7298 2809 docs/ARCHITECTURE.md
-24796 9786 docs/COMMANDS.md
+14042 5952 AGENTS.md
+7409 2856 docs/ARCHITECTURE.md
+24563 9705 docs/COMMANDS.md
 26962 9968 docs/CONVENTIONS.md
-7068 2860 docs/DEPENDENCIES.md
-20842 8014 docs/DEPLOYMENT.md
-23001 9324 docs/ENVIRONMENT.md
-8941 3330 docs/FAILURE-NOTIFICATION.md
-24244 9529 docs/INFRASTRUCTURE.md
+10123 4029 docs/DEPENDENCIES.md
+24054 9490 docs/DEPLOYMENT.md
+23311 9474 docs/ENVIRONMENT.md
+8978 3342 docs/FAILURE-NOTIFICATION.md
+25254 10011 docs/INFRASTRUCTURE.md
 10405 4259 docs/MEMORY-PROTECTION.md
 22771 8106 docs/POLITENESS.md
-24601 9307 docs/SKILLS.md
+25990 9908 docs/SKILLS.md
 20007 7721 docs/SOCRATICODE.md
-23319 8547 docs/STORAGE.md
-26973 9875 docs/STREAMS.md
-3441 1245 docs/STYLE.md
-26286 9895 docs/TESTING.md
-9609 3750 docs/contracts/content-capture-issuer-contract.md
+25318 9315 docs/STORAGE.md
+27047 9910 docs/STREAMS.md
+3305 1183 docs/STYLE.md
+26546 10025 docs/TESTING.md
+11494 4544 docs/contracts/content-capture-issuer-contract.md
 26929 9839 docs/contracts/content-fetch-issuer-contract.md
 23431 8465 docs/contracts/content-fetch-issuer-reference.md
 26475 9985 docs/contracts/content-fetch-outcome-reference.md
-9039 3348 docs/contracts/content-persist-issuer-contract.md
-27798 9893 docs/contracts/content-replicate-issuer-contract.md
+10179 3814 docs/contracts/content-persist-issuer-contract.md
+28065 9993 docs/contracts/content-replicate-issuer-contract.md
 12475 4331 docs/contracts/content-replicate-issuer-reference.md
 27606 9841 docs/contracts/replicator-boundaries.md
-11830 5008 docs/reference/tailscale.md
+11896 5031 docs/reference/tailscale.md
