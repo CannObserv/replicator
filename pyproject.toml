@@ -7,72 +7,94 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
-    # Floor is 0.48.0, and it carries no new feature: a two-minor catch-up
-    # (#206), in #199's shape. The lock takes 0.48.2, the index's newest with the
-    # bound opened to `<1` [measured 2026-11-15]. The floor stays at .0 because
-    # nothing here depends on 0.48.1's or 0.48.2's changes, Drive-only inside this
-    # closure. `co-core-aio` and `co-core-sync` 0.48.x require
-    # `co-core>=0.48,<0.49`, so the three move together. Each minor's break misses
-    # this closure. 0.47.0 renames `TranscriptSpeakerModel.relationship_id` to
-    # `role_assignment_id`, still reading the old name (cannobserv#469), and its
-    # WordPress disclosure-block removals (cannobserv#672) ship in none of the
-    # three wheels. 0.48.0's catalog-only `DisclosureServiceModel.service_type`
-    # (cannobserv#678) is on a model these wheels didn't have at 0.46.1.
+    # Floor is 0.50.0, and it carries no new feature: a two-minor catch-up
+    # (#211), in #206's shape. The lock takes 0.50.0, the index's newest with the
+    # bound opened to `<1` [measured 2026-11-18]. `co-core-aio` and `co-core-sync`
+    # 0.50.0 require `co-core>=0.50,<0.51`, so the three move together. Both
+    # minors' breaks miss this closure. 0.49.0 removes `InformationModel.source`
+    # from co-core's own `pure/models/information.py` (cannobserv#673), beside
+    # cannobserv-side retirements Replicator never installs. 0.50.0 moves the
+    # storage framework into `co_core.pure.storage` and `co_core_sync.storage`
+    # (cannobserv#703). Neither adds a module to this closure.
     #
-    # **`scripts/co_core_closure_diff.py 0.46.1 0.48.2`** (#145), verbatim, from
+    # **`scripts/co_core_closure_diff.py 0.48.2 0.50.0`** (#145), verbatim, from
     # the wheels this lock pins (their sha256 matched against `uv.lock`):
     #
-    # ## Import closure, 0.46.1 → 0.48.2
+    # ## Import closure, 0.48.2 → 0.50.0
     #
     # Roots `src`, `scripts`; packages `co_core`, `co_core_aio`, `co_core_sync`.
     #
-    # 58 files at 0.46.1, 58 at 0.48.2. 5 not identical:
+    # 58 files at 0.48.2, 58 at 0.50.0. 6 not identical:
     #
     # - `version-only` co_core/__init__.py
-    # - `changed` co_core/effects/gdrive.py
+    # - `docstrings-only` co_core/pure/models/changes.py
     # - `version-only` co_core_aio/__init__.py
     # - `version-only` co_core_sync/__init__.py
     # - `changed` co_core_sync/drivers/gdrive.py
+    # - `changed` co_core_sync/drivers/transport.py
     #
     # **Requires-Dist:**
     #
     # - co_core: unchanged
-    # - co_core_aio: removed `co-core<0.47,>=0.46`; added `co-core<0.49,>=0.48`
-    # - co_core_sync: removed `co-core<0.47,>=0.46`; added `co-core<0.49,>=0.48`
+    # - co_core_aio: removed `co-core<0.49,>=0.48`; added `co-core<0.51,>=0.50`
+    # - co_core_sync: removed `co-core<0.49,>=0.48`; added `co-core<0.51,>=0.50`
     #
-    # **Third-party imports** (at 0.48.2): `google`, `google_auth_oauthlib`, `googleapiclient`, `httpx`, `pydantic`, `redis`, `requests`, `urllib3`.
+    # **Third-party imports** (at 0.50.0): `google`, `google_auth_oauthlib`, `googleapiclient`, `httpx`, `pydantic`, `redis`, `requests`, `urllib3`.
     #
     # **Dynamic imports, not followed:**
     #
     # - co_core_sync/drivers/__init__.py:89 `import_module(f"{__name__}.{module}")`
     # - co_core_sync/drivers/blobstore/__init__.py:32 `import_module(f"{__name__}.{module}")`
     #
-    # Read by hand (`--diff`), the two `changed` files are Drive only, and
-    # Replicator has no Drive writer: `KNOWN_PROVIDERS` is `("gcs",)`
-    # (`src/worker/aliases.py`), so a `gdrive-` alias is refused, and this host's
-    # alias table names none.
+    # Both `changed` files are 0.49.0's; 0.49.0 → 0.50.0 alone is three
+    # `version-only` and `changes.py`'s docstrings, where `FetchPolicyState.generation`
+    # is still `Generation | None = None` [measured, per-step closure diffs]. Read by
+    # hand (`--diff`):
     #
-    # - `effects/gdrive.py` adds the `GdriveDeleteIfPresent` effect, the
-    #   `GdriveDeleteOutcome` enum and the effect's member of `GdriveEffect`.
-    # - `drivers/gdrive.py` passes `num_retries=DRIVE_NUM_RETRIES` (3) to
-    #   `files().delete`, `.get` and `.list` (0.48.1, cannobserv#601), and adds
-    #   `delete_if_present`, which maps a 404 to `ALREADY_ABSENT` (0.48.2,
-    #   cannobserv#692).
+    # - `drivers/gdrive.py` sends every `files()` call through
+    #   `execute_drive_request`, which passes `DRIVE_NUM_RETRIES` only to a method
+    #   in `transport.RETRY_METHODS` (GET and DELETE are; POST and PATCH aren't),
+    #   so each call's retry count is what it was. Drive can't load here:
+    #   importing `src.worker.main` loads no `drivers.gdrive`, and
+    #   `googleapiclient` isn't installed (no `[gdrive]` extra) [measured, as on
+    #   #206]. `KNOWN_PROVIDERS` is `("gcs",)` (`src/worker/aliases.py`) besides.
+    # - `drivers/transport.py` is cannobserv#714's sync deadline fix: a connect or
+    #   request whose `CO_HTTP_DEADLINE` budget is already spent raises
+    #   `ConnectTimeoutError` (`_refuse_spent_attempt`), and a pool mixin drops a
+    #   returned socket from the call budget. The module *is* loaded here
+    #   (`drivers/__init__.py:41` imports it eagerly, as at 0.48.2), but inert:
+    #   only `resilient_adapter` and `mount_resilient_adapter` build its retry,
+    #   adapter and pools, and nothing in the three wheels or in `src/`,
+    #   `scripts/` or `tests/` calls either [measured]. `GcsBlobStore` uses
+    #   `google.cloud.storage`'s own transport.
     #
-    # Neither can load here, which settles it beyond the provider list: the
-    # closure reaches them only through `drivers/__init__.py`'s `TYPE_CHECKING`
-    # names and lazy `__getattr__`, importing `src.worker.main` and
-    # `src.storage.local_store` loads neither, and `drivers/gdrive.py` imports
-    # `googleapiclient` at module top, which isn't installed (no `[gdrive]`
-    # extra; not in `uv.lock`) [measured, #206 CR 1].
+    # Outside the closure, by whole-wheel diff [measured; the CHANGELOG is not
+    # the source]: 0.49.0 changes co-core's `information`, `source` and three
+    # `transcript*` models, `mixins/removed_fields.py`, `errors.py`, two co/v1
+    # adapters, `workflows/gdrive.py` and four co-core-sync `services/`, and adds
+    # `pure/util/audacity.py` (cannobserv#674). 0.50.0 adds the two `storage`
+    # packages (`StorageConfig.from_toml` retired with the move), changes
+    # `errors.py`, `util/information_types.py` and `util/versioning.py`, and
+    # removes `co_core.pure.resources`, an empty placeholder. Nothing in `src/`,
+    # `scripts/` or `tests/` reaches any of them; the closure is the same with
+    # `tests/` as a root.
     #
-    # The closure is the same with `tests/` as a root, and the dynamic imports
-    # are the same two as at 0.46.1. Outside the closure, 0.47 and 0.48 changed
-    # co/v1's `exceptions.py` and `urls.py`, the transcript models,
-    # `workflows/upload.py`, co-core-sync's `runner.py` and seven `services/`
-    # modules, and added the WordPress `blocks`, `disclosure` and `transcript`
-    # adapters and the disclosure catalog and service modules. Nothing in `src/`,
-    # `scripts/` or `tests/` reaches any of them.
+    # Previously:
+    #
+    # Floor was 0.48.0, and it carried no new feature: a two-minor catch-up
+    # (#206), in #199's shape, locked at 0.48.2. Each minor's break missed this
+    # closure: 0.47.0's `TranscriptSpeakerModel.relationship_id` rename
+    # (cannobserv#469) and WordPress disclosure-block removals (cannobserv#672),
+    # and 0.48.0's catalog-only `DisclosureServiceModel.service_type`
+    # (cannobserv#678).
+    #
+    # **Diffing the closure, 0.46.1 → 0.48.2** (58 files, both sides): 5 not
+    # identical, 3 `version-only`; the two `changed` files were Drive only.
+    # `effects/gdrive.py` added `GdriveDeleteIfPresent` and `GdriveDeleteOutcome`;
+    # `drivers/gdrive.py` passed `num_retries=DRIVE_NUM_RETRIES` to
+    # `files().delete`, `.get` and `.list` (0.48.1, cannobserv#601) and added
+    # `delete_if_present` (0.48.2, cannobserv#692). Neither could load here
+    # [measured, #206 CR 1]. Requires-Dist moved only the aio/sync `co-core` bound.
     #
     # Previously:
     #
@@ -482,9 +504,9 @@ dependencies = [
     # at module load, so a skew cannot reach a running worker at all. Additive over
     # 0.8.0 for everything the fetch path uses — no field on ContentFetchCommand,
     # BlobAvailableEvent or FetchFailedEvent moved between the two.
-    "co-core>=0.48.0,<0.49",
-    "co-core-aio[bus,gcs]>=0.48.0,<0.49",
-    "co-core-sync[gcs]>=0.48.0,<0.49",
+    "co-core>=0.50.0,<0.51",
+    "co-core-aio[bus,gcs]>=0.50.0,<0.51",
+    "co-core-sync[gcs]>=0.50.0,<0.51",
     "fastapi>=0.126.0,<1",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.5.0,<3",
