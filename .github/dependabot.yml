@@ -37,14 +37,20 @@ updates:
     # (dependabot-core#15290). A bump inside a cap moves the lock and, under uv,
     # the floor; one past it rewrites the cap.
     versioning-strategy: increase-if-necessary
-    # One PR per runtime package not ignored, plus one per group; the test
-    # derives that bound from pyproject.toml.
+    # One PR per runtime package not ignored, one per package the group
+    # excludes, plus one per group; the test derives that bound from
+    # pyproject.toml.
     open-pull-requests-limit: 10
     groups:
       # Dev tooling is one PR. Not a no-deploy marker: anyio, httpx and pyyaml
       # are runtime transitives too (docs/DEPLOYMENT.md -> "Dependabot").
       dev-tools:
         dependency-type: "development"
+        # Dependabot gives a requirement with extras no previous version, and
+        # one such member drops the whole group as "Nothing to update" (the
+        # first run, #169). On its own PR it works, like uvicorn[standard].
+        exclude-patterns:
+          - "google-auth*" # the co-pypi group's google-auth[requests]
     # Name-only, so the updater drops each name before any version lookup.
     # Majors are not ignored: a major is a PR, and `@dependabot ignore this
     # major version` on it keeps that one cap (#169).
@@ -58,5 +64,9 @@ updates:
       # Pinned == with its headless shell; a bump is a lock change plus the
       # viewport-capture runbook's install on every host (#138).
       - dependency-name: "playwright"
+      # [build-system]: no lock entry, so it too would drop the group. Its range
+      # is the host uv's minor, repeated in ci.yml's setup-uv inputs; it moves
+      # by hand with the host's uv (docs/DEPENDENCIES.md).
+      - dependency-name: "uv-build"
     commit-message:
       prefix: "chore"

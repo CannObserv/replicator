@@ -106,7 +106,8 @@ ci.yml's four `setup-uv` steps take the same range as `version:`, verbatim.
 setup-uv installs the newest uv inside it (`resolution-strategy: highest`), so
 patches arrive on their own and a minor needs a deliberate bump.
 `tests/ci/test_workflow_pins.py` holds the five strings equal and the range to
-one minor.
+one minor. Dependabot ignores `uv-build` (#169): a bot bump would
+raise the floor in the first string alone.
 
 **When to bump:** the host's `/usr/local/bin/uv`, which the operator installs, is
 past the bound when the deploy sync prints

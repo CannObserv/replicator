@@ -221,7 +221,65 @@ def test_uv_strategy_is_not_the_unsupported_widen(uv_block):
 def test_uv_dev_tools_are_one_grouped_pr(uv_block):
     """One group, for development dependencies only. Not a no-deploy marker:
     some dev packages are runtime transitives too (docs/DEPLOYMENT.md)."""
-    assert uv_block.get("groups") == {"dev-tools": {"dependency-type": "development"}}
+    groups = uv_block.get("groups", {})
+    assert list(groups) == ["dev-tools"]
+    assert groups["dev-tools"].get("dependency-type") == "development"
+    assert set(groups["dev-tools"]) <= {"dependency-type", "exclude-patterns"}
+
+
+def _group_requirements() -> list[Requirement]:
+    """Every ``[dependency-groups]`` requirement: Dependabot's "development" type."""
+    groups = _pyproject().get("dependency-groups", {}).values()
+    return [Requirement(r) for group in groups for r in group if isinstance(r, str)]
+
+
+def _dependabot_name(req: Requirement) -> str:
+    """The name Dependabot's uv updater gives a requirement: extras included."""
+    name = canonicalize_name(req.name)
+    return f"{name}[{','.join(sorted(req.extras))}]" if req.extras else name
+
+
+def _build_requirements() -> set[str]:
+    """``[build-system].requires``: development to Dependabot, and in no lock."""
+    requires = _pyproject().get("build-system", {}).get("requires", [])
+    return {canonicalize_name(Requirement(r).name) for r in requires}
+
+
+def test_dev_tools_group_holds_no_extras_requirement(uv_block):
+    """Dependabot gives a requirement with extras no previous version, and a
+    group change with one such member and one unchanged requirement is dropped
+    whole, logged as "Nothing to update" (dependabot-core
+    ``DependencyChange#all_have_previous_version?``; the first run, #169). On its
+    own PR an extras requirement works, so exclude it from the group."""
+    excluded = uv_block.get("groups", {}).get("dev-tools", {}).get("exclude-patterns", [])
+    caught = [
+        name
+        for name in map(_dependabot_name, _group_requirements())
+        if "[" in name
+        and not _is_ignored(name, uv_block)
+        and not any(fnmatchcase(name, pattern) for pattern in excluded)
+    ]
+    assert not caught, (
+        f"{caught}: a dependency-group requirement with extras inside the dev-tools "
+        "group drops the whole group PR; add `<name>*` to its exclude-patterns"
+    )
+
+
+def test_dev_tools_exclusions_are_not_stale(uv_block):
+    excluded = uv_block.get("groups", {}).get("dev-tools", {}).get("exclude-patterns", [])
+    names = [_dependabot_name(r) for r in _group_requirements()]
+    stale = [p for p in excluded if not any(fnmatchcase(n, p) for n in names)]
+    assert not stale, f"exclude-patterns {stale} match no dependency-group requirement"
+
+
+def test_uv_ignores_every_build_requirement(uv_block):
+    """A build requirement has no lock entry, so it would drop the dev-tools
+    group (as above). ``uv_build``'s range is the host uv's minor, repeated in
+    ci.yml's setup-uv inputs (test_workflow_pins.py): it moves by hand."""
+    requires = _build_requirements()
+    assert requires, "found no [build-system] requires: the derivation broke"
+    missed = sorted(r for r in requires if not _is_ignored(r, uv_block))
+    assert not missed, f"{missed}: build requirements not ignored by name"
 
 
 def test_uv_ignores_every_index_package(uv_block):
@@ -250,20 +308,29 @@ def test_uv_ignores_are_name_only_and_none_is_stale(uv_block):
     entries = uv_block.get("ignore", [])
     narrowed = [e for e in entries if set(e) != {"dependency-name"}]
     assert not narrowed, f"narrowed ignore entries {narrowed}: make each name-only"
-    wanted = _index_packages() | _exact_pins()
+    wanted = _index_packages() | _exact_pins() | _build_requirements()
     stale = [n for n in _ignored_names(uv_block) if not any(fnmatchcase(w, n) for w in wanted)]
-    assert not stale, f"ignore entries {stale} match no index package or exact pin"
+    assert not stale, (
+        f"ignore entries {stale} match no index package, exact pin or build requirement"
+    )
 
 
 def test_uv_open_pr_limit_outlasts_a_full_batch(uv_block):
-    """One PR per runtime package the bot may move, plus one per group."""
+    """One PR per runtime package the bot may move, one per requirement the
+    group excludes, plus one per group."""
     runtime = {canonicalize_name(r.name) for r in _runtime()}
-    movable = sorted(n for n in runtime if not _is_ignored(n, uv_block))
+    excluded = uv_block.get("groups", {}).get("dev-tools", {}).get("exclude-patterns", [])
+    loose = {
+        name
+        for name in map(_dependabot_name, _group_requirements())
+        if any(fnmatchcase(name, pattern) for pattern in excluded)
+    }
+    movable = sorted(n for n in runtime | loose if not _is_ignored(n, uv_block))
     assert movable, "found no runtime dependency to bump: the derivation broke"
     groups = len(uv_block.get("groups", {}))
     limit = uv_block.get("open-pull-requests-limit", 5)
     assert limit > len(movable) + groups, (
-        f"limit {limit} can be filled by {len(movable)} runtime PRs ({movable}) and "
+        f"limit {limit} can be filled by {len(movable)} single PRs ({movable}) and "
         f"{groups} group PRs; past it Dependabot opens nothing and says so nowhere. "
         "Raise open-pull-requests-limit"
     )
