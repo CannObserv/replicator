@@ -520,7 +520,7 @@ dependencies = [
     # step on every host (docs/plans/2026-10-25-viewport-capture-runbook.md).
     # Bundles its own Node (the driver): an outside-apt runtime for patching.
     "playwright==1.64.1",
-    "uvicorn[standard]>=0.34.0,<1",
+    "uvicorn[standard]>=0.54.0,<1",
 ]
 
 [project.scripts]
