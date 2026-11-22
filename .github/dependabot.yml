@@ -1,13 +1,15 @@
-# Moves the action pins nothing else moves (#76): ci.yml pins every `uses:` to
-# a commit SHA with a `# vX.Y.Z` comment, and Dependabot rewrites both. Each PR
-# is gated by ci.yml; a Dependabot-triggered run is treated like a fork's, so
-# on a red one read the WIF auth step first (the verdict table on #76).
-# How one lands: docs/DEPLOYMENT.md -> "Dependabot".
+# Moves the pins nothing else moves: the action pins (#76), where ci.yml pins
+# every `uses:` to a commit SHA with a `# vX.Y.Z` comment and Dependabot
+# rewrites both, and the Python dependencies whose caps hide a new release from
+# `uv lock` (#169). Each PR is gated by ci.yml; a Dependabot-triggered run is
+# treated like a fork's, so on a red one read the WIF auth step first (the
+# verdict table on #76). How one lands, and when a `uv` PR owes a deploy:
+# docs/DEPLOYMENT.md -> "Dependabot".
 #
-# github-actions only. `uv` stays parked under #169: co-core resolves from the
-# private co-pypi index (#183), which Dependabot's updater reaches only once an
-# org owner admits it (CannObserv/cannobserv#615). gitsubmodule (deliberate
-# skills-vendor/ bumps) stays out too.
+# The `uv` updater resolves co-core from the co-pypi index (#183) over OIDC:
+# the org registry admits this repository, and pyproject.toml's index URL
+# equals the registry's byte for byte, so no `registries:` key (cannobserv
+# docs/DEPENDABOT.md). gitsubmodule (deliberate skills-vendor/ bumps) stays out.
 # Guarded by tests/ci/test_dependabot.py: a mistyped config stops producing
 # PRs without erroring anywhere a person looks.
 version: 2
@@ -25,5 +27,36 @@ updates:
     # the bound.
     open-pull-requests-limit: 10
     # AGENTS.md's no-issue form: "chore: bump actions/checkout from 5.1.0 to 7.0.1".
+    commit-message:
+      prefix: "chore"
+  - package-ecosystem: "uv"
+    directory: "/" # pyproject.toml + uv.lock
+    schedule:
+      interval: "weekly"
+    # The default `auto` resolves to `widen`, which uv can't do
+    # (dependabot-core#15290). A bump inside a cap moves the lock and, under uv,
+    # the floor; one past it rewrites the cap.
+    versioning-strategy: increase-if-necessary
+    # One PR per runtime package not ignored, plus one per group; the test
+    # derives that bound from pyproject.toml.
+    open-pull-requests-limit: 10
+    groups:
+      # Dev tooling is one PR. Not a no-deploy marker: anyio, httpx and pyyaml
+      # are runtime transitives too (docs/DEPLOYMENT.md -> "Dependabot").
+      dev-tools:
+        dependency-type: "development"
+    # Name-only, so the updater drops each name before any version lookup.
+    # Majors are not ignored: a major is a PR, and `@dependabot ignore this
+    # major version` on it keeps that one cap (#169).
+    ignore:
+      # Every [tool.uv.sources] index name. Dependabot asks PyPI before the
+      # index, and a squatter could take these names there (the PyPI-first
+      # limit, accepted 2026-11-22, #169). co-core moves by epic #154's
+      # pin-move children. Resolution still reads the index: every other bump
+      # re-locks co-core from it.
+      - dependency-name: "co-core*"
+      # Pinned == with its headless shell; a bump is a lock change plus the
+      # viewport-capture runbook's install on every host (#138).
+      - dependency-name: "playwright"
     commit-message:
       prefix: "chore"

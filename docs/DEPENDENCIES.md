@@ -130,6 +130,7 @@ reads to see which packages moved.
   would have refused service start. Since #151 no unit runs `uv`; the deploy's
   build still would refuse.
 - **An exact CI pin.** Nothing moves `with.version`. Dependabot's
-  `github-actions` updater rewrites the SHA only, and `uv` is parked (#169).
+  `github-actions` updater rewrites the SHA only, and its `uv` updater (#169)
+  reads `pyproject.toml` and `uv.lock`, not `ci.yml`.
 - **Unpinned.** CI took each new minor the day it shipped, which is how the
   warning got into CI logs.

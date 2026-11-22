@@ -1,33 +1,54 @@
-"""Pin ``.github/dependabot.yml``, the bot that proposes action bumps (#76).
+"""Pin ``.github/dependabot.yml``, the bot that proposes action bumps (#76)
+and Python dependency bumps (#169).
 
 Dependabot's config fails silently: a mistyped ecosystem, a bad directory or a
 missing schedule stops producing PRs without erroring anywhere a person looks,
 and a quiet bot reads like "no updates available". Ported from
-CannObserv/archiver#192 (``c5a7a22``), assertions only:
+CannObserv/archiver#192 (``c5a7a22``) and CannObserv/watcher's ``uv`` guards,
+assertions only:
 
-* **``github-actions`` only.** ``uv`` stays parked under #169: co-core
-  resolves from the private co-pypi index (#183), which Dependabot's updater
-  reaches only once an org owner admits it (CannObserv/cannobserv#615).
-  ``skills-vendor/``'s deliberate submodule bumps stay out too. Any second block fails here.
+* **Two ecosystems, ``github-actions`` and ``uv``.** The ``uv`` updater resolves
+  co-core from the co-pypi index (#183) over OIDC, through the org registry
+  that admits this repository; ``pyproject.toml``'s index URL matches the
+  registry's byte for byte, so there is no ``registries:`` key.
+  ``skills-vendor/``'s deliberate submodule bumps stay out.
 * **``context-cadence.yml`` is excluded.** ``install-cadence.sh`` generates it,
   and a re-render reverts any bump made in it (gregoryfoster/skills#373). Its
   pin moves with the installer.
-* **The open-PR limit outlasts a full batch.** Past the limit (default 5)
-  Dependabot opens nothing and says so nowhere (CannObserv/notifier#103). One
-  PR per action, so the bound is derived from the workflows, not transcribed.
+* **Every index package and every exact pin is ignored by name, and nothing
+  else is.** co-core moves by the pin-move children of epic #154, and a
+  name-only ignore keeps Dependabot from asking PyPI, which it does before the
+  index, about a name a squatter could take (the PyPI-first limit, accepted
+  2026-11-22). ``playwright``'s ``==`` pin moves with its headless shell, a host
+  runbook step. Both sets are derived from ``pyproject.toml``, so a new one
+  fails here until it's ignored.
+* **``increase-if-necessary``.** The default ``auto`` resolves to ``widen``,
+  which uv can't do (dependabot-core#15290).
+* **Dev tools are one grouped PR; runtime packages are one PR each.**
+* **The open-PR limits outlast a full batch.** Past the limit (default 5)
+  Dependabot opens nothing and says so nowhere (CannObserv/notifier#103). The
+  bounds are derived (one PR per action from the workflows, one per runtime
+  package not ignored plus one per group), never transcribed.
 * **Commits match AGENTS.md's no-issue form**, ``<type>: <description>``.
 
 The pins it moves are ``test_workflow_pins.py``'s. Pure file reads.
 """
 
 import re
+import tomllib
+from fnmatch import fnmatchcase
 
 import pytest
 import yaml
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 
 from tests.ci.test_workflow_pins import GENERATED, REPO_ROOT, _scanned, _uses
 
 CONFIG = REPO_ROOT / ".github" / "dependabot.yml"
+PYPROJECT = REPO_ROOT / "pyproject.toml"
+
+ECOSYSTEMS = ["github-actions", "uv"]
 
 # AGENTS.md → Conventions → Commit Messages.
 COMMIT_TYPES = {"feat", "fix", "refactor", "docs", "test", "chore"}
@@ -74,20 +95,36 @@ def test_config_is_version_2():
     assert _load().get("version") == 2
 
 
-def test_only_github_actions_is_configured():
-    ecosystems = [u.get("package-ecosystem") for u in _updates()]
-    assert ecosystems == ["github-actions"], (
-        f"ecosystems {ecosystems}: #76 ships github-actions alone. A `uv` block "
-        "is #169's, parked until an org owner admits Dependabot to the co-pypi index "
-        "(CannObserv/cannobserv#615); gitsubmodule is its own decision"
+def test_exactly_the_two_ecosystems_are_configured():
+    ecosystems = sorted(u.get("package-ecosystem") for u in _updates())
+    assert ecosystems == ECOSYSTEMS, (
+        f"ecosystems {ecosystems}: expected one block each for {ECOSYSTEMS} "
+        "(#76's action bumps, #169's Python bumps); gitsubmodule is its own decision"
     )
+
+
+def test_no_registries_key():
+    """The org registry serves an admitted repository's jobs only when the index
+    URL in ``pyproject.toml`` matches its own; a ``registries:`` entry here would
+    be a second, repo-level credential path (cannobserv ``docs/DEPENDABOT.md``)."""
+    assert "registries" not in _load()
+    assert all("registries" not in u for u in _updates())
+
+
+def _block(ecosystem: str) -> dict:
+    blocks = [u for u in _updates() if u.get("package-ecosystem") == ecosystem]
+    assert len(blocks) == 1, f"expected one {ecosystem} block, found {len(blocks)}"
+    return blocks[0]
 
 
 @pytest.fixture
 def actions_block() -> dict:
-    blocks = [u for u in _updates() if u.get("package-ecosystem") == "github-actions"]
-    assert len(blocks) == 1, f"expected one github-actions block, found {len(blocks)}"
-    return blocks[0]
+    return _block("github-actions")
+
+
+@pytest.fixture
+def uv_block() -> dict:
+    return _block("uv")
 
 
 def test_actions_block_covers_the_workflows(actions_block):
@@ -120,10 +157,113 @@ def test_open_pr_limit_outlasts_a_full_batch(actions_block):
     )
 
 
-def test_commits_follow_the_repo_convention(actions_block):
+@pytest.mark.parametrize("ecosystem", ECOSYSTEMS)
+def test_commits_follow_the_repo_convention(ecosystem):
     """The PR's commit reaches ``main`` as is, so it must read like ours."""
-    prefix = actions_block.get("commit-message", {}).get("prefix")
+    prefix = _block(ecosystem).get("commit-message", {}).get("prefix")
     assert prefix in COMMIT_TYPES, (
         f"commit-message.prefix {prefix!r}: Dependabot's default 'Bump …' subject "
         f"matches none of AGENTS.md's types {sorted(COMMIT_TYPES)}"
+    )
+
+
+def _pyproject() -> dict:
+    return tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+
+
+def _runtime() -> list[Requirement]:
+    """``[project].dependencies``: the runtime packages, one PR each."""
+    return [Requirement(r) for r in _pyproject()["project"]["dependencies"]]
+
+
+def _index_packages() -> set[str]:
+    """The names ``[tool.uv.sources]`` binds to an index: co-core, from co-pypi."""
+    sources = _pyproject().get("tool", {}).get("uv", {}).get("sources", {})
+    return {canonicalize_name(n) for n, s in sources.items() if "index" in s}
+
+
+def _exact_pins() -> set[str]:
+    """Runtime names pinned ``==``: each moves by a deliberate change, never the bot."""
+    return {
+        canonicalize_name(r.name)
+        for r in _runtime()
+        if any(s.operator in ("==", "===") for s in r.specifier)
+    }
+
+
+def _ignored_names(block: dict) -> list[str]:
+    """Every ignore entry's name pattern, narrowed entries included."""
+    return [e.get("dependency-name", "") for e in block.get("ignore", [])]
+
+
+def _is_ignored(name: str, block: dict) -> bool:
+    """Whether a name-only entry matches: only that drops every version of it."""
+    entries = block.get("ignore", [])
+    patterns = [e.get("dependency-name", "") for e in entries if set(e) == {"dependency-name"}]
+    return any(fnmatchcase(name, pattern) for pattern in patterns)
+
+
+def test_uv_block_covers_the_project(uv_block):
+    """``/`` holds ``pyproject.toml`` and ``uv.lock``; any other directory is silence."""
+    assert _directories(uv_block) == {"/"}
+
+
+def test_uv_block_runs_weekly(uv_block):
+    assert uv_block.get("schedule", {}).get("interval") == "weekly"
+
+
+def test_uv_strategy_is_not_the_unsupported_widen(uv_block):
+    """The default ``auto`` resolves to ``widen``, which uv can't do
+    (dependabot-core#15290): the run fails in a log nobody reads."""
+    assert uv_block.get("versioning-strategy") == "increase-if-necessary"
+
+
+def test_uv_dev_tools_are_one_grouped_pr(uv_block):
+    """One group, for development dependencies only. Not a no-deploy marker:
+    some dev packages are runtime transitives too (docs/DEPLOYMENT.md)."""
+    assert uv_block.get("groups") == {"dev-tools": {"dependency-type": "development"}}
+
+
+def test_uv_ignores_every_index_package(uv_block):
+    """Dependabot asks PyPI before the index; a name-only ignore stops the lookup."""
+    packages = _index_packages()
+    assert packages, "found no index-bound name in [tool.uv.sources]: the derivation broke"
+    missed = sorted(p for p in packages if not _is_ignored(p, uv_block))
+    assert not missed, (
+        f"{missed}: bound to the co-pypi index but not ignored, so Dependabot would "
+        "look it up on PyPI first and could propose a squatter's version (#169)"
+    )
+
+
+def test_uv_ignores_every_exact_pin(uv_block):
+    """An ``==`` pin is a decision a bot bump would undo: playwright's moves with
+    the headless shell every host installs (#138's runbook)."""
+    missed = sorted(p for p in _exact_pins() if not _is_ignored(p, uv_block))
+    assert not missed, f"{missed}: pinned == in [project].dependencies but not ignored"
+
+
+def test_uv_ignores_are_name_only_and_none_is_stale(uv_block):
+    """A narrowed entry (``versions``, ``update-types``) still lets the bot ask
+    PyPI about the name; an entry matching nothing hides a package we never meant
+    to (a typo, or a dependency since dropped). Majors flow as PRs (#169): close
+    one with ``@dependabot ignore this major version`` to keep a cap."""
+    entries = uv_block.get("ignore", [])
+    narrowed = [e for e in entries if set(e) != {"dependency-name"}]
+    assert not narrowed, f"narrowed ignore entries {narrowed}: make each name-only"
+    wanted = _index_packages() | _exact_pins()
+    stale = [n for n in _ignored_names(uv_block) if not any(fnmatchcase(w, n) for w in wanted)]
+    assert not stale, f"ignore entries {stale} match no index package or exact pin"
+
+
+def test_uv_open_pr_limit_outlasts_a_full_batch(uv_block):
+    """One PR per runtime package the bot may move, plus one per group."""
+    runtime = {canonicalize_name(r.name) for r in _runtime()}
+    movable = sorted(n for n in runtime if not _is_ignored(n, uv_block))
+    assert movable, "found no runtime dependency to bump: the derivation broke"
+    groups = len(uv_block.get("groups", {}))
+    limit = uv_block.get("open-pull-requests-limit", 5)
+    assert limit > len(movable) + groups, (
+        f"limit {limit} can be filled by {len(movable)} runtime PRs ({movable}) and "
+        f"{groups} group PRs; past it Dependabot opens nothing and says so nowhere. "
+        "Raise open-pull-requests-limit"
     )
