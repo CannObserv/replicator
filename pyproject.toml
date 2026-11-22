@@ -510,7 +510,7 @@ dependencies = [
     "fastapi>=0.165.0,<1",
     "pydantic>=2.14.4,<3",
     "pydantic-settings>=2.5.0,<3",
-    "python-json-logger>=4.0.0,<5",
+    "python-json-logger>=4.2.0,<5",
     "python-ulid>=3.1.0,<4",
     # Viewport capture's renderer (#138). **Pinned exact, not a range**: each
     # Playwright release pins one Chromium revision, and the worker launches the
