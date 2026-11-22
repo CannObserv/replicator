@@ -509,7 +509,7 @@ dependencies = [
     "co-core-sync[gcs]>=0.50.0,<0.51",
     "fastapi>=0.165.0,<1",
     "pydantic>=2.14.4,<3",
-    "pydantic-settings>=2.5.0,<3",
+    "pydantic-settings>=2.16.3,<3",
     "python-json-logger>=4.2.0,<5",
     "python-ulid>=3.1.0,<4",
     # Viewport capture's renderer (#138). **Pinned exact, not a range**: each
