@@ -64,7 +64,7 @@ import asyncio
 import http.cookiejar
 import ipaddress
 import socket
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Iterable, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -317,7 +317,7 @@ _COMMAND_SCOPE: ContextVar[CommandScope | None] = ContextVar("command_scope", de
 
 
 @contextmanager
-def command_scope(credentials: tuple[Resolved, ...] = ()) -> Iterator[CommandScope]:
+def command_scope(credentials: tuple[Resolved, ...] = ()) -> Generator[CommandScope]:
     """Enter a fresh scope for one command's fetch, and leave it even when the fetch raises."""
     scope = CommandScope(credentials=credentials)
     token = _COMMAND_SCOPE.set(scope)
