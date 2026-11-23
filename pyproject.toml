@@ -7,7 +7,78 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
-    # Floor is 0.50.0, and it carries no new feature: a two-minor catch-up
+    # Floor is 0.51.1, for cannobserv#577's fetch credential references (#216):
+    # `ContentFetchCommand.credential_headers` and `validate_fetch_credential`.
+    # The lock takes 0.51.1, the index's newest with the bound opened to `<1`
+    # [measured 2026-11-23]. `co-core-aio` and `co-core-sync` 0.51.1 require
+    # `co-core>=0.51.1,<0.52`, so the three move together. Nothing reads the
+    # field until #216's build lands: the canonical class is `extra="ignore"`,
+    # so on this pin a credentialed frame decodes and is fetched without its
+    # credential, as on 0.50.0.
+    #
+    # **`scripts/co_core_closure_diff.py 0.50.0 0.51.1`** (#145), verbatim, from
+    # the wheels this lock pins (their sha256 matched against `uv.lock`):
+    #
+    # ## Import closure, 0.50.0 → 0.51.1
+    #
+    # Roots `src`, `scripts`; packages `co_core`, `co_core_aio`, `co_core_sync`.
+    #
+    # 58 files at 0.50.0, 58 at 0.51.1. 8 not identical:
+    #
+    # - `version-only` co_core/__init__.py
+    # - `docstrings-only` co_core/pure/extract/__init__.py
+    # - `changed` co_core/pure/extract/errors.py
+    # - `changed` co_core/pure/extract/extraction_defaults.py
+    # - `changed` co_core/pure/models/changes.py
+    # - `changed` co_core/pure/util/aliases.py
+    # - `version-only` co_core_aio/__init__.py
+    # - `version-only` co_core_sync/__init__.py
+    #
+    # **Requires-Dist:**
+    #
+    # - co_core: unchanged
+    # - co_core_aio: removed `co-core<0.51,>=0.50`; added `co-core<0.52,>=0.51.1`
+    # - co_core_sync: removed `co-core<0.51,>=0.50`; added `co-core<0.52,>=0.51.1`
+    #
+    # **Third-party imports** (at 0.51.1): `google`, `google_auth_oauthlib`, `googleapiclient`, `httpx`, `pydantic`, `redis`, `requests`, `urllib3`.
+    #
+    # **Dynamic imports, not followed:**
+    #
+    # - co_core_sync/drivers/__init__.py:89 `import_module(f"{__name__}.{module}")`
+    # - co_core_sync/drivers/blobstore/__init__.py:32 `import_module(f"{__name__}.{module}")`
+    #
+    # Read by hand (`--diff`; per-step diffs place each change):
+    #
+    # - `pure/models/changes.py` (0.51.1) is additive.
+    #   `ContentFetchCommand.credential_headers: dict[str, str] | None = None`;
+    #   `ContentFetchCommandEmit` gains `hide_input_in_errors` and E1-E5's
+    #   refusals (a credential under `render="browser"`, a reference off
+    #   `fetch-<role>`, one name twice, `user-agent` or a conditional validator,
+    #   a name also in `headers`); two `FetchFailedEvent.reason` registry
+    #   docstrings (`credential_unknown`, `credential_refused`). The canonical
+    #   class refuses none of these, so a malformed map reaches the consumer.
+    # - `pure/util/aliases.py` (0.51.1) is additive: `CredentialKind`,
+    #   `credential_kind`, `FETCH_CREDENTIAL_PATTERN`/`_RE`,
+    #   `validate_fetch_credential`. `CREDENTIALS_ALIAS_PATTERN` keeps its text,
+    #   so `ALIAS_NAME_PATTERN`'s pin (`src/worker/aliases.py`) still holds
+    #   [measured: equal strings].
+    # - `pure/extract/errors.py` and `extraction_defaults.py` (0.51.0) add
+    #   `include_description` (cannobserv#559): `refuse_unhonoured` takes a new
+    #   required keyword. Loaded only through `changes.py`'s import of
+    #   `extract.canonical`; nothing in `src/`, `scripts/` or `tests/` calls into
+    #   `co_core.pure.extract` [grep].
+    #
+    # Outside the closure, by whole-wheel diff [measured; the CHANGELOG is not
+    # the source]: 0.51.0 and 0.51.1 change nine co/v1 adapters,
+    # `adapters/wordpress/transcript.py`, five `extract` parsers,
+    # `models/assignment.py`, `workflows/legislative_session.py` and eleven
+    # co-core-sync `services/`; nothing is added or removed. Nothing in `src/`,
+    # `scripts/` or `tests/` reaches any of them; the closure is the same with
+    # `tests/` as a root.
+    #
+    # Previously:
+    #
+    # Floor was 0.50.0, and it carried no new feature: a two-minor catch-up
     # (#211), in #206's shape. The lock takes 0.50.0, the index's newest with the
     # bound opened to `<1` [measured 2026-11-18]. `co-core-aio` and `co-core-sync`
     # 0.50.0 require `co-core>=0.50,<0.51`, so the three move together. Both
@@ -504,9 +575,9 @@ dependencies = [
     # at module load, so a skew cannot reach a running worker at all. Additive over
     # 0.8.0 for everything the fetch path uses — no field on ContentFetchCommand,
     # BlobAvailableEvent or FetchFailedEvent moved between the two.
-    "co-core>=0.50.0,<0.51",
-    "co-core-aio[bus,gcs]>=0.50.0,<0.51",
-    "co-core-sync[gcs]>=0.50.0,<0.51",
+    "co-core>=0.51.1,<0.52",
+    "co-core-aio[bus,gcs]>=0.51.1,<0.52",
+    "co-core-sync[gcs]>=0.51.1,<0.52",
     "fastapi>=0.165.0,<1",
     "pydantic>=2.14.4,<3",
     "pydantic-settings>=2.16.3,<3",
