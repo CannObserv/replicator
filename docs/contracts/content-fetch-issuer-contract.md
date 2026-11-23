@@ -107,6 +107,12 @@ The refusal list itself — hop-by-hop and derived headers, the rules on names a
 ceilings, the timeout bounds, the header-name folding rule, and the reasoning behind each — is in
 [the reference](content-fetch-issuer-reference.md#request-options-what-replicator-will-send-and-what-it-refuses-11).
 
+`credential_headers` (#216) carries **references, never values**: a header name to a
+`fetch-<role>` binding the Replicator operator provisioned. A reference resolves only where it was
+provisioned, the binding pins its header, hosts and `https`:443, and every redirect hop is held to
+it. Its refusals (`invalid_request_options`, `credential_unknown`, `credential_refused`) are in
+[the reference](content-fetch-issuer-reference.md#credential_headers-fetch-credential-references-216).
+
 ### The facts
 
 Both outcomes arrive on `content.blobs` — **`blob_available`** (`BlobAvailableEvent`) on success,

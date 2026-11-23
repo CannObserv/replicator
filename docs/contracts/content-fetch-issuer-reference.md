@@ -62,7 +62,7 @@ own fingerprints.
 | A name that is not an RFC 9110 token | `user agent`, `user:agent`, an empty name, anything non-ASCII — and a name with surrounding whitespace, which RFC 9110 forbids before the colon and which is therefore malformed rather than trimmable |
 | A value with any byte outside `\x20`–`\x7e` | Printable US-ASCII and SP only. Excludes CR, LF, NUL, every other control character, HTAB, and all of `obs-text` (`\x80`–`\xff`) — narrower than RFC 9110 permits, deliberately. A CRLF here is request splitting |
 | Two names differing only in case | Folding them would silently discard one. Refused even when the values agree — the rule is about the shape, not the values |
-| More than **32** headers, or more than **8192 bytes** of them | 8 KiB is the common origin-side limit (nginx, Apache), so past it the far end answers an opaque 400. The constants in [`src/worker/handler.py`](../../src/worker/handler.py) are authoritative |
+| More than **32** headers, or more than **8192 bytes** of them | 8 KiB is the common origin-side limit (nginx, Apache), so past it the far end answers an opaque 400. The constants in [`src/worker/headers.py`](../../src/worker/headers.py) are authoritative. Since #216 both bounds cover `headers` and `credential_headers` together |
 | `timeout_seconds` that is zero, negative, NaN, or infinite | Not a duration |
 | `timeout_seconds` over `REPLICATOR_MAX_FETCH_TIMEOUT_SECONDS` (default **120**) | Replicator's consume path is serial, so your timeout is a lien on every *other* issuer's commands too. Ask an operator if 120 s is genuinely too short for a target. It bounds each *operation* (the connect, each read); the whole fetch is bounded by `REPLICATOR_MAX_FETCH_SECONDS` (default **120**, never less than this), and a fetch past that is retried, not refused (#104) |
 
@@ -130,6 +130,54 @@ checks on **every connection the page opens**, not only on the URL and its redir
 **A mode change is a fingerprint discontinuity.** Rendered bytes differ from HTTP bytes for the
 same URL, so the first fetch after a flip reads as a content change. Whether to re-baseline is the
 issuer's call (archiver#379).
+
+### `credential_headers`: fetch credential references (#216)
+
+**What it is.** `credential_headers` (co-core **0.51.1**, cannobserv#577) maps a header name to a
+`fetch-<role>` **reference**, e.g. `{"X-Api-Key": "fetch-wa-leg-api"}`. The reference names a
+binding an operator provisioned on Replicator's host; the binding holds the value. **The value never
+travels on the bus**, and Replicator never echoes it: not on a fact, not in `detail`, not in the
+journal. `None` and `{}` both mean no credential, which is today's path, byte for byte.
+
+**A reference resolves only where it was provisioned.** Agree the binding with the Replicator
+operator before emitting the reference; until then every such command closes `credential_unknown`.
+A binding pins three things, and a command can widen none of them:
+
+- **the header** it rides. A command naming another header for the reference closes
+  `credential_refused`: an in-scope endpoint that echoes request headers must not be handed the
+  value under a header it reflects;
+- **the hosts** it may reach, exactly: no wildcard, no subdomain, compared in punycode;
+- **`https` on port 443**, the only scheme and port a credential is sent to.
+
+**Scoped per hop, and refused rather than stripped (C2, C3).** Every redirect hop is checked against
+every credential on the command, before the hop is sent. A hop out of scope closes the command
+`credential_refused`; it is **never** sent without the credential instead, because a fetch that
+quietly went out anonymous is a different fetch from the one you asked for. A hop that is out of
+scope *and* in a range the destination guard refuses reports `credential_refused`: the scope is
+checked first, with no DNS lookup.
+
+| Refused | Token |
+|---|---|
+| A credential name that `headers` would refuse (not a token, hop-by-hop, derived, `proxy-*`) | `invalid_request_options` |
+| A name in both `headers` and `credential_headers` (E3), or twice by case (E4) | `invalid_request_options` |
+| `user-agent`, `if-none-match` or `if-modified-since` as a credential name (E5) | `invalid_request_options` |
+| Any credential under `render="browser"` (E1): a browser sends a header to every host the page contacts | `invalid_request_options` |
+| The header count, or the byte total **with the resolved values counted**, over the bounds above | `invalid_request_options` |
+| A reference off `fetch-<role>`, never provisioned, or dropped at the host's boot | `credential_unknown` |
+| A header other than the one the binding pins | `credential_refused` |
+| The URL, or any redirect hop, not `https`, not on port 443, or not one of every binding's hosts | `credential_refused` |
+
+All are terminal with `status_code` and `attempts` unset, and arrive before the request (or the hop)
+goes out. `detail` names the header and the reference, never the value; a reference off the rule isn't
+quoted at all, because the likeliest wrong value where a reference belongs is a pasted secret. Like
+`invalid_request_options`, both credential tokens are decided from the command and the host's table, so
+re-issuing the same command is refused identically until one of them changes: fix the policy, or ask
+the operator to provision the binding. An origin's 401 or 403 when a credential **was** sent stays
+`http_status`.
+
+**Cookies live for one command since #216.** A `Set-Cookie` on one hop is sent on the later hops of
+the same redirect chain, as before, and on nothing after it: one command's session no longer rides
+another command to the same host. That applies to every command, credentialed or not.
 
 ### `invalid_request_options` and stored values
 
@@ -285,7 +333,9 @@ three payloads and `command_id` on `blob_available`, re-keyed `blob_available` t
 `content_fingerprint:command_id` (cannobserv#300), and added `blob_expires_at` (cannobserv#301).
 **v0.40.1** added `render` (cannobserv#602), honoured since #63; a consumer older than that fetches
 a `browser` command over HTTP and stores the empty shell, which is why co-core's MUST waited on
-Replicator's announcement. Replicator requires **co-core ≥ 0.8.0** to decode a command at all.
+Replicator's announcement. **v0.51.1** added `credential_headers` (cannobserv#577), resolved since
+#216; a consumer older than that decodes the field and ignores it, sending the fetch without the
+credential. Replicator requires **co-core ≥ 0.8.0** to decode a command at all.
 Founding rationale:
 [`docs/plans/2026-06-25-replicator-mvp-design.md`](../plans/2026-06-25-replicator-mvp-design.md).
 

@@ -844,3 +844,50 @@ def test_a_dry_run_shows_the_options_that_would_travel(capsys):
     assert "watcher/0.1.0" in printed
     assert "5.0" in printed
     assert '"render":"browser"' in printed
+
+
+async def test_published_commands_carry_credential_references(fake_redis, owned_client):
+    """#216: end to end through argparse. A reference, never a value, rides the frame."""
+    argv = ("--topic", TOPIC, "--credential-header", "X-Api-Key: fetch-wa-leg-api", URL)
+    assert await run(seed_args(*argv)) == 0
+
+    (command,) = await decoded_commands(fake_redis)
+    assert command.credential_headers == {"X-Api-Key": "fetch-wa-leg-api"}
+    assert command.headers is None
+
+
+def test_repeated_credential_header_flags_collect_into_one_mapping():
+    args = seed_args(
+        "--topic",
+        TOPIC,
+        "--credential-header",
+        "X-Api-Key: fetch-a",
+        "--credential-header",
+        "Cookie: fetch-b",
+        URL,
+    )
+
+    assert args.credential_headers == {"X-Api-Key": "fetch-a", "Cookie": "fetch-b"}
+    assert args.headers is None
+
+
+def test_no_credential_header_flag_means_none():
+    assert seed_args("--topic", TOPIC, URL).credential_headers is None
+
+
+def test_a_dry_run_shows_the_credential_reference(capsys):
+    code = main(
+        [
+            "--redis-url",
+            "redis://localhost:1/0",
+            "--topic",
+            TOPIC,
+            "--dry-run",
+            "--credential-header",
+            "X-Api-Key: fetch-wa-leg-api",
+            URL,
+        ]
+    )
+
+    assert code == 0
+    assert "fetch-wa-leg-api" in capsys.readouterr().out

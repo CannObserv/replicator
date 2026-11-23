@@ -101,6 +101,11 @@ worker refuses it before any request goes out, closing the command as `fetch_fai
 worth knowing before seeding a local test server. The full list is in
 [`docs/contracts/content-fetch-issuer-reference.md`](contracts/content-fetch-issuer-reference.md).
 
+`--credential-header 'X-Api-Key: fetch-wa-leg-api'` attaches a fetch credential **reference**
+(#216), repeatable, to every command: a `fetch-<role>` name the worker resolves from its host's
+table, never a value. Unchecked here too, so an unprovisioned reference seeds `credential_unknown`
+and a header the binding doesn't pin seeds `credential_refused`.
+
 Watch the live side with `sudo journalctl -u replicator -f`: each `stored a blob and published
 blob_available` is one of Watcher's commands closing.
 
