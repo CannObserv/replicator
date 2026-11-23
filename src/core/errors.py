@@ -106,6 +106,26 @@ class FailureReason(StrEnum):
     only way the issuer can tell the two cases apart.
     """
 
+    CREDENTIAL_UNKNOWN = "credential_unknown"
+    """A ``credential_headers`` reference this host has no usable binding for (#216).
+
+    Never provisioned, dropped at load, or off the ``fetch-<role>`` rule. Terminal,
+    pre-flight: nothing was sent. The remedy is to provision the binding on the
+    host, or fix the reference in the issuer's policy. ``detail`` names the header
+    and the reference, never a value.
+    """
+
+    CREDENTIAL_REFUSED = "credential_refused"
+    """The binding exists, but this use of it is outside it (#216).
+
+    A hop whose host isn't in every binding's ``hosts``, that isn't ``https``, or
+    isn't on port 443; or a header name that isn't the binding's. ``destination_refused``'s
+    shape: pre-flight on the submitted URL, or **at the redirect hop**, before that
+    hop is sent, so the value never leaves the binding's scope (C2, C3). Out of scope
+    *and* in a refused range gives this token (operator call 5). An origin's 401 or
+    403 when a credential was sent stays ``http_status``.
+    """
+
     NOT_MODIFIED = "not_modified"
     """A conditional GET that succeeded: 304, and the issuer's bytes still stand.
 

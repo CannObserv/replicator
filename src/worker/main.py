@@ -48,11 +48,14 @@ from src.worker.browser_fetch import BrowserFetcher
 from src.worker.capture import build_capture_handler
 from src.worker.capture_reporter import build_capture_reporter, build_captured_publisher
 from src.worker.checkout import checkout_refusal
+from src.worker.credentials import load_fetch_credentials
 from src.worker.egress import (
     BodyCeilingTransport,
+    CommandScopeTransport,
     DestinationGuard,
     GuardedTransport,
     blocked_networks,
+    never_storing_cookies,
 )
 from src.worker.handler import build_handler
 from src.worker.loop import (
@@ -119,12 +122,20 @@ def build_fetch_client(settings: Settings) -> httpx.AsyncClient:
     ``response.content`` can no longer hold more than the handler will keep.
     Inside rather than outside so a refused destination is refused before any
     response exists to count.
+
+    **Outside the guard, the command scope** (#216): each hop reads its command's
+    scope, and cookies live there for one command's redirect chain. The client's
+    own jar never stores, which is what makes them per command rather than per
+    worker. Outermost so a scope refusal costs no DNS lookup.
     """
     return httpx.AsyncClient(
-        transport=GuardedTransport(
-            BodyCeilingTransport(httpx.AsyncHTTPTransport(), max_bytes=settings.max_blob_bytes),
-            blocked=blocked_networks(settings.blocked_destination_cidrs),
+        transport=CommandScopeTransport(
+            GuardedTransport(
+                BodyCeilingTransport(httpx.AsyncHTTPTransport(), max_bytes=settings.max_blob_bytes),
+                blocked=blocked_networks(settings.blocked_destination_cidrs),
+            )
         ),
+        cookies=never_storing_cookies(),
         follow_redirects=True,
     )
 
@@ -954,6 +965,10 @@ async def run(
             else None
         )
         capture_consumer_name = consumer_name_for(settings, settings.capture_consumer_group)
+        # The fetch credential table, the same kind of host state (#216): read once,
+        # values included, so a bad value file drops its binding here and not at the
+        # first credentialed fetch. Never raises; unset provisions nothing.
+        fetch_credentials = load_fetch_credentials(settings.fetch_credentials_file)
         # Host state, read once at boot: which destinations an operator
         # provisioned here. Unset means nothing is provisioned and every
         # replicate command is refused — the safe default (contract T5), and
@@ -1172,6 +1187,7 @@ async def run(
                     stop=stop,
                     # render="browser" (#63). None: parked, never fetched over HTTP.
                     browser_fetcher=browser_fetcher,
+                    credentials=fetch_credentials,
                 ),
                 # The other outcome of a command, on the same stream: an issuer
                 # closes a pending entry off one consumer group either way (#9,

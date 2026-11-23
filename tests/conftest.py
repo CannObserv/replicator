@@ -57,6 +57,9 @@ LEFTOVER_TTL_SECONDS = 900
 # same backend a fresh clone does.
 PRODUCTION_ENV = (
     "REPLICATOR_REPLICATION_ALIASES_FILE",
+    # Production will set it (#216); a test that inherited it would load the host's
+    # real bindings. test_every_credential_setting_is_scrubbed requires it by name.
+    "REPLICATOR_FETCH_CREDENTIALS_FILE",
     "GOOGLE_APPLICATION_CREDENTIALS",
     "REPLICATOR_BLOB_BACKEND",
     "REPLICATOR_BLOB_BUCKET",

@@ -18,12 +18,12 @@ import pytest
 from src.core.errors import FailureReason, PermanentFetchError, TransientFetchError
 from src.storage.sweeper import BlobUsage
 from src.worker import handler as handler_module
-from src.worker.handler import (
-    _HEADER_VALUE,  # the guard under test, pinned to httpx
+from src.worker.headers import (
+    HEADER_VALUE,  # the guard under test, pinned to httpx
     MAX_REQUEST_HEADER_BYTES,
     MAX_REQUEST_HEADERS,
 )
-from src.worker.handler import REFUSED_HEADERS as REFUSED
+from src.worker.headers import REFUSED_HEADERS as REFUSED
 from src.worker.loop import Outcome, poll_once
 from tests.worker.conftest import (
     GROUP,
@@ -227,7 +227,7 @@ async def test_the_value_guard_covers_everything_httpx_cannot_send():
     95 is the printable US-ASCII range ``\\x20``–``\\x7e`` inclusive, so this
     fails on a narrowing as loudly as on a widening.
     """
-    accepted = [chr(code) for code in range(256) if _HEADER_VALUE.match(chr(code))]
+    accepted = [chr(code) for code in range(256) if HEADER_VALUE.match(chr(code))]
 
     assert len(accepted) == 95
     assert accepted[0] == " " and accepted[-1] == "~"

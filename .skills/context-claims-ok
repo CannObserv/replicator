@@ -46,3 +46,11 @@ docs/SKILLS.md :: retarget :: SOCRATICODE.md
 docs/SOCRATICODE.md :: disproven :: systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% -- npm install --prefix ~/.socraticode/pin socraticode@<version>
 docs/SOCRATICODE.md :: disproven :: systemd-run --user --scope -p MemoryHigh=1200M -p MemoryMax=1536M -p CPUQuota=100% -- npx -y -p socraticode@<version> -- node -e 0
 docs/CONVENTIONS.md :: disproven :: (+xdel ~content.fetch.dlq ~content.replicate.dlq)
+
+# ---- #216 curation ----
+# @run base=812d0e592a99 file=docs/DEPLOYMENT.md
+# The moved Dependabot section's two links, re-aimed from docs/DEPENDENCIES.md:
+# the same-doc anchor now names DEPLOYMENT.md, the DEPENDENCIES.md one is same-doc.
+retarget :: #main-takes-pull-requests-208
+retarget :: DEPENDENCIES.md#the-build-backends-bound-and-cis-uv
+# @run end

@@ -30,6 +30,7 @@ from co_core_sync.drivers.blobstore import LocalBlobStore
 
 from src.core.config import get_settings
 from src.storage.sweeper import BlobUsage
+from src.worker.credentials import FetchCredentialTable
 from src.worker.handler import build_handler
 from src.worker.loop import FETCH_SPEC, FailureReport, process_message, run_loop
 from src.worker.main import build_consumer
@@ -185,6 +186,7 @@ def command(
     timeout_seconds: float | None = None,
     info_source_id: str = INFO_SOURCE_ID,
     render: str | None = None,
+    credential_headers: dict[str, str] | None = None,
 ) -> ContentFetchCommand:
     """A decoded ``content.fetch`` command, as the handler receives it.
 
@@ -202,6 +204,7 @@ def command(
         timeout_seconds=timeout_seconds,
         info_source_id=info_source_id,
         render=render,
+        credential_headers=credential_headers,
     )
 
 
@@ -240,6 +243,7 @@ def handler(fake_redis, tmp_path):
         ceiling_bytes: int | None = _UNSET,
         browser_fetcher=None,
         pacer: HostPacer | None = None,
+        credentials: FetchCredentialTable | None = None,
     ):
         return build_handler(
             fetcher=fetcher or FakeFetcher(),
@@ -254,6 +258,7 @@ def handler(fake_redis, tmp_path):
             **({} if blobs_topic is None else {"blobs_topic": blobs_topic}),
             browser_fetcher=browser_fetcher,
             pacer=pacer,
+            **({} if credentials is None else {"credentials": credentials}),
         )
 
     return build
@@ -291,9 +296,19 @@ def make_command(
     headers: dict[str, str] | None = None,
     timeout_seconds: float | None = None,
     info_source_id: str = INFO_SOURCE_ID,
+    credential_headers: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """A well-formed ``content.fetch`` wire frame."""
-    return to_wire(command(command_id, url, headers, timeout_seconds, info_source_id))
+    return to_wire(
+        command(
+            command_id,
+            url,
+            headers,
+            timeout_seconds,
+            info_source_id,
+            credential_headers=credential_headers,
+        )
+    )
 
 
 @pytest.fixture

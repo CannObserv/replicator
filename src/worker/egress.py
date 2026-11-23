@@ -48,16 +48,31 @@ is fetch's alone.
 sits inside the guard on the same client, for the same reason it is a transport:
 the driver reads every hop's body whole, and this is the one place a body passes
 before that. It stops reading at ``REPLICATOR_MAX_BLOB_BYTES``.
+
+**And what one command's hops may carry (#216).** :class:`CommandScopeTransport`
+sits outside the guard and reads the command's :class:`CommandScope` from a
+``ContextVar`` the handler sets around the fetch. A hop with no scope is refused,
+so nothing reaches the wire unaccounted for. Cookies live in the scope, for one
+command's redirect chain: the client's own jar never stores
+(:func:`never_storing_cookies`), so one command's ``Set-Cookie`` never rides
+another's request. A ``ContextVar`` and not a client per command because co-core's
+driver builds the request and httpx follows redirects in the calling task, so the
+value set around ``_fetch`` holds on every hop.
 """
 
 import asyncio
+import http.cookiejar
 import ipaddress
 import socket
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Iterable, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 
 import httpx
 
 from src.core.errors import FailureReason, PermanentFetchError, TransientFetchError
+from src.worker.credentials import Resolved
 
 # What a fetch may not reach. Every range here is this host, this host's private
 # network, the tailnet the bus rides, or an IANA special-purpose range (#161) —
@@ -283,6 +298,142 @@ class GuardedTransport(httpx.AsyncBaseTransport):
 
     async def aclose(self) -> None:
         await self._inner.aclose()
+
+
+@dataclass(frozen=True, slots=True)
+class CommandScope:
+    """What one command's hops share, and nothing past the command (#216).
+
+    ``credentials`` are the bindings the handler resolved; empty for an anonymous
+    command, whose hops go out as they always have. ``cookies`` live for the
+    command's redirect chain.
+    """
+
+    credentials: tuple[Resolved, ...] = ()
+    cookies: httpx.Cookies = field(default_factory=httpx.Cookies)
+
+
+_COMMAND_SCOPE: ContextVar[CommandScope | None] = ContextVar("command_scope", default=None)
+
+
+@contextmanager
+def command_scope(credentials: tuple[Resolved, ...] = ()) -> Generator[CommandScope]:
+    """Enter a fresh scope for one command's fetch, and leave it even when the fetch raises."""
+    scope = CommandScope(credentials=credentials)
+    token = _COMMAND_SCOPE.set(scope)
+    try:
+        yield scope
+    finally:
+        _COMMAND_SCOPE.reset(token)
+
+
+# The one port a credential may be sent to (operator call 4). ``PolicyHost`` has no
+# port, so a host-only scope would admit ``https`` on any port of that host;
+# relaxing this later stays compatible, tightening it would not.
+CREDENTIAL_PORT = 443
+
+
+def scope_refusal(url: httpx.URL, credentials: Iterable[Resolved]) -> str | None:
+    """Why ``url`` is outside a credential's scope, or ``None`` if every one admits it (C2).
+
+    Pure, so the handler checks the submitted URL with it before the ceiling, and the
+    transport checks every hop with it before DNS. ``https`` only, port 443 only, and
+    the host in **every** binding's ``hosts``: a hop out of scope for one credential
+    sends none of them. The host is ``raw_host`` (punycode), never ``host`` (IDNA
+    decoded), less one trailing dot, so it compares in ``PolicyHost``'s form.
+    """
+    credentials = tuple(credentials)
+    if not credentials:
+        return None
+    named = ", ".join(f"{c.credential.header} ({c.reference})" for c in credentials)
+    if url.scheme != "https":
+        return f"{url} is {url.scheme}, not https; {named} is sent over https only"
+    port = url.port if url.port is not None else _default_port(url)
+    if port != CREDENTIAL_PORT:
+        return f"{url} is port {port}; {named} is sent to port {CREDENTIAL_PORT} only"
+    host = url.raw_host.decode("ascii").lower().removesuffix(".")
+    for reference, credential in credentials:
+        if host not in credential.hosts:
+            return (
+                f"{url} is outside {credential.header} ({reference})'s scope: "
+                f"{host} is not one of {', '.join(sorted(credential.hosts))}"
+            )
+    return None
+
+
+def never_storing_cookies() -> http.cookiejar.CookieJar:
+    """The client's jar: one whose policy admits no domain, so it never stores a cookie.
+
+    The scope's cookies replace it. Left as httpx's default, it lived for the
+    worker's lifetime and replayed one command's session on every later command to
+    the same host (operator call 1A).
+    """
+    return http.cookiejar.CookieJar(policy=http.cookiejar.DefaultCookiePolicy(allowed_domains=[]))
+
+
+class CommandScopeTransport(httpx.AsyncBaseTransport):
+    """Send each hop as its command's scope allows, on a copy of the request (#216).
+
+    **A copy, never the request handed in.** httpx builds the next hop from the
+    previous request's headers (``_build_redirect_request``, 0.28.1), so anything
+    set on the handed request would ride every later hop, a cross-origin one
+    included [measured 2026-11-23].
+
+    **Credentials** (C2, C3): with any in scope, a hop that :func:`scope_refusal`
+    refuses raises ``credential_refused`` before anything below runs, the guard's
+    DNS lookup included (operator call 5). A hop in scope carries each credential
+    header; this is the one place a value is read (``get_secret_value``), and
+    ``tests/test_boundaries.py`` pins that.
+
+    **Cookies** are the scope's: added before the hop with httpx's public
+    ``set_cookie_header``, which leaves a ``Cookie`` the issuer sent alone, as the
+    client's jar did, and taken from the response with ``extract_cookies``. A
+    ``Cookie`` credential is followed by the jar's cookies in the same field
+    (``<credential>; <jar>``), so a session the origin mints on top of it survives
+    the redirect chain.
+    """
+
+    def __init__(self, inner: httpx.AsyncBaseTransport) -> None:
+        self._inner = inner
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        scope = _COMMAND_SCOPE.get()
+        if scope is None:
+            raise RuntimeError(f"{request.url} was requested outside a command scope: refused")
+        if (why := scope_refusal(request.url, scope.credentials)) is not None:
+            raise PermanentFetchError(why, reason=FailureReason.CREDENTIAL_REFUSED)
+        outgoing = httpx.Request(
+            request.method,
+            request.url,
+            headers=request.headers.copy(),
+            stream=request.stream,
+            extensions=request.extensions,
+        )
+        for _, credential in scope.credentials:
+            outgoing.headers[credential.header] = credential.value.get_secret_value()
+        if "cookie" in {credential.header for _, credential in scope.credentials}:
+            if jar := _jar_cookies(scope.cookies, outgoing):
+                outgoing.headers["cookie"] = f"{outgoing.headers['cookie']}; {jar}"
+        else:
+            scope.cookies.set_cookie_header(outgoing)
+        response = await self._inner.handle_async_request(outgoing)
+        response.request = outgoing
+        scope.cookies.extract_cookies(response)
+        return response
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
+def _jar_cookies(cookies: httpx.Cookies, request: httpx.Request) -> str | None:
+    """The ``Cookie`` field the jar would add to ``request``, worked out on a bare probe.
+
+    ``set_cookie_header`` adds nothing to a request that already carries a ``Cookie``,
+    and a ``Cookie`` credential is one; so the jar's half is computed apart, then joined.
+    """
+    probe = httpx.Request(request.method, request.url)
+    cookies.set_cookie_header(probe)
+    return probe.headers.get("cookie")
 
 
 class BodyCeilingTransport(httpx.AsyncBaseTransport):

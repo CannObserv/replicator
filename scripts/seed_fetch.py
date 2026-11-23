@@ -123,6 +123,7 @@ def build_command(
     timeout_seconds: float | None = None,
     info_source_id: str = SEED_INFO_SOURCE_ID,
     render: str | None = None,
+    credential_headers: dict[str, str] | None = None,
 ) -> ContentFetchCommand:
     """Mint a command for one URL.
 
@@ -147,6 +148,10 @@ def build_command(
 
     ``render`` (#63) is ``None`` by default, today's HTTP fetch. It is passed through
     unchecked, so a scratch run can seed the refusal of an unknown mode too.
+
+    ``credential_headers`` (#216) maps a header name to a ``fetch-<role>``
+    **reference**, never a value: the worker resolves it from its host's table. Also
+    unchecked, so a scratch run can seed ``credential_unknown`` and its siblings.
     """
     return ContentFetchCommand(
         occurred_at=datetime.now(UTC),
@@ -156,6 +161,7 @@ def build_command(
         timeout_seconds=timeout_seconds,
         info_source_id=info_source_id,
         render=render,
+        credential_headers=credential_headers,
     )
 
 
@@ -297,6 +303,7 @@ async def publish(
     timeout_seconds: float | None = None,
     info_source_id: str = SEED_INFO_SOURCE_ID,
     render: str | None = None,
+    credential_headers: dict[str, str] | None = None,
 ) -> list[SeedResult]:
     """XADD one command per URL, in the order given.
 
@@ -312,7 +319,9 @@ async def publish(
     publisher = AsyncBusPublisher(client)
     results = []
     for url in urls:
-        command = build_command(url, headers, timeout_seconds, info_source_id, render)
+        command = build_command(
+            url, headers, timeout_seconds, info_source_id, render, credential_headers
+        )
         result = await publisher.execute(BusPublish(topic, to_wire(command)))
         published = SeedResult(command.command_id, url, result.bus_message_id)
         results.append(published)
@@ -470,6 +479,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="request header to attach to every command; repeatable (#11)",
     )
     parser.add_argument(
+        "--credential-header",
+        action=HeaderAction,
+        dest="credential_headers",
+        default=None,
+        metavar="'Name: fetch-<role>'",
+        help=(
+            "credential reference to attach to every command; repeatable (#216). "
+            "A fetch-<role> name the worker resolves from its host's table, never a value"
+        ),
+    )
+    parser.add_argument(
         "--info-source-id",
         default=SEED_INFO_SOURCE_ID,
         dest="info_source_id",
@@ -514,6 +534,7 @@ def _print_dry_run(
     timeout_seconds: float | None = None,
     info_source_id: str = SEED_INFO_SOURCE_ID,
     render: str | None = None,
+    credential_headers: dict[str, str] | None = None,
 ) -> None:
     """Show the wire frames without publishing them.
 
@@ -523,7 +544,9 @@ def _print_dry_run(
     travel, after this script's own stripping.
     """
     for url in urls:
-        command = build_command(url, headers, timeout_seconds, info_source_id, render)
+        command = build_command(
+            url, headers, timeout_seconds, info_source_id, render, credential_headers
+        )
         print(f"would publish to {topic}: {to_wire(command)}")
 
 
@@ -608,6 +631,7 @@ async def _seed(client: Redis, args: argparse.Namespace) -> int:
             timeout_seconds=args.timeout_seconds,
             info_source_id=args.info_source_id,
             render=args.render,
+            credential_headers=args.credential_headers,
         )
     except (RedisError, OSError) as exc:
         print(
@@ -692,6 +716,7 @@ def main(argv: list[str] | None = None) -> int:
             args.timeout_seconds,
             args.info_source_id,
             args.render,
+            args.credential_headers,
         )
         return 0
     return asyncio.run(run(args))

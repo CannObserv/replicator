@@ -135,7 +135,7 @@ are the whole value of the six:
 | `detail` | `str \| None` | Free text for the journal. **Never branch on it**, and never show it to an end user — on `handler_error` it is an unanticipated exception's text, so unbounded |
 
 The tokens emitted today are `http_status`, `not_modified`, `not_fetchable`, `too_large`,
-`destination_refused`, `unsupported_schema_version`, `invalid_request_options` and `handler_error` —
+`destination_refused`, `credential_unknown`, `credential_refused`, `unsupported_schema_version`, `invalid_request_options` and `handler_error` —
 one per row of the [failure taxonomy](#failure-taxonomy-what-happens-and-what-the-issuer-sees)
 below, which states each one's condition. Why the list is additive, why `wrong_payload_type` never
 appears and why every one is `terminal=True`: [Reading the failure fact](#reading-the-failure-fact).
@@ -156,6 +156,7 @@ appears and why every one is `terminal=True`: [Reading the failure fact](#readin
 | URL not fetchable (bad scheme / invalid URL; under `browser`, a download or non-HTML document) | fact, then `content.fetch.dlq` | `fetch_failed` · `not_fetchable` |
 | Body over `REPLICATOR_MAX_BLOB_BYTES` (default 64 MiB) | fact, then `content.fetch.dlq` — since #104 **Replicator stops reading at the ceiling**, or before any byte when `Content-Length` declares more | `fetch_failed` · `too_large` |
 | Unsendable `headers` / `timeout_seconds` / `render` | fact, then `content.fetch.dlq`, **before the fetch** | `fetch_failed` · `invalid_request_options` |
+| A credential reference unbound here, or used off its binding, **redirect hops** included (#216) | fact, then `content.fetch.dlq`, before the hop | `credential_unknown` / `credential_refused` |
 | Destination in a range this host will not fetch from — loopback, RFC 1918, link-local, ULA, the tailnet's CGNAT `100.64.0.0/10` (#95), an IANA special-purpose range (#161), or an IPv6 address embedding one (#156) | fact, then `content.fetch.dlq`, **before the request goes out**, and on **each redirect hop** | `fetch_failed` · `destination_refused` |
 | HTTP 5xx / 408 / 429, a network error, or a fetch still running at `REPLICATOR_MAX_FETCH_SECONDS` (default 120 s, #104) | retry indefinitely, default ~60 s cadence | delayed fact, or **nothing while it retries** |
 | Blob tree over `REPLICATOR_BLOB_MAX_TOTAL_BYTES` | parked in the PEL until a sweep frees space | delayed fact, or **nothing while it waits** |
@@ -306,12 +307,9 @@ have and must not grow.
 
 Expands [MUST-7](content-fetch-issuer-contract.md#7-copy-the-bytes-before-the-blob-expires).
 
-**Why the seven-day window is a commitment rather than a number to ask about.** It used to be
-`REPLICATOR_BLOB_TTL_SECONDS` on Replicator's host — a setting, visible to nobody else, changeable
-by an operator with no consumer the wiser. Under the object-store backend the reap is a **bucket
-lifecycle rule**, which is a stated, auditable window rather than an mtime clock that moves for
-reasons no consumer can see. The rule is `daysSinceCustomTime: 8` against a published 7-day
-horizon — the extra day for the reason the table below gives.
+**The seven-day window is a commitment, not a number to ask about.** Under the object-store backend
+the reap is a **bucket lifecycle rule**, `daysSinceCustomTime: 8`, against the 7-day horizon published
+from `REPLICATOR_BLOB_TTL_SECONDS`; the extra day is for the reason the table below gives.
 
 The clock runs from **last reference by a fetch**, not last read by a consumer, and **both backends
 implement that same rule by different means**. A consumer reading the blob extends nothing, on
@@ -334,11 +332,10 @@ moment the reap measures against — and every mechanism after it pushes the rea
 The error is one-way: acting on the horizon is early, never too late. A later fetch pushes the
 expiry out and emits a fresh fact carrying the new value.
 
-**Nothing keeps the two halves in step automatically under `gcs`.** The published horizon comes from
-`REPLICATOR_BLOB_TTL_SECONDS` and the reap comes from a lifecycle rule configured in Google Cloud;
-a rule shorter than the setting would announce a window the bucket will not honour, which is the one
-way this value can be wrong in the unsafe direction. The worker logs the horizon at boot beside the
-bucket so the pairing is checkable, and `docs/INFRASTRUCTURE.md` records the provisioned rule.
+**Nothing keeps the two halves in step under `gcs`**: the horizon is `REPLICATOR_BLOB_TTL_SECONDS`,
+the reap a lifecycle rule in Google Cloud. A rule shorter than the setting is the one way this value
+can be wrong in the unsafe direction. The worker logs the horizon at boot beside the bucket, and
+`docs/INFRASTRUCTURE.md` records the rule.
 
 Also, on the reaper [MUST-6](content-fetch-issuer-contract.md#6-handle-fetch_failed-and-keep-a-reaper-anyway)
 keeps:

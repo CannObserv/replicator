@@ -19,7 +19,7 @@ The worker binds no port; 8000 is reserved for the API, 8001 is dev. No tailnet 
 
 ## The host's disk GC is the cohort's (#148)
 
-The root is shared by the worker's temp blobs, the journal, and the dev sessions' tooling trees. It reached 97% on 2026-10-22. Disk hygiene here is Provisioner's canonical GC and headroom sensor (`cannobserv-disk-gc.timer`, `cannobserv-disk-headroom.timer`), adopted through the [`maintaining-host-disk`](../skills/maintaining-host-disk/) skill and never built here. It's a host install, not a `deploy/` copy: the config and key live in `/etc/cannobserv/disk-gc/`, outside the repo. The installed `VERSION`, the lines and tiers, and each timer's state are recorded on #148.
+The root is shared by the worker's temp blobs, the journal, and the dev sessions' tooling trees. Disk hygiene here is Provisioner's canonical GC and headroom sensor (`cannobserv-disk-gc.timer`, `cannobserv-disk-headroom.timer`), adopted through the [`maintaining-host-disk`](../skills/maintaining-host-disk/) skill and never built here. It's a host install, not a `deploy/` copy: the config and key live in `/etc/cannobserv/disk-gc/`, outside the repo. The installed `VERSION`, the lines and tiers, and each timer's state are recorded on #148.
 
 ## The broker is `co-broker` — Replicator connects, it does not run one
 
@@ -32,10 +32,10 @@ The **redis-py client** resolves `>=5,<8` transitively via `co-core-aio[bus]`. D
 ### Grants the `replicator` user gained later
 
 What this credential may run, and what to ask the broker operator for, is tabulated in
-[COMMANDS.md](COMMANDS.md#inspecting-the-consume-path), beside the commands. Some of
-those rows arrived after broker#2's ACL cutover, and this is how:
+[COMMANDS.md](COMMANDS.md#inspecting-the-consume-path), beside the commands. Rows that
+arrived after broker#2's ACL cutover:
 
-**`XPENDING` moved columns on 2026-09-22 (broker#39, #103, #107)**, not as a courtesy: the
+**`XPENDING` moved columns on 2026-09-22 (broker#39, #103, #107)**: the
 delivery ceiling reads it, so before the grant `REPLICATOR_MAX_DELIVERY_ATTEMPTS` could never
 fire. Probed afterwards, like every row: both groups answered 0 pending, where 12:55Z
 had returned `NOPERM`.

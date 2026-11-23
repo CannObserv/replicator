@@ -894,6 +894,258 @@ def test_the_credential_detector_passes_a_host_resolved_credential():
 
 
 # --------------------------------------------------------------------------
+# 2c. The credential reference is a key; the value is the transport's (#216)
+# --------------------------------------------------------------------------
+
+# §2b's mirror for ``content.fetch``'s ``credential_headers`` (cannobserv#577, C1).
+# The map's *values* are references: ``fetch-<role>`` names of bindings an operator
+# provisioned on this host. The binding holds the secret; the bus never does.
+#
+# Not §2b's scan reused, because one rule differs on purpose: a refusal's
+# ``detail`` **names** the reference, so the issuer can tell which binding to
+# provision. A reference is a key and safe to show; what must never happen is
+# Replicator *interpreting* one — comparing it, storing it, or building a path from
+# it — instead of looking it up in the host's table. So the legal uses of a
+# reference are: the argument to a lookup, the validator, or ``Resolved``, and a
+# placeholder in a ``PermanentFetchError`` message. Everything else is flagged.
+CREDENTIAL_FIELD = "credential_headers"
+
+# Where the field may be read at all. The handler alone: ``credentials.py`` deals
+# in bindings read from host config, and ``egress.py`` in resolved pairs.
+CREDENTIAL_FIELD_MODULES = frozenset({"src/worker/handler.py"})
+
+REFERENCE_LOOKUPS = frozenset({"resolve", "validate_fetch_credential", "Resolved"})
+REFERENCE_MESSAGES = frozenset({"PermanentFetchError"})
+
+# The one function that reads a value (D2): the transport, as it builds a hop.
+SECRET_READER = ("src/worker/egress.py", "CommandScopeTransport.handle_async_request")
+
+
+def _call_name(call: ast.Call) -> str | None:
+    func = call.func
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    if isinstance(func, ast.Name):
+        return func.id
+    return None
+
+
+def _is_items_of_the_field(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "items"
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == CREDENTIAL_FIELD
+    )
+
+
+def _reference_loops(tree: ast.AST) -> list[tuple[ast.For, str]]:
+    """Each ``for name, reference in <x>.credential_headers.items()``, with its reference name."""
+    loops = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.For)
+            and _is_items_of_the_field(node.iter)
+            and isinstance(node.target, ast.Tuple)
+            and len(node.target.elts) == 2
+            and isinstance(node.target.elts[1], ast.Name)
+        ):
+            loops.append((node, node.target.elts[1].id))
+    return loops
+
+
+def _reference_use_is_legal(node: ast.Name, parent: dict[int, ast.AST]) -> bool:
+    context = parent.get(id(node))
+    if isinstance(context, ast.Call) and node in context.args:
+        return _call_name(context) in REFERENCE_LOOKUPS
+    if isinstance(context, ast.FormattedValue):
+        joined = parent.get(id(context))
+        call = parent.get(id(joined))
+        return (
+            isinstance(call, ast.Call)
+            and joined in call.args
+            and _call_name(call) in REFERENCE_MESSAGES
+        )
+    return False
+
+
+def _reference_violations(tree: ast.AST) -> list[str]:
+    """Every use of a reference, or read of the map's values, that isn't a lookup.
+
+    Two shapes are flagged:
+
+    1. a reference bound by the ``.items()`` loop and then used other than as a
+       lookup argument or a refusal message's placeholder;
+    2. the map's values reached any other way — a subscript, ``.values()``,
+       ``.get()`` — which would put a reference somewhere this scan can't follow.
+    """
+    parent = _parents(tree)
+    violations: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr == CREDENTIAL_FIELD:
+            context = parent.get(id(node))
+            if isinstance(context, ast.Subscript) and context.value is node:
+                violations.append(f"line {node.lineno}: .{CREDENTIAL_FIELD}[...] reads a reference")
+            elif isinstance(context, ast.Attribute) and context.attr in {
+                "values",
+                "get",
+                "pop",
+                "setdefault",
+                "popitem",
+            }:
+                violations.append(
+                    f"line {node.lineno}: .{CREDENTIAL_FIELD}.{context.attr} reads a reference"
+                )
+    for loop, reference in _reference_loops(tree):
+        for statement in loop.body:
+            for node in ast.walk(statement):
+                if (
+                    isinstance(node, ast.Name)
+                    and node.id == reference
+                    and isinstance(node.ctx, ast.Load)
+                    and not _reference_use_is_legal(node, parent)
+                ):
+                    violations.append(f"line {node.lineno}: {reference} used as a value")
+    return violations
+
+
+def _qualified_functions(tree: ast.AST) -> dict[int, str]:
+    """Each node's enclosing ``Class.function`` name, for nodes inside a function."""
+    owner: dict[int, str] = {}
+
+    def visit(node: ast.AST, prefix: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.ClassDef):
+                visit(child, f"{prefix}{child.name}.")
+            elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                name = f"{prefix}{child.name}"
+                for inner in ast.walk(child):
+                    owner.setdefault(id(inner), name)
+            else:
+                visit(child, prefix)
+
+    visit(tree, "")
+    return owner
+
+
+def _secret_reads(path: Path, root: Path = REPO) -> list[tuple[str, str]]:
+    tree = _parse(path)
+    owner = _qualified_functions(tree)
+    return [
+        (path.relative_to(root).as_posix(), owner.get(id(node), "<module>"))
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and _call_name(node) == "get_secret_value"
+    ]
+
+
+def test_the_credential_reference_is_a_key_never_a_value():
+    """C1, made mechanical: the reference selects a binding; Replicator never reads it."""
+    offenders = {}
+    for path in _python_files(SRC):
+        name = path.relative_to(REPO).as_posix()
+        tree = _parse(path)
+        reads_field = any(
+            isinstance(node, ast.Attribute) and node.attr == CREDENTIAL_FIELD
+            for node in ast.walk(tree)
+        )
+        if reads_field and name not in CREDENTIAL_FIELD_MODULES:
+            offenders[name] = [f"reads .{CREDENTIAL_FIELD} at all"]
+        elif violations := _reference_violations(tree):
+            offenders[name] = violations
+    assert not offenders
+
+
+def test_the_reference_scan_has_a_subject():
+    """A scan whose loop pattern stopped matching would pass on nothing."""
+    loops = [
+        loop
+        for module in CREDENTIAL_FIELD_MODULES
+        for loop in _reference_loops(_parse(REPO / module))
+    ]
+    assert loops, "no `for name, reference in ....credential_headers.items()` loop found"
+
+
+def test_the_value_is_read_in_the_transport_alone():
+    """D2: ``get_secret_value()`` has one call site, where the outgoing hop is built."""
+    reads = [read for path in _python_files(SRC) for read in _secret_reads(path)]
+
+    assert reads == [SECRET_READER]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param(
+            "for n, ref in o.credential_headers.items():\n    if ref == 'fetch-x': pass",
+            id="compared",
+        ),
+        pytest.param("for n, ref in o.credential_headers.items():\n    seen.add(ref)", id="stored"),
+        pytest.param(
+            "for n, ref in o.credential_headers.items():\n    open(f'/etc/creds/{ref}')",
+            id="a-path-from-it",
+        ),
+        pytest.param(
+            "for n, ref in o.credential_headers.items():\n    p = Path('/etc') / ref",
+            id="a-path-joined",
+        ),
+        pytest.param(
+            "for n, ref in o.credential_headers.items():\n    logger.info(f'{ref}')",
+            id="logged-outside-a-refusal",
+        ),
+        pytest.param("r = command.credential_headers['X-Api-Key']", id="subscript"),
+        pytest.param("rs = list(command.credential_headers.values())", id="values"),
+        pytest.param("r = command.credential_headers.get('X-Api-Key')", id="get"),
+    ],
+)
+def test_the_reference_detector_sees_a_planted_read(source):
+    assert _reference_violations(ast.parse(source))
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param(
+            "for n, ref in o.credential_headers.items():\n    b = table.resolve(ref)",
+            id="lookup",
+        ),
+        pytest.param(
+            "for n, ref in o.credential_headers.items():\n    validate_fetch_credential(ref)",
+            id="validator",
+        ),
+        pytest.param(
+            "for n, ref in o.credential_headers.items():\n    out.append(Resolved(ref, b))",
+            id="paired",
+        ),
+        pytest.param(
+            "for n, ref in o.credential_headers.items():\n"
+            "    raise PermanentFetchError(f'{n} names {ref}', reason=r)",
+            id="named-in-a-refusal",
+        ),
+    ],
+)
+def test_the_reference_detector_passes_a_lookup(source):
+    assert not _reference_violations(ast.parse(source))
+
+
+def test_the_secret_read_detector_sees_a_second_reader(tmp_path):
+    planted = tmp_path / "planted.py"
+    planted.write_text(
+        "class T:\n    def f(self, c):\n        return c.value.get_secret_value()\n"
+        "def leak(c):\n    print(c.value.get_secret_value())\n"
+    )
+    reads = _secret_reads(planted, root=tmp_path)
+
+    assert reads == [("planted.py", "T.f"), ("planted.py", "leak")]
+
+
+def test_the_credential_field_modules_list_names_files_that_exist():
+    for module in CREDENTIAL_FIELD_MODULES:
+        assert (REPO / module).is_file(), module
+    assert (REPO / SECRET_READER[0]).is_file()
+
+
+# --------------------------------------------------------------------------
 # 3. Ingress is read-only
 # --------------------------------------------------------------------------
 
@@ -1203,8 +1455,32 @@ def test_the_import_time_detector_scans_class_bodies_but_not_functions():
 # admin listener grows inside src/worker/ — the exact thing the rejected fourth
 # channel is about.
 SERVER_MODULES = frozenset(
-    {"fastapi", "uvicorn", "starlette", "aiohttp", "flask", "http", "socketserver", "wsgiref"}
+    {"fastapi", "uvicorn", "starlette", "aiohttp", "flask", "socketserver", "wsgiref"}
 )
+# The standard library's ``http`` package is half client: ``http.cookiejar`` is what
+# the fetch client's never-storing jar is built from (#216). So the server half is
+# named by its dotted path rather than the whole package refused.
+SERVER_SUBMODULES = frozenset({"http.server"})
+
+
+def _server_imports(tree: ast.Module) -> set[str]:
+    """The server modules ``tree`` imports, by package or by dotted submodule."""
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            # ``from http import server`` imports ``http.server`` too.
+            names = [node.module, *(f"{node.module}.{alias.name}" for alias in node.names)]
+        else:
+            continue
+        for name in names:
+            if name.split(".")[0] in SERVER_MODULES:
+                found.add(name.split(".")[0])
+            found.update(
+                sub for sub in SERVER_SUBMODULES if name == sub or name.startswith(f"{sub}.")
+            )
+    return found
 
 
 def test_the_worker_imports_no_server_framework():
@@ -1212,11 +1488,33 @@ def test_the_worker_imports_no_server_framework():
     assert files, f"no modules found under {WORKER} — the scan is a no-op"
 
     offenders = {
-        path.relative_to(REPO).as_posix(): sorted(SERVER_MODULES & _imported_modules(_parse(path)))
+        path.relative_to(REPO).as_posix(): sorted(_server_imports(_parse(path)))
         for path in files
-        if SERVER_MODULES & _imported_modules(_parse(path))
+        if _server_imports(_parse(path))
     }
     assert not offenders
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import http.server",
+        "from http import server",
+        "from http.server import HTTPServer",
+        "from http import cookiejar, server",
+        "import uvicorn",
+        "from fastapi import FastAPI",
+    ],
+)
+def test_the_server_detector_catches_a_planted_import(source):
+    assert _server_imports(ast.parse(source))
+
+
+@pytest.mark.parametrize(
+    "source", ["import http.cookiejar", "from http import HTTPStatus", "import httpx"]
+)
+def test_the_server_detector_passes_the_client_half_of_http(source):
+    assert not _server_imports(ast.parse(source))
 
 
 def test_the_unit_starts_the_worker_and_binds_no_port():

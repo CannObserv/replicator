@@ -4,7 +4,7 @@
 # `uv lock` (#169). Each PR is gated by ci.yml; a Dependabot-triggered run is
 # treated like a fork's, so on a red one read the WIF auth step first (the
 # verdict table on #76). How one lands, and when a `uv` PR owes a deploy:
-# docs/DEPLOYMENT.md -> "Dependabot".
+# docs/DEPENDENCIES.md -> "Dependabot".
 #
 # The `uv` updater resolves co-core from the co-pypi index (#183) over OIDC:
 # the org registry admits this repository, and pyproject.toml's index URL
@@ -43,7 +43,7 @@ updates:
     open-pull-requests-limit: 10
     groups:
       # Dev tooling is one PR. Not a no-deploy marker: anyio, httpx and pyyaml
-      # are runtime transitives too (docs/DEPLOYMENT.md -> "Dependabot").
+      # are runtime transitives too (docs/DEPENDENCIES.md -> "Dependabot").
       dev-tools:
         dependency-type: "development"
         # Dependabot gives a requirement with extras no previous version, and

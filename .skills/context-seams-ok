@@ -531,7 +531,19 @@ tests/test_socraticode_pin.py :: worker runs beside every session (docs/COMMANDS
 #
 # #162: three standing provenance headings, added after #146's sweep by #76, #148
 # and #138. Renaming one moves its anchor, which this curation has no reason to
-# do. Rename each with its doc's next substantive edit.
-docs/DEPLOYMENT.md :: Dependabot proposes the action bumps (#76)
+# do. Rename each with its doc's next substantive edit. (#76's went with #216's
+# move of the Dependabot section into docs/DEPENDENCIES.md.)
 docs/INFRASTRUCTURE.md :: The host's disk GC is the cohort's (#148)
 docs/TESTING.md :: Testing the browser (#138)
+#
+# #216 curation: provenance headings the interval sweep reached because their docs
+# were edited. Each anchor is linked from elsewhere (the moved Dependabot section
+# links #main-takes-pull-requests-208 itself), so renaming is its own change.
+docs/DEPLOYMENT.md :: Releases (#151)
+docs/DEPLOYMENT.md :: `main` takes pull requests (#208)
+docs/DEPLOYMENT.md :: The service user (#202)
+docs/DEPLOYMENT.md :: The release check — only a release builds a writer (#52, #151)
+docs/INFRASTRUCTURE.md :: The captures bucket (#189)
+docs/contracts/content-fetch-issuer-reference.md :: `render`: the browser mode (#63)
+# DEPENDENCIES.md's scope line names AGENTS.md for the co-core rule, which stays there.
+docs/DEPENDENCIES.md :: `AGENTS.md` keeps the co-core rule

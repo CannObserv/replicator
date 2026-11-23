@@ -46,17 +46,23 @@ import asyncio
 import time
 import uuid
 from collections.abc import AsyncGenerator
+from types import MappingProxyType
 
+import httpx
 import pytest
 from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
 from co_core.pure.adapters.bus.streams import dlq_name
 from co_core.pure.models.changes import FetchFailedEvent
 from co_core.pure.util.hashing import sha256
+from co_core_aio.fetch import AsyncFetchDriver
 from co_core_sync.drivers.blobstore import LocalBlobStore
+from pydantic import SecretStr
 
 from scripts.seed_fetch import last_id, publish, resolve_blobs_topic, watch_for_facts
 from src.core.config import get_settings
 from src.core.errors import TransientError
+from src.worker.credentials import FetchCredential, FetchCredentialTable
+from src.worker.egress import CommandScopeTransport, never_storing_cookies
 from src.worker.handler import build_handler
 from src.worker.loop import (
     DEDUPE_KEY_PREFIX,
@@ -665,3 +671,104 @@ async def test_an_end_to_end_run_only_creates_predictable_keys(
         for key in created
         if not (key.startswith("replicator.itest.") or key.startswith(DEDUPE_KEY_PREFIX))
     ]
+
+
+async def test_a_credentialed_frame_is_scoped_per_hop_against_a_live_broker(
+    real_redis, scratch_topic, scratch_blobs_topic, dedupe_keys, itest_settings, tmp_path
+):
+    """#216 end to end: a seeded reference, resolved on the host, sent in scope only.
+
+    The real driver and the worker's scope transport over a mock origin, so the hops
+    are observable. Two commands: one redirected within the binding's host, which
+    stores a blob with the credential on both hops; one redirected off it, which
+    closes ``credential_refused`` with the off-scope host never contacted. Then every
+    scratch stream is searched for the value.
+    """
+    value = "planted-itest-value-5be0"  # never a real credential; a tripwire
+    seen: list[httpx.Request] = []
+
+    def origin(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path == "/in":
+            return httpx.Response(302, headers={"location": "/landed"})
+        if request.url.path == "/out":
+            return httpx.Response(302, headers={"location": "https://elsewhere.example/"})
+        return httpx.Response(200, content=BODY, headers={"content-type": "text/html"})
+
+    table = FetchCredentialTable(
+        MappingProxyType(
+            {
+                "fetch-itest": FetchCredential(
+                    header="x-api-key",
+                    hosts=frozenset({"api.example"}),
+                    value=SecretStr(value),
+                    value_file="/scratch",
+                )
+            }
+        )
+    )
+    settings = itest_settings.model_copy(
+        update={"blob_dir": tmp_path, "dedupe_ttl_seconds": DEDUPE_TTL_SECONDS}
+    )
+    consumer = build_consumer(real_redis, settings, topic=scratch_topic)
+    await consumer.ensure_group(start_id="0")
+    client = httpx.AsyncClient(
+        transport=CommandScopeTransport(httpx.MockTransport(origin)),
+        cookies=never_storing_cookies(),
+        follow_redirects=True,
+    )
+    handler = build_handler(
+        fetcher=AsyncFetchDriver(client),
+        store=LocalBlobStore(tmp_path, touch_on_rereference=True),
+        client=real_redis,
+        settings=settings,
+        blobs_topic=scratch_blobs_topic,
+        credentials=table,
+    )
+    stop = asyncio.Event()
+    loop = asyncio.create_task(
+        run_loop(
+            client=real_redis,
+            consumer=consumer,
+            group=GROUP,
+            settings=settings,
+            handler=handler,
+            reporter=build_failure_reporter(client=real_redis, blobs_topic=scratch_blobs_topic),
+            spec=FETCH_SPEC,
+            stop=stop,
+        )
+    )
+    start_id = await last_id(real_redis, scratch_blobs_topic)
+    seeded = await publish(
+        real_redis,
+        scratch_topic,
+        ["https://api.example/in", "https://api.example/out"],
+        credential_headers={"X-Api-Key": "fetch-itest"},
+    )
+    dedupe_keys.extend(FETCH_SPEC.dedupe_key(s.command_id) for s in seeded)
+    try:
+        facts = await watch_for_facts(
+            real_redis,
+            scratch_blobs_topic,
+            start_id,
+            {s.command_id for s in seeded},
+            timeout_seconds=FACT_TIMEOUT_SECONDS,
+        )
+    finally:
+        stop.set()
+        await asyncio.wait_for(loop, timeout=5)
+        await client.aclose()
+
+    by_command = {fact.command_id: fact for fact in facts}
+    stored, refused = (by_command[s.command_id] for s in seeded)
+    assert stored.content_fingerprint == sha256(BODY)
+    assert isinstance(refused, FetchFailedEvent)
+    assert refused.reason == "credential_refused"
+    assert refused.terminal is True
+    assert [(r.url.host, r.url.path, r.headers.get("x-api-key")) for r in seen] == [
+        ("api.example", "/in", value),
+        ("api.example", "/landed", value),
+        ("api.example", "/out", value),
+    ]
+    for topic in (scratch_topic, scratch_blobs_topic, dlq_name(scratch_topic)):
+        assert value not in str(await real_redis.xrange(topic)), topic
