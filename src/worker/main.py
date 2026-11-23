@@ -965,15 +965,15 @@ async def run(
             else None
         )
         capture_consumer_name = consumer_name_for(settings, settings.capture_consumer_group)
+        # The fetch credential table, the same kind of host state (#216): read once,
+        # values included, so a bad value file drops its binding here and not at the
+        # first credentialed fetch. Never raises; unset provisions nothing.
+        fetch_credentials = load_fetch_credentials(settings.fetch_credentials_file)
         # Host state, read once at boot: which destinations an operator
         # provisioned here. Unset means nothing is provisioned and every
         # replicate command is refused — the safe default (contract T5), and
         # every host's state until an operator writes the table (this VM's
         # until #86 provisioned `primary`).
-        # The fetch credential table, the same kind of host state (#216): read once,
-        # values included, so a bad value file drops its binding here and not at the
-        # first credentialed fetch. Never raises; unset provisions nothing.
-        fetch_credentials = load_fetch_credentials(settings.fetch_credentials_file)
         aliases = load_alias_table(
             settings.replication_aliases_file,
             # No alias may bind a bucket this host keeps blobs in (#114).
