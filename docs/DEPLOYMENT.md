@@ -47,7 +47,8 @@ that answers. 4: left on a build that does not answer; the message says what to 
 **What one deploy does**, in order: waits for CI on the commit (all four jobs,
 `CI_JOBS`); builds `releases/<sha12>` and imports `src.worker.main` from it;
 `post_build_check` asks the release's own writer guard (#52, below), refusing a
-release that would build no writer; switches `live`; installs whichever unit
+release that would build no writer; `migrate` installs the release's pinned
+headless shell (#228, [below](#the-headless-shell-228)); switches `live`; installs whichever unit
 differs (keeping the old copy for a switch-back); restarts the worker, which
 drains for up to `TimeoutStopSec=180`; and verifies it: a new main PID whose cwd
 is the release, then its own `"worker ready"` line naming the build. A failed
@@ -157,12 +158,31 @@ chowns the state directory back at start, recursively, keeping modes (measured b
 `build-id.env` for exactly this. Root writes it, under a name the older unit never
 truncates, and removes the old name for the older unit to recreate as its own.
 
-**A Playwright bump's shell** goes into the state directory as its owner, from the live
-release's venv:
+### The headless shell (#228)
+
+**The deploy installs the release's pinned `chromium-headless-shell`**, in `migrate`,
+before the switch. It installs as `replicator`, into the state directory, from the release's
+own venv, so a Playwright bump (a Dependabot PR included) needs no hand step, and a rollback
+installs its own revision. When the revision is already there, the install does nothing.
+Each revision is ~282 MB (1255, Playwright 1.65.2). The GC runs while the release this deploy
+prunes is still on disk, so up to three revisions can be kept (~0.85 GB), and only after
+consecutive bumps.
+
+**Never run a bare `playwright install` into it.** Playwright garbage-collects before it
+installs. It drops every `.links` entry it can't read, then every revision that no remaining
+entry pins. The host's first install made an entry that points into `/home`, which `replicator` can't read, so
+a bare install would delete the shell the live worker launches for each render. `migrate`
+first re-registers the live release, with `PLAYWRIGHT_SKIP_BROWSER_GC=1`, then installs.
+The GC then keeps the revisions of every release still on disk and drops a pruned release's
+revision at the next deploy. To install by hand, register the live release the same way first:
 
 ```bash
+cd /
 sudo -u replicator env PLAYWRIGHT_BROWSERS_PATH=/var/lib/replicator/ms-playwright \
-  /srv/replicator/live/.venv/bin/playwright install chromium-headless-shell
+  PLAYWRIGHT_SKIP_BROWSER_GC=1 \
+  "$(realpath /srv/replicator/live)/.venv/bin/playwright" install chromium-headless-shell
+sudo -u replicator env PLAYWRIGHT_BROWSERS_PATH=/var/lib/replicator/ms-playwright \
+  /srv/replicator/releases/<sha12>/.venv/bin/playwright install chromium-headless-shell
 ```
 
 The capture runbook's `exedev` install predates the account. Everything the shell needs is
