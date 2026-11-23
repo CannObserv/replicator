@@ -283,8 +283,13 @@ def _canonical_hosts(hosts: Any) -> tuple[frozenset[str], str | None]:
 
 def _read_value(value_file: str, header: str) -> tuple[str, str | None]:
     """The value, minus one trailing ``\\n``, or why it can't be sent verbatim. Never quoted."""
+    # Bounded (CR 2): a path at /dev/zero, or a file far over the bound, must drop
+    # the binding rather than hold the boot. The bound, a newline, and one byte more
+    # to tell "at the bound" from "over it".
+    limit = MAX_REQUEST_HEADER_BYTES - len(header) - 4
     try:
-        content = Path(value_file).read_bytes()
+        with open(value_file, "rb") as handle:
+            content = handle.read(limit + 2)
     except OSError as exc:
         return "", f"value_file is unreadable ({type(exc).__name__})"
     try:
@@ -294,13 +299,14 @@ def _read_value(value_file: str, header: str) -> tuple[str, str | None]:
     value = value.removesuffix("\n")
     if not value:
         return "", "the value is empty"
+    # First, so a truncated read is always named for its length. The handler's
+    # measure: name, ": ", value, CRLF (``headers.py``).
+    if len(value) > limit:
+        return "", f"the value exceeds the {MAX_REQUEST_HEADER_BYTES}-byte header bound"
     if not HEADER_VALUE.match(value):
         return "", "the value is not printable US-ASCII on one line"
     if value != value.strip():
         # The handler strips an issuer's value; a credential's is refused instead,
         # because a stripped secret is a different secret.
         return "", "the value has leading or trailing whitespace"
-    # The handler's measure: name, ": ", value, CRLF (``headers.py``).
-    if len(header) + len(value) + 4 > MAX_REQUEST_HEADER_BYTES:
-        return "", f"the value exceeds the {MAX_REQUEST_HEADER_BYTES}-byte header bound"
     return value, None

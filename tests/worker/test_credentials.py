@@ -367,3 +367,12 @@ def test_a_value_pasted_into_another_field_is_never_quoted(tmp_path, caplog, ove
     warning = _dropped(tmp_path, caplog, "fetch-wa-leg-api", entry, "")
 
     assert warning.reference == "fetch-wa-leg-api"
+
+
+def test_a_value_file_that_never_ends_drops_the_binding_at_once(tmp_path, caplog):
+    """CR 2: the read is bounded, so ``/dev/zero`` can't hold the boot forever."""
+    warning = _dropped(
+        tmp_path, caplog, "fetch-wa-leg-api", binding("/dev/zero"), "byte header bound"
+    )
+
+    assert warning.value_file == "/dev/zero"
