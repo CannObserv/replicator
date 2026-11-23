@@ -36,7 +36,12 @@ from src.core.config import Settings, get_settings
 from src.core.logging import configure_logging
 from src.storage.local_store import SweepSafeLocalBlobStore
 from src.storage.sweeper import SweepResult
-from src.worker.egress import RESOLVE_TIMEOUT_SECONDS, BodyCeilingTransport, GuardedTransport
+from src.worker.egress import (
+    RESOLVE_TIMEOUT_SECONDS,
+    BodyCeilingTransport,
+    CommandScopeTransport,
+    GuardedTransport,
+)
 from src.worker.main import (
     build_consumer,
     build_fetch_client,
@@ -613,7 +618,8 @@ async def test_run_closes_the_fetch_driver(monkeypatch, fake_redis, tmp_path):
             # The run() seam passes the guarded client (#95); a stub that took
             # no argument would make this test pass while the worker fetched
             # through an unguarded one.
-            assert isinstance(client._transport, GuardedTransport)
+            assert isinstance(client._transport, CommandScopeTransport)
+            assert isinstance(client._transport._inner, GuardedTransport)
             clients.append(client)
 
         async def execute(self, effect):
@@ -1646,10 +1652,33 @@ def test_the_worker_builds_its_fetch_client_behind_the_destination_guard(monkeyp
     # that renames it fails here loudly, which is the right failure: it means
     # nothing is checking that the worker's client is the guarded one.
     assert isinstance(client, httpx.AsyncClient)
-    assert isinstance(client._transport, GuardedTransport)
+    assert isinstance(client._transport._inner, GuardedTransport)
     assert client.follow_redirects is True, (
         "redirects stay on — the guard checks each hop rather than refusing the feature"
     )
+
+
+def test_the_worker_scopes_every_hop_to_its_command_outermost(monkeypatch):
+    """#216: the scope transport wraps the guard, and the client's own jar never stores.
+
+    Outermost so a credential out of scope is refused before a DNS lookup (operator
+    call 5). The never-storing jar is what makes cookies per command (call 1A): the
+    scope's cookies are then the only ones a hop carries.
+    """
+    monkeypatch.delenv("REPLICATOR_BLOCKED_DESTINATIONS", raising=False)
+
+    client = build_fetch_client(Settings())
+
+    assert isinstance(client._transport, CommandScopeTransport)
+    assert isinstance(client._transport._inner, GuardedTransport)
+    client.cookies.extract_cookies(
+        httpx.Response(
+            200,
+            headers={"set-cookie": "sid=abc; Path=/"},
+            request=httpx.Request("GET", "https://a.example/"),
+        )
+    )
+    assert len(client.cookies.jar) == 0
 
 
 def test_the_operators_ranges_reach_the_worker_guard(monkeypatch):
@@ -1658,7 +1687,7 @@ def test_the_operators_ranges_reach_the_worker_guard(monkeypatch):
 
     client = build_fetch_client(Settings())
 
-    assert [str(net) for net in client._transport._guard._blocked] == ["10.0.0.0/8"]
+    assert [str(net) for net in client._transport._inner._guard._blocked] == ["10.0.0.0/8"]
 
 
 def test_the_worker_guard_resolves_under_the_budgeted_cap(monkeypatch):
@@ -1674,7 +1703,7 @@ def test_the_worker_guard_resolves_under_the_budgeted_cap(monkeypatch):
 
     client = build_fetch_client(Settings())
 
-    assert client._transport._guard._resolve_timeout == RESOLVE_TIMEOUT_SECONDS
+    assert client._transport._inner._guard._resolve_timeout == RESOLVE_TIMEOUT_SECONDS
 
 
 def test_the_worker_stops_reading_a_body_at_the_blob_ceiling(monkeypatch):
@@ -1687,7 +1716,7 @@ def test_the_worker_stops_reading_a_body_at_the_blob_ceiling(monkeypatch):
 
     client = build_fetch_client(Settings())
 
-    guard = client._transport
+    guard = client._transport._inner
     assert isinstance(guard, GuardedTransport)
     inner = guard._inner
     assert isinstance(inner, BodyCeilingTransport)

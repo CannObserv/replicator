@@ -1203,8 +1203,32 @@ def test_the_import_time_detector_scans_class_bodies_but_not_functions():
 # admin listener grows inside src/worker/ — the exact thing the rejected fourth
 # channel is about.
 SERVER_MODULES = frozenset(
-    {"fastapi", "uvicorn", "starlette", "aiohttp", "flask", "http", "socketserver", "wsgiref"}
+    {"fastapi", "uvicorn", "starlette", "aiohttp", "flask", "socketserver", "wsgiref"}
 )
+# The standard library's ``http`` package is half client: ``http.cookiejar`` is what
+# the fetch client's never-storing jar is built from (#216). So the server half is
+# named by its dotted path rather than the whole package refused.
+SERVER_SUBMODULES = frozenset({"http.server"})
+
+
+def _server_imports(tree: ast.Module) -> set[str]:
+    """The server modules ``tree`` imports, by package or by dotted submodule."""
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            # ``from http import server`` imports ``http.server`` too.
+            names = [node.module, *(f"{node.module}.{alias.name}" for alias in node.names)]
+        else:
+            continue
+        for name in names:
+            if name.split(".")[0] in SERVER_MODULES:
+                found.add(name.split(".")[0])
+            found.update(
+                sub for sub in SERVER_SUBMODULES if name == sub or name.startswith(f"{sub}.")
+            )
+    return found
 
 
 def test_the_worker_imports_no_server_framework():
@@ -1212,11 +1236,33 @@ def test_the_worker_imports_no_server_framework():
     assert files, f"no modules found under {WORKER} — the scan is a no-op"
 
     offenders = {
-        path.relative_to(REPO).as_posix(): sorted(SERVER_MODULES & _imported_modules(_parse(path)))
+        path.relative_to(REPO).as_posix(): sorted(_server_imports(_parse(path)))
         for path in files
-        if SERVER_MODULES & _imported_modules(_parse(path))
+        if _server_imports(_parse(path))
     }
     assert not offenders
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import http.server",
+        "from http import server",
+        "from http.server import HTTPServer",
+        "from http import cookiejar, server",
+        "import uvicorn",
+        "from fastapi import FastAPI",
+    ],
+)
+def test_the_server_detector_catches_a_planted_import(source):
+    assert _server_imports(ast.parse(source))
+
+
+@pytest.mark.parametrize(
+    "source", ["import http.cookiejar", "from http import HTTPStatus", "import httpx"]
+)
+def test_the_server_detector_passes_the_client_half_of_http(source):
+    assert not _server_imports(ast.parse(source))
 
 
 def test_the_unit_starts_the_worker_and_binds_no_port():

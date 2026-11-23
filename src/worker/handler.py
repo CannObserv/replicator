@@ -38,6 +38,7 @@ from src.core.errors import (
 from src.core.logging import get_logger
 from src.storage.sweeper import BlobUsage
 from src.worker.browser import RenderDeadlineError
+from src.worker.egress import command_scope
 from src.worker.loop import Handler, park
 from src.worker.pacing import HostPacer, HostPolicy
 
@@ -744,10 +745,11 @@ async def _fetch(
     to finish on its own, as #100 already accepts.
     """
     try:
-        async with asyncio.timeout(deadline_seconds) as deadline:
-            return await fetcher.execute(
-                FetchContent(command.url, headers=options.headers, timeout=options.timeout)
-            )
+        with command_scope():
+            async with asyncio.timeout(deadline_seconds) as deadline:
+                return await fetcher.execute(
+                    FetchContent(command.url, headers=options.headers, timeout=options.timeout)
+                )
     except (httpx.UnsupportedProtocol, httpx.InvalidURL) as exc:
         raise PermanentFetchError(
             f"{command.url} is not fetchable: {exc}", reason=FailureReason.NOT_FETCHABLE

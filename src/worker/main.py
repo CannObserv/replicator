@@ -50,9 +50,11 @@ from src.worker.capture_reporter import build_capture_reporter, build_captured_p
 from src.worker.checkout import checkout_refusal
 from src.worker.egress import (
     BodyCeilingTransport,
+    CommandScopeTransport,
     DestinationGuard,
     GuardedTransport,
     blocked_networks,
+    never_storing_cookies,
 )
 from src.worker.handler import build_handler
 from src.worker.loop import (
@@ -119,12 +121,20 @@ def build_fetch_client(settings: Settings) -> httpx.AsyncClient:
     ``response.content`` can no longer hold more than the handler will keep.
     Inside rather than outside so a refused destination is refused before any
     response exists to count.
+
+    **Outside the guard, the command scope** (#216): each hop reads its command's
+    scope, and cookies live there for one command's redirect chain. The client's
+    own jar never stores, which is what makes them per command rather than per
+    worker. Outermost so a scope refusal costs no DNS lookup.
     """
     return httpx.AsyncClient(
-        transport=GuardedTransport(
-            BodyCeilingTransport(httpx.AsyncHTTPTransport(), max_bytes=settings.max_blob_bytes),
-            blocked=blocked_networks(settings.blocked_destination_cidrs),
+        transport=CommandScopeTransport(
+            GuardedTransport(
+                BodyCeilingTransport(httpx.AsyncHTTPTransport(), max_bytes=settings.max_blob_bytes),
+                blocked=blocked_networks(settings.blocked_destination_cidrs),
+            )
         ),
+        cookies=never_storing_cookies(),
         follow_redirects=True,
     )
 

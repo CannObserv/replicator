@@ -40,8 +40,11 @@ from src.worker.egress import (
     DEFAULT_BLOCKED_DESTINATIONS,
     RESOLVE_TIMEOUT_SECONDS,
     BodyCeilingTransport,
+    CommandScopeTransport,
     GuardedTransport,
     blocked_networks,
+    command_scope,
+    never_storing_cookies,
 )
 from tests.worker.conftest import command
 
@@ -863,3 +866,135 @@ async def test_an_endless_non_2xx_body_from_a_real_origin_is_cut_short(endless_o
 
     assert response.status_code == 503
     assert len(response.content) == ceiling
+
+
+# --- The command scope (#216): cookies live for one command's redirect chain ---------
+
+
+def _scoped_client(origin) -> httpx.AsyncClient:
+    """The worker's stack minus the guard and the ceiling: scope over a mock origin."""
+    return httpx.AsyncClient(
+        transport=CommandScopeTransport(httpx.MockTransport(origin)),
+        cookies=never_storing_cookies(),
+        follow_redirects=True,
+    )
+
+
+def _cookie_origin(seen: list[tuple[str, str | None]]):
+    """``/bounce`` sets a cookie on a 302 to ``/land``; ``/plant`` sets one on a 200."""
+
+    def origin(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, request.headers.get("cookie")))
+        if request.url.path == "/bounce":
+            return httpx.Response(
+                302, headers={"location": "/land", "set-cookie": "sid=abc; Path=/"}
+            )
+        if request.url.path == "/plant":
+            return httpx.Response(200, headers={"set-cookie": "planted=1; Path=/"})
+        return httpx.Response(200, text="ok")
+
+    return origin
+
+
+async def test_a_cookie_set_on_a_redirect_reaches_the_next_hop():
+    """Today's behaviour, kept: a session minted on a 302 is sent on the hop it points at."""
+    seen: list[tuple[str, str | None]] = []
+
+    async with _scoped_client(_cookie_origin(seen)) as client:
+        with command_scope():
+            await AsyncFetchDriver(client).execute(FetchContent("https://a.example/bounce"))
+
+    assert seen == [("/bounce", None), ("/land", "sid=abc")]
+
+
+async def test_a_cookie_from_one_command_never_reaches_the_next():
+    """The behaviour change (operator call 1A): the worker-lifetime jar is gone.
+
+    Before, one command's ``Set-Cookie`` was replayed on every later command to the
+    same host, so a credentialed fetch's session would ride an anonymous one.
+    """
+    seen: list[tuple[str, str | None]] = []
+
+    async with _scoped_client(_cookie_origin(seen)) as client:
+        driver = AsyncFetchDriver(client)
+        with command_scope():
+            await driver.execute(FetchContent("https://a.example/plant"))
+        with command_scope():
+            await driver.execute(FetchContent("https://a.example/later"))
+
+    assert seen[-1] == ("/later", None)
+
+
+async def test_the_client_jar_stores_nothing():
+    """The per-command cookies are the only ones: the client's jar never fills."""
+    async with _scoped_client(_cookie_origin([])) as client:
+        with command_scope():
+            await AsyncFetchDriver(client).execute(FetchContent("https://a.example/bounce"))
+
+        assert len(client.cookies.jar) == 0
+
+
+async def test_a_hop_outside_any_command_scope_is_refused():
+    """Fails closed: nothing reaches the wire without a scope to read it against."""
+    async with _scoped_client(_never_called) as client:
+        with pytest.raises(RuntimeError, match="outside a command scope"):
+            await client.get("https://a.example/")
+
+
+async def test_the_scope_is_gone_after_the_command_even_when_it_raises():
+    with pytest.raises(ValueError), command_scope():
+        raise ValueError("the fetch failed")
+
+    async with _scoped_client(_never_called) as client:
+        with pytest.raises(RuntimeError, match="outside a command scope"):
+            await client.get("https://a.example/")
+
+
+async def test_the_request_handed_down_is_never_mutated():
+    """httpx builds the next hop from the request it handed in, headers and all.
+
+    So whatever the transport adds must go on a copy, or it rides every later hop
+    including a cross-origin one [measured 2026-11-23, httpx 0.28.1].
+    """
+    seen: list[httpx.Request] = []
+
+    def origin(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200)
+
+    transport = CommandScopeTransport(httpx.MockTransport(origin))
+    handed = httpx.Request("GET", "https://a.example/", headers={"accept": "text/html"})
+    with command_scope() as scope:
+        scope.cookies.set("sid", "abc", domain="a.example")
+        await transport.handle_async_request(handed)
+
+    assert seen[0].headers["cookie"] == "sid=abc"
+    assert seen[0].headers["accept"] == "text/html"
+    assert "cookie" not in handed.headers
+
+
+async def test_an_issuers_own_cookie_header_is_sent_as_given():
+    """As httpx's jar did: a ``Cookie`` already on the request is left alone."""
+    seen: list[tuple[str, str | None]] = []
+
+    async with _scoped_client(_cookie_origin(seen)) as client:
+        with command_scope() as scope:
+            scope.cookies.set("sid", "abc", domain="a.example")
+            await client.get("https://a.example/land", headers={"cookie": "mine=1"})
+
+    assert seen == [("/land", "mine=1")]
+
+
+async def test_every_command_the_handler_runs_has_its_own_scope(handler):
+    """The handler enters the scope, so the worker's client never refuses a real command.
+
+    And it is a fresh one each time: the second command carries none of the first's cookies.
+    """
+    seen: list[tuple[str, str | None]] = []
+
+    async with _scoped_client(_cookie_origin(seen)) as client:
+        handle = handler(AsyncFetchDriver(client))
+        await handle(command(command_id="cmd-1", url="https://a.example/plant"))
+        await handle(command(command_id="cmd-2", url="https://a.example/later"))
+
+    assert seen == [("/plant", None), ("/later", None)]
