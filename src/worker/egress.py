@@ -379,9 +379,18 @@ class CommandScopeTransport(httpx.AsyncBaseTransport):
     set on the handed request would ride every later hop, a cross-origin one
     included [measured 2026-11-23].
 
+    **Credentials** (C2, C3): with any in scope, a hop that :func:`scope_refusal`
+    refuses raises ``credential_refused`` before anything below runs, the guard's
+    DNS lookup included (operator call 5). A hop in scope carries each credential
+    header; this is the one place a value is read (``get_secret_value``), and
+    ``tests/test_boundaries.py`` pins that.
+
     **Cookies** are the scope's: added before the hop with httpx's public
     ``set_cookie_header``, which leaves a ``Cookie`` the issuer sent alone, as the
-    client's jar did, and taken from the response with ``extract_cookies``.
+    client's jar did, and taken from the response with ``extract_cookies``. A
+    ``Cookie`` credential is followed by the jar's cookies in the same field
+    (``<credential>; <jar>``), so a session the origin mints on top of it survives
+    the redirect chain.
     """
 
     def __init__(self, inner: httpx.AsyncBaseTransport) -> None:
@@ -391,6 +400,8 @@ class CommandScopeTransport(httpx.AsyncBaseTransport):
         scope = _COMMAND_SCOPE.get()
         if scope is None:
             raise RuntimeError(f"{request.url} was requested outside a command scope: refused")
+        if (why := scope_refusal(request.url, scope.credentials)) is not None:
+            raise PermanentFetchError(why, reason=FailureReason.CREDENTIAL_REFUSED)
         outgoing = httpx.Request(
             request.method,
             request.url,
@@ -398,7 +409,13 @@ class CommandScopeTransport(httpx.AsyncBaseTransport):
             stream=request.stream,
             extensions=request.extensions,
         )
-        scope.cookies.set_cookie_header(outgoing)
+        for _, credential in scope.credentials:
+            outgoing.headers[credential.header] = credential.value.get_secret_value()
+        if "cookie" in {credential.header for _, credential in scope.credentials}:
+            if jar := _jar_cookies(scope.cookies, outgoing):
+                outgoing.headers["cookie"] = f"{outgoing.headers['cookie']}; {jar}"
+        else:
+            scope.cookies.set_cookie_header(outgoing)
         response = await self._inner.handle_async_request(outgoing)
         response.request = outgoing
         scope.cookies.extract_cookies(response)
@@ -406,6 +423,17 @@ class CommandScopeTransport(httpx.AsyncBaseTransport):
 
     async def aclose(self) -> None:
         await self._inner.aclose()
+
+
+def _jar_cookies(cookies: httpx.Cookies, request: httpx.Request) -> str | None:
+    """The ``Cookie`` field the jar would add to ``request``, worked out on a bare probe.
+
+    ``set_cookie_header`` adds nothing to a request that already carries a ``Cookie``,
+    and a ``Cookie`` credential is one; so the jar's half is computed apart, then joined.
+    """
+    probe = httpx.Request(request.method, request.url)
+    cookies.set_cookie_header(probe)
+    return probe.headers.get("cookie")
 
 
 class BodyCeilingTransport(httpx.AsyncBaseTransport):

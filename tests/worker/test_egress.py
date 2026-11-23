@@ -21,13 +21,16 @@ The decision and the three tests it was run through: #89. The scope: #95, and
 
 import asyncio
 import ipaddress
+import logging
 import re
 import socket
+from types import MappingProxyType
 
 import httpx
 import pytest
 from co_core.effects.fetch import FetchContent
 from co_core_aio.fetch import AsyncFetchDriver
+from pydantic import SecretStr
 
 from src.core.errors import (
     FailureReason,
@@ -36,6 +39,7 @@ from src.core.errors import (
     TransientError,
     TransientFetchError,
 )
+from src.worker.credentials import FetchCredential, FetchCredentialTable, Resolved
 from src.worker.egress import (
     DEFAULT_BLOCKED_DESTINATIONS,
     RESOLVE_TIMEOUT_SECONDS,
@@ -46,7 +50,9 @@ from src.worker.egress import (
     command_scope,
     never_storing_cookies,
 )
-from tests.worker.conftest import command
+from src.worker.loop import poll_once
+from src.worker.reporter import build_failure_reporter
+from tests.worker.conftest import GROUP, TOPIC, command, make_command, process_one
 
 
 def _never_called(request: httpx.Request) -> httpx.Response:  # pragma: no cover - asserts
@@ -998,3 +1004,249 @@ async def test_every_command_the_handler_runs_has_its_own_scope(handler):
         await handle(command(command_id="cmd-2", url="https://a.example/later"))
 
     assert seen == [("/plant", None), ("/later", None)]
+
+
+# --- Credentials per hop (#216, D3): in scope or not sent, and never by mutation -------
+
+VALUE = "planted-egress-value-c4d2"  # never a real credential; a tripwire for leaks
+
+
+def _resolved(header="x-api-key", hosts=("api.leg.wa.gov",), reference="fetch-wa-leg-api"):
+    return Resolved(
+        reference,
+        FetchCredential(
+            header=header, hosts=frozenset(hosts), value=SecretStr(VALUE), value_file="/v"
+        ),
+    )
+
+
+def _recording_origin(seen: list[httpx.Request], routes: dict[str, httpx.Response] | None = None):
+    def origin(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        for path, response in (routes or {}).items():
+            if request.url.path == path:
+                return response
+        return httpx.Response(200, text="ok")
+
+    return origin
+
+
+async def _get(origin, url: str, *credentials: Resolved) -> httpx.Response:
+    async with _scoped_client(origin) as client:
+        with command_scope(credentials):
+            return await AsyncFetchDriver(client).execute(FetchContent(url))
+
+
+async def test_an_in_scope_credential_is_sent_on_every_hop():
+    seen: list[httpx.Request] = []
+    origin = _recording_origin(seen, {"/a": httpx.Response(302, headers={"location": "/b"})})
+
+    await _get(origin, "https://api.leg.wa.gov/a", _resolved())
+
+    assert [r.url.path for r in seen] == ["/a", "/b"]
+    assert [r.headers.get("x-api-key") for r in seen] == [VALUE, VALUE]
+
+
+async def test_a_cross_origin_redirect_is_refused_before_the_hop_is_sent():
+    """C2, C3: the hop is refused, not sent bare. The other host receives nothing at all."""
+    seen: list[httpx.Request] = []
+    origin = _recording_origin(
+        seen, {"/a": httpx.Response(302, headers={"location": "https://other.example/land"})}
+    )
+
+    with pytest.raises(PermanentFetchError) as raised:
+        await _get(origin, "https://api.leg.wa.gov/a", _resolved())
+
+    assert raised.value.reason is FailureReason.CREDENTIAL_REFUSED
+    assert [str(r.url) for r in seen] == ["https://api.leg.wa.gov/a"]
+    assert "other.example" in str(raised.value) and "fetch-wa-leg-api" in str(raised.value)
+    assert VALUE not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        pytest.param("http://api.leg.wa.gov/b", id="https-to-http"),
+        pytest.param("https://api.leg.wa.gov:8443/b", id="another-port"),
+        pytest.param("https://evil.api.leg.wa.gov/b", id="a-subdomain"),
+    ],
+)
+async def test_a_redirect_off_the_scheme_port_or_host_is_refused(location):
+    seen: list[httpx.Request] = []
+    origin = _recording_origin(seen, {"/a": httpx.Response(302, headers={"location": location})})
+
+    with pytest.raises(PermanentFetchError) as raised:
+        await _get(origin, "https://api.leg.wa.gov/a", _resolved())
+
+    assert raised.value.reason is FailureReason.CREDENTIAL_REFUSED
+    assert len(seen) == 1
+
+
+async def test_a_first_hop_over_http_is_refused_at_the_transport_too():
+    """The handler checks the submitted URL; the transport doesn't rely on it."""
+    with pytest.raises(PermanentFetchError) as raised:
+        await _get(_never_called, "http://api.leg.wa.gov/a", _resolved())
+
+    assert raised.value.reason is FailureReason.CREDENTIAL_REFUSED
+
+
+@pytest.mark.parametrize(
+    ("url", "hosts"),
+    [
+        pytest.param("https://Bücher.example/a", ("xn--bcher-kva.example",), id="idna"),
+        pytest.param("https://api.leg.wa.gov./a", ("api.leg.wa.gov",), id="trailing-dot"),
+        pytest.param("https://API.LEG.WA.GOV/a", ("api.leg.wa.gov",), id="upper-case"),
+    ],
+)
+async def test_the_hop_host_is_compared_in_its_canonical_form(url, hosts):
+    seen: list[httpx.Request] = []
+
+    await _get(_recording_origin(seen), url, _resolved(hosts=hosts))
+
+    assert seen[0].headers["x-api-key"] == VALUE
+
+
+async def test_the_unicode_host_is_never_what_is_compared():
+    """``url.host`` is IDNA-decoded; a binding written in unicode would never match it."""
+    with pytest.raises(PermanentFetchError):
+        await _get(_never_called, "https://Bücher.example/a", _resolved(hosts=("bücher.example",)))
+
+
+async def test_every_credential_must_admit_the_hop():
+    seen: list[httpx.Request] = []
+
+    with pytest.raises(PermanentFetchError) as raised:
+        await _get(
+            _recording_origin(seen),
+            "https://api.leg.wa.gov/a",
+            _resolved(),
+            _resolved(header="x-other", hosts=("other.example",), reference="fetch-other"),
+        )
+
+    assert raised.value.reason is FailureReason.CREDENTIAL_REFUSED
+    assert "fetch-other" in str(raised.value)
+    assert seen == []
+
+
+async def test_the_credential_never_lands_on_the_request_httpx_holds():
+    """httpx builds the next hop from the handed request: the credential must not be on it."""
+    seen: list[httpx.Request] = []
+    transport = CommandScopeTransport(httpx.MockTransport(_recording_origin(seen)))
+    handed = httpx.Request("GET", "https://api.leg.wa.gov/a")
+
+    with command_scope((_resolved(),)):
+        await transport.handle_async_request(handed)
+
+    assert seen[0].headers["x-api-key"] == VALUE
+    assert "x-api-key" not in handed.headers
+
+
+async def test_a_cookie_credential_keeps_the_session_minted_on_top_of_it():
+    """``<credential>; <jar>``: the origin's session cookie survives the redirect chain."""
+    seen: list[httpx.Request] = []
+    origin = _recording_origin(
+        seen,
+        {"/a": httpx.Response(302, headers={"location": "/b", "set-cookie": "sid=abc; Path=/"})},
+    )
+
+    await _get(origin, "https://api.leg.wa.gov/a", _resolved(header="cookie"))
+
+    assert [r.headers.get("cookie") for r in seen] == [VALUE, f"{VALUE}; sid=abc"]
+
+
+async def test_an_anonymous_scope_sends_what_a_plain_client_sends():
+    """No credential, no cookie: the hop goes out header for header as it did before #216."""
+    plain: list[httpx.Request] = []
+    scoped: list[httpx.Request] = []
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_recording_origin(plain))) as client:
+        await AsyncFetchDriver(client).execute(FetchContent("https://a.example/x"))
+    await _get(_recording_origin(scoped), "https://a.example/x")
+
+    assert list(scoped[0].headers.multi_items()) == list(plain[0].headers.multi_items())
+    assert scoped[0].url == plain[0].url
+
+
+async def test_out_of_scope_and_in_a_refused_range_is_credential_refused():
+    """Operator call 5: the scope check is pure and outermost, so it answers before DNS."""
+    resolved_hosts: list[str] = []
+
+    async def resolve(host: str, port: int) -> list[str]:  # pragma: no cover - asserts
+        resolved_hosts.append(host)
+        return ["127.0.0.1"]
+
+    client = httpx.AsyncClient(
+        transport=CommandScopeTransport(
+            GuardedTransport(
+                httpx.MockTransport(_never_called), blocked=blocked_networks(None), resolve=resolve
+            )
+        ),
+        cookies=never_storing_cookies(),
+    )
+    async with client:
+        with command_scope((_resolved(),)), pytest.raises(PermanentFetchError) as raised:
+            await client.get("https://shelley.invalid/")
+
+    assert raised.value.reason is FailureReason.CREDENTIAL_REFUSED
+    assert resolved_hosts == []
+
+
+async def test_a_hop_refusal_reaches_the_handler_through_the_real_driver(handler):
+    """Out through httpx's redirect loop and ``_fetch`` unchanged: terminal, not transient."""
+    seen: list[httpx.Request] = []
+    origin = _recording_origin(
+        seen, {"/a": httpx.Response(302, headers={"location": "https://other.example/"})}
+    )
+    table = FetchCredentialTable(MappingProxyType({"fetch-wa-leg-api": _resolved().credential}))
+
+    async with _scoped_client(origin) as client:
+        with pytest.raises(PermanentFetchError) as raised:
+            await handler(AsyncFetchDriver(client), credentials=table)(
+                command(
+                    url="https://api.leg.wa.gov/a",
+                    credential_headers={"X-Api-Key": "fetch-wa-leg-api"},
+                )
+            )
+
+    assert raised.value.reason is FailureReason.CREDENTIAL_REFUSED
+    assert len(seen) == 1 and seen[0].headers["x-api-key"] == VALUE
+
+
+async def test_no_value_in_the_journal_when_the_wire_fails_mid_fetch(
+    fake_redis, consumer, settings, handler, caplog
+):
+    """A forced, unclassified failure after the credential is attached: the traceback the
+    loop logs names the error, and never the value the request carried."""
+
+    def exploding(request: httpx.Request) -> httpx.Response:
+        raise ValueError(f"the origin broke on {request.url}")
+
+    table = FetchCredentialTable(MappingProxyType({"fetch-wa-leg-api": _resolved().credential}))
+    await fake_redis.xadd(
+        TOPIC,
+        make_command(
+            command_id="cmd-boom",
+            url="https://api.leg.wa.gov/a",
+            credential_headers={"X-Api-Key": "fetch-wa-leg-api"},
+        ),
+    )
+    message = (await poll_once(fake_redis, consumer, settings, group=GROUP))[0]
+
+    async with _scoped_client(exploding) as client:
+        with caplog.at_level("DEBUG"):
+            await process_one(
+                fake_redis,
+                consumer,
+                settings,
+                message,
+                handler(AsyncFetchDriver(client), credentials=table),
+                reporter=build_failure_reporter(client=fake_redis),
+            )
+
+    assert any(r.exc_info or r.exc_text for r in caplog.records), "no traceback was logged"
+    journal = caplog.text + "".join(
+        logging.Formatter().formatException(r.exc_info) for r in caplog.records if r.exc_info
+    )
+    assert "the origin broke" in journal
+    assert VALUE not in journal
+    assert VALUE not in str(await fake_redis.xrange("content.blobs"))
