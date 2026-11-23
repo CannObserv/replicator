@@ -105,6 +105,8 @@ def test_the_reason_tokens_are_the_wire_tokens():
     here rather than silently change what Watcher branches on.
     """
     assert {reason.value for reason in FailureReason} == {
+        "credential_refused",
+        "credential_unknown",
         "destination_refused",
         "http_status",
         "invalid_request_options",
