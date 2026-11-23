@@ -175,6 +175,11 @@ re-issuing the same command is refused identically until one of them changes: fi
 the operator to provision the binding. An origin's 401 or 403 when a credential **was** sent stays
 `http_status`.
 
+**What a binding cannot prevent: reflection.** An in-scope origin that echoes the request header into
+its response body puts the value in the stored blob, which `blob_available` announces cluster-wide.
+The header pin narrows that to the header the operator meant; beyond it, bind only hosts trusted to
+keep the credential.
+
 **Cookies live for one command since #216.** A `Set-Cookie` on one hop is sent on the later hops of
 the same redirect chain, as before, and on nothing after it: one command's session no longer rides
 another command to the same host. That applies to every command, credentialed or not.
