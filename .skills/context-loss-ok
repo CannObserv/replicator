@@ -828,3 +828,42 @@ docs/SOCRATICODE.md :: disproven :: `systemd-run --user --scope -p MemoryHigh=12
 # #162 CR 1: CONVENTIONS.md quoted a two-queue XDEL selector; broker's deploy/redis-acl.conf
 # names four (persist and capture joined). It now links the selector's shape instead.
 docs/CONVENTIONS.md :: disproven :: - **DLQ is a shipped seam, not a TODO:** `dead_letter(message_id, fields, reason=…)` copies the frame to `<topic>.dlq` with co-core's `dlq.*` provenance beside it, and acks the original. Deterministic failure ⇒ DLQ; transient failure ⇒ retry. **Draining it is this service's job, and both halves are granted** — `XADD <topic>.dlq` parks a frame and, since 2026-09-11, an ACL selector `(+xdel ~content.fetch.dlq ~content.replicate.dlq)` removes one once it is triaged (#86, broker#12). `XDEL` is refused on every other stream and nothing here issues `XTRIM` (#106 — the broker had granted it on both fact streams and both queues, and broker#41 withdraws it), so disposal is one entry at a time by id and a drain can never become a wipe. Resting state for both queues is 0: `docs/COMMANDS.md`.
+
+# ---- #216 curation: the four docs over the 10,000-token budget ----
+# Each line below was read against its replacement before being warranted.
+# @run base=812d0e592a99 file=docs/DEPLOYMENT.md
+# The Dependabot section moved verbatim to docs/DEPENDENCIES.md as a `##`; its
+# provenance heading lost `(#76, #169)` per the seams-ack note (#162), both issues
+# still cited in its body, and its two links were re-aimed from the new home.
+rename :: ### Dependabot proposes the action and Python bumps (#76, #169)
+retarget :: It proposes one PR per runtime package and one `dev-tools` group PR.
+retarget :: Merge a bot PR [like any PR](#main-takes-pull-requests-208)
+# @run end
+# @run base=812d0e592a99 file=docs/contracts/content-fetch-outcome-reference.md
+# The TTL section's history (the window "used to be" a host setting) and the
+# operator-side pairing detail, which INFRASTRUCTURE.md's lifecycle table carries;
+# every atom kept (claims_dropped 0).
+tighten :: **Why the seven-day window is a commitment rather than a number to ask about.** It used to be
+tighten :: `REPLICATOR_BLOB_TTL_SECONDS` on Replicator's host — a setting, visible to nobody else, changeable
+tighten :: by an operator with no consumer the wiser. Under the object-store backend the reap is a **bucket
+tighten :: lifecycle rule**, which is a stated, auditable window rather than an mtime clock that moves for
+tighten :: reasons no consumer can see. The rule is `daysSinceCustomTime: 8` against a published 7-day
+tighten :: horizon — the extra day for the reason the table below gives.
+tighten :: **Nothing keeps the two halves in step automatically under `gcs`.** The published horizon comes from
+tighten :: `REPLICATOR_BLOB_TTL_SECONDS` and the reap comes from a lifecycle rule configured in Google Cloud;
+tighten :: a rule shorter than the setting would announce a window the bucket will not honour, which is the one
+tighten :: way this value can be wrong in the unsafe direction. The worker logs the horizon at boot beside the
+tighten :: bucket so the pairing is checkable, and `docs/INFRASTRUCTURE.md` records the provisioned rule.
+# @run end
+# @run base=812d0e592a99 file=docs/TESTING.md
+# Two sentences of how-it-was-found narrative; every atom kept.
+tighten :: **Where fakeredis diverges.** It is sound for consumer-group *mechanics*
+tighten :: **The shared broker is not a `real_redis` target, three times over.**
+# @run end
+# @run base=812d0e592a99 file=docs/INFRASTRUCTURE.md
+# A dated disk reading, a filler clause and a narrative lead-in; every atom kept.
+tighten :: It reached 97% on 2026-10-22. Disk hygiene here is Provisioner'
+tighten :: [COMMANDS.md](COMMANDS.md#inspecting-the-consume-path), beside the commands. Some of
+tighten :: those rows arrived after broker#2's ACL cutover, and this is how:
+tighten :: **`XPENDING` moved columns on 2026-09-22 (broker#39, #103, #107)**, not as a courtesy: the
+# @run end

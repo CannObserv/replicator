@@ -108,7 +108,7 @@ ceilings, the timeout bounds, the header-name folding rule, and the reasoning be
 [the reference](content-fetch-issuer-reference.md#request-options-what-replicator-will-send-and-what-it-refuses-11).
 
 `credential_headers` (#216) carries **references, never values**, resolved only where the operator
-provisioned them: [the reference](content-fetch-issuer-reference.md#credential_headers-fetch-credential-references-216).
+provisioned them: [the reference](content-fetch-issuer-reference.md#credential_headers-fetch-credential-references).
 
 ### The facts
 

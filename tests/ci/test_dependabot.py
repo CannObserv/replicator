@@ -220,7 +220,7 @@ def test_uv_strategy_is_not_the_unsupported_widen(uv_block):
 
 def test_uv_dev_tools_are_one_grouped_pr(uv_block):
     """One group, for development dependencies only. Not a no-deploy marker:
-    some dev packages are runtime transitives too (docs/DEPLOYMENT.md)."""
+    some dev packages are runtime transitives too (docs/DEPENDENCIES.md)."""
     groups = uv_block.get("groups", {})
     assert list(groups) == ["dev-tools"]
     assert groups["dev-tools"].get("dependency-type") == "development"

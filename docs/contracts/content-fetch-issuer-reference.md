@@ -131,9 +131,9 @@ checks on **every connection the page opens**, not only on the URL and its redir
 same URL, so the first fetch after a flip reads as a content change. Whether to re-baseline is the
 issuer's call (archiver#379).
 
-### `credential_headers`: fetch credential references (#216)
+### `credential_headers`: fetch credential references
 
-**What it is.** `credential_headers` (co-core **0.51.1**, cannobserv#577) maps a header name to a
+**What it is.** `credential_headers` (co-core **0.51.1**, cannobserv#577; #216) maps a header name to a
 `fetch-<role>` **reference**, e.g. `{"X-Api-Key": "fetch-wa-leg-api"}`. The reference names a
 binding an operator provisioned on Replicator's host; the binding holds the value. **The value never
 travels on the bus**, and Replicator never echoes it: not on a fact, not in `detail`, not in the

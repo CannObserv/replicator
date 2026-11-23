@@ -307,12 +307,10 @@ have and must not grow.
 
 Expands [MUST-7](content-fetch-issuer-contract.md#7-copy-the-bytes-before-the-blob-expires).
 
-**Why the seven-day window is a commitment rather than a number to ask about.** It used to be
-`REPLICATOR_BLOB_TTL_SECONDS` on Replicator's host — a setting, visible to nobody else, changeable
-by an operator with no consumer the wiser. Under the object-store backend the reap is a **bucket
-lifecycle rule**, which is a stated, auditable window rather than an mtime clock that moves for
-reasons no consumer can see. The rule is `daysSinceCustomTime: 8` against a published 7-day
-horizon — the extra day for the reason the table below gives.
+**The seven-day window is a commitment, not a number to ask about.** Under the object-store backend
+the reap is a **bucket lifecycle rule** on `REPLICATOR_BLOB_TTL_SECONDS`'s horizon:
+`daysSinceCustomTime: 8` against a published 7 days, the extra day for the reason the table below
+gives.
 
 The clock runs from **last reference by a fetch**, not last read by a consumer, and **both backends
 implement that same rule by different means**. A consumer reading the blob extends nothing, on
@@ -335,11 +333,9 @@ moment the reap measures against — and every mechanism after it pushes the rea
 The error is one-way: acting on the horizon is early, never too late. A later fetch pushes the
 expiry out and emits a fresh fact carrying the new value.
 
-**Nothing keeps the two halves in step automatically under `gcs`.** The published horizon comes from
-`REPLICATOR_BLOB_TTL_SECONDS` and the reap comes from a lifecycle rule configured in Google Cloud;
-a rule shorter than the setting would announce a window the bucket will not honour, which is the one
-way this value can be wrong in the unsafe direction. The worker logs the horizon at boot beside the
-bucket so the pairing is checkable, and `docs/INFRASTRUCTURE.md` records the provisioned rule.
+**Nothing keeps the two halves in step under `gcs`**: the horizon is `REPLICATOR_BLOB_TTL_SECONDS`,
+the reap a lifecycle rule in Google Cloud. A rule shorter than the setting is the one way this value
+can be wrong in the unsafe direction; the boot log and `docs/INFRASTRUCTURE.md` are the check.
 
 Also, on the reaper [MUST-6](content-fetch-issuer-contract.md#6-handle-fetch_failed-and-keep-a-reaper-anyway)
 keeps:

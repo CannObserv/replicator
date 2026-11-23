@@ -1,7 +1,7 @@
 # Dependencies
 
-Where co-core comes from, how to reach it, and its pin; then the `uv_build` bound and
-CI's uv. `AGENTS.md` keeps the co-core rule and `[build-system]`'s comment keeps the
+Where co-core comes from, how to reach it, and its pin; then the `uv_build` bound,
+CI's uv, and what Dependabot proposes. `AGENTS.md` keeps the co-core rule and `[build-system]`'s comment keeps the
 bound's; the reasoning is here. The unit and the deploy recipe are in
 [DEPLOYMENT.md](DEPLOYMENT.md); every variable is in [ENVIRONMENT.md](ENVIRONMENT.md).
 
@@ -135,3 +135,32 @@ reads to see which packages moved.
   reads `pyproject.toml` and `uv.lock`, not `ci.yml`.
 - **Unpinned.** CI took each new minor the day it shipped, which is how the
   warning got into CI logs.
+
+## Dependabot proposes the action and Python bumps
+
+`.github/dependabot.yml` has two blocks, both weekly:
+
+- **`github-actions`** (#76). Every `uses:` in `ci.yml` pins a commit SHA with a `# vX.Y.Z` comment, and Dependabot moves both. `context-cadence.yml` is excluded, because the installer re-renders it (gregoryfoster/skills#373).
+- **`uv`** (#169). It proposes one PR per runtime package and one `dev-tools` group PR. `google-auth[requests]` gets its own PR, because an extras requirement inside a group drops the whole group without an error (#169). Under `increase-if-necessary` each PR raises the requirement's floor in `pyproject.toml` along with the lock. It resolves co-core from the co-pypi index over OIDC, through the org registry that admits this repository. It ignores `co-core*`, which moves by epic #154's pin-move children; `playwright`, whose bump is the viewport-capture runbook's install on every host; and `uv-build`, which moves with the host's uv ([above](#the-build-backends-bound-and-cis-uv)). **Majors arrive as PRs.** To keep a cap, close the PR with `@dependabot ignore this major version`.
+
+Guarded by `tests/ci/`. Merge a bot PR [like any PR](DEPLOYMENT.md#main-takes-pull-requests-208), then `git pull --ff-only` before the next local commit. If a bot PR is red at the WIF auth step, suspect the Dependabot run's OIDC token before the bump (the verdict table on #76). Read the release notes, not the diff: setup-uv v9 flipped `prune-cache` silently. A bump that changes behaviour takes fix commits pushed onto its branch.
+
+**Whether a bot PR owes a deploy:**
+
+- **An action PR** touches only `.github/`, so it needs no deploy and no restart.
+- **A `uv` PR owes one only if it changes what a release installs.** `deploy.sh` builds with `uv sync --locked --no-dev`. Some dev packages are also runtime transitives: `anyio`, `httpx` and `pyyaml` from `dev`, and `google-auth` from `co-pypi`. So the group a PR comes from can't tell you, and neither can whether a `[project].dependencies` line moved. A lock-only security PR can move a runtime transitive too.
+
+Diff the two install sets. It needs no index token and no checkout of the PR:
+
+```bash
+release_set() {  # what a release of <rev> installs
+  local d; d=$(mktemp -d)
+  git show "$1:pyproject.toml" >"$d/pyproject.toml" && git show "$1:uv.lock" >"$d/uv.lock" &&
+    (cd "$d" && uv export --frozen --no-dev --no-emit-project --no-hashes --no-header -q)
+  rm -rf "$d"
+}
+git fetch -q origin pull/<n>/head
+diff <(release_set origin/main) <(release_set FETCH_HEAD) && echo "no deploy owed"
+```
+
+If any line differs, merge the PR, then deploy the merge commit with `scripts/deploy.sh`, which restarts the worker.
