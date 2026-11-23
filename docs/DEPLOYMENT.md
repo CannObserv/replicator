@@ -195,6 +195,7 @@ world-readable, so `-m browser` still runs as `exedev`.
 | After editing `deploy/needrestart.conf.d/replicator.conf` | `sudo install -D -m 644 deploy/needrestart.conf.d/replicator.conf /etc/needrestart/conf.d/replicator.conf` — **no reload**, apt's hook reads it at the next dpkg run; `sudo needrestart -m u -r l -b` printing `Disabling Ubuntu mode` proves it loads. Without it a security apply restarts the worker mid-apply, outside any window (#122) |
 | Reading what the failure handler reported | `journalctl -t replicator-failure` — **not** `journalctl -u`; why, in [FAILURE-NOTIFICATION.md](FAILURE-NOTIFICATION.md) |
 | After a co-core pin move | the procedure in [DEPENDENCIES.md](DEPENDENCIES.md#moving-the-pin), then deploy |
+| After merging a Dependabot PR | an action PR owes none; a `uv` PR owes one when what a release installs changed — [the check](DEPENDENCIES.md#dependabot-proposes-the-action-and-python-bumps) |
 | `Start request repeated too quickly` | `sudo systemctl reset-failed replicator && sudo systemctl start replicator` — the rate limit, not a broken build |
 
 **A start syncs nothing.** `ExecStart` runs the release's own `.venv`, built at deploy
