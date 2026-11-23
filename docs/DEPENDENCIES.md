@@ -1,9 +1,10 @@
 # Dependencies
 
 Where co-core comes from, how to reach it, and its pin; then the `uv_build` bound,
-CI's uv, and what Dependabot proposes. `AGENTS.md` keeps the co-core rule and `[build-system]`'s comment keeps the
-bound's; the reasoning is here. The unit and the deploy recipe are in
-[DEPLOYMENT.md](DEPLOYMENT.md); every variable is in [ENVIRONMENT.md](ENVIRONMENT.md).
+CI's uv, and what Dependabot proposes. `AGENTS.md` keeps the co-core rule and
+`[build-system]`'s comment keeps the bound's; the reasoning is here. The unit and the
+deploy recipe are in [DEPLOYMENT.md](DEPLOYMENT.md); every variable is in
+[ENVIRONMENT.md](ENVIRONMENT.md).
 
 ## The co-pypi index
 
