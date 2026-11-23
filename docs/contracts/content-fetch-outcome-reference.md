@@ -135,8 +135,7 @@ are the whole value of the six:
 | `detail` | `str \| None` | Free text for the journal. **Never branch on it**, and never show it to an end user — on `handler_error` it is an unanticipated exception's text, so unbounded |
 
 The tokens emitted today are `http_status`, `not_modified`, `not_fetchable`, `too_large`,
-`destination_refused`, `credential_unknown`, `credential_refused` (both #216),
-`unsupported_schema_version`, `invalid_request_options` and `handler_error` —
+`destination_refused`, `credential_unknown`, `credential_refused`, `unsupported_schema_version`, `invalid_request_options` and `handler_error` —
 one per row of the [failure taxonomy](#failure-taxonomy-what-happens-and-what-the-issuer-sees)
 below, which states each one's condition. Why the list is additive, why `wrong_payload_type` never
 appears and why every one is `terminal=True`: [Reading the failure fact](#reading-the-failure-fact).
@@ -156,9 +155,8 @@ appears and why every one is `terminal=True`: [Reading the failure fact](#readin
 | HTTP 304 Not Modified — a conditional GET that **succeeded** (#17) | fact, ack, and **no DLQ entry**; the dedupe key is written | `fetch_failed` · `not_modified` (+ `status_code=304`) |
 | URL not fetchable (bad scheme / invalid URL; under `browser`, a download or non-HTML document) | fact, then `content.fetch.dlq` | `fetch_failed` · `not_fetchable` |
 | Body over `REPLICATOR_MAX_BLOB_BYTES` (default 64 MiB) | fact, then `content.fetch.dlq` — since #104 **Replicator stops reading at the ceiling**, or before any byte when `Content-Length` declares more | `fetch_failed` · `too_large` |
-| Unsendable `headers` / `timeout_seconds` / `render` / `credential_headers` names, or both header maps over the count or byte bound | fact, then `content.fetch.dlq`, **before the fetch** | `fetch_failed` · `invalid_request_options` |
-| A `credential_headers` reference this host has no usable binding for — never provisioned, dropped at boot, or off `fetch-<role>` (#216) | fact, then `content.fetch.dlq`, **before the fetch** | `fetch_failed` · `credential_unknown` |
-| A credential used outside its binding: another header, or a URL or **redirect hop** not `https`, not on port 443, or not one of every binding's hosts (#216) | fact, then `content.fetch.dlq`, **before the request or the hop goes out**; never sent without the credential instead | `fetch_failed` · `credential_refused` |
+| Unsendable `headers` / `timeout_seconds` / `render` | fact, then `content.fetch.dlq`, **before the fetch** | `fetch_failed` · `invalid_request_options` |
+| A credential reference unbound here, or used off its binding, **redirect hops** included (#216) | fact, then `content.fetch.dlq`, before the hop | `credential_unknown` / `credential_refused` |
 | Destination in a range this host will not fetch from — loopback, RFC 1918, link-local, ULA, the tailnet's CGNAT `100.64.0.0/10` (#95), an IANA special-purpose range (#161), or an IPv6 address embedding one (#156) | fact, then `content.fetch.dlq`, **before the request goes out**, and on **each redirect hop** | `fetch_failed` · `destination_refused` |
 | HTTP 5xx / 408 / 429, a network error, or a fetch still running at `REPLICATOR_MAX_FETCH_SECONDS` (default 120 s, #104) | retry indefinitely, default ~60 s cadence | delayed fact, or **nothing while it retries** |
 | Blob tree over `REPLICATOR_BLOB_MAX_TOTAL_BYTES` | parked in the PEL until a sweep frees space | delayed fact, or **nothing while it waits** |

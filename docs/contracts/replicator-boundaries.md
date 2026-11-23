@@ -112,13 +112,8 @@ cohort convention, kept from when four services shared one VM (#88). **`BUILD_ID
 mean a per-service variable name for one git SHA. It is exempted by name in the test, not
 waved through — an exemption list that grows is this convention ending quietly.
 
-**A credential reference is a key, and the value never travels (#216, cannobserv#577).**
-`credential_headers` maps a header name to a `fetch-<role>` reference; the binding it names, and
-the secret, are host state read at boot, as the alias table is. So env carries the table's path,
-the command carries this occasion's reference, and the value rides neither. It passes the three
-tests: no per-resource history (cookies now live *shorter*, one command), coordination over a
-resource only the fetcher can see (the secret, and the redirect hops only the transport sees), and
-no domain vocabulary (a header name, a reference, hostnames). Its scan is §2c of the tests.
+**A credential reference is a key; the value never travels (#216)**: the secret is host state, read
+at boot, as the alias table is.
 
 **The fourth channel is rejected by name: an inbound admin HTTP API.** It is the easy path for
 every future config need and it ends the property that makes this service testable and
@@ -359,8 +354,8 @@ is failing a PR, not documenting an intention.
 | No domain vocabulary | AST scan of `src/`: `info_source`, `info_item`, `watched_item`, `tenant`, `aspect` appear in no identifier and no string literal — exact `info_source_id` and `info_item_rep_spec_id` exempted in the emit-path modules only, per token |
 | The echoed keys are never interpreted | AST scan of `src/`: every occurrence of either echoed field is a field declaration, a parameter, the keyword named for **itself**, or that keyword's value; all else fails |
 | Ingress is read-only | recursive route walk: every path in the allowlist, every method in `{GET, HEAD}` |
-| The credential reference is a key; the value is the transport's | AST scan of `src/`: `credential_headers` is read in `handler.py` alone; a reference bound by its `.items()` loop is only a lookup, validator or `Resolved` argument, or a placeholder in a `PermanentFetchError` message — never compared, stored or made a path; the map's values are reached no other way; `get_secret_value()` has one call site, `CommandScopeTransport.handle_async_request` (#216) |
-| The deployed process has no ingress | `src/worker/` imports no server framework — `http.server` by name, so `http.cookiejar` (the fetch client's never-storing jar, #216) stays legal; the unit runs `src.worker.main` with no `uvicorn` and no `--port` |
+| The credential reference is a key | AST scan: a reference is only looked up, validated or named in a refusal; one `get_secret_value()` call (#216) |
+| The deployed process has no ingress | `src/worker/` imports no server framework (`http.server`, not `http.cookiejar`); the unit runs `src.worker.main` with no `uvicorn` and no `--port` |
 | No locally-defined wire models | no class in `src/` declares an `event_type` field — every wire payload comes from co-core |
 | No issuer SDK | no dependency on a sibling repo's client in the lock |
 | Config surface | every `Settings` field is `REPLICATOR_*`-prefixed except `build_id`, exempted by name; no `env_file`; no configuration or network call at import time |
