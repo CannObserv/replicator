@@ -345,3 +345,25 @@ def test_a_credential_is_constructed_only_with_a_secret():
         FetchCredential(
             header="x-api-key", hosts=frozenset({"a.example"}), value=VALUE, value_file="/v"
         )
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"value_file": VALUE}, id="value-pasted-as-value_file"),
+        pytest.param({"hosts": [VALUE + ":x"]}, id="value-pasted-as-a-host"),
+        pytest.param({"hosts": ["api.leg.wa.gov", f"https://{VALUE}"]}, id="value-in-a-host-url"),
+    ],
+)
+def test_a_value_pasted_into_another_field_is_never_quoted(tmp_path, caplog, overrides):
+    """CR 1: a value pasted where a path or host belongs is dropped, not logged.
+
+    The alias table refuses to quote a non-path ``credentials_file`` for this reason;
+    the same holds for ``value_file`` and for ``hosts``, whose validator's own message
+    would quote the host back.
+    """
+    entry = binding(write_value(tmp_path), **overrides)
+
+    warning = _dropped(tmp_path, caplog, "fetch-wa-leg-api", entry, "")
+
+    assert warning.reference == "fetch-wa-leg-api"

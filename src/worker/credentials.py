@@ -208,7 +208,9 @@ def _credential_or_none(reference: str, entry: Any, position: int) -> FetchCrede
     why, credential = _why_unusable(entry)
     if why is not None:
         extra: dict[str, Any] = {"reference": reference, "detail": why}
-        if isinstance(entry, dict) and isinstance(entry.get("value_file"), str):
+        # The path only when it is one (CR 1): a value_file that isn't an absolute
+        # path is likeliest the value itself, pasted, and is never quoted.
+        if isinstance(entry, dict) and _is_host_path(entry.get("value_file")):
             extra["value_file"] = entry["value_file"]
         logger.warning(_DROPPED, extra=extra)
         return None
@@ -227,8 +229,8 @@ def _why_unusable(entry: Any) -> tuple[str | None, FetchCredential | None]:
     if why is not None:
         return why, None
     value_file = entry.get("value_file")
-    if not isinstance(value_file, str) or not value_file.startswith("/"):
-        return "value_file must be an absolute host path to the value", None
+    if not _is_host_path(value_file):
+        return "value_file must be an absolute host path to the value (not quoted)", None
     value, why = _read_value(value_file, header.lower())
     if why is not None:
         return why, None
@@ -251,20 +253,31 @@ def _why_unusable_header(header: Any) -> str | None:
     return None
 
 
+def _is_host_path(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith("/")
+
+
 def _canonical_hosts(hosts: Any) -> tuple[frozenset[str], str | None]:
-    """Each host in ``PolicyHost``'s form; a binding matches hosts exactly."""
+    """Each host in ``PolicyHost``'s form; a binding matches hosts exactly.
+
+    A bad host is named by its position, never its text (CR 1): ``PolicyHost``'s own
+    message quotes the host back, and a value pasted into ``hosts`` would ride it.
+    """
     if not isinstance(hosts, list) or not hosts:
         return frozenset(), "hosts must be a non-empty list of hostnames"
     canonical: set[str] = set()
-    for host in hosts:
+    for position, host in enumerate(hosts):
         if not isinstance(host, str):
-            return frozenset(), "every entry in hosts must be a hostname"
+            return frozenset(), f"hosts[{position}] is not a hostname"
         if "*" in host:
-            return frozenset(), f"host {host!r} is a wildcard; a binding matches hosts exactly"
+            return frozenset(), f"hosts[{position}] is a wildcard; a binding matches hosts exactly"
         try:
             canonical.add(_POLICY_HOST.validate_python(host))
-        except ValidationError as exc:
-            return frozenset(), f"host {host!r} is not a bare hostname: {exc.errors()[0]['msg']}"
+        except ValidationError:
+            return frozenset(), (
+                f"hosts[{position}] is not a bare hostname: lower-case punycode, "
+                "no scheme, port or path (not quoted)"
+            )
     return frozenset(canonical), None
 
 
