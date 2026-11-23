@@ -76,6 +76,36 @@ from src.worker.checkout import checkout_refusal
 sys.exit(checkout_refusal())'
 }
 
+# The release's pinned chromium-headless-shell, installed before the switch (#228),
+# so a Playwright bump needs no hand step and the restarted worker finds its shell.
+# As the worker's user, into its state directory (config.py's default). The
+# contract's expand-only step: a no-op when the revision is there, and the old one
+# stays. From / because the core runs hooks from the checkout, which replicator
+# cannot traverse (#202).
+#
+# Playwright's install garbage-collects first. It drops every .links entry it
+# cannot read, then every browser no remaining entry pins. The live release may
+# have no entry of its own (the first shell was installed from /home), so it is
+# registered first by a no-op install with GC skipped. GC then keeps every revision
+# a release on disk pins: the live one keeps launching per render until the
+# restart, and a switch-back finds its shell. A pruned release's revision goes at
+# the next deploy.
+migrate() { # <target>
+  shell() { # <release dir> [<VAR=value>...]
+    local dir="$1"
+    shift
+    sudo -n -u replicator env PLAYWRIGHT_BROWSERS_PATH=/var/lib/replicator/ms-playwright "$@" \
+      "$dir/.venv/bin/playwright" install chromium-headless-shell
+  }
+  cd /
+  local live
+  live="$(realpath -eq "$ROOT/$1")" || live=""
+  if [[ -n "$live" && "$live" != "$(realpath -e "$release")" ]]; then
+    shell "$live" PLAYWRIGHT_SKIP_BROWSER_GC=1
+  fi
+  shell "$release"
+}
+
 # The worker: a new main PID running from the release (the core's own check), then
 # its own start record naming the build. "worker ready" is logged after the floor
 # check, the broker connection, the groups and the writers, and its "build" is
