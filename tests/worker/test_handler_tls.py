@@ -6,7 +6,7 @@ record that fails its MAC mid-response reaches ``_fetch`` as the raw
 ``ssl.SSLError`` — not an ``httpx.HTTPError``, and not the builtin
 ``ConnectionError`` the loop retries. Left there it lands in the loop's
 unclassified branch, the one ``UnicodeEncodeError`` would have reached before
-``_HEADER_VALUE``: retried to the delivery ceiling, then closed ``handler_error``.
+``HEADER_VALUE``: retried to the delivery ceiling, then closed ``handler_error``.
 
 Measured on a real socket for #173, with a forged record before the status line
 and after part of the body. A mock here, because a forged record needs a TLS

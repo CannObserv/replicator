@@ -37,6 +37,7 @@ src/worker/     — Bus consumer; the primary process
 src/worker/main.py   — Entry point: client lifetime, consumer group, signals, backend selection
 src/worker/loop.py   — The consume path: poll → dispatch → ack, DLQ, dedupe, recovery; one loop per command stream, parameterized by CommandSpec
 src/worker/handler.py — The byte path behind the Handler seam: fetch → fingerprint → store → publish
+src/worker/headers.py — The request-header rules: names, values, the refused set, the count and byte bounds; shared by the handler's `headers` guards and the fetch credential table (#11, #216)
 src/worker/egress.py — The destination guard: a transport refusing loopback, private, tailnet and IANA special-purpose addresses per redirect hop (#95, #161); an answer it cannot check retries, never passes (#100). Beside it, the body ceiling: every hop's body counted on the wire and not read past `REPLICATOR_MAX_BLOB_BYTES` (#104)
 src/worker/browser.py — The renderer behind the Renderer seam: one pinned headless Chromium per render, sandboxed, scrubbed env, one at a time; a screenshot (render) or the serialized document (load, #63); says what happened to the page, never the wire reason (#138)
 src/worker/browser_fetch.py — BrowserFetcher, the Fetcher behind render="browser": load → a FetchResult describing the stored document, render errors in fetch's vocabulary (#63)
