@@ -1874,3 +1874,33 @@ async def test_a_failed_reservation_claim_is_loud_and_not_fatal(
     assert record["worker_memory_low"] == "claim failed"
     errors = [r for r in lines if r.get("level") == "ERROR"]
     assert any("memory.low" in r["message"] for r in errors), errors
+
+
+async def test_the_boot_reads_the_fetch_credential_table(monkeypatch, fake_redis, tmp_path, capsys):
+    """#216: the table is read at boot and its line names references, never values."""
+    value = "planted-boot-value-7d1e"
+    value_file = tmp_path / "fetch-wa-leg-api"
+    value_file.write_text(value + "\n")
+    table = tmp_path / "fetch-credentials.json"
+    table.write_text(
+        json.dumps(
+            {
+                "fetch-wa-leg-api": {
+                    "header": "X-Api-Key",
+                    "hosts": ["api.leg.wa.gov"],
+                    "value_file": str(value_file),
+                }
+            }
+        )
+    )
+    monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setenv("REPLICATOR_FETCH_CREDENTIALS_FILE", str(table))
+    monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+
+    await run(_stopped())
+
+    out = capsys.readouterr().out
+    lines = [json.loads(line) for line in out.splitlines() if line.strip()]
+    [loaded] = [line for line in lines if line.get("message") == "fetch credentials loaded"]
+    assert list(loaded["provisioned"]) == ["fetch-wa-leg-api"]
+    assert value not in out

@@ -56,6 +56,7 @@ src/core/       — Shared domain logic, logging, config
 src/core/errors.py   — TransientError / PermanentError (what the loop catches) + the *Fetch/*Replicate leaves + FailureReason / ReplicateReason / PersistReason / CaptureReason
 src/worker/replicate.py — The content.replicate handler: alias resolve, T3/T3a guards, refusals; upload or server-side copy
 src/worker/aliases.py — The provisioned destination set, read once from env-referenced host config
+src/worker/credentials.py — The fetch credential table: `fetch-<role>` → header, hosts and a `SecretStr` value read from a host file, once at boot (#216)
 src/worker/replicate_reporter.py — replication_failed on content.artifacts
 src/worker/persist.py — The content.persist handler: T3a, the digest check, the copy into the permanent store (#114)
 src/worker/persist_reporter.py — blob_persisted / persist_failed on content.artifacts

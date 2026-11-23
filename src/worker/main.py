@@ -48,6 +48,7 @@ from src.worker.browser_fetch import BrowserFetcher
 from src.worker.capture import build_capture_handler
 from src.worker.capture_reporter import build_capture_reporter, build_captured_publisher
 from src.worker.checkout import checkout_refusal
+from src.worker.credentials import load_fetch_credentials
 from src.worker.egress import (
     BodyCeilingTransport,
     CommandScopeTransport,
@@ -969,6 +970,10 @@ async def run(
         # replicate command is refused — the safe default (contract T5), and
         # every host's state until an operator writes the table (this VM's
         # until #86 provisioned `primary`).
+        # The fetch credential table, the same kind of host state (#216): read once,
+        # values included, so a bad value file drops its binding here and not at the
+        # first credentialed fetch. Never raises; unset provisions nothing.
+        load_fetch_credentials(settings.fetch_credentials_file)
         aliases = load_alias_table(
             settings.replication_aliases_file,
             # No alias may bind a bucket this host keeps blobs in (#114).

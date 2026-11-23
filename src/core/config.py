@@ -393,6 +393,15 @@ class Settings(BaseSettings):
         default=None, validation_alias="REPLICATOR_REPLICATION_ALIASES_FILE"
     )
 
+    # Where the fetch credential table lives, or None on a host that sends none
+    # (#216). The alias table's shape and reasoning: a path in env, a table in the
+    # file, each value in a file of its own (src/worker/credentials.py). Unset is
+    # the safe default: every command carrying credential_headers is refused
+    # credential_unknown, so sending a credential is an operator act on the host.
+    fetch_credentials_file: Path | None = Field(
+        default=None, validation_alias="REPLICATOR_FETCH_CREDENTIALS_FILE"
+    )
+
     # How long one conditional create may run before the provider gives up.
     #
     # Surfaced rather than inherited (CR #38): the SDK's own default is 120s and
