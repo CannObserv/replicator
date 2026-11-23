@@ -402,11 +402,14 @@ async def test_a_refusal_closes_with_a_terminal_fact_that_names_no_value(
 
 async def test_a_reference_with_a_trailing_newline_is_off_the_rule(handler):
     """co-core's pattern ends in ``$``; the rule is checked whole, so ``\\n`` can't ride it."""
-    await refused(
+    error = await refused(
         handler,
         command(url=URL, credential_headers={"X-Api-Key": "fetch-wa-leg-api\n"}),
         FailureReason.CREDENTIAL_UNKNOWN,
     )
+
+    # The off-rule branch, not the unprovisioned one: the whole string was checked.
+    assert "not a fetch-<role> reference" in str(error)
 
 
 async def test_an_unparseable_url_with_credentials_is_not_fetchable(handler):
