@@ -1029,11 +1029,11 @@ def _qualified_functions(tree: ast.AST) -> dict[int, str]:
     return owner
 
 
-def _secret_reads(path: Path) -> list[tuple[str, str]]:
+def _secret_reads(path: Path, root: Path = REPO) -> list[tuple[str, str]]:
     tree = _parse(path)
     owner = _qualified_functions(tree)
     return [
-        (path.relative_to(REPO).as_posix(), owner.get(id(node), "<module>"))
+        (path.relative_to(root).as_posix(), owner.get(id(node), "<module>"))
         for node in ast.walk(tree)
         if isinstance(node, ast.Call) and _call_name(node) == "get_secret_value"
     ]
@@ -1134,12 +1134,7 @@ def test_the_secret_read_detector_sees_a_second_reader(tmp_path):
         "class T:\n    def f(self, c):\n        return c.value.get_secret_value()\n"
         "def leak(c):\n    print(c.value.get_secret_value())\n"
     )
-    original = REPO
-    try:
-        globals()["REPO"] = tmp_path
-        reads = _secret_reads(planted)
-    finally:
-        globals()["REPO"] = original
+    reads = _secret_reads(planted, root=tmp_path)
 
     assert reads == [("planted.py", "T.f"), ("planted.py", "leak")]
 
