@@ -1,7 +1,7 @@
 ---
 title: Fetch credential references — resolve ContentFetchCommand.credential_headers on the host
 date: 2026-11-23
-status: proposed 2026-11-23 (awaiting the operator's approval)
+status: accepted 2026-11-23 (the operator approved all five recommendations, calls 1A–5 as written)
 issue: "#216 (epic #154)"
 ---
 
