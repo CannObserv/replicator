@@ -19,9 +19,10 @@ assertions only:
   else is.** co-core moves by the pin-move children of epic #154, and a
   name-only ignore keeps Dependabot from asking PyPI, which it does before the
   index, about a name a squatter could take (the PyPI-first limit, accepted
-  2026-11-22). ``playwright``'s ``==`` pin moves with its headless shell, a host
-  runbook step. Both sets are derived from ``pyproject.toml``, so a new one
-  fails here until it's ignored.
+  2026-11-22). Both sets are derived from ``pyproject.toml``, so a new one
+  fails here until it's ignored. **One exception:** ``playwright``'s ``==`` pin
+  moves with its headless shell, and the deploy's ``migrate`` hook installs that
+  shell (#228), so the bot proposes it and CI's ``browser`` job proves it.
 * **``increase-if-necessary``.** The default ``auto`` resolves to ``widen``,
   which uv can't do (dependabot-core#15290).
 * **Dev tools are one grouped PR; runtime packages are one PR each.**
@@ -293,11 +294,26 @@ def test_uv_ignores_every_index_package(uv_block):
     )
 
 
-def test_uv_ignores_every_exact_pin(uv_block):
-    """An ``==`` pin is a decision a bot bump would undo: playwright's moves with
-    the headless shell every host installs (#138's runbook)."""
-    missed = sorted(p for p in _exact_pins() if not _is_ignored(p, uv_block))
+# Exact pins the deploy installs for, so a bot bump needs no hand step: each one's
+# migrate hook line is held below.
+DEPLOY_INSTALLED = {"playwright": '/.venv/bin/playwright" install chromium-headless-shell'}
+
+
+def test_uv_ignores_every_exact_pin_the_deploy_does_not_install(uv_block):
+    """An ``==`` pin is a decision a bot bump would undo, unless the deploy
+    carries what the pin moves (playwright's headless shell, #228)."""
+    missed = sorted(
+        p for p in _exact_pins() - DEPLOY_INSTALLED.keys() if not _is_ignored(p, uv_block)
+    )
     assert not missed, f"{missed}: pinned == in [project].dependencies but not ignored"
+
+
+@pytest.mark.parametrize(("name", "install"), DEPLOY_INSTALLED.items())
+def test_the_deploy_installs_what_each_unignored_pin_moves(uv_block, name, install):
+    assert name in _exact_pins(), f"{name} is no longer pinned ==: drop it here"
+    assert not _is_ignored(name, uv_block), f"{name} is ignored: the bot never proposes it"
+    hooks = (REPO_ROOT / "scripts" / "deploy_hooks.sh").read_text()
+    assert install in hooks.split("\nmigrate() {", 1)[-1], f"migrate runs no `{install}`"
 
 
 def test_uv_ignores_are_name_only_and_none_is_stale(uv_block):
@@ -308,7 +324,7 @@ def test_uv_ignores_are_name_only_and_none_is_stale(uv_block):
     entries = uv_block.get("ignore", [])
     narrowed = [e for e in entries if set(e) != {"dependency-name"}]
     assert not narrowed, f"narrowed ignore entries {narrowed}: make each name-only"
-    wanted = _index_packages() | _exact_pins() | _build_requirements()
+    wanted = _index_packages() | (_exact_pins() - DEPLOY_INSTALLED.keys()) | _build_requirements()
     stale = [n for n in _ignored_names(uv_block) if not any(fnmatchcase(w, n) for w in wanted)]
     assert not stale, (
         f"ignore entries {stale} match no index package, exact pin or build requirement"

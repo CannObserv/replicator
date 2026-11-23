@@ -587,10 +587,11 @@ dependencies = [
     # Playwright release pins one Chromium revision, and the worker launches the
     # `chromium-headless-shell` that `playwright install` put under
     # REPLICATOR_PLAYWRIGHT_BROWSERS_PATH for *this* version. A patch bump moves
-    # the revision too, so a bump is a lock change plus the runbook's install
-    # step on every host (docs/plans/2026-10-25-viewport-capture-runbook.md).
+    # the revision too, and the deploy's `migrate` hook installs it before the
+    # switch (#228, docs/DEPLOYMENT.md), so Dependabot proposes bumps and CI's
+    # `browser` job proves them.
     # Bundles its own Node (the driver): an outside-apt runtime for patching.
-    "playwright==1.64.1",
+    "playwright==1.65.2",
     "uvicorn[standard]>=0.54.0,<1",
 ]
 

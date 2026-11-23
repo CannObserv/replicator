@@ -61,9 +61,6 @@ updates:
       # pin-move children. Resolution still reads the index: every other bump
       # re-locks co-core from it.
       - dependency-name: "co-core*"
-      # Pinned == with its headless shell; a bump is a lock change plus the
-      # viewport-capture runbook's install on every host (#138).
-      - dependency-name: "playwright"
       # [build-system]: no lock entry, so it too would drop the group. Its range
       # is the host uv's minor, repeated in ci.yml's setup-uv inputs; it moves
       # by hand with the host's uv (docs/DEPENDENCIES.md).

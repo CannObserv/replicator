@@ -117,3 +117,81 @@ def test_verify_fails_without_one(tmp_path, journal):
 def test_verify_has_no_check_for_the_failure_handler(tmp_path):
     result = _verify(tmp_path, "replicator-failure-notify@.service", [])
     assert result.returncode == 2
+
+
+# --- migrate: the release's pinned headless shell (#228) ---------------------
+#
+# Installed before the switch, as the worker's user, into its state directory.
+# Playwright's install garbage-collects first: it drops every .links entry it can't
+# read and every browser no remaining link pins. The host's only link pointed into
+# /home, which `replicator` can't reach (#202), so an install alone would delete the
+# shell the live worker launches per render. migrate re-registers the live release
+# first, GC skipped, then installs the new one with GC on.
+
+OLD, NEW = "aaaaaaaaaaaa", "bbbbbbbbbbbb"
+
+
+def _migrate(tmp_path: Path, live: str | None, fail_on: int = 0):
+    """migrate live (the target) deploying NEW, with sudo stubbed to record each call.
+
+    In a subshell with errexit on, under the core's nounset and pipefail."""
+    root = tmp_path / "srv"
+    for build in (OLD, NEW):
+        (root / "releases" / build).mkdir(parents=True)
+    if live:
+        (root / "live").symlink_to(f"releases/{live}")
+    calls = tmp_path / "calls"
+    stubs = (
+        'sudo() { n=1; [[ ! -f "$CALLS" ]] || n=$(( $(wc -l <"$CALLS") + 1 )); '
+        'echo "$PWD|$*" >>"$CALLS"; (( n != FAIL_ON )); }; '
+        "say() { :; }; note() { :; }; journal() { :; }; "
+    )
+    result = subprocess.run(
+        ["bash", "-c", f'source "$1"; {stubs} (set -euo pipefail; migrate live)', "_", str(HOOKS)],
+        capture_output=True,
+        text=True,
+        cwd=REPO,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "CALLS": str(calls),
+            "FAIL_ON": str(fail_on),
+            "ROOT": str(root),
+            "release": str(root / "releases" / NEW),
+        },
+    )
+    lines = calls.read_text().splitlines() if calls.exists() else []
+    return result, [line.split("|", 1) for line in lines], root
+
+
+def _install(root: Path, build: str, *, gc: bool) -> str:
+    from src.core.config import Settings
+
+    browsers = Settings.model_fields["playwright_browsers_path"].default
+    skip = [] if gc else ["PLAYWRIGHT_SKIP_BROWSER_GC=1"]
+    return " ".join(
+        ["-n", "-u", "replicator", "env", f"PLAYWRIGHT_BROWSERS_PATH={browsers}", *skip]
+        + [f"{root}/releases/{build}/.venv/bin/playwright", "install", "chromium-headless-shell"]
+    )
+
+
+def test_migrate_registers_the_live_release_then_installs_the_new_one(tmp_path):
+    result, calls, root = _migrate(tmp_path, live=OLD)
+    assert result.returncode == 0, result.stderr
+    assert calls == [
+        ["/", _install(root, OLD, gc=False)],
+        ["/", _install(root, NEW, gc=True)],
+    ]
+
+
+@pytest.mark.parametrize("live", [None, NEW], ids=["first deploy", "redeploy"])
+def test_migrate_installs_once_when_no_other_release_is_live(tmp_path, live):
+    result, calls, root = _migrate(tmp_path, live=live)
+    assert result.returncode == 0, result.stderr
+    assert calls == [["/", _install(root, NEW, gc=True)]]
+
+
+@pytest.mark.parametrize("fail_on", [1, 2])
+def test_a_failed_install_refuses_the_deploy(tmp_path, fail_on):
+    result, calls, _ = _migrate(tmp_path, live=OLD, fail_on=fail_on)
+    assert result.returncode != 0
+    assert len(calls) == fail_on, "nothing runs after a failed install"
