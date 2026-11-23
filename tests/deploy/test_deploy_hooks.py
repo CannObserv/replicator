@@ -134,7 +134,7 @@ OLD, NEW = "aaaaaaaaaaaa", "bbbbbbbbbbbb"
 def _migrate(tmp_path: Path, live: str | None, fail_on: int = 0):
     """migrate live (the target) deploying NEW, with sudo stubbed to record each call.
 
-    In a subshell with errexit on, as the core's ``hook`` runs it."""
+    In a subshell with errexit on, under the core's nounset and pipefail."""
     root = tmp_path / "srv"
     for build in (OLD, NEW):
         (root / "releases" / build).mkdir(parents=True)
@@ -142,12 +142,12 @@ def _migrate(tmp_path: Path, live: str | None, fail_on: int = 0):
         (root / "live").symlink_to(f"releases/{live}")
     calls = tmp_path / "calls"
     stubs = (
-        'sudo() { n=$(( $(cat "$CALLS" 2>/dev/null | wc -l) + 1 )); '
+        'sudo() { n=1; [[ ! -f "$CALLS" ]] || n=$(( $(wc -l <"$CALLS") + 1 )); '
         'echo "$PWD|$*" >>"$CALLS"; (( n != FAIL_ON )); }; '
         "say() { :; }; note() { :; }; journal() { :; }; "
     )
     result = subprocess.run(
-        ["bash", "-c", f'source "$1"; {stubs} (set -e; migrate live)', "_", str(HOOKS)],
+        ["bash", "-c", f'source "$1"; {stubs} (set -euo pipefail; migrate live)', "_", str(HOOKS)],
         capture_output=True,
         text=True,
         cwd=REPO,
