@@ -72,6 +72,7 @@ from dataclasses import dataclass, field
 import httpx
 
 from src.core.errors import FailureReason, PermanentFetchError, TransientFetchError
+from src.worker.credentials import Resolved
 
 # What a fetch may not reach. Every range here is this host, this host's private
 # network, the tailnet the bus rides, or an IANA special-purpose range (#161) —
@@ -301,8 +302,14 @@ class GuardedTransport(httpx.AsyncBaseTransport):
 
 @dataclass(frozen=True, slots=True)
 class CommandScope:
-    """What one command's hops share: its cookies, and nothing past the command (#216)."""
+    """What one command's hops share, and nothing past the command (#216).
 
+    ``credentials`` are the bindings the handler resolved; empty for an anonymous
+    command, whose hops go out as they always have. ``cookies`` live for the
+    command's redirect chain.
+    """
+
+    credentials: tuple[Resolved, ...] = ()
     cookies: httpx.Cookies = field(default_factory=httpx.Cookies)
 
 
@@ -310,14 +317,48 @@ _COMMAND_SCOPE: ContextVar[CommandScope | None] = ContextVar("command_scope", de
 
 
 @contextmanager
-def command_scope() -> Iterator[CommandScope]:
+def command_scope(credentials: tuple[Resolved, ...] = ()) -> Iterator[CommandScope]:
     """Enter a fresh scope for one command's fetch, and leave it even when the fetch raises."""
-    scope = CommandScope()
+    scope = CommandScope(credentials=credentials)
     token = _COMMAND_SCOPE.set(scope)
     try:
         yield scope
     finally:
         _COMMAND_SCOPE.reset(token)
+
+
+# The one port a credential may be sent to (operator call 4). ``PolicyHost`` has no
+# port, so a host-only scope would admit ``https`` on any port of that host;
+# relaxing this later stays compatible, tightening it would not.
+CREDENTIAL_PORT = 443
+
+
+def scope_refusal(url: httpx.URL, credentials: Iterable[Resolved]) -> str | None:
+    """Why ``url`` is outside a credential's scope, or ``None`` if every one admits it (C2).
+
+    Pure, so the handler checks the submitted URL with it before the ceiling, and the
+    transport checks every hop with it before DNS. ``https`` only, port 443 only, and
+    the host in **every** binding's ``hosts``: a hop out of scope for one credential
+    sends none of them. The host is ``raw_host`` (punycode), never ``host`` (IDNA
+    decoded), less one trailing dot, so it compares in ``PolicyHost``'s form.
+    """
+    credentials = tuple(credentials)
+    if not credentials:
+        return None
+    named = ", ".join(f"{c.credential.header} ({c.reference})" for c in credentials)
+    if url.scheme != "https":
+        return f"{url} is {url.scheme}, not https; {named} is sent over https only"
+    port = url.port if url.port is not None else _default_port(url)
+    if port != CREDENTIAL_PORT:
+        return f"{url} is port {port}; {named} is sent to port {CREDENTIAL_PORT} only"
+    host = url.raw_host.decode("ascii").lower().removesuffix(".")
+    for reference, credential in credentials:
+        if host not in credential.hosts:
+            return (
+                f"{url} is outside {credential.header} ({reference})'s scope: "
+                f"{host} is not one of {', '.join(sorted(credential.hosts))}"
+            )
+    return None
 
 
 def never_storing_cookies() -> http.cookiejar.CookieJar:

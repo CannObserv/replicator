@@ -21,6 +21,7 @@ from co_core.effects.fetch import FetchContent, FetchResult
 from co_core.pure.adapters.bus import streams
 from co_core.pure.adapters.bus.envelope import to_wire
 from co_core.pure.models.changes import BlobAvailableEvent, ContentFetchCommand
+from co_core.pure.util.aliases import validate_fetch_credential
 from co_core.pure.util.blobstore import BlobStore
 from co_core.pure.util.hashing import sha256
 from co_core_aio.bus import AsyncBusPublisher
@@ -37,7 +38,13 @@ from src.core.errors import (
 from src.core.logging import get_logger
 from src.storage.sweeper import BlobUsage
 from src.worker.browser import RenderDeadlineError
-from src.worker.egress import command_scope
+from src.worker.credentials import (
+    UNCREDENTIALED_HEADERS,
+    FetchCredentialTable,
+    Resolved,
+    unprovisioned,
+)
+from src.worker.egress import command_scope, scope_refusal
 from src.worker.headers import (
     HEADER_NAME,
     HEADER_VALUE,
@@ -131,6 +138,9 @@ class RequestOptions(NamedTuple):
     headers: dict[str, str] | None
     timeout: float | None
     render: str = RENDER_HTTP
+    # Header name, as the issuer spelled it, to a ``fetch-<role>`` reference (#216).
+    # References only: values are resolved from the host's table, never carried here.
+    credential_headers: dict[str, str] | None = None
 
 
 class Fetcher(Protocol):
@@ -163,6 +173,7 @@ def build_handler(
     stop: asyncio.Event | None = None,
     blobs_topic: str = streams.CONTENT_BLOBS,
     browser_fetcher: Fetcher | None = None,
+    credentials: FetchCredentialTable | None = None,
 ) -> Handler:
     """Wire the byte path into a handler the loop can dispatch to.
 
@@ -212,8 +223,13 @@ def build_handler(
     ``browser_fetcher`` is where a ``render="browser"`` command goes (#63), and
     ``None`` means this worker has no browser: the flag is off, or the boot
     preflight failed. Such a command is parked, **never** fetched over HTTP.
+
+    ``credentials`` is the host's fetch credential table (#216), read at boot.
+    ``None`` means nothing is provisioned: a command carrying ``credential_headers``
+    is refused ``credential_unknown``, never fetched without them.
     """
     publisher = AsyncBusPublisher(client)
+    credentials = credentials if credentials is not None else unprovisioned()
     usage = usage if usage is not None else BlobUsage()
     ceiling = (
         settings.blob_max_total_bytes if ceiling_bytes is _CEILING_FROM_SETTINGS else ceiling_bytes
@@ -231,6 +247,9 @@ def build_handler(
         # sweep frees space. A command that can never succeed must not wait a
         # sweep interval to reach a conclusion available immediately.
         options = _request_options(command, settings.max_fetch_timeout_seconds)
+        # Pure too, against the frozen table, and ahead of the ceiling for the same
+        # reason: a reference nobody provisioned stays unprovisioned until a restart.
+        scoped = _resolve_credentials(options, command, credentials)
         selected = _select_fetcher(options, command, fetcher, browser_fetcher)
         raise_for_ceiling(usage, ceiling)
         # Last of the three, and after the ceiling on purpose: spending a wait to
@@ -240,7 +259,11 @@ def build_handler(
         # and the ceiling is an inter-sweep estimate either way (CR #9).
         paced_seconds = await pace(pacer, command, stop=stop, park_above_seconds=park_above_seconds)
         result = await _fetch(
-            selected, command, options, deadline_seconds=settings.max_fetch_seconds
+            selected,
+            command,
+            options,
+            deadline_seconds=settings.max_fetch_seconds,
+            credentials=scoped,
         )
         # Stamped here rather than at publish: occurred_at is when the fact went
         # onto the bus, which under a reclaim is minutes after the bytes were on
@@ -367,6 +390,8 @@ def build_handler(
                 # exposure one layer down, in a journal a wider set of people
                 # read than can write to the bus.
                 "request_headers": sorted(options.headers or {}),
+                # Name -> reference: a key, never a value (#216).
+                "credential_headers": dict(options.credential_headers or {}),
                 "request_timeout_seconds": options.timeout,
                 "render": options.render,
                 # Politeness, on the line that already exists rather than one of
@@ -442,14 +467,126 @@ def _request_options(command: ContentFetchCommand, max_timeout: float) -> Reques
     bytes fetched under conditions it did not ask for.
     """
     headers = _request_headers(command.headers)
+    credential_headers = _request_credential_names(command.credential_headers, headers)
     return RequestOptions(
         headers=headers,
         timeout=_request_timeout(command.timeout_seconds, max_timeout),
-        render=_request_render(command.render, headers),
+        render=_request_render(command.render, headers, credential_headers),
+        credential_headers=credential_headers,
     )
 
 
-def _request_render(render: str | None, headers: dict[str, str] | None) -> str:
+def _request_credential_names(
+    credential_headers: dict[str, str] | None, headers: dict[str, str] | None
+) -> dict[str, str] | None:
+    """Guard ``credential_headers``' names with ``headers``' rules, folded with them (#216).
+
+    C4: the request-option guards cover the union of both maps. So a name in both
+    (co-core E3) or twice by case (E4) is a duplicate, and the count bound is over
+    both. E5's names (``UNCREDENTIALED_HEADERS``) are refused too. The byte bound
+    needs the resolved values, so it waits for :func:`_resolve_credentials`.
+
+    ``None`` and ``{}`` both mean no credential, and both return ``None``: today's
+    path. References aren't checked here; resolution closes an unknown one with its
+    own token.
+    """
+    if not credential_headers:
+        return None
+    issued = headers or {}
+    if len(issued) + len(credential_headers) > MAX_REQUEST_HEADERS:
+        raise _invalid_options(
+            f"{len(issued)} headers and {len(credential_headers)} credential headers, "
+            f"over the {MAX_REQUEST_HEADERS} allowed"
+        )
+    seen: set[str] = set()
+    for name in credential_headers:
+        key = name.lower()
+        if not HEADER_NAME.match(key):
+            raise _invalid_options(f"credential_headers: {name!r} is not a valid header name")
+        if key in REFUSED_HEADERS or key.startswith(REFUSED_HEADER_PREFIX):
+            raise _invalid_options(
+                f"credential_headers: {name!r} is not a header Replicator will send"
+            )
+        if key in UNCREDENTIALED_HEADERS:
+            raise _invalid_options(f"credential_headers: {name!r} is never a credential header")
+        if key in issued:
+            raise _invalid_options(f"{name!r} is in both headers and credential_headers")
+        if key in seen:
+            raise _invalid_options(
+                f"credential_headers: {name!r} was given more than once, differing only in case"
+            )
+        seen.add(key)
+    return dict(credential_headers)
+
+
+def _resolve_credentials(
+    options: RequestOptions, command: ContentFetchCommand, table: FetchCredentialTable
+) -> tuple[Resolved, ...]:
+    """Each reference against the host's table, then the byte bound and the first hop.
+
+    D4 step 2, in order:
+
+    - a reference off ``fetch-<role>``, never provisioned, or dropped at load is
+      ``credential_unknown``. An off-rule one isn't quoted: ``detail`` is published,
+      and the likeliest wrong value where a reference belongs is a pasted secret;
+    - a header other than the binding's is ``credential_refused`` (operator call 3);
+    - the byte bound over both maps, **the resolved values counted** (C4), is
+      ``invalid_request_options``. ``len()`` of a ``SecretStr`` reads no value;
+    - the submitted URL outside any binding's scope is ``credential_refused``. The
+      transport checks every hop again; this check closes the command before the
+      ceiling and the pacer spend anything on a request that would never go out.
+    """
+    if not options.credential_headers:
+        return ()
+    resolved: list[Resolved] = []
+    for name, reference in options.credential_headers.items():
+        # co-core's validator, which ``fullmatch``es: its exported pattern ends in
+        # ``$``, which ``match`` would let a trailing newline past.
+        try:
+            validate_fetch_credential(reference)
+        except ValueError:
+            raise PermanentFetchError(
+                f"credential_headers[{name!r}] is not a fetch-<role> reference "
+                "(not quoted: a wrong value here is most often a pasted secret)",
+                reason=FailureReason.CREDENTIAL_UNKNOWN,
+            ) from None
+        credential = table.resolve(reference)
+        if credential is None:
+            raise PermanentFetchError(
+                f"credential_headers[{name!r}] names {reference}, "
+                "which this host has not provisioned",
+                reason=FailureReason.CREDENTIAL_UNKNOWN,
+            )
+        if name.lower() != credential.header:
+            raise PermanentFetchError(
+                f"credential_headers[{name!r}] names {reference}, "
+                f"which is bound to the {credential.header!r} header only",
+                reason=FailureReason.CREDENTIAL_REFUSED,
+            )
+        resolved.append(Resolved(reference, credential))
+    total = sum(len(key) + len(value) + 4 for key, value in (options.headers or {}).items())
+    total += sum(len(r.credential.header) + len(r.credential.value) + 4 for r in resolved)
+    if total > MAX_REQUEST_HEADER_BYTES:
+        raise _invalid_options(
+            f"headers and credential headers exceed the {MAX_REQUEST_HEADER_BYTES}-byte "
+            "bound, the resolved values counted"
+        )
+    try:
+        url = httpx.URL(command.url)
+    except httpx.InvalidURL as exc:
+        raise PermanentFetchError(
+            f"{command.url} is not fetchable: {exc}", reason=FailureReason.NOT_FETCHABLE
+        ) from exc
+    if (why := scope_refusal(url, resolved)) is not None:
+        raise PermanentFetchError(why, reason=FailureReason.CREDENTIAL_REFUSED)
+    return tuple(resolved)
+
+
+def _request_render(
+    render: str | None,
+    headers: dict[str, str] | None,
+    credential_headers: dict[str, str] | None = None,
+) -> str:
     """The command's render mode, or the refusal that closes it (#63).
 
     Two refusals, both co-core's (``FetchFailedEvent``'s docstring lists them), and
@@ -470,6 +607,13 @@ def _request_render(render: str | None, headers: dict[str, str] | None) -> str:
         return RENDER_HTTP
     if render != RENDER_BROWSER:
         raise _invalid_options(f"render={render!r} is not one of {sorted(_RENDER_MODES)}")
+    if credential_headers:
+        # co-core's E1 (D5): a browser sends a header to every host the page
+        # contacts, and no per-hop scope exists inside a browser.
+        raise _invalid_options(
+            "credential_headers beside render='browser': a browser would send them "
+            "to every host the page contacts"
+        )
     names = set(headers or {})
     if validators := sorted(names & _VALIDATOR_HEADERS):
         raise _invalid_options(
@@ -621,6 +765,7 @@ async def _fetch(
     options: RequestOptions,
     *,
     deadline_seconds: float,
+    credentials: tuple[Resolved, ...] = (),
 ) -> FetchResult:
     """Fetch the command's URL, mapping httpx's failures into the loop's vocabulary.
 
@@ -664,7 +809,7 @@ async def _fetch(
     to finish on its own, as #100 already accepts.
     """
     try:
-        with command_scope():
+        with command_scope(credentials):
             async with asyncio.timeout(deadline_seconds) as deadline:
                 return await fetcher.execute(
                     FetchContent(command.url, headers=options.headers, timeout=options.timeout)

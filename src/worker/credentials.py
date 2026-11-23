@@ -31,7 +31,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, NamedTuple
 
 from co_core.pure.models.changes import PolicyHost
 from co_core.pure.util.aliases import FETCH_CREDENTIAL_PATTERN, validate_fetch_credential
@@ -84,6 +84,17 @@ class FetchCredential:
             raise TypeError("a FetchCredential's value is a SecretStr, never a plain string")
 
 
+class Resolved(NamedTuple):
+    """A reference the handler resolved, beside its binding: what a command scope holds.
+
+    The reference rides along so a hop refusal can name it; the table's key stays the
+    one owner of the name, as the alias table's does (``AliasBinding``'s CR #39).
+    """
+
+    reference: str
+    credential: FetchCredential
+
+
 @dataclass(frozen=True, slots=True)
 class FetchCredentialTable:
     """The provisioned set, read once at boot. A command can resolve it and never change it."""
@@ -100,7 +111,8 @@ class FetchCredentialTable:
         return tuple(sorted(self.bindings))
 
 
-def _empty() -> FetchCredentialTable:
+def unprovisioned() -> FetchCredentialTable:
+    """The nothing-provisioned table: every reference resolves to ``None``."""
     return FetchCredentialTable(MappingProxyType({}))
 
 
@@ -122,7 +134,7 @@ def load_fetch_credentials(path: Path | None) -> FetchCredentialTable:
                 "every credentialed content.fetch command is refused credential_unknown"
             },
         )
-        return _empty()
+        return unprovisioned()
     try:
         raw = json.loads(Path(path).read_text())
     except FileNotFoundError:
@@ -134,7 +146,7 @@ def load_fetch_credentials(path: Path | None) -> FetchCredentialTable:
                 "every credentialed content.fetch command is refused credential_unknown",
             },
         )
-        return _empty()
+        return unprovisioned()
     except Exception as exc:
         # The exception's type, never its message: a JSON error's message quotes no
         # content today, and a refusal that never quotes must not rest on that.
@@ -146,13 +158,13 @@ def load_fetch_credentials(path: Path | None) -> FetchCredentialTable:
                 "detail": "nothing is provisioned; every credentialed command will be refused",
             },
         )
-        return _empty()
+        return unprovisioned()
     if not isinstance(raw, dict):
         logger.error(
             "fetch credential table is unreadable",
             extra={"path": str(path), "detail": "expected an object of reference -> binding"},
         )
-        return _empty()
+        return unprovisioned()
 
     bindings: dict[str, FetchCredential] = {}
     for position, (reference, entry) in enumerate(raw.items()):

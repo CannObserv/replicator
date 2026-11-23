@@ -260,6 +260,7 @@ def test_a_reference_off_the_rule_is_dropped_and_not_quoted(tmp_path, caplog, re
         pytest.param({"header": "if-modified-since"}, "never a credential", id="E5-validator-2"),
         pytest.param({"hosts": []}, "hosts", id="no-hosts"),
         pytest.param({"hosts": "api.leg.wa.gov"}, "hosts", id="hosts-a-string"),
+        pytest.param({"hosts": [7]}, "hostname", id="host-not-a-string"),
         pytest.param({"hosts": ["https://api.leg.wa.gov"]}, "host", id="host-with-scheme"),
         pytest.param({"hosts": ["api.leg.wa.gov:443"]}, "host", id="host-with-port"),
         pytest.param({"hosts": ["bücher.example"]}, "host", id="host-not-punycode"),

@@ -973,7 +973,7 @@ async def run(
         # The fetch credential table, the same kind of host state (#216): read once,
         # values included, so a bad value file drops its binding here and not at the
         # first credentialed fetch. Never raises; unset provisions nothing.
-        load_fetch_credentials(settings.fetch_credentials_file)
+        fetch_credentials = load_fetch_credentials(settings.fetch_credentials_file)
         aliases = load_alias_table(
             settings.replication_aliases_file,
             # No alias may bind a bucket this host keeps blobs in (#114).
@@ -1187,6 +1187,7 @@ async def run(
                     stop=stop,
                     # render="browser" (#63). None: parked, never fetched over HTTP.
                     browser_fetcher=browser_fetcher,
+                    credentials=fetch_credentials,
                 ),
                 # The other outcome of a command, on the same stream: an issuer
                 # closes a pending entry off one consumer group either way (#9,

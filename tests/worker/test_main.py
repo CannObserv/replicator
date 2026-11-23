@@ -1896,9 +1896,19 @@ async def test_the_boot_reads_the_fetch_credential_table(monkeypatch, fake_redis
     monkeypatch.setenv("REPLICATOR_BLOB_DIR", str(tmp_path / "blobs"))
     monkeypatch.setenv("REPLICATOR_FETCH_CREDENTIALS_FILE", str(table))
     monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
+    seen = {}
+    real_build_handler = src.worker.main.build_handler
+
+    def recording_build_handler(**kwargs):
+        seen["credentials"] = kwargs.get("credentials")
+        return real_build_handler(**kwargs)
+
+    monkeypatch.setattr("src.worker.main.build_handler", recording_build_handler)
 
     await run(_stopped())
 
+    # The table the boot read is the one the fetch handler resolves against.
+    assert seen["credentials"].provisioned == ("fetch-wa-leg-api",)
     out = capsys.readouterr().out
     lines = [json.loads(line) for line in out.splitlines() if line.strip()]
     [loaded] = [line for line in lines if line.get("message") == "fetch credentials loaded"]
