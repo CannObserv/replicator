@@ -618,7 +618,7 @@ dev = [
 # The shared co-pypi wrapper's minter runs from this group alone, --frozen,
 # before any token exists, so it holds nothing from the index (#201,
 # tests/test_co_pypi.py). Not a default group: neither a release nor CI syncs it.
-co-pypi = ["google-auth[requests]>=2.62.2,<3"]
+co-pypi = ["google-auth[requests]>=2.63.0,<3"]
 
 # co-core, co-core-aio and co-core-sync resolve from cannobserv's co-pypi
 # Artifact Registry index ("Path C", #183), and only they do: `explicit` means
