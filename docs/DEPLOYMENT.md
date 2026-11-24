@@ -95,6 +95,15 @@ ruleset, so a by-hand `git push origin main` still lands.
     It needs *Allow GitHub Actions to create and approve pull requests* (Settings → Actions →
     General), on since 2026-11-17 by the operator's word.
 
+### A PR's suite may be attested (#215)
+
+`.skills/attest-local-gate` is `on`: `push.sh` gates the clean tree, pushes, and posts
+`gate/local` on the head ([attestation.md](../skills/shipping-work/references/attestation.md)).
+An attested PR from a person skips only `test`'s default pytest step. The read is PR-only,
+so `main`'s push run (`deploy.sh` reads it) runs everything, `fail_under` included.
+Cases: `tests/ci/test_attestation.py`. The PAT needs *Commit statuses: Read and write*.
+*Update branch* drops the status: update locally, `push.sh` again.
+
 ### Once, before the first deploy (the operator)
 
 1. The root, root's alone: `sudo install -d -o root -g root -m 755 /srv/replicator`.

@@ -125,9 +125,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     # WIF: mint an OIDC token for google-github-actions/auth (see the lint job).
+    # statuses: the attest step reads the PR head's combined status (#215).
+    # Here, not at the workflow level: a job's `permissions` replace the
+    # workflow's, so a workflow-level grant would never reach this job.
     permissions:
       contents: read
       id-token: write
+      statuses: read
     steps:
       # `submodules` is load-bearing for tests/test_skills_hook.py, which
       # dereferences the .claude/hooks/ symlink into skills-vendor/ — an
@@ -209,11 +213,55 @@ jobs:
           print('co-core extras OK')
           "
 
+      # The local-gate attestation (#215, gregoryfoster/skills#688). With
+      # .skills/attest-local-gate on, shipping-work's push.sh runs the gate on
+      # the exact tree, pushes, and posts `gate/local` = success on the pushed
+      # SHA. This step reads it, and the next step skips for an attested human
+      # PR. Nothing else in this workflow skips.
+      # - pull_request only: a merge made on GitHub carries no status, so on
+      #   main a read could only fail, and deploy.sh refuses a main commit whose
+      #   push run isn't all success. Unset here, the output reads as unattested.
+      # - HEAD is the PR's head: on pull_request, github.sha is the merge
+      #   commit, which nobody gated.
+      # - The combined status keeps each context's latest state (/statuses
+      #   lists every one ever posted), and a page is 30 contexts unless more
+      #   are asked for. A refused read fails the step: loud, never a skip.
+      # - The comments are here, not in `run:`, so the script splits under
+      #   shlex (watcher, status on #688). tee logs the verdict (#697 item 7).
+      # - Placed after the sync: push.sh posts seconds after the push, so a
+      #   late read usually finds it. One that doesn't runs the suite.
+      - id: attest
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          n=$(gh api "repos/$REPO/commits/$HEAD/status?per_page=100" \
+                --jq '[.statuses[] | select(.context == "gate/local" and .state == "success")] | length')
+          echo "attested=$([ "$n" -gt 0 ] && echo yes || echo no)" | tee -a "$GITHUB_OUTPUT"
+
       # No Postgres service and no alembic steps: Replicator is DB-free. Its
       # durable state is the Redis consumer group's PEL plus content-addressed
       # blobs on disk. Unit tests use fakeredis; anything needing a real broker
       # is marked @pytest.mark.integration and excluded by default.
+      #
+      # The one step an attestation may skip: it is the local gate's own run
+      # (same marker expression; the gate adds --no-cov). The `if:` is the
+      # reference's (shipping-work/references/attestation.md), each line at one
+      # indent so `>-` folds it to spaces. It skips only for an attested PR
+      # from a person on this repo: a bot's or a fork's never came from a local
+      # gate, and on push the attest step doesn't run. Accepted: an attested
+      # PR skips coverage's fail_under. main's push run, which every deploy
+      # needs, is the backstop.
       - name: pytest (default, excludes integration)
+        if: >-
+          steps.attest.outputs.attested != 'yes'
+          || (github.event_name != 'push' && github.event_name != 'pull_request')
+          || startsWith(github.ref, 'refs/tags/')
+          || (github.event_name == 'pull_request'
+          && (github.event.pull_request.user.type == 'Bot'
+          || github.event.pull_request.head.repo.full_name != github.repository))
         run: uv run pytest
 
       # One integration file runs here, and only one (#83). Every other
