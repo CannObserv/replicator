@@ -34,8 +34,9 @@ from pathlib import Path
 
 import pytest
 
-from tests.ci.test_workflow_pins import _jobs
+from tests.ci.test_workflow_pins import REPO_ROOT, _jobs
 
+KNOB = REPO_ROOT / ".skills" / "attest-local-gate"
 SKIPPABLE = "pytest (default, excludes integration)"
 REPO = "CannObserv/replicator"
 
@@ -45,6 +46,23 @@ def _step(job: str, *, id_: str | None = None, name: str | None = None) -> dict:
         if (id_ and step.get("id") == id_) or (name and step.get("name") == name):
             return step
     raise AssertionError(f"no step {id_ or name!r} in job {job!r}")
+
+
+# --- The knob -----------------------------------------------------------------
+
+
+def test_the_knob_is_committed_on():
+    """shipping-work's grammar: one word, blank lines and whole-line ``#`` comments
+    ignored. It is read from the commit, so it must be tracked (checked by the
+    push itself); here, that it says ``on``."""
+    assert KNOB.is_file() and not KNOB.is_symlink(), f"{KNOB} must be a regular file"
+    words = [
+        word
+        for line in KNOB.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+        for word in line.split()
+    ]
+    assert words == ["on"], f"{KNOB.name} must hold the one word 'on', got {words}"
 
 
 # --- Where the read happens ---------------------------------------------------

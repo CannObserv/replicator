@@ -1,0 +1,3 @@
+# shipping-work local-gate attestation (#215, gregoryfoster/skills#688):
+# push.sh gates the clean tree, pushes, and posts gate/local on the head.
+on

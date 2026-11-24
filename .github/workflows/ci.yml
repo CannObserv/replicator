@@ -230,7 +230,8 @@ jobs:
       #   shlex (watcher, status on #688). tee logs the verdict (#697 item 7).
       # - Placed after the sync: push.sh posts seconds after the push, so a
       #   late read usually finds it. One that doesn't runs the suite.
-      - id: attest
+      - name: attest (read gate/local on the PR head)
+        id: attest
         if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
