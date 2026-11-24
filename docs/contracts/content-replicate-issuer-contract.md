@@ -112,9 +112,9 @@ provider, and a `gcs-<role>` alias binds `co-gcs-<role>` or its test twin `co-gc
 other bucket. The name therefore determines the bucket, and one typo can no longer bind the public
 bucket under a private name or the reverse. No alias may bind a bucket the host keeps blobs in, the
 temp, the permanent or (since #189) the captures bucket, because aliases are publication destinations. A binding that breaks
-either rule is dropped at load, so commands naming it are refused `alias_unknown`. co-core will export the pattern (cannobserv#493) so
-Archiver's RepSpec schema validates `credentials_alias` against the same text and a bad name fails
-when the RepSpec is saved.
+either rule is dropped at load, so commands naming it are refused `alias_unknown`. co-core exports the pattern as
+`CREDENTIALS_ALIAS_PATTERN` (cannobserv#493), and Replicator imports it (#238), so Archiver's RepSpec schema validates
+`credentials_alias` against the same text and a bad name fails when the RepSpec is saved.
 
 Names are selectors, not secrets (T1), so the cluster's are listed here. **Adding one is three acts in
 one change:** the host binding (operator), a row here, and the RepSpec that uses it.
