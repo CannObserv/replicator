@@ -7,6 +7,7 @@ still ensured, so no command is skipped, and fetch keeps running.
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -183,6 +184,14 @@ async def test_a_browser_that_cannot_start_degrades_capture_alone(
     (critical,) = [line for line in lines if line.get("level") == "CRITICAL"]
     assert critical["runbook"] == runbook
     assert str(error) in critical["error"]
+
+
+def test_the_capture_runbook_is_a_file_in_the_repo():
+    """The cgroup's and every launch error's pointer (#240): a moved runbook would
+    leave the CRITICAL naming nothing, with every assertion above still green."""
+    repo = Path(__file__).resolve().parents[2]
+
+    assert (repo / src.worker.main.CAPTURE_RUNBOOK).is_file()
 
 
 async def test_a_browser_that_cannot_be_built_degrades_capture_alone(
