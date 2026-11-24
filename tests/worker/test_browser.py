@@ -13,6 +13,7 @@ shell. These pin the decisions a real browser would make slow or flaky to test:
 """
 
 import asyncio
+import re
 import socket
 import struct
 import zlib
@@ -48,6 +49,15 @@ from src.worker.browser import (
     png_dimensions,
 )
 from src.worker.egress import DestinationGuard, blocked_networks
+from tests.worker._browser_shell import (
+    DEPLOYMENT_SECTION,
+    STATE_DIRECTORY,
+    VARIABLE,
+    browsers_path,
+    missing_shell_message,
+)
+
+REPO = Path(__file__).resolve().parents[2]
 
 NOW = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
 
@@ -342,6 +352,64 @@ def test_the_pinned_shell_is_this_releases_revision(tmp_path):
     )
 
     assert f"chromium_headless_shell-{revision}" in str(pinned_shell(tmp_path))
+
+
+# --------------------------------------------------------------------------- missing shell (#236)
+#
+# What ``-m browser`` says with no shell to launch, pinned here because that module is
+# deselected by default. The state directory is the deploy's (#228): an ``exedev``
+# install there fails on its mode, and a ``replicator`` one is the bare install whose GC
+# can delete the live worker's shell. Keyed on the resolved path, not the variable:
+# docs/TESTING.md's own command sets the variable *to* the state directory.
+
+
+def test_an_unset_shell_root_is_the_settings_default():
+    assert browsers_path({}) == STATE_DIRECTORY == Path("/var/lib/replicator/ms-playwright")
+
+
+def test_a_set_shell_root_is_the_variable(tmp_path):
+    assert browsers_path({VARIABLE: str(tmp_path)}) == tmp_path
+
+
+@pytest.mark.parametrize(
+    "environ",
+    [
+        pytest.param({}, id="unset"),
+        pytest.param({VARIABLE: "/var/lib/replicator/ms-playwright"}, id="set-to-state-dir"),
+        pytest.param({VARIABLE: "/var/lib/replicator/ms-playwright/"}, id="trailing-slash"),
+        pytest.param({VARIABLE: "/var/lib/replicator/./ms-playwright"}, id="dot-segment"),
+    ],
+)
+def test_a_missing_state_directory_shell_names_the_deploy_and_gives_no_install(environ):
+    message = missing_shell_message(browsers_path(environ))
+
+    assert "playwright install" not in message
+    assert "migrate" in message
+    assert DEPLOYMENT_SECTION in message
+    # The scratch-path way out stays, naming the variable.
+    assert VARIABLE in message
+
+
+def test_a_missing_scratch_shell_gives_the_install_for_that_path(tmp_path):
+    message = missing_shell_message(browsers_path({VARIABLE: str(tmp_path)}))
+
+    assert (
+        f"PLAYWRIGHT_BROWSERS_PATH={tmp_path} uv run playwright install chromium-headless-shell"
+    ) in message
+    assert DEPLOYMENT_SECTION not in message
+
+
+def _anchor(heading: str) -> str:
+    """GitHub's anchor for a heading: lowercased, punctuation dropped, spaces to hyphens."""
+    return re.sub(r"[^\w\- ]", "", heading.strip().lower()).replace(" ", "-")
+
+
+def test_the_missing_shell_message_links_a_live_section():
+    doc, _, anchor = DEPLOYMENT_SECTION.partition("#")
+    text = (REPO / doc).read_text()
+    headings = re.findall(r"^#+ (.+)$", text, re.MULTILINE)
+
+    assert anchor in {_anchor(h) for h in headings}
 
 
 # --------------------------------------------------------------------------- the render

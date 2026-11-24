@@ -1,7 +1,7 @@
 """Where ``-m browser`` finds the pinned shell, and what it says when the shell is missing.
 
 Its own module because ``test_browser_real.py`` is all ``-m browser``, deselected by
-default; ``test_browser_shell.py`` pins the message in every suite (#236).
+default; ``test_browser.py`` pins the message in every suite (#236).
 """
 
 import os
