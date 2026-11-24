@@ -406,7 +406,8 @@ def _anchor(heading: str) -> str:
 
 def test_the_missing_shell_message_links_a_live_section():
     doc, _, anchor = DEPLOYMENT_SECTION.partition("#")
-    text = (REPO / doc).read_text()
+    # Without its fenced blocks: a bash comment there reads as a heading.
+    text = re.sub(r"^```.*?^```", "", (REPO / doc).read_text(), flags=re.MULTILINE | re.DOTALL)
     headings = re.findall(r"^#+ (.+)$", text, re.MULTILINE)
 
     assert anchor in {_anchor(h) for h in headings}
