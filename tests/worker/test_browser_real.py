@@ -57,12 +57,12 @@ from src.worker.capture_reporter import build_captured_publisher
 from src.worker.egress import DestinationGuard, blocked_networks
 from src.worker.handler import build_handler
 from src.worker.pacing import HostPacer
+from tests.worker import _browser_shell
 from tests.worker.conftest import FakeFetcher, capture_command, command, published_facts
 
 pytestmark = pytest.mark.browser
 
 CANARY_HOST = "127.0.0.2"
-DEFAULT_BROWSERS_PATH = "/var/lib/replicator/ms-playwright"
 
 
 # --------------------------------------------------------------------------- servers
@@ -150,13 +150,9 @@ async def site():
 
 @pytest.fixture(scope="session")
 def browsers_path() -> Path:
-    path = Path(os.environ.get("REPLICATOR_PLAYWRIGHT_BROWSERS_PATH", DEFAULT_BROWSERS_PATH))
+    path = _browser_shell.browsers_path()
     if not pinned_shell(path).is_file():
-        pytest.fail(
-            f"no pinned shell at {pinned_shell(path)}: install it with "
-            f"PLAYWRIGHT_BROWSERS_PATH={path} uv run playwright install chromium-headless-shell, "
-            "or point REPLICATOR_PLAYWRIGHT_BROWSERS_PATH at an install"
-        )
+        pytest.fail(_browser_shell.missing_shell_message(path))
     return path
 
 
