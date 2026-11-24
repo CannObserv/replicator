@@ -7,7 +7,74 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
-    # Floor is 0.51.1, for cannobserv#577's fetch credential references (#216):
+    # Floor is 0.53.1 (#238), straight from 0.51.1: one move, not two (operator,
+    # 2026-11-24). The lock takes 0.53.1, the index's newest with the bound opened
+    # to `<1` [measured 2026-11-24]. `co-core-aio` and `co-core-sync` 0.53.1 require
+    # `co-core>=0.53.1,<0.54`, so the three move together. The code depends on
+    # 0.53.0's cannobserv#629: `FetchPolicyState.generation` is required on decode,
+    # so a `content.fetch-policy` frame without one is poison, skipped by the
+    # reader (`src/worker/policy.py`; design
+    # `docs/plans/2026-11-24-238-co-core-0-53-design.md`).
+    #
+    # **`scripts/co_core_closure_diff.py 0.51.1 0.53.1`** (#145), verbatim, from
+    # the wheels this lock pins (their sha256 matched against `uv.lock`):
+    #
+    # ## Import closure, 0.51.1 → 0.53.1
+    #
+    # Roots `src`, `scripts`; packages `co_core`, `co_core_aio`, `co_core_sync`.
+    #
+    # 58 files at 0.51.1, 58 at 0.53.1. 7 not identical:
+    #
+    # - `version-only` co_core/__init__.py
+    # - `docstrings-only` co_core/pure/adapters/bus/envelope.py
+    # - `changed` co_core/pure/models/changes.py
+    # - `changed` co_core/pure/util/aliases.py
+    # - `version-only` co_core_aio/__init__.py
+    # - `version-only` co_core_sync/__init__.py
+    # - `changed` co_core_sync/drivers/transport.py
+    #
+    # **Requires-Dist:**
+    #
+    # - co_core: unchanged
+    # - co_core_aio: removed `co-core<0.52,>=0.51.1`; added `co-core<0.54,>=0.53.1`
+    # - co_core_sync: removed `co-core<0.52,>=0.51.1`; added `co-core<0.54,>=0.53.1`
+    #
+    # **Third-party imports** (at 0.53.1): `google`, `google_auth_oauthlib`, `googleapiclient`, `httpx`, `pydantic`, `redis`, `requests`, `urllib3`.
+    #
+    # **Dynamic imports, not followed:**
+    #
+    # - co_core_sync/drivers/__init__.py:89 `import_module(f"{__name__}.{module}")`
+    # - co_core_sync/drivers/blobstore/__init__.py:32 `import_module(f"{__name__}.{module}")`
+    #
+    # Read by hand (`--diff`; per-step diffs place each change):
+    #
+    # - `pure/models/changes.py` (0.53.0, cannobserv#629): `FetchPolicyState.generation`
+    #   is required; `fetch_policy_supersedes` is "empty slot, or a higher
+    #   generation", its unordered branch and ratchet gone; `FetchPolicyEmit` only
+    #   drops its re-declaration. The rest is docstrings.
+    # - `pure/util/aliases.py` (0.52.0, cannobserv#763): the three `*_PATTERN`
+    #   constants end in `(?![\s\S])` instead of `$`; the functions already used
+    #   `fullmatch`. `ALIAS_NAME_PATTERN` imports `CREDENTIALS_ALIAS_PATTERN`
+    #   (#238), and two journal `detail`s that quote a pattern change text with it.
+    # - `co_core_sync/drivers/transport.py` (0.52.0, cannobserv#603): the deadline
+    #   pools' `ConnectionCls` is a descriptor answering the recording class unless
+    #   the stock pool's class is patched (a vcrpy cassette). Nothing here patches
+    #   it [grep]; after importing `src.worker.main` both pools answer their
+    #   recording class [measured].
+    # - `pure/adapters/bus/envelope.py` (0.53.0): docstrings only. 0.52.0 → 0.53.0
+    #   leaves `aliases.py` and `transport.py` byte-identical; 0.53.0 → 0.53.1 is
+    #   `version-only` across the closure.
+    #
+    # Outside the closure, by whole-wheel diff [measured]: the co/v1 `urls.py`
+    # adapter, `adapters/wordpress/transcript.py`, `models/transcript_element.py`
+    # and `transcript_speaker.py`, fifteen co-core-sync `services/`, and two added
+    # modules (`co_v1/org_ref_candidates.py`, `models/org_ref_candidate.py`).
+    # Nothing in `src/`, `scripts/` or `tests/` reaches any of them; the closure is
+    # the same with `tests/` as a root.
+    #
+    # Previously:
+    #
+    # Floor was 0.51.1, for cannobserv#577's fetch credential references (#216):
     # `ContentFetchCommand.credential_headers` and `validate_fetch_credential`.
     # The lock takes 0.51.1, the index's newest with the bound opened to `<1`
     # [measured 2026-11-23]. `co-core-aio` and `co-core-sync` 0.51.1 require
@@ -75,8 +142,6 @@ dependencies = [
     # co-core-sync `services/`; nothing is added or removed. Nothing in `src/`,
     # `scripts/` or `tests/` reaches any of them; the closure is the same with
     # `tests/` as a root.
-    #
-    # Previously:
     #
     # Floor was 0.50.0, and it carried no new feature: a two-minor catch-up
     # (#211), in #206's shape. The lock takes 0.50.0, the index's newest with the
@@ -575,9 +640,9 @@ dependencies = [
     # at module load, so a skew cannot reach a running worker at all. Additive over
     # 0.8.0 for everything the fetch path uses — no field on ContentFetchCommand,
     # BlobAvailableEvent or FetchFailedEvent moved between the two.
-    "co-core>=0.51.1,<0.52",
-    "co-core-aio[bus,gcs]>=0.51.1,<0.52",
-    "co-core-sync[gcs]>=0.51.1,<0.52",
+    "co-core>=0.53.1,<0.54",
+    "co-core-aio[bus,gcs]>=0.53.1,<0.54",
+    "co-core-sync[gcs]>=0.53.1,<0.54",
     "fastapi>=0.165.0,<1",
     "pydantic>=2.14.4,<3",
     "pydantic-settings>=2.16.3,<3",

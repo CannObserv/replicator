@@ -1010,7 +1010,11 @@ async def test_the_policy_map_is_rebuilt_before_the_consume_loop_starts(
     monkeypatch.setattr("src.worker.main.Redis.from_url", lambda *a, **kw: fake_redis)
     await fake_redis.xadd(
         streams.CONTENT_FETCH_POLICY,
-        to_wire(FetchPolicyState(occurred_at=now(), host="slow.test", min_interval_seconds=30.0)),
+        to_wire(
+            FetchPolicyState(
+                occurred_at=now(), host="slow.test", min_interval_seconds=30.0, generation=1
+            )
+        ),
     )
     seen = {}
 

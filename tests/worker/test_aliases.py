@@ -403,10 +403,13 @@ def gcs_entry(bucket, **extra):
     return {"provider": "gcs", "bucket": bucket, **extra}
 
 
-def test_the_name_pattern_is_the_plans():
-    """Pinned as a string because co-core will export it (cannobserv#493) for
-    Archiver's RepSpec schema, and the two definitions must be the same text."""
-    assert ALIAS_NAME_PATTERN == r"^(gcs|gdrive|ia)-[a-z][a-z0-9-]*$"
+def test_the_name_pattern_is_co_cores():
+    """Imported, not copied (cannobserv#493, #238): Archiver's RepSpec schema
+    validates ``credentials_alias`` against the same object, so the two can't drift
+    the way the local copy did when cannobserv#763 changed the anchor."""
+    from co_core.pure.util.aliases import CREDENTIALS_ALIAS_PATTERN
+
+    assert ALIAS_NAME_PATTERN is CREDENTIALS_ALIAS_PATTERN
 
 
 @pytest.mark.parametrize(
@@ -422,6 +425,21 @@ def test_the_name_pattern_is_the_plans():
 )
 def test_a_name_outside_the_rule_drops_the_binding(tmp_path, caplog, name):
     path = write_aliases(tmp_path, {name: gcs_entry("co-gcs-publication")})
+
+    with caplog.at_level("WARNING", logger="src.worker.aliases"):
+        table = load_alias_table(path)
+
+    assert table.provisioned == ()
+    (record,) = [r for r in caplog.records if r.message == "ignoring an unusable alias binding"]
+    assert "<provider>-<role>" in record.detail
+
+
+def test_a_name_with_a_trailing_newline_drops_the_binding(tmp_path, caplog):
+    """#232: ``$`` also matches before a final ``\\n``, so the check is a ``fullmatch``.
+
+    The bucket carries the same newline, so the bucket rule agrees with the name
+    and only the name rule stands between this binding and the table."""
+    path = write_aliases(tmp_path, {"gcs-x\n": gcs_entry("co-gcs-x\n")})
 
     with caplog.at_level("WARNING", logger="src.worker.aliases"):
         table = load_alias_table(path)

@@ -11,6 +11,7 @@ from datetime import timedelta
 
 import pytest
 from co_core.pure.adapters.bus.envelope import from_wire, to_wire
+from co_core.pure.adapters.bus.exceptions import BusMessageAnomaly
 from co_core.pure.models.changes import BlobAvailableEvent, FetchPolicyState
 
 from src.worker.policy import FetchPolicyMap
@@ -26,7 +27,7 @@ def policy(
     revoked: bool = False,
     occurred_at=None,
     schema_version: int = 1,
-    generation: int | None = None,
+    generation: int = 1,
 ) -> FetchPolicyState:
     return FetchPolicyState(
         schema_version=schema_version,
@@ -61,8 +62,8 @@ def test_a_later_policy_replaces_an_earlier_one():
     policies = FetchPolicyMap(DEFAULT)
     first = now()
 
-    policies.apply(policy(min_interval_seconds=30.0, occurred_at=first))
-    policies.apply(policy(min_interval_seconds=5.0, occurred_at=first + timedelta(seconds=1)))
+    policies.apply(policy(min_interval_seconds=30.0, generation=1, occurred_at=first))
+    policies.apply(policy(min_interval_seconds=5.0, generation=2, occurred_at=first))
 
     assert policies.interval_for("slow.test") == 5.0
 
@@ -88,15 +89,9 @@ def test_a_revoked_host_drops_out_of_the_map():
     """
     policies = FetchPolicyMap(DEFAULT)
     first = now()
-    policies.apply(policy(min_interval_seconds=30.0, occurred_at=first))
+    policies.apply(policy(min_interval_seconds=30.0, generation=1, occurred_at=first))
 
-    policies.apply(
-        policy(
-            min_interval_seconds=None,
-            revoked=True,
-            occurred_at=first + timedelta(seconds=1),
-        )
-    )
+    policies.apply(policy(min_interval_seconds=None, revoked=True, generation=2, occurred_at=first))
 
     assert policies.interval_for("slow.test") is None
 
@@ -125,65 +120,15 @@ def test_revoking_a_host_that_was_never_known_is_a_no_op():
     assert policies.interval_for("never.test") is None
 
 
-def test_a_stale_republish_does_not_revert_a_newer_policy():
-    """Arrival order is not publication order once a full set is republished.
-
-    The producer periodically re-emits every host. A republish built from a
-    snapshot taken before a change that already shipped would otherwise revert
-    it — silently, and in the loosening direction.
-    """
-    policies = FetchPolicyMap(DEFAULT)
-    first = now()
-    policies.apply(policy(min_interval_seconds=30.0, occurred_at=first))
-
-    policies.apply(policy(min_interval_seconds=2.0, occurred_at=first - timedelta(seconds=5)))
-
-    assert policies.interval_for("slow.test") == 30.0
-
-
-def test_a_stale_revocation_does_not_drop_a_newer_policy():
-    """The tombstone gets the same ordering guard as a live value — otherwise the
-    one message that erases state is the one message that ignores ordering."""
-    policies = FetchPolicyMap(DEFAULT)
-    first = now()
-    policies.apply(policy(min_interval_seconds=30.0, occurred_at=first))
-
-    policies.apply(
-        policy(
-            min_interval_seconds=None,
-            revoked=True,
-            occurred_at=first - timedelta(seconds=5),
-        )
-    )
-
-    assert policies.interval_for("slow.test") == 30.0
-
-
-def test_a_republish_of_the_same_stamp_is_applied():
-    """``>=``, not ``>``: a producer that stamps a whole full set with one
-    ``occurred_at`` must not have every host after the first ignored."""
-    policies = FetchPolicyMap(DEFAULT)
-    stamp = now()
-    policies.apply(policy(min_interval_seconds=30.0, occurred_at=stamp))
-
-    policies.apply(policy(min_interval_seconds=5.0, occurred_at=stamp))
-
-    assert policies.interval_for("slow.test") == 5.0
-
-
 def test_ordering_is_tracked_per_host():
-    """One host's newer stamp must not suppress another host's older one."""
+    """One host's higher generation must not suppress another host's lower one."""
     policies = FetchPolicyMap(DEFAULT)
     stamp = now()
-    policies.apply(policy(host="a.test", min_interval_seconds=30.0, occurred_at=stamp))
-
     policies.apply(
-        policy(
-            host="b.test",
-            min_interval_seconds=5.0,
-            occurred_at=stamp - timedelta(seconds=10),
-        )
+        policy(host="a.test", min_interval_seconds=30.0, generation=9, occurred_at=stamp)
     )
+
+    policies.apply(policy(host="b.test", min_interval_seconds=5.0, generation=1, occurred_at=stamp))
 
     assert policies.interval_for("b.test") == 5.0
 
@@ -304,11 +249,11 @@ def test_a_republish_that_changes_nothing_is_not_logged_again(caplog):
     """
     policies = FetchPolicyMap(DEFAULT)
     first = now()
-    policies.apply(policy(min_interval_seconds=30.0, occurred_at=first))
+    policies.apply(policy(min_interval_seconds=30.0, generation=1, occurred_at=first))
     caplog.clear()
 
     with caplog.at_level(logging.INFO):
-        policies.apply(policy(min_interval_seconds=30.0, occurred_at=first + timedelta(seconds=1)))
+        policies.apply(policy(min_interval_seconds=30.0, generation=2, occurred_at=first))
 
     assert "applied a host fetch policy" not in caplog.text
     assert policies.interval_for("slow.test") == 30.0
@@ -318,11 +263,11 @@ def test_a_republish_that_changes_the_interval_is_logged(caplog):
     """The line survives for the case it was added for: a policy that moved."""
     policies = FetchPolicyMap(DEFAULT)
     first = now()
-    policies.apply(policy(min_interval_seconds=30.0, occurred_at=first))
+    policies.apply(policy(min_interval_seconds=30.0, generation=1, occurred_at=first))
     caplog.clear()
 
     with caplog.at_level(logging.INFO):
-        policies.apply(policy(min_interval_seconds=12.0, occurred_at=first + timedelta(seconds=1)))
+        policies.apply(policy(min_interval_seconds=12.0, generation=2, occurred_at=first))
 
     record = next(r for r in caplog.records if r.message == "applied a host fetch policy")
     assert record.min_interval_seconds == 12.0
@@ -336,11 +281,11 @@ def test_a_republished_strict_policy_is_warned_about_once(caplog):
     """
     policies = FetchPolicyMap(DEFAULT)
     first = now()
-    policies.apply(policy(min_interval_seconds=30.0, occurred_at=first))
+    policies.apply(policy(min_interval_seconds=30.0, generation=1, occurred_at=first))
     caplog.clear()
 
     with caplog.at_level(logging.WARNING):
-        policies.apply(policy(min_interval_seconds=30.0, occurred_at=first + timedelta(seconds=1)))
+        policies.apply(policy(min_interval_seconds=30.0, generation=2, occurred_at=first))
 
     assert "stricter than the fallback default" not in caplog.text
 
@@ -349,17 +294,13 @@ def test_a_republished_tombstone_is_not_logged_again(caplog):
     """Revocation is an edge too: the producer keeps republishing the tombstone."""
     policies = FetchPolicyMap(DEFAULT)
     first = now()
-    policies.apply(policy(min_interval_seconds=30.0, occurred_at=first))
-    policies.apply(
-        policy(min_interval_seconds=None, revoked=True, occurred_at=first + timedelta(seconds=1))
-    )
+    policies.apply(policy(min_interval_seconds=30.0, generation=1, occurred_at=first))
+    policies.apply(policy(min_interval_seconds=None, revoked=True, generation=2, occurred_at=first))
     caplog.clear()
 
     with caplog.at_level(logging.INFO):
         policies.apply(
-            policy(
-                min_interval_seconds=None, revoked=True, occurred_at=first + timedelta(seconds=2)
-            )
+            policy(min_interval_seconds=None, revoked=True, generation=3, occurred_at=first)
         )
 
     assert "revoked a host fetch policy" not in caplog.text
@@ -380,14 +321,12 @@ def test_a_host_revoked_and_then_republished_is_logged_again(caplog):
     """Change-gating must not hide a host coming *back* at the value it had."""
     policies = FetchPolicyMap(DEFAULT)
     first = now()
-    policies.apply(policy(min_interval_seconds=30.0, occurred_at=first))
-    policies.apply(
-        policy(min_interval_seconds=None, revoked=True, occurred_at=first + timedelta(seconds=1))
-    )
+    policies.apply(policy(min_interval_seconds=30.0, generation=1, occurred_at=first))
+    policies.apply(policy(min_interval_seconds=None, revoked=True, generation=2, occurred_at=first))
     caplog.clear()
 
     with caplog.at_level(logging.INFO):
-        policies.apply(policy(min_interval_seconds=30.0, occurred_at=first + timedelta(seconds=2)))
+        policies.apply(policy(min_interval_seconds=30.0, generation=3, occurred_at=first))
 
     record = next(r for r in caplog.records if r.message == "applied a host fetch policy")
     assert record.min_interval_seconds == 30.0
@@ -416,14 +355,17 @@ def test_a_revoked_host_stops_counting_against_the_default():
     """It resolves to the fallback from here on, so it is no longer outstripping it."""
     policies = FetchPolicyMap(DEFAULT)
     first = now()
-    policies.apply(policy(host="strict.test", min_interval_seconds=30.0, occurred_at=first))
+    policies.apply(
+        policy(host="strict.test", min_interval_seconds=30.0, generation=1, occurred_at=first)
+    )
 
     policies.apply(
         policy(
             host="strict.test",
             min_interval_seconds=None,
             revoked=True,
-            occurred_at=first + timedelta(seconds=1),
+            generation=2,
+            occurred_at=first,
         )
     )
 
@@ -435,18 +377,10 @@ def test_a_revoked_host_stops_counting_against_the_default():
 #
 # Archiver publishes through an outbox that can reorder under retry, so its
 # frames carry a per-host `generation`. The rule is co-core's
-# `fetch_policy_supersedes`; the map keeps today's `occurred_at` guard only for
-# frames that carry none (the operator's decision on #136).
+# `fetch_policy_supersedes`, the stamp never consulted. Since co-core 0.53 every
+# frame carries one (cannobserv#629, #238); the stamp-ordered rule for frames
+# without one, and the ratchet between the two, went with it.
 # --------------------------------------------------------------------------- #
-
-
-def decoded(payload: dict) -> FetchPolicyState:
-    """A policy as a producer on any co-core version would put it on the wire."""
-    fields = to_wire(policy())
-    fields["payload"] = json.dumps(payload)
-    message = from_wire(fields, topic="content.fetch-policy")
-    assert isinstance(message.payload, FetchPolicyState)
-    return message.payload
 
 
 def test_a_newer_generation_replaces_an_older_one():
@@ -519,44 +453,6 @@ def test_an_equal_generation_is_skipped_and_not_logged(caplog):
     assert caplog.records == []
 
 
-def test_a_frame_with_a_generation_claims_a_slot_without_one_despite_an_older_stamp():
-    """The ratchet's upward half: Archiver takes over a host Watcher held.
-
-    The two producers' clocks are not comparable, so an ordered frame must not
-    lose to the unordered one on ``occurred_at``.
-    """
-    policies = FetchPolicyMap(DEFAULT)
-    first = now()
-    policies.apply(policy(min_interval_seconds=30.0, occurred_at=first))
-
-    policies.apply(
-        policy(min_interval_seconds=5.0, generation=0, occurred_at=first - timedelta(seconds=60))
-    )
-
-    assert policies.interval_for("slow.test") == 5.0
-
-
-def test_a_frame_without_a_generation_never_overwrites_one_with(caplog):
-    """The ratchet's other half: a Watcher that did not stop at F1 cannot fight
-    the new owner, however new its stamp. Logged, because the docstring's
-    "drops just as silently" is the failure mode worth a line."""
-    policies = FetchPolicyMap(DEFAULT)
-    first = now()
-    policies.apply(policy(min_interval_seconds=30.0, generation=2, occurred_at=first))
-
-    with caplog.at_level(logging.INFO):
-        policies.apply(policy(min_interval_seconds=2.0, occurred_at=first + timedelta(minutes=5)))
-
-    assert policies.interval_for("slow.test") == 30.0
-    record = next(
-        r
-        for r in caplog.records
-        if r.message == "ignoring a fetch policy without a generation for a host that holds one"
-    )
-    assert record.host == "slow.test"
-    assert record.held_generation == 2
-
-
 def test_a_tombstone_with_a_generation_is_ordered_like_a_live_frame():
     policies = FetchPolicyMap(DEFAULT)
     stamp = now()
@@ -589,33 +485,9 @@ def test_a_stale_tombstone_does_not_drop_a_newer_generation():
     assert policies.interval_for("slow.test") == 30.0
 
 
-def test_a_revoked_host_keeps_its_generation():
-    """The hazard the held frame exists for (#136 hazard 2).
-
-    A map that forgot the tombstone's slot would treat the host as empty, and
-    a stale live frame without a generation would claim it — resurrecting a
-    revoked host on the next Watcher republish.
-    """
-    policies = FetchPolicyMap(DEFAULT)
-    first = now()
-    policies.apply(policy(min_interval_seconds=30.0, occurred_at=first))
-    policies.apply(
-        policy(
-            min_interval_seconds=None,
-            revoked=True,
-            generation=5,
-            occurred_at=first - timedelta(seconds=30),
-        )
-    )
-
-    policies.apply(policy(min_interval_seconds=30.0, occurred_at=first + timedelta(minutes=5)))
-
-    assert policies.interval_for("slow.test") is None
-
-
 def test_a_tombstone_for_an_unknown_host_still_claims_its_slot():
     """A booting worker meets tombstones for hosts it never held — they are
-    still ordered, or a later unordered frame would resurrect them."""
+    still ordered, or the stale live frame they superseded would resurrect them."""
     policies = FetchPolicyMap(DEFAULT)
     first = now()
     policies.apply(
@@ -623,46 +495,47 @@ def test_a_tombstone_for_an_unknown_host_still_claims_its_slot():
             host="never.test",
             min_interval_seconds=None,
             revoked=True,
-            generation=1,
+            generation=2,
             occurred_at=first,
         )
     )
 
     policies.apply(
-        policy(host="never.test", min_interval_seconds=9.0, occurred_at=first + timedelta(hours=1))
+        policy(
+            host="never.test",
+            min_interval_seconds=9.0,
+            generation=1,
+            occurred_at=first + timedelta(hours=1),
+        )
     )
 
     assert policies.interval_for("never.test") is None
 
 
 @pytest.mark.parametrize(
-    "generation_field",
-    [{}, {"generation": None}],
+    ("generation_field", "error_type"),
+    [({}, "missing"), ({"generation": None}, "int_type")],
     ids=["key-missing", "null"],
 )
-def test_a_missing_or_null_generation_on_the_wire_is_absent(generation_field):
-    """``null`` means absent (cannobserv#565's convention), and so does the key a
-    pre-0.37 producer never sends. Built through ``from_wire``: a Python
-    ``generation=None`` exercises only the default, not the decode."""
-    stamp = now()
+def test_a_missing_or_null_generation_is_refused_at_decode(generation_field, error_type):
+    """Required on decode since co-core 0.53 (cannobserv#629). ``from_wire`` raises,
+    so the reader steps past the frame as poison (``test_policy_reader.py``) and
+    the map never sees it: there's no unordered rule left to apply."""
     frame = {
         "schema_version": 1,
         "event_type": "fetch_policy",
-        "occurred_at": stamp.isoformat(),
+        "occurred_at": now().isoformat(),
         "host": "slow.test",
         "min_interval_seconds": 5.0,
         "revoked": False,
         **generation_field,
     }
-    unordered = FetchPolicyMap(DEFAULT)
-    unordered.apply(policy(min_interval_seconds=30.0, occurred_at=stamp))
-    ordered = FetchPolicyMap(DEFAULT)
-    ordered.apply(policy(min_interval_seconds=30.0, generation=0, occurred_at=stamp))
+    fields = to_wire(policy())
+    fields["payload"] = json.dumps(frame)
 
-    unordered.apply(decoded(frame))
-    ordered.apply(decoded(frame))
+    with pytest.raises(BusMessageAnomaly) as raised:
+        from_wire(fields, topic="content.fetch-policy", message_id="1-0")
 
-    # Stream order (with the >= stamp guard) over an unordered slot...
-    assert unordered.interval_for("slow.test") == 5.0
-    # ...and never over an ordered one.
-    assert ordered.interval_for("slow.test") == 30.0
+    assert raised.value.message_id == "1-0"
+    cause = raised.value.__cause__
+    assert [(e["loc"], e["type"]) for e in cause.errors()] == [(("generation",), error_type)]

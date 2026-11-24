@@ -13,7 +13,6 @@ attest to is the live broker's own behaviour on a real stream, which is
 import asyncio
 import json
 from collections import Counter
-from datetime import timedelta
 
 import pytest
 from co_core.pure.adapters.bus.envelope import to_wire
@@ -45,6 +44,7 @@ async def publish(client, topic: str, host: str, min_interval_seconds: float = 3
                 occurred_at=now(),
                 host=host,
                 min_interval_seconds=min_interval_seconds,
+                generation=1,
             )
         ),
     )
@@ -269,7 +269,11 @@ async def test_a_failed_read_backs_off_instead_of_taking_the_worker_down(
 async def test_an_outage_leaves_the_last_known_policies_in_place(policies, fast_settings):
     """The map is state, not a cache of the last read."""
     reader = BrokenReader()
-    policies.apply(FetchPolicyState(occurred_at=now(), host="slow.test", min_interval_seconds=30.0))
+    policies.apply(
+        FetchPolicyState(
+            occurred_at=now(), host="slow.test", min_interval_seconds=30.0, generation=1
+        )
+    )
     stop = asyncio.Event()
 
     task = asyncio.create_task(
@@ -686,72 +690,145 @@ async def test_the_tail_still_reads_one_at_a_time(fake_redis, policies, fast_set
 
 
 # --------------------------------------------------------------------------- #
-# The replay across F1 (#136): Watcher's frames, then Archiver's.
+# A frame without a generation is poison (#238, cannobserv#629).
+#
+# co-core 0.53 requires ``generation`` on decode, so ``from_wire`` raises and the
+# reader steps past the frame. Nothing applies it in stream order any more.
 # --------------------------------------------------------------------------- #
 
-
-async def publish_frame(client, frame: FetchPolicyState, *, pre_generation: bool = False) -> None:
-    """XADD one frame; ``pre_generation`` sends it as a co-core < 0.37 producer
-    would, with no ``generation`` key in the payload at all."""
-    fields = to_wire(frame)
-    if pre_generation:
-        payload = json.loads(fields["payload"])
-        del payload["generation"]
-        fields["payload"] = json.dumps(payload)
-    await client.xadd(TOPIC, fields)
+SKIPPED = "skipping a malformed frame on the fetch policy stream"
+# Per wire form, what pydantic names the failure, measured on the 0.53.1 wheel.
+WITHOUT_GENERATION = [
+    pytest.param("missing", ["generation: missing"], id="key-missing"),
+    pytest.param("null", ["generation: int_type"], id="null"),
+]
 
 
-async def test_a_replay_across_the_producer_handover_lands_on_archivers_state(
-    fake_redis, policies, caplog
-):
-    """The boot replay from ``0-0`` after F1, end to end through the broker.
+async def publish_frame(client, frame: FetchPolicyState, *, generation: str = "sent") -> str:
+    """XADD one frame and return its id.
 
-    Watcher's frames come first and carry no ``generation``, so they keep
-    today's ``occurred_at`` rule — a full set sharing one stamp applies to
-    every host. Archiver's follow, ordered, through an outbox that reorders,
-    on a clock not comparable with Watcher's. A Watcher that did not stop
-    publishes once more at the end.
+    ``generation="missing"`` drops the key and ``"null"`` sends ``null``: the two
+    wire forms of a frame without one, which a model can no longer build.
     """
-    t0 = now()
+    fields = to_wire(frame)
+    if generation != "sent":
+        payload = json.loads(fields["payload"])
+        if generation == "missing":
+            del payload["generation"]
+        else:
+            payload["generation"] = None
+        fields["payload"] = json.dumps(payload)
+    message_id = await client.xadd(TOPIC, fields)
+    return message_id.decode() if isinstance(message_id, bytes) else message_id
 
-    def frame(host, interval=None, *, at, generation=None, revoked=False):
-        return FetchPolicyState(
-            occurred_at=t0 + timedelta(seconds=at),
-            host=host,
-            min_interval_seconds=interval,
-            revoked=revoked,
-            generation=generation,
+
+def policy_frame(host: str, interval: float | None = 30.0, *, generation: int = 1, **extra):
+    return FetchPolicyState(
+        occurred_at=now(),
+        host=host,
+        min_interval_seconds=interval,
+        generation=generation,
+        **extra,
+    )
+
+
+@pytest.mark.parametrize(("wire_form", "invalid_fields"), WITHOUT_GENERATION)
+async def test_replay_skips_a_frame_without_a_generation(
+    fake_redis, policies, caplog, wire_form, invalid_fields
+):
+    """The behaviour #629 changes: skipped as poison, never applied, and the
+    WARNING says which field failed (design D4), since its ``error`` can't."""
+    await publish_frame(fake_redis, policy_frame("ahead.test"))
+    bad = await publish_frame(fake_redis, policy_frame("bad.test", 5.0), generation=wire_form)
+    await publish_frame(fake_redis, policy_frame("behind.test", 12.0))
+
+    with caplog.at_level("WARNING"):
+        await replay_policies(
+            build_policy_reader(fake_redis, topic=TOPIC), policies, stop=asyncio.Event()
         )
 
-    watcher = [
-        frame("a.test", 30.0, at=0),
-        frame("b.test", 5.0, at=0),  # one stamp for the whole set
-        frame("a.test", 30.0, at=300),
-        frame("b.test", 5.0, at=300),
-        frame("a.test", 20.0, at=310),
-        frame("a.test", 99.0, at=200),  # a stale Watcher republish, by stamp
-    ]
-    for item in watcher:
-        await publish_frame(fake_redis, item, pre_generation=True)
-    archiver = [
-        # Archiver's first full set, stamped before Watcher's last frame.
-        frame("a.test", 20.0, at=100, generation=4),
-        frame("b.test", 5.0, at=100, generation=7),
+    assert policies.interval_for("ahead.test") == 30.0
+    assert policies.interval_for("behind.test") == 12.0
+    assert policies.interval_for("bad.test") is None
+    (record,) = [r for r in caplog.records if r.message == SKIPPED]
+    assert record.message_id == bad
+    assert record.invalid_fields == invalid_fields
+
+
+@pytest.mark.parametrize(("wire_form", "invalid_fields"), WITHOUT_GENERATION)
+async def test_the_tail_skips_a_frame_without_a_generation(
+    fake_redis, policies, fast_settings, caplog, wire_form, invalid_fields
+):
+    reader = build_policy_reader(fake_redis, topic=TOPIC)
+    stop = asyncio.Event()
+    task = asyncio.create_task(
+        run_policy_reader(reader, policies=policies, settings=fast_settings, stop=stop)
+    )
+    try:
+        with caplog.at_level("WARNING"):
+            bad = await publish_frame(
+                fake_redis, policy_frame("bad.test", 5.0), generation=wire_form
+            )
+            await publish_frame(fake_redis, policy_frame("behind.test", 12.0))
+            await until(lambda: policies.interval_for("behind.test") == 12.0)
+    finally:
+        stop.set()
+        await task
+
+    assert policies.interval_for("bad.test") is None
+    (record,) = [r for r in caplog.records if r.message == SKIPPED]
+    assert record.message_id == bad
+    assert record.invalid_fields == invalid_fields
+
+
+async def test_a_frame_that_fails_before_validation_names_no_fields(fake_redis, policies, caplog):
+    """``invalid_fields`` comes from the ``ValidationError`` behind the anomaly. A
+    frame with no ``event_type`` fails before any model runs, so it has none."""
+    await fake_redis.xadd(TOPIC, {"not": "a frame"})
+
+    with caplog.at_level("WARNING"):
+        await replay_policies(
+            build_policy_reader(fake_redis, topic=TOPIC), policies, stop=asyncio.Event()
+        )
+
+    (record,) = [r for r in caplog.records if r.message == SKIPPED]
+    assert not hasattr(record, "invalid_fields")
+
+
+async def test_a_replay_with_generation_less_frames_lands_on_the_ordered_state(
+    fake_redis, policies, caplog
+):
+    """The F1 handover replay (#136), after #629: frames without a generation,
+    Watcher's pre-F1 shape, are each skipped as poison, wherever they sit. The
+    ordered frames around them still decide every host, through an outbox that
+    reorders. Six in a row at the head stays under ``MAX_POISON_SKIPS``.
+    """
+
+    def frame(host, interval=None, *, generation, revoked=False):
+        return policy_frame(host, interval, generation=generation, revoked=revoked)
+
+    generation_less = [frame("a.test", 30.0, generation=1), frame("b.test", 5.0, generation=1)] * 3
+    assert len(generation_less) < MAX_POISON_SKIPS
+    for item in generation_less:
+        await publish_frame(fake_redis, item, generation="missing")
+    ordered = [
+        frame("a.test", 20.0, generation=4),
+        frame("b.test", 5.0, generation=7),
         # b's next two edits, published out of order by an outbox retry.
-        frame("b.test", 12.0, at=400, generation=9),
-        frame("b.test", 10.0, at=390, generation=8),
+        frame("b.test", 12.0, generation=9),
+        frame("b.test", 10.0, generation=8),
         # a is revoked; then the snapshot republish it superseded lands late.
-        frame("a.test", at=410, generation=5, revoked=True),
-        frame("a.test", 20.0, at=420, generation=4),
+        frame("a.test", generation=5, revoked=True),
+        frame("a.test", 20.0, generation=4),
         # The next full set repeats every generation.
-        frame("b.test", 12.0, at=700, generation=9),
-        frame("a.test", at=700, generation=5, revoked=True),
+        frame("b.test", 12.0, generation=9),
+        frame("a.test", generation=5, revoked=True),
     ]
-    for item in archiver:
+    for item in ordered:
         await publish_frame(fake_redis, item)
-    # A Watcher that did not stop at F1, with the newest stamp on the stream.
-    await publish_frame(fake_redis, frame("a.test", 30.0, at=900), pre_generation=True)
-    await publish_frame(fake_redis, frame("b.test", 5.0, at=900), pre_generation=True)
+    # Two more without, behind the ordered frames, with nothing to say about order.
+    await publish_frame(fake_redis, frame("a.test", 30.0, generation=1), generation="null")
+    await publish_frame(fake_redis, frame("b.test", 5.0, generation=1), generation="missing")
 
     with caplog.at_level("INFO"):
         await replay_policies(
@@ -761,15 +838,10 @@ async def test_a_replay_across_the_producer_handover_lands_on_archivers_state(
     assert policies.interval_for("a.test") is None
     assert policies.interval_for("b.test") == 12.0
     assert policies.tracked_hosts == 1
-    ignored = Counter(
-        r.message for r in caplog.records if r.message.startswith("ignoring a fetch policy")
-    )
-    # Watcher's stale stamp, b's reordered gen 8 and a's late gen 4 are each
-    # "older"; the two post-F1 Watcher frames each lack a generation. The
-    # full-set repeats say nothing.
-    assert ignored == {
-        "ignoring a fetch policy older than the one already applied": 3,
-        "ignoring a fetch policy without a generation for a host that holds one": 2,
-    }
+    messages = Counter(r.message for r in caplog.records)
+    assert messages[SKIPPED] == len(generation_less) + 2
+    # b's reordered gen 8 and a's late gen 4; the full-set repeats say nothing.
+    assert messages["ignoring a fetch policy older than the one already applied"] == 2
     summary = next(r for r in caplog.records if r.message == "fetch policy replay complete")
-    assert summary.messages == len(watcher) + len(archiver) + 2
+    # Only decoded frames count; the skips are the WARNING lines.
+    assert summary.messages == len(ordered)

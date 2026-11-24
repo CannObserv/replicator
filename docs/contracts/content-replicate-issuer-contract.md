@@ -107,14 +107,13 @@ This is the cheap part, taken because it is cheap. It is **not** a substitute fo
 #### Alias names
 
 **Since #114 a name is a rule, enforced when the host loads its table.** An alias is
-`<provider>-<role>`, matching `^(gcs|gdrive|ia)-[a-z][a-z0-9-]*$`. Its prefix must be the binding's
+`<provider>-<role>`, matching `^(gcs|gdrive|ia)-[a-z][a-z0-9-]*(?![\s\S])`. Its prefix must be the binding's
 provider, and a `gcs-<role>` alias binds `co-gcs-<role>` or its test twin `co-gcs-test-<role>` and no
 other bucket. The name therefore determines the bucket, and one typo can no longer bind the public
 bucket under a private name or the reverse. No alias may bind a bucket the host keeps blobs in, the
 temp, the permanent or (since #189) the captures bucket, because aliases are publication destinations. A binding that breaks
-either rule is dropped at load, so commands naming it are refused `alias_unknown`. co-core will export the pattern (cannobserv#493) so
-Archiver's RepSpec schema validates `credentials_alias` against the same text and a bad name fails
-when the RepSpec is saved.
+either rule is dropped at load, so commands naming it are refused `alias_unknown`. The pattern is co-core's
+`CREDENTIALS_ALIAS_PATTERN` (cannobserv#493), so Archiver's RepSpec schema refuses a bad name on save.
 
 Names are selectors, not secrets (T1), so the cluster's are listed here. **Adding one is three acts in
 one change:** the host binding (operator), a row here, and the RepSpec that uses it.

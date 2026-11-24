@@ -31,6 +31,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+from co_core.pure.util.aliases import CREDENTIALS_ALIAS_PATTERN
+
 from src.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -68,10 +70,11 @@ KNOWN_PROVIDERS = ("gcs",)
 # prefixes span every provider the wire knows, not just ``KNOWN_PROVIDERS``: a
 # name can be well-formed for a provider this host cannot bind yet.
 #
-# co-core will export this pattern (cannobserv#493) so Archiver's RepSpec schema
-# validates ``credentials_alias`` against the same text; import it from there
-# once it ships. ``tests/worker/test_aliases.py`` pins the string until then.
-ALIAS_NAME_PATTERN = r"^(gcs|gdrive|ia)-[a-z][a-z0-9-]*$"
+# co-core's own pattern (cannobserv#493), imported so Archiver's RepSpec schema
+# and this loader check ``credentials_alias`` against the same text. A copy drifted
+# once: cannobserv#763 moved the anchor from ``$`` to ``(?![\s\S])`` and the copy
+# kept ``$`` (#238). ``fullmatch`` below doesn't rely on either anchor (#232).
+ALIAS_NAME_PATTERN = CREDENTIALS_ALIAS_PATTERN
 _ALIAS_NAME = re.compile(ALIAS_NAME_PATTERN)
 
 # **No name is accepted outside the rule.** ``primary`` predated it and was
@@ -295,7 +298,7 @@ def _why_misnamed(alias: str, provider: str, bucket: str) -> str | None:
     reaches. Harmless — the bucket is still one the rule derives — and left legal
     because narrowing it would diverge from the pattern co-core exports.
     """
-    if not _ALIAS_NAME.match(alias):
+    if not _ALIAS_NAME.fullmatch(alias):
         return f"the alias name is not <provider>-<role> ({ALIAS_NAME_PATTERN})"
     named, role = alias.split("-", 1)
     if named != provider:

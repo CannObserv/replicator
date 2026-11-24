@@ -66,19 +66,13 @@ Four consumer-side rules that came out of building it, each one a way to be wron
   shipped would revert it, silently and in the loosening direction. Since F1 the producer is
   Archiver, whose outbox can also publish a retried row behind the next one. The map holds the
   last applied **frame** per host, tombstones included, and orders the next one through
-  co-core's `fetch_policy_supersedes` (#136):
-  - **With a `generation`:** a higher one applies. An equal one is a republish repeating its
-    delta, so it is skipped, with no log line.
-  - **Without one** (Watcher's frames, plus any Archiver frame built without a `generation`):
-    the rule from before #136. The frame applies on `>=` against the held `occurred_at`, `>=`
-    rather than `>` so a full set stamped with one instant does not lose every host after the
-    first.
-  - **Mixed, a ratchet:** an ordered frame claims an unordered slot whatever the two stamps
-    say, since the producers' clocks are not comparable. An unordered frame never overwrites an
-    ordered slot.
+  co-core's `fetch_policy_supersedes` (#136): a higher `generation` applies, and `occurred_at`
+  is never consulted. An equal one is a republish repeating its delta, so it is skipped, with
+  no log line. **Every frame carries one** since co-core 0.53 (cannobserv#629, #238): a frame
+  without, the key missing or `null`, fails to decode and is skipped as poison, never applied.
 
-  The tombstone keeps its frame. A map that forgot it would let a stale unordered frame
-  resurrect the host.
+  The tombstone keeps its frame. A map that forgot it would let the stale live frame it
+  superseded resurrect the host.
 
 And two that are about the frame rather than the policy:
 
@@ -169,14 +163,12 @@ the last warning has rotated out while the condition still holds. Read
 **`hosts_stricter_than_default`** on the replay summary instead — every boot re-asserts it, and
 non-zero is what says to run the warning grep unwindowed (no `--since`) to find out which hosts.
 
-**Two `ignoring a fetch policy` lines name an ordering refusal (#136), and an equal-generation
+**One `ignoring a fetch policy` line names an ordering refusal (#136), and an equal-generation
 skip names none** — that skip is every Archiver republish. `older than the one already applied`
-carries `generation` and `held_generation` when an outbox reorder was the reason, and the stamp
-pair when it was an unordered frame's `occurred_at`. `without a generation for a host that holds
-one` is an Archiver frame built without its `generation`, or a Watcher frame from before
-broker#95 revoked its grant, replayed behind an Archiver one. Either way the ratchet drops the
-frame, which `FetchPolicyState`'s docstring calls silent, and this line is what keeps it from
-being silent.
+carries `generation` and `held_generation`: an outbox reorder. **A frame without a `generation`
+logs `skipping a malformed frame on the fetch policy stream`** (WARNING, #238), with
+`invalid_fields` naming the failure, `generation: missing` or `generation: int_type` for `null`.
+That field appears on any frame that failed validation; the frame's values never do.
 
 ## Escalation on 429 and 503
 
