@@ -3,7 +3,8 @@
 **Status: shipped, and live on `co-replicator` since 2026-10-26T16:42:36Z** (the journal's first
 `worker ready` with `capture: enabled`). `src/` runs a `content.capture` loop when
 `REPLICATOR_CAPTURE_ENABLED` is set. It is off by default on every host: the pinned browser has to be
-installed first ([runbook](../plans/2026-10-25-viewport-capture-runbook.md)), and the loop creates its
+in place first (the deploy installs it, [DEPLOYMENT.md](../DEPLOYMENT.md#the-headless-shell-228); its
+cgroup is the [runbook](../plans/2026-10-25-viewport-capture-runbook.md)'s), and the loop creates its
 group at boot. The broker grant is live since 2026-10-20T15:06Z (broker#114). **Archiver may issue**,
 on a host whose `worker ready` reports `capture: enabled`: Replicator creates the group, then Archiver
 writes the stream (broker#116). The loop renders a page in a confined headless browser, stores the PNG
@@ -127,9 +128,9 @@ disk ceiling, are retried with no fact, exempt from the delivery ceiling, as for
 
 ## Enabling it on a host
 
-- The runtime, per the [runbook](../plans/2026-10-25-viewport-capture-runbook.md): the pinned
-  `chromium-headless-shell` in `REPLICATOR_PLAYWRIGHT_BROWSERS_PATH`, and the unit's delegated
-  `browser/` cgroup.
+- The runtime: the pinned `chromium-headless-shell` in `REPLICATOR_PLAYWRIGHT_BROWSERS_PATH`, which
+  the deploy installs ([DEPLOYMENT.md](../DEPLOYMENT.md#the-headless-shell-228)), and the unit's
+  delegated `browser/` cgroup, per the [runbook](../plans/2026-10-25-viewport-capture-runbook.md).
 - **`REPLICATOR_CAPTURE_ENABLED=true`** creates `replicator.capture` at boot, at `0`, and starts the
   loop after one test launch. A launch that fails leaves the group in place and the loop off:
   `CRITICAL` names the runbook, and fetch, replicate and persist keep running.
