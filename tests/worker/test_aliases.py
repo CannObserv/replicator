@@ -431,6 +431,21 @@ def test_a_name_outside_the_rule_drops_the_binding(tmp_path, caplog, name):
     assert "<provider>-<role>" in record.detail
 
 
+def test_a_name_with_a_trailing_newline_drops_the_binding(tmp_path, caplog):
+    """#232: ``$`` also matches before a final ``\\n``, so the check is a ``fullmatch``.
+
+    The bucket carries the same newline, so the bucket rule agrees with the name
+    and only the name rule stands between this binding and the table."""
+    path = write_aliases(tmp_path, {"gcs-x\n": gcs_entry("co-gcs-x\n")})
+
+    with caplog.at_level("WARNING", logger="src.worker.aliases"):
+        table = load_alias_table(path)
+
+    assert table.provisioned == ()
+    (record,) = [r for r in caplog.records if r.message == "ignoring an unusable alias binding"]
+    assert "<provider>-<role>" in record.detail
+
+
 def test_the_name_must_carry_the_bindings_provider(tmp_path, caplog):
     """`ia-publication` bound to `gcs` reads as archive.org to anyone writing a RepSpec."""
     path = write_aliases(tmp_path, {"ia-publication": gcs_entry("co-gcs-publication")})
