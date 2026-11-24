@@ -122,7 +122,7 @@ rather than deleting bytes a consumer was promised.
 | `REPLICATOR_BLOB_BACKEND` | `gcs` | Temp blobs live in an object store — **not** the `local` default |
 | `REPLICATOR_BLOB_BUCKET` | `co-gcs-blobs` | The temp-blob bucket that backend writes into |
 | `REPLICATOR_PERSIST_ENABLED` | `true`, since 2026-09-26 | Whether this worker consumes `content.persist` (#114). Default off; turned on here after the broker granted the stream (broker#64). Needs `REPLICATOR_PERMANENT_BUCKET` |
-| `REPLICATOR_CAPTURE_ENABLED` | `true`, since 2026-10-26 | Whether this worker consumes `content.capture` (#138). Install the browser first (the runbook). Needs `REPLICATOR_CAPTURE_BUCKET` under `gcs` |
+| `REPLICATOR_CAPTURE_ENABLED` | `true`, since 2026-10-26 | Whether this worker consumes `content.capture` (#138). The deploy installs the browser ([DEPLOYMENT.md](docs/DEPLOYMENT.md#the-headless-shell-228)); the cgroup comes first (the runbook). Needs `REPLICATOR_CAPTURE_BUCKET` under `gcs` |
 | `REPLICATOR_CAPTURE_BUCKET` | `co-gcs-captures`, since #189 | Every capture byte: temp under `temp/`, kept under `blobs/`; never a raw blob (archiver#380 D4) |
 | `REPLICATOR_PERMANENT_BUCKET` | `co-gcs-replicator`, set at the #114 step 5 deploy | The permanent content-addressed store: a second replicate source, and where `content.persist` writes (#114); unset ⇒ none |
 | `REPLICATOR_BLOB_DIR` | `/var/lib/replicator/blobs` | Temp-storage root; **unused under `gcs`**, kept against a flip back to `local` |

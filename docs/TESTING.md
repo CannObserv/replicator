@@ -47,7 +47,10 @@ an undelegated cgroup fails it, because a green run that launched nothing is the
 hides a confinement gone missing. It needs two things:
 
 - the shell, at `REPLICATOR_PLAYWRIGHT_BROWSERS_PATH` (default
-  `/var/lib/replicator/ms-playwright`, installed by the runbook);
+  `/var/lib/replicator/ms-playwright`, which the deploy installs; never a bare install into it:
+  [DEPLOYMENT.md](DEPLOYMENT.md#the-headless-shell-228) has the hand order). For another shell,
+  point the variable at a path you can write and install there; a run with the shell missing
+  prints the command (#236);
 - a cgroup this user owns, which the fixture splits into `worker/` and `browser/` the way
   `DelegateSubgroup=` does for the unit.
 
