@@ -403,10 +403,13 @@ def gcs_entry(bucket, **extra):
     return {"provider": "gcs", "bucket": bucket, **extra}
 
 
-def test_the_name_pattern_is_the_plans():
-    """Pinned as a string because co-core will export it (cannobserv#493) for
-    Archiver's RepSpec schema, and the two definitions must be the same text."""
-    assert ALIAS_NAME_PATTERN == r"^(gcs|gdrive|ia)-[a-z][a-z0-9-]*$"
+def test_the_name_pattern_is_co_cores():
+    """Imported, not copied (cannobserv#493, #238): Archiver's RepSpec schema
+    validates ``credentials_alias`` against the same object, so the two can't drift
+    the way the local copy did when cannobserv#763 changed the anchor."""
+    from co_core.pure.util.aliases import CREDENTIALS_ALIAS_PATTERN
+
+    assert ALIAS_NAME_PATTERN is CREDENTIALS_ALIAS_PATTERN
 
 
 @pytest.mark.parametrize(
