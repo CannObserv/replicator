@@ -334,8 +334,12 @@ async def test_a_missing_runtime_fails_before_anything_launches(tmp_path):
         playwright_factory=lambda: pw,
     )
 
-    with pytest.raises(RuntimeUnavailableError, match="runbook"):
+    # The deploy installs the shell (#228); a hand install is the one DEPLOYMENT
+    # forbids, so the message names that section and no command (#240).
+    shell_section = r"DEPLOYMENT\.md#the-headless-shell-228"
+    with pytest.raises(RuntimeUnavailableError, match=shell_section) as e:
         await renderer.render(_request())
+    assert "runbook" not in str(e.value)
     assert pw.launch_kwargs is None
 
 

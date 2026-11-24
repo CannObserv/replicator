@@ -9,12 +9,14 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from src.core.config import Settings
-from src.worker.browser import pinned_shell
+from src.worker.browser import SHELL_INSTALL_DOC, pinned_shell
 
 VARIABLE = "REPLICATOR_PLAYWRIGHT_BROWSERS_PATH"
 # The worker's own default, so the check below can't drift from src/core/config.py.
 STATE_DIRECTORY: Path = Settings.model_fields["playwright_browsers_path"].default
-DEPLOYMENT_SECTION = "docs/DEPLOYMENT.md#the-headless-shell-228"
+# The worker's own pointer (#240), so the live-anchor test guards the string the
+# missing-shell error and the preflight CRITICAL print, not a copy of it.
+DEPLOYMENT_SECTION = SHELL_INSTALL_DOC
 
 
 def browsers_path(environ: Mapping[str, str] = os.environ) -> Path:

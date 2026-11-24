@@ -169,6 +169,11 @@ class RuntimeUnavailableError(RenderError):
     """The pinned shell is not installed where the runtime says it is."""
 
 
+# Where an operator is sent for a missing shell: the deploy installs it (#228), and
+# the section says how to install by hand without deleting the live one (#240).
+SHELL_INSTALL_DOC = "docs/DEPLOYMENT.md#the-headless-shell-228"
+
+
 class DestinationRefusedError(RenderError):
     """The page, or the navigation, asked for a destination the guard refuses."""
 
@@ -350,9 +355,10 @@ class BrowserRuntime:
     def executable(self) -> Path:
         shell = pinned_shell(self.browsers_path)
         if not shell.is_file():
+            # No install command: run by hand, it is the bare install DEPLOYMENT
+            # forbids, which can delete the live worker's shell (#228, #240).
             raise RuntimeUnavailableError(
-                f"{shell} is missing: install the pinned shell "
-                "(docs/plans/2026-10-25-viewport-capture-runbook.md)"
+                f"{shell} is missing: the deploy installs the pinned shell ({SHELL_INSTALL_DOC})"
             )
         return shell
 

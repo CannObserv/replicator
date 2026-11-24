@@ -7,6 +7,7 @@ still ensured, so no command is skipped, and fetch keeps running.
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -145,14 +146,28 @@ async def test_fetch_and_capture_share_one_pacer(monkeypatch, fake_redis):
 
 
 @pytest.mark.parametrize(
-    "error",
-    [RuntimeUnavailableError("the shell is missing"), OSError("cgroup.subtree_control")],
+    ("error", "runbook"),
+    [
+        # Since #228 the deploy installs the shell; the runbook's install is the
+        # bare one DEPLOYMENT forbids (#240).
+        pytest.param(
+            RuntimeUnavailableError("the shell is missing"),
+            "docs/DEPLOYMENT.md#the-headless-shell-228",
+            id="missing-shell",
+        ),
+        pytest.param(
+            OSError("cgroup.subtree_control"),
+            "docs/plans/2026-10-25-viewport-capture-runbook.md",
+            id="launch-error",
+        ),
+    ],
 )
 async def test_a_browser_that_cannot_start_degrades_capture_alone(
-    monkeypatch, fake_redis, capsys, error
+    monkeypatch, fake_redis, capsys, error, runbook
 ):
     """The group is still ensured, so nothing is skipped; fetch runs; the journal
-    says ``CRITICAL`` and names the runbook; broker's undelivered-age probe alarms."""
+    says ``CRITICAL`` and names where to look: the deploy for a missing shell, the
+    runbook for anything else; broker's undelivered-age probe alarms."""
     monkeypatch.setenv("REPLICATOR_CAPTURE_ENABLED", "true")
     get_settings.cache_clear()
     _renderer(monkeypatch, FakeRenderer(error))
@@ -167,8 +182,16 @@ async def test_a_browser_that_cannot_start_degrades_capture_alone(
     lines = _lines(capsys)
     assert _ready(lines)["capture"] == "unavailable"
     (critical,) = [line for line in lines if line.get("level") == "CRITICAL"]
-    assert "viewport-capture-runbook" in critical["runbook"]
+    assert critical["runbook"] == runbook
     assert str(error) in critical["error"]
+
+
+def test_the_capture_runbook_is_a_file_in_the_repo():
+    """The cgroup's and every launch error's pointer (#240): a moved runbook would
+    leave the CRITICAL naming nothing, with every assertion above still green."""
+    repo = Path(__file__).resolve().parents[2]
+
+    assert (repo / src.worker.main.CAPTURE_RUNBOOK).is_file()
 
 
 async def test_a_browser_that_cannot_be_built_degrades_capture_alone(
@@ -194,7 +217,7 @@ async def test_a_browser_that_cannot_be_built_degrades_capture_alone(
     lines = _lines(capsys)
     assert _ready(lines)["capture"] == "unavailable"
     (critical,) = [line for line in lines if line.get("level") == "CRITICAL"]
-    assert "viewport-capture-runbook" in critical["runbook"]
+    assert critical["runbook"] == "docs/plans/2026-10-25-viewport-capture-runbook.md"
     assert "not delegated" in critical["error"]
 
 

@@ -42,7 +42,13 @@ from src.core.logging import configure_logging, get_logger
 from src.storage.local_store import SweepSafeLocalBlobStore
 from src.storage.sweeper import BlobUsage
 from src.worker.aliases import AliasTable, load_alias_table
-from src.worker.browser import BrowserRuntime, PlaywrightRenderer, Renderer
+from src.worker.browser import (
+    SHELL_INSTALL_DOC,
+    BrowserRuntime,
+    PlaywrightRenderer,
+    Renderer,
+    RuntimeUnavailableError,
+)
 from src.worker.browser_cgroup import BrowserCgroup, CgroupUnavailableError, claim_worker_memory_low
 from src.worker.browser_fetch import BrowserFetcher
 from src.worker.capture import build_capture_handler
@@ -140,7 +146,8 @@ def build_fetch_client(settings: Settings) -> httpx.AsyncClient:
     )
 
 
-# Where an operator is sent when the browser cannot start.
+# Where an operator is sent when the browser cannot start: the delegated cgroup
+# and any launch error. A missing shell goes to SHELL_INSTALL_DOC instead (#240).
 CAPTURE_RUNBOOK = "docs/plans/2026-10-25-viewport-capture-runbook.md"
 # Bounds boot's one launch. The launch itself is bounded inside at 30 s; this
 # covers the driver's start and the close as well.
@@ -178,8 +185,9 @@ async def prepare_renderer(settings: Settings) -> PlaywrightRenderer | None:
     A failure degrades the browser's users alone (#138 design, operator call 4): the
     capture group is already ensured, so no command is skipped; a browser fetch is
     parked, never fetched over HTTP; fetch, replicate and persist keep running. The
-    ``CRITICAL`` line names the runbook; broker's undelivered-age probe is the alarm
-    on a capture backlog.
+    ``CRITICAL`` line's ``runbook`` names where to look: DEPLOYMENT's shell section
+    for a missing shell, the capture runbook for anything else (#240). Broker's
+    undelivered-age probe is the alarm on a capture backlog.
     """
     guard = DestinationGuard(blocked=blocked_networks(settings.blocked_destination_cidrs))
     try:
@@ -189,10 +197,19 @@ async def prepare_renderer(settings: Settings) -> PlaywrightRenderer | None:
     except Exception as exc:
         logger.critical(
             "the browser could not start: capture and browser fetch are unavailable",
-            extra={"error": f"{type(exc).__name__}: {exc}", "runbook": CAPTURE_RUNBOOK},
+            extra={"error": f"{type(exc).__name__}: {exc}", "runbook": _runbook_for(exc)},
         )
         return None
     return renderer
+
+
+def _runbook_for(exc: Exception) -> str:
+    """The doc a failed preflight sends the operator to (#240).
+
+    ``RuntimeUnavailableError`` is raised for one cause, a missing shell, which the
+    deploy installs. The runbook still owns the cgroup and every other launch error.
+    """
+    return SHELL_INSTALL_DOC if isinstance(exc, RuntimeUnavailableError) else CAPTURE_RUNBOOK
 
 
 def _browser_state(enabled: bool, renderer: Renderer | None) -> str:
