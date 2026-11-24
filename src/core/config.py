@@ -335,7 +335,7 @@ class Settings(BaseSettings):
 
     # The fourth command stream (#138): render a page, store the image. Off by
     # default for persist's reason, and for the host's: the pinned browser has to
-    # be installed first (docs/plans/2026-10-25-viewport-capture-runbook.md).
+    # be installed first, which the deploy does (docs/DEPLOYMENT.md#the-headless-shell-228).
     capture_enabled: bool = Field(default=False, validation_alias="REPLICATOR_CAPTURE_ENABLED")
     capture_consumer_group: str = Field(
         default=streams.group_name(streams.CONTENT_CAPTURE, SERVICE_NAME),

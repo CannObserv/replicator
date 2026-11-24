@@ -133,7 +133,8 @@ disk ceiling, are retried with no fact, exempt from the delivery ceiling, as for
   delegated `browser/` cgroup, per the [runbook](../plans/2026-10-25-viewport-capture-runbook.md).
 - **`REPLICATOR_CAPTURE_ENABLED=true`** creates `replicator.capture` at boot, at `0`, and starts the
   loop after one test launch. A launch that fails leaves the group in place and the loop off:
-  `CRITICAL` names the runbook, and fetch, replicate and persist keep running.
+  the `CRITICAL`'s `runbook` names DEPLOYMENT's shell section for a missing shell and the runbook
+  for anything else (#240), and fetch, replicate and persist keep running.
 - Settings construction refuses `3 × REPLICATOR_CAPTURE_MAX_WAIT_SECONDS + 30` over
   `REPLICATOR_MAX_FETCH_SECONDS`, so each wait can run to its bound inside the deadline and a slow
   page usually closes as `wait_timeout`. Launch and the screenshot share the 30 s, so a page that
