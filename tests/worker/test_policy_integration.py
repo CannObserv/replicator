@@ -62,7 +62,10 @@ async def publish(client, topic: str, host: str, min_interval_seconds: float) ->
         topic,
         to_wire(
             FetchPolicyState(
-                occurred_at=now(), host=host, min_interval_seconds=min_interval_seconds
+                occurred_at=now(),
+                host=host,
+                min_interval_seconds=min_interval_seconds,
+                generation=1,
             )
         ),
     )
@@ -122,7 +125,11 @@ async def test_the_read_really_blocks(real_redis, policy_topic, settings):
     would spin the tail against the broker for as long as the worker is up."""
     await real_redis.xadd(
         policy_topic,
-        to_wire(FetchPolicyState(occurred_at=now(), host="seed.test", min_interval_seconds=1.0)),
+        to_wire(
+            FetchPolicyState(
+                occurred_at=now(), host="seed.test", min_interval_seconds=1.0, generation=1
+            )
+        ),
     )
     reader = build_policy_reader(real_redis, topic=policy_topic)
     # read, not replay: the module removed `replay` from its seam as unsafe

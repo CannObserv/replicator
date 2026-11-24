@@ -173,8 +173,8 @@ posture as every other wire input.
 
 **Producer:** Archiver, since the headless-Watcher flip F1
 ([CannObserv/watcher#374](https://github.com/CannObserv/watcher/issues/374)); Watcher published
-from its `Domain` table before it. The payload is unchanged but for an optional `generation`,
-which Archiver sets because its outbox can reorder frames ([CannObserv/cannobserv#566](https://github.com/CannObserv/cannobserv/issues/566)).
+from its `Domain` table before it. The payload is unchanged but for a `generation`,
+required since cannobserv#629 (#238), which Archiver sets because its outbox can reorder frames ([CannObserv/cannobserv#566](https://github.com/CannObserv/cannobserv/issues/566)).
 Replicator applies it through co-core's `fetch_policy_supersedes`; the rule is
 [POLITENESS.md](../POLITENESS.md#applying-a-policy)'s and the code of record
 [`src/worker/policy.py`](../../src/worker/policy.py). Nothing there branches on which producer

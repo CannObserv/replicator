@@ -540,8 +540,8 @@ def _resolve_credentials(
         return ()
     resolved: list[Resolved] = []
     for name, reference in options.credential_headers.items():
-        # co-core's validator, which ``fullmatch``es: its exported pattern ends in
-        # ``$``, which ``match`` would let a trailing newline past.
+        # co-core's validator, which ``fullmatch``es, so a trailing newline fails
+        # whatever the exported pattern's anchor (cannobserv#763, #232).
         try:
             validate_fetch_credential(reference)
         except ValueError:

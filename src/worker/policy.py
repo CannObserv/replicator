@@ -9,23 +9,18 @@ the producer publishes a `FetchPolicyState` per host, every worker replays the
 stream from `0-0` at boot and tails it thereafter, and the map that results is
 what `HostPacer` consults.
 
-**The producer is Archiver, since the headless-Watcher flip F1.** Watcher
-published before it, from its `Domain` table, with no `generation`; Archiver
-publishes through an outbox that can reorder a retried row behind the next one,
-so it stamps each frame with a per-host `generation` (cannobserv#566, #136).
-Nothing here branches on which producer sent a frame — only on whether it is
-ordered:
+**The producer is Archiver, since the headless-Watcher flip F1.** It publishes
+through an outbox that can reorder a retried row behind the next one, so it
+stamps each frame with a per-host `generation` (cannobserv#566, #136). One rule
+orders them, co-core's `fetch_policy_supersedes`: a frame applies iff its
+`generation` is higher than the held frame's. Equal is a republish repeating its
+delta, and skipped. `occurred_at` is never consulted.
 
-* **Ordered** frames apply iff co-core's `fetch_policy_supersedes` says so: a
-  higher `generation` than the held frame's. Equal is a republish repeating its
-  delta, and skipped.
-* **Unordered** frames — Watcher's, or an Archiver frame built without its
-  `generation` — keep the rule this map had before #136: arrival order,
-  guarded by `occurred_at` (`>=`) against a stale republish.
-* **Mixed, a ratchet.** An ordered frame claims a slot holding an unordered one,
-  whatever the two stamps say — the producers' clocks are not comparable. An
-  unordered frame never overwrites an ordered slot. A replay that still reaches
-  Watcher's frames reads them ahead of Archiver's, so the two rules agree on it.
+**A frame without a `generation` never reaches the map** (cannobserv#629, #238).
+co-core requires the field on decode since 0.53, so ``from_wire`` raises and the
+reader steps past the frame as poison, logging the field that failed. Until then
+such frames (Watcher's, from before F1) applied in stream order behind an
+`occurred_at` guard; the live stream held none when the rule went (broker#152).
 
 Two pieces, split because only one of them needs a broker:
 
@@ -57,6 +52,7 @@ from co_core.pure.models.changes import (
     fetch_policy_supersedes,
 )
 from co_core_aio.bus import AsyncBusTailReader
+from pydantic import ValidationError
 from redis.asyncio import Redis
 
 from src.core.config import Settings
@@ -142,14 +138,14 @@ class FetchPolicyMap:
         self._default = default_interval_seconds
         # The last frame applied per host, live values and tombstones alike — the
         # frame and not just its number, because ordering the next one needs its
-        # `generation` and, for an unordered frame, its `occurred_at` (#136).
-        # Arrival order is not publication order: the producer periodically
-        # republishes its whole set, and Archiver's outbox can reorder a retry.
+        # `generation` (#136). Arrival order is not publication order: the
+        # producer periodically republishes its whole set, and Archiver's outbox
+        # can reorder a retry.
         #
         # A revoked host keeps its frame, so this outgrows tracked_hosts.
-        # Deliberate: forgetting the tombstone would let the stale *live* policy
-        # it superseded resurrect the host on the next republish (CR #10) — and
-        # would forget its `generation`, which is what the ratchet stands on.
+        # Deliberate: forgetting the tombstone would forget its `generation`, and
+        # the stale *live* policy it superseded would then claim the empty slot
+        # and resurrect the host (CR #10).
         self._held: dict[str, FetchPolicyState] = {}
 
     @property
@@ -236,17 +232,9 @@ class FetchPolicyMap:
     def _is_current(self, payload: FetchPolicyState, held: FetchPolicyState | None) -> bool:
         """Whether this message supersedes the one already applied for its host.
 
-        The ratchet is co-core's (``fetch_policy_supersedes``), called rather
-        than re-derived. What it leaves out is the ``occurred_at`` guard this map
-        applied before ``generation`` existed: between two unordered frames it
-        answers "stream order", and the map still drops an unordered frame
-        stamped older than the one it holds, so unordered frames behave exactly
-        as Watcher's did before #136. Once either frame is ordered, the stamp is
-        not consulted — an outbox retry can stamp row N+1 earlier than row N.
-
-        ``>=`` rather than ``>`` on the stamp: a producer is free to stamp an
-        entire full-set republish with one ``occurred_at``, and a strict
-        comparison would apply the first host and drop every other one.
+        The rule is co-core's (``fetch_policy_supersedes``), called rather than
+        re-derived: an empty slot, or a higher ``generation``. The stamp is not
+        consulted — an outbox retry can stamp row N+1 earlier than row N.
 
         Tombstones are guarded exactly as live values are. Exempting them would
         make the single message that *erases* state the single message that
@@ -255,21 +243,9 @@ class FetchPolicyMap:
         Indexed by ``payload.host``, so the helper's mismatched-host
         ``ValueError`` cannot fire here.
         """
-        if held is None:
+        if held is None or fetch_policy_supersedes(payload, held):
             return True
-        if not fetch_policy_supersedes(payload, held):
-            _log_out_of_order(payload, held)
-            return False
-        if payload.generation is not None or payload.occurred_at >= held.occurred_at:
-            return True
-        logger.info(
-            "ignoring a fetch policy older than the one already applied",
-            extra={
-                "host": payload.host,
-                "occurred_at": payload.occurred_at.isoformat(),
-                "applied_at": held.occurred_at.isoformat(),
-            },
-        )
+        _log_out_of_order(payload, held)
         return False
 
     def _revoke(self, payload: FetchPolicyState, previous: float | None) -> None:
@@ -352,28 +328,13 @@ def _interval_of(held: FetchPolicyState) -> float | None:
 
 
 def _log_out_of_order(payload: FetchPolicyState, held: FetchPolicyState) -> None:
-    """Say why the ratchet refused a frame — except when nothing is wrong.
+    """Say why the ordering refused a frame — except when nothing is wrong.
 
     An **equal** ``generation`` is the steady state, not an anomaly: every full-set
     republish repeats each host's generation and a boot replay walks all of them,
-    so a line per skip is the #85 volume back. The other two refusals each mean
-    something moved out of order, so each gets the generation pair that decided
-    it.
+    so a line per skip is the #85 volume back. A **lower** one means something
+    moved out of order, so it gets the generation pair that decided it.
     """
-    if payload.generation is None:
-        # An Archiver frame built without its generation, or a Watcher frame
-        # from before broker#95 revoked its grant, replayed behind an Archiver
-        # one. FetchPolicyState's docstring calls both drops silent; this line
-        # is what makes them not.
-        logger.info(
-            "ignoring a fetch policy without a generation for a host that holds one",
-            extra={
-                "host": payload.host,
-                "occurred_at": payload.occurred_at.isoformat(),
-                "held_generation": held.generation,
-            },
-        )
-        return
     if payload.generation == held.generation:
         return
     logger.info(
@@ -681,9 +642,28 @@ def _skip_poison(reader: PolicyReader, exc: BusMessageAnomaly) -> bool:
             extra={"topic": exc.topic, "error": str(exc)},
         )
         return False
-    logger.warning(
-        "skipping a malformed frame on the fetch policy stream",
-        extra={"message_id": exc.message_id, "error": str(exc)},
-    )
+    extra: dict[str, object] = {"message_id": exc.message_id, "error": str(exc)}
+    fields = _invalid_fields(exc)
+    if fields:
+        extra["invalid_fields"] = fields
+    logger.warning("skipping a malformed frame on the fetch policy stream", extra=extra)
     reader.seek(exc.message_id)
     return True
+
+
+def _invalid_fields(exc: BusMessageAnomaly) -> list[str]:
+    """``loc: type`` per field the payload failed on, or ``[]`` (#238, design D4).
+
+    The anomaly's own text says only "malformed payload", so a frame without a
+    ``generation`` (cannobserv#629) can't be told from any other bad one; the
+    reason is on the ``ValidationError`` it was raised from. Locations and error
+    types only, **never** ``input`` or the anomaly's ``raw``: a malformed frame is
+    untrusted, and its values have no business in the journal.
+    """
+    cause = exc.__cause__
+    if not isinstance(cause, ValidationError):
+        return []
+    return [
+        f"{'.'.join(str(part) for part in error['loc'])}: {error['type']}"
+        for error in cause.errors()
+    ]
