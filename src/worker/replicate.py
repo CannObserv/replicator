@@ -247,7 +247,9 @@ def fingerprint_in(blob_uri: str) -> str | None:
     if parts.scheme not in _BLOB_URI_SCHEMES or not parts.path:
         return None
     stem = parts.path.rsplit("/", 1)[-1].removesuffix(".bin")
-    return stem if FINGERPRINT_RE.match(stem) else None
+    # ``fullmatch``: co-core's pattern ends in ``$``, which also matches before a
+    # final ``\n``; urlsplit stripping newlines must not be what keeps one out (#243).
+    return stem if FINGERPRINT_RE.fullmatch(stem) else None
 
 
 def validate_destination(destination: str, *, binding: AliasBinding) -> str:
