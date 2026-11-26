@@ -104,6 +104,18 @@ def test_every_enrolment_names_a_discovered_pattern():
     assert sorted(VALID.keys() | EXEMPT.keys()) == sorted(SUBJECTS)
 
 
+@pytest.mark.parametrize("name", sorted(EXEMPT))
+def test_every_exemption_is_still_needed(name):
+    """An exempt pattern that gains an absolute anchor should be probed instead.
+
+    ``FINGERPRINT_RE`` is the expected case: if co-core moves it off ``$``, as
+    cannobserv#763 did for the alias patterns, this fails. Then move it into
+    ``VALID`` with ``"0" * 64``.
+    """
+    assert name in SUBJECTS
+    assert not SUBJECTS[name].pattern.endswith(END_ANCHORS), f"{name} is anchored: probe it"
+
+
 def test_the_anchoring_check_has_subjects():
     """A reflection-driven parametrize that finds nothing passes silently.
 
