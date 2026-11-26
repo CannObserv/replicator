@@ -88,7 +88,10 @@ SUBJECTS = discover()
 @pytest.mark.parametrize("name", sorted(SUBJECTS.keys() - EXEMPT.keys()))
 def test_every_validator_anchors_on_the_absolute_end_of_the_string(name):
     pattern = SUBJECTS[name]
-    assert name in VALID, f"{name} is new: enrol it in VALID with an accepted value, or in EXEMPT"
+    assert name in VALID, (
+        f"{name} is new or newly aliased (the key joins every name it's bound to): "
+        "enrol it in VALID with an accepted value, or in EXEMPT"
+    )
     valid = VALID[name]
 
     assert pattern.pattern.endswith(END_ANCHORS), f"{name} doesn't end on an absolute anchor"
