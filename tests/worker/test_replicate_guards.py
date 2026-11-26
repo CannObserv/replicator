@@ -17,17 +17,21 @@ the shapes nobody thought of are refused for free.
 
 import hashlib
 import io
+from urllib.parse import SplitResult
 
 import pytest
 from co_core_sync.drivers.blobstore import GcsBlobStore, LocalBlobStore
 
 from src.core.errors import PermanentReplicateError, ReplicateReason
+from src.worker import replicate as replicate_module
 from src.worker.aliases import AliasBinding
-from src.worker.replicate import LocatedBlob, locate_blob, validate_destination
+from src.worker.replicate import LocatedBlob, fingerprint_in, locate_blob, validate_destination
 from tests.storage.conftest import FakeBucket, FakeClient
 
 # The real digest of the bytes stored under it (co-core 0.19.6, cannobserv#492).
 FINGERPRINT = hashlib.sha256(b"artifact bytes").hexdigest()
+# Shaped like a fingerprint and no more; for checks that never reach a store.
+ZERO_FINGERPRINT = "0" * 64
 GCS_ROOT = AliasBinding(provider="gcs", bucket="co-artifacts", prefix="reps")
 
 
@@ -125,6 +129,32 @@ def test_a_uri_that_will_not_even_parse_is_refused(store):
         locate_blob("file://[oops:::1]:notaport/x.bin", store=store)
 
     assert caught.value.reason is ReplicateReason.INVALID_SOURCE
+
+
+def _split_keeping(path):
+    """A ``urlsplit`` stand-in that returns ``path`` untouched."""
+    return lambda _uri: SplitResult("file", "", path, "", "")
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        pytest.param(f"/blobs/{ZERO_FINGERPRINT}.bin", ZERO_FINGERPRINT, id="control"),
+        pytest.param(f"/blobs/{ZERO_FINGERPRINT}\n.bin", None, id="trailing-newline"),
+    ],
+)
+def test_the_fingerprint_check_needs_no_help_from_urlsplit(monkeypatch, path, expected):
+    """#243: co-core's ``FINGERPRINT_RE`` ends in ``$``, which also matches before a final ``\\n``.
+
+    Through a real URI this can't be reached: ``urlsplit`` strips ASCII newlines
+    before the stem is cut. So the check was only safe because of a stdlib
+    detail. The stub keeps the newline, and that leaves the check to stand on
+    its own (``fullmatch``). The control case shows the stubbed path does reach
+    the check and is not filtered out earlier.
+    """
+    monkeypatch.setattr(replicate_module, "urlsplit", _split_keeping(path))
+
+    assert fingerprint_in("ignored") == expected
 
 
 def test_a_wellformed_uri_for_a_blob_that_is_gone_is_expired_not_invalid(store):

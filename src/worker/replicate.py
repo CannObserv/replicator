@@ -230,7 +230,9 @@ def fingerprint_in(blob_uri: str) -> str | None:
 
     The pattern is co-core's ``FINGERPRINT_RE`` rather than a second spelling of
     it (#114): the store validates every call against that same rule, so this
-    guard and the store cannot disagree about what a fingerprint is. Lower-case
+    guard and the store cannot disagree about what a fingerprint is. The *method*
+    matters as much as the rule: the store calls ``fullmatch``, and this called
+    ``.match`` until #243, which let one trailing newline through. Lower-case
     only, because the store derives paths from the exact string — accepting
     upper-case would make two spellings of one fingerprint address two different
     files on a case-sensitive filesystem.
@@ -247,7 +249,9 @@ def fingerprint_in(blob_uri: str) -> str | None:
     if parts.scheme not in _BLOB_URI_SCHEMES or not parts.path:
         return None
     stem = parts.path.rsplit("/", 1)[-1].removesuffix(".bin")
-    return stem if FINGERPRINT_RE.match(stem) else None
+    # ``fullmatch``, the store's own call: the pattern ends in ``$``, which with
+    # ``.match`` admits a final ``\n``. urlsplit stripping newlines isn't the guard (#243).
+    return stem if FINGERPRINT_RE.fullmatch(stem) else None
 
 
 def validate_destination(destination: str, *, binding: AliasBinding) -> str:
