@@ -8,9 +8,10 @@ the same trap in another module.
 This used to walk only ``src.worker.handler``, and saw the header patterns only
 because that module imports them. So ``aliases.py``'s ``.match`` on a ``$``
 pattern (#232) went unseen. It now walks every module under ``src/`` and keeps a
-pattern whatever module defines it. #232's pattern and co-core's
-``FINGERPRINT_RE`` are both imported, so a walk limited to local definitions
-would miss them again.
+pattern whatever module defines it. co-core's ``FINGERPRINT_RE`` arrives in
+``replicate`` already compiled. A walk limited to locally defined names would
+lose it, and it's the case #243 found. (``_ALIAS_NAME`` is different: it's
+compiled in ``aliases`` from co-core's string, so it's a local definition.)
 
 The subjects are discovered, not listed (CR #15). A new validator is covered on
 the next run. It then fails until it's enrolled in ``VALID`` (with a value it
