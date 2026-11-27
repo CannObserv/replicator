@@ -52,7 +52,8 @@ async def test_whether_an_empty_poll_registers_the_consumer_is_the_engines(
     never delivered to, and on Valkey it is a group nobody has read at all
     (docs/COMMANDS.md). Until #251 this test asserted the 7.0 half alone, and it
     failed against the production engine. Both halves are pinned because the dev
-    host's scratch ``redis-server`` is still 7.0.15.
+    host runs the tier on either engine: Valkey by default, apt's 7.0.15 without
+    the shim (docs/TESTING.md, #253).
     """
     consumer = _consumer(real_redis, scratch_topic)
     await consumer.ensure_group(start_id="$")

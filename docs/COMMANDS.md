@@ -232,10 +232,13 @@ curl -s localhost:8001/health | jq
 ```bash
 uv run pytest                              # full suite, coverage gate active
 uv run pytest --no-cov tests/worker/       # subset; skip the gate (it measures all of src/)
-uv run pytest --no-cov -m integration      # a scratch redis-server (TESTING.md), plus the OOM
-                                           # rows against a broker they spawn themselves (#79)
-                                           # and the reconnection rows against one they stop and
-                                           # restart (#94); skip the gate
+
+# Default engine: the broker's Valkey 7.2, shimmed as in CI (#253); unshimmed, apt's 7.0.15.
+shim=~/.cache/replicator/scratch-broker; mkdir -p "$shim"
+ln -sfn /usr/bin/valkey-server "$shim/redis-server"; export PATH="$shim:$PATH"
+redis-server --bind 127.0.0.1 --save '' --appendonly no   # scratch, 6379
+redis-cli INFO server | grep -E '^(server_name|valkey_version|redis_version):'
+uv run pytest --no-cov -m integration      # + OOM (#79), reconnect (#94) self-spawners; no gate
 
 sudo bash scripts/rehearse_reconnect.sh    # the half a pytest cannot reach: systemd's own restart
                                            # semantics across a broker outage (#94). Spawns its
