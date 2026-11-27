@@ -1,10 +1,12 @@
 """Consumer-lifecycle facts the fake broker cannot prove (GH #3).
 
-fakeredis is sound for consumer-group *mechanics* but diverges on *lifecycle*:
-it registers a consumer on an empty ``XREADGROUP``; real Redis registers one only
-on the first delivered message. The default suite therefore asserts the positive
-half (``tests/worker/test_main.py``) and the negative half lives here, where a
-live broker can contradict it.
+fakeredis is sound for consumer-group *mechanics* but keeps its own *lifecycle*:
+it registers a consumer on an empty ``XREADGROUP``. Redis 7.0.15 registers one
+only on the first delivered message. Valkey 7.2.14, the broker's engine since
+CannObserv/broker#85, registers on the empty poll as the fake does (#251, measured
+against both). The default suite asserts only the positive half
+(``tests/worker/test_main.py``). Which way an empty poll goes is asserted here,
+per engine, where a live server can contradict it.
 
 These tests drive ``AsyncBusConsumer`` directly against a scratch stream rather
 than through ``build_consumer``: the property under test belongs to the broker,
@@ -29,22 +31,43 @@ def _consumer(client: Redis, topic: str) -> AsyncBusConsumer:
     return AsyncBusConsumer(client, topic=topic, group=GROUP, consumer=CONSUMER)
 
 
-async def test_empty_poll_does_not_register_the_consumer(real_redis, scratch_topic):
-    """A polling worker is invisible in XINFO CONSUMERS until work arrives.
+def _registers_on_an_empty_poll(server: dict) -> bool:
+    """Whether this engine registers a consumer that has read nothing (#251).
 
-    This is what fakeredis gets wrong, and what a naive "is my consumer alive?"
-    health check would read as a dead worker.
+    Keyed on ``redis_version``, the compatibility level Valkey reports (7.2.4 on
+    Valkey 7.2.14). Measured on 7.0.15 (no) and Valkey 7.2.14 (yes). Redis 7.2
+    itself is unmeasured, and is read from the fork point Valkey 7.2 shares with it.
+    """
+    major, minor = (int(part) for part in str(server["redis_version"]).split(".")[:2])
+    return (major, minor) >= (7, 2)
+
+
+async def test_whether_an_empty_poll_registers_the_consumer_is_the_engines(
+    real_redis, scratch_topic
+):
+    """On 7.0 a polling worker is invisible in XINFO CONSUMERS until work arrives.
+    On the broker's Valkey 7.2 it registers at its first read, empty or not.
+
+    So ``consumers: 0`` changed meaning with broker#85: on 7.0 it was a worker
+    never delivered to, and on Valkey it is a group nobody has read at all
+    (docs/COMMANDS.md). Until #251 this test asserted the 7.0 half alone, and it
+    failed against the production engine. Both halves are pinned because the dev
+    host's scratch ``redis-server`` is still 7.0.15.
     """
     consumer = _consumer(real_redis, scratch_topic)
     await consumer.ensure_group(start_id="$")
 
     assert await consumer.read(count=1, block_ms=1) == []
 
-    assert await real_redis.xinfo_consumers(scratch_topic, GROUP) == []
+    registered = [c["name"] for c in await real_redis.xinfo_consumers(scratch_topic, GROUP)]
+    expected = (
+        [CONSUMER.encode()] if _registers_on_an_empty_poll(await real_redis.info("server")) else []
+    )
+    assert registered == expected
 
 
 async def test_first_delivery_registers_the_consumer(real_redis, scratch_topic):
-    """Delivery — not polling — is what creates the consumer entry."""
+    """Delivery registers the consumer on every engine; on 7.0 it is the only thing that does."""
     consumer = _consumer(real_redis, scratch_topic)
     await consumer.ensure_group(start_id="$")
     await real_redis.xadd(scratch_topic, make_command())

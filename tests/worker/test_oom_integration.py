@@ -97,10 +97,11 @@ pytestmark = pytest.mark.integration
 GROUP = "replicator.oomtest"
 CONSUMER = "replicator@oomtest"
 
-# The cap the experiment runs at, and the issue's own number. A fresh 7.0.15
-# reports ~660 KiB of ``used_memory`` before a single key exists, so 1 MiB leaves
-# a few hundred KiB of headroom — enough that filling it is a real fill and quick
-# enough that it is not a wall-clock tax.
+# The cap the experiment runs at, and the issue's own number. A fresh server
+# reports 645-667 KiB of ``used_memory`` before a single key exists (Redis 7.0.15,
+# and Ubuntu's Valkey 7.2.14, the broker's and CI's engine since #251), so 1 MiB
+# leaves a few hundred KiB of headroom — enough that filling it is a real fill
+# and quick enough that it is not a wall-clock tax.
 CAP_BYTES = 1024 * 1024
 
 # One ballast entry, and the size is the load-bearing part of it. Redis compares
