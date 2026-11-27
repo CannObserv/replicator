@@ -285,28 +285,28 @@ wheels = [
 
 [[package]]
 name = "co-core"
-version = "0.53.1"
+version = "0.53.3"
 source = { registry = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/simple/" }
 dependencies = [
     { name = "dateparser" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/co-core/co_core-0.53.1.tar.gz", hash = "sha256:6eed0b4b87e6a614b6919272bf61fa2e5a970781af4bdebc964aed7117be8ad9" }
+sdist = { url = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/co-core/co_core-0.53.3.tar.gz", hash = "sha256:7d6ed3d3be73cfe7e794c0e95f2bbfd9dea9679782116bc2b29e5afb78fa0613" }
 wheels = [
-    { url = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/co-core/co_core-0.53.1-py3-none-any.whl", hash = "sha256:845a01a52e98717e4c62dace20044aaecc097aa3e8b2ae8a9f85f8d8c71e8adc" },
+    { url = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/co-core/co_core-0.53.3-py3-none-any.whl", hash = "sha256:2b2334fd0e0414617ad6476f37c30cb3dc6dab7837452247a38710ea20a4b49e" },
 ]
 
 [[package]]
 name = "co-core-aio"
-version = "0.53.1"
+version = "0.53.3"
 source = { registry = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/simple/" }
 dependencies = [
     { name = "co-core" },
     { name = "httpx" },
 ]
-sdist = { url = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/co-core-aio/co_core_aio-0.53.1.tar.gz", hash = "sha256:0470ae5532cc867295273143fa62238c1b9dadb64713e4196529a0ef14bc9b0a" }
+sdist = { url = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/co-core-aio/co_core_aio-0.53.3.tar.gz", hash = "sha256:0f3b093b3ec179e8238527286781c8e7537ec588f28b23960fc5c10b296c6f24" }
 wheels = [
-    { url = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/co-core-aio/co_core_aio-0.53.1-py3-none-any.whl", hash = "sha256:1fcde6e5922343012f217ec24774d161c1dc57572cf7dd6a6b22722f87785e92" },
+    { url = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/co-core-aio/co_core_aio-0.53.3-py3-none-any.whl", hash = "sha256:16a03499dd12d0d34639d1344aabc6420b71f0a1288d3ad4ca654c4acab99387" },
 ]
 
 [package.optional-dependencies]
@@ -320,16 +320,16 @@ gcs = [
 
 [[package]]
 name = "co-core-sync"
-version = "0.53.1"
+version = "0.53.3"
 source = { registry = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/simple/" }
 dependencies = [
     { name = "co-core" },
     { name = "requests" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/co-core-sync/co_core_sync-0.53.1.tar.gz", hash = "sha256:2f7b538986c3da05a2c56618778c622b1418d6588789848ec3736c329468ec71" }
+sdist = { url = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/co-core-sync/co_core_sync-0.53.3.tar.gz", hash = "sha256:9000b6b60584be11875fb624628a2d5536fc257e6b2b720b57e1c2be7b42f85f" }
 wheels = [
-    { url = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/co-core-sync/co_core_sync-0.53.1-py3-none-any.whl", hash = "sha256:cac342eec5aa5d670e7545f6f64876b253381defa9d54fd250c4b97ece55a707" },
+    { url = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/co-core-sync/co_core_sync-0.53.3-py3-none-any.whl", hash = "sha256:eba68813353094e755a896183808ffd65a23a65d6789e0ac44a1ec65103ffd8d" },
 ]
 
 [package.optional-dependencies]
@@ -1409,9 +1409,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "co-core", specifier = ">=0.53.1,<0.54", index = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/simple/" },
-    { name = "co-core-aio", extras = ["bus", "gcs"], specifier = ">=0.53.1,<0.54", index = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/simple/" },
-    { name = "co-core-sync", extras = ["gcs"], specifier = ">=0.53.1,<0.54", index = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/simple/" },
+    { name = "co-core", specifier = ">=0.53.3,<0.54", index = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/simple/" },
+    { name = "co-core-aio", extras = ["bus", "gcs"], specifier = ">=0.53.3,<0.54", index = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/simple/" },
+    { name = "co-core-sync", extras = ["gcs"], specifier = ">=0.53.3,<0.54", index = "https://us-west1-python.pkg.dev/co-gcs/co-pypi/simple/" },
     { name = "fastapi", specifier = ">=0.165.0,<1" },
     { name = "playwright", specifier = "==1.65.2" },
     { name = "pydantic", specifier = ">=2.14.4,<3" },
