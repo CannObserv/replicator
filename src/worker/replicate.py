@@ -250,7 +250,8 @@ def fingerprint_in(blob_uri: str) -> str | None:
         return None
     stem = parts.path.rsplit("/", 1)[-1].removesuffix(".bin")
     # ``fullmatch``, the store's own call. The pattern ended in ``$`` before co-core
-    # 0.53.3, and ``.match`` then admitted a final ``\n``; this holds on either (#243).
+    # 0.53.3, where ``.match`` admitted a final ``\n``. ``fullmatch`` refuses it
+    # whichever way the pattern is anchored (#243).
     return stem if FINGERPRINT_RE.fullmatch(stem) else None
 
 
