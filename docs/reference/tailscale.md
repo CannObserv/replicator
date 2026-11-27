@@ -91,7 +91,7 @@ not buy the floor check. Offsets are from tailscaled starting:
 |---|---|---|---|
 | `After=` only | +1.65 s | +0.73 s | `UNVERIFIED` — `No address associated with hostname` |
 | + a wait for the tailnet address | +0.61 s | +0.80 s, address already local | `UNVERIFIED` — same error |
-| + the floor check retrying (#88) | +1.65 s | retried, +1.76 s | `broker reachable after 1s`, 7.0.15 meets the floor |
+| + the floor check retrying (#88) | +1.65 s | retried, +1.76 s | `broker reachable after 1s`, 7.0.15 meets the floor (Redis, before broker#85) |
 
 `No address associated with hostname` is `EAI_NODATA` — the cohort's `Error -5`
 — and it is an *answer*: MagicDNS is up but does not yet return `broker`.

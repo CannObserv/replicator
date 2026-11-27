@@ -281,10 +281,12 @@ Group and connection state are **not observable from this host at all** — the 
 carry it are in the denied column above — so they have to be asked of the broker operator. Two
 things to know before asking (#85):
 
-- **`consumers: 0` on `XINFO GROUPS` is not evidence of a dead worker** on a stream that has
-  never carried a message. Redis registers a consumer only when a read *returns* an entry, so a
-  worker blocked on an empty stream registers nothing — the state of `content.replicate` and
-  `content.artifacts` today (broker#7).
+- **`consumers` on `XINFO GROUPS` changed meaning with the engine.** On Redis 7.0.15 a consumer
+  registered only when a read *returned* an entry, so `consumers: 0` on a stream that had never
+  carried a message was a healthy worker blocked on it (broker#7). The broker's Valkey 7.2.14
+  (broker#85) registers a consumer at its first read, empty or not, so `0` now means nobody has
+  read the group (#251, measured on a scratch server). A non-zero count is no liveness signal
+  either: a registration persists until an `XGROUP DELCONSUMER` that nothing calls.
 - **The liveness signal for a low-traffic group is `flags=b` on the connection**, from
   `CLIENT LIST`: `b` means genuinely blocked in Redis, as against `N` for a connection that
   merely ran a read once. That field is what distinguished a healthy worker from #85's spinning
