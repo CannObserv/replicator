@@ -25,7 +25,7 @@ The root is shared by the worker's temp blobs, the journal, and the dev sessions
 
 The change bus runs on `co-broker` (tailnet `broker`), operated from CannObserv/broker (broker#1). Replicator is a **client** — the `replicator` ACL user (broker#2) — and never ships a broker. The `redis-server` here is a binary for tests that spawn their own; its service is masked.
 
-**Redis ≥ 7.0 is Replicator-critical.** Replicator is the cluster's first user of `AsyncBusConsumer.claim_stale_page` (`claim_stale` before #109), which reads `XAUTOCLAIM`'s three-element reply — the deleted-ids element added in Redis **server** 7.0. Below that, the crash-recovery path raises. The recovery walk also resumes with an exclusive `(<id>` start (#109), which the server resolves; verified on 7.0.15 and on Valkey 7.2.14 (#251), and pinned by `tests/worker/test_fake_xautoclaim_integration.py`. `scripts/check_redis_floor.sh` guards this as an `ExecStartPre`. On a cold boot `After=tailscaled.service` is not enough — MagicDNS answers `broker` with no address for a moment after tailscaled starts — so the check retries an unreachable broker for `REPLICATOR_REDIS_FLOOR_WAIT` (#88). The broker runs Ubuntu's Valkey 7.2.14 since 2026-11-27 (broker#85; Redis 7.0.15 before). Its `INFO server` reports `redis_version:7.2.4`, the Redis level Valkey is compatible with, and that is the field the check reads and prints, so its journal line says `Redis 7.2.4 meets the >=7.0 floor`: the level the floor is defined against, not the engine. The wording is archiver's and stays (#251).
+**Redis ≥ 7.0 is Replicator-critical.** Replicator is the cluster's first user of `AsyncBusConsumer.claim_stale_page` (`claim_stale` before #109), which reads `XAUTOCLAIM`'s three-element reply — the deleted-ids element added in Redis **server** 7.0. Below that, the crash-recovery path raises. The recovery walk also resumes with an exclusive `(<id>` start (#109), which the server resolves; verified on 7.0.15 and on Valkey 7.2.14 (#251), and pinned by `tests/worker/test_fake_xautoclaim_integration.py`. `scripts/check_redis_floor.sh` guards this as an `ExecStartPre`. On a cold boot `After=tailscaled.service` is not enough — MagicDNS answers `broker` with no address for a moment after tailscaled starts — so the check retries an unreachable broker for `REPLICATOR_REDIS_FLOOR_WAIT` (#88). The broker is Ubuntu's Valkey 7.2.14 since broker#85; the check's `Redis 7.2.4` line is its compatibility `redis_version` (#251).
 
 The **redis-py client** resolves `>=5,<8` transitively via `co-core-aio[bus]`. Don't re-pin it narrower.
 
@@ -54,9 +54,9 @@ command grant:
 Persist's queue joined 2026-09-26 (broker#64), capture's with broker#114 (`7fe8f44`), each read
 from broker's `deploy/redis-acl.conf`. `XDEL` works on those four and is refused on every other key
 this credential reaches, command and fact streams included; the root permission set never gains
-`+xdel`. Verified on the broker's node against Redis 7.0.15, before broker#85's Valkey, and not from here: a drained queue shows by its
-depth (`content.replicate.dlq` is 0), but the selector's shape can't be proven without deleting
-something. The grant adds `+xdel` alone, so per-id deletion is the only disposal: precise, never
+`+xdel`. Verified on the broker's node against Redis 7.0.15 (before broker#85), not from here:
+a drained queue shows by its depth (`content.replicate.dlq` is 0), but the selector's shape can't
+be proven without deleting something. The grant adds `+xdel` alone, so per-id deletion is the only disposal: precise, never
 a queue wipe.
 
 ## The semantic index is `co-index` — a store this repo is a client of

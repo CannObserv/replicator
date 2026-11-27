@@ -242,22 +242,21 @@ the one thing it must never do is produce that state on the shared broker:
 `OOM command not allowed` would refuse `XADD` for archiver, watcher and notifier
 at the same time. The module therefore **spawns its own `redis-server`** — a free
 loopback port, `maxmemory-policy noeviction`, `--appendonly no --save ''`,
-`maxclients` pinned, started uncapped, killed in teardown — and never reads `REPLICATOR_TEST_REDIS_URL`, which
-names the server it is avoiding.
+`maxclients` pinned, started uncapped, killed in teardown — and never reads
+`REPLICATOR_TEST_REDIS_URL`, which names the server it is avoiding.
 
 It runs under the existing `integration` marker rather than a third one: it does
 hit a real broker, it is local and free, and a marker whose meaning is "starts a
 process" would split the suite along a line nobody selects on.
 
 **CI runs this file and no other marked one (#83).** The `test` job installs
-the broker's own engine, Ubuntu's `valkey-server` from noble-updates (#251;
-apt's `redis-server` 7.0.15 before), and puts it on PATH as `redis-server`, the
-name the fixture spawns. It asserts that name resolved, and to Valkey 7.2. A
-skip here is silent by construction, so an apt failure would otherwise leave a
-green job with the suite unrun, the same hazard the `gcs` job asserts its way
-out of. Then it runs the file explicitly. Every other `@pytest.mark.integration` test still needs a scratch
-`redis-server` (the production broker refuses them, above) and never runs in CI, so the marker's meaning is unchanged: what
-CI selects is a path, not a marker. `tests/ci/test_workflow_runs.py` pins the
+the broker's own engine, Ubuntu's `valkey-server` (#251; `redis-server` 7.0.15
+before), shims it onto PATH as `redis-server`, asserts the name resolved to
+Valkey 7.2 — a skip is silent by construction, the hazard the `gcs` job asserts
+its way out of — and runs the file explicitly. Every other
+`@pytest.mark.integration` test still needs a scratch `redis-server` (the
+production broker refuses them, above) and never runs in CI, so the marker's
+meaning is unchanged: what CI selects is a path, not a marker. `tests/ci/test_workflow_runs.py` pins the
 step, the engine and the guard, because deleting any of them leaves a workflow
 that still passes.
 
