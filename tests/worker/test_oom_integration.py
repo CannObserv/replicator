@@ -111,8 +111,9 @@ MIN_HEADROOM_BYTES = 256 * 1024
 
 # Pinned because otherwise the server derives it from the open-file limit, and a
 # fresh server's ``used_memory`` grows ~64 B a slot. Unpinned, the baseline was
-# whatever the host's ``ulimit -n`` made it: ~660 KB here, and over the cap for
-# Valkey on a CI runner (#251). The suite needs a handful of connections.
+# whatever the host's ``ulimit -n`` made it: ~660 KB here, and projected over the
+# cap for Valkey on a CI runner, which failed there until this pin (#251). The
+# suite needs a handful of connections.
 SCRATCH_MAXCLIENTS = 256
 
 # One ballast entry, and the size is the load-bearing part of it. Redis compares
@@ -551,13 +552,14 @@ async def times_delivered(client, topic: str, message_id: str) -> int:
 async def test_a_fresh_scratch_broker_starts_well_under_the_cap(broker):
     """The headroom ``cap()`` fills has to exist on every host, not only this one.
 
-    A fresh server's ``used_memory`` grows by ~64 B for each ``maxclients`` slot,
-    and ``maxclients`` follows the open-file limit unless it is set. The limit is
-    4096 here and 65536 on a CI runner, so maxclients is 4064 here and 10000
-    there. On the runner Redis 7.0.15 started about 8 KB under the 1 MiB cap, and
-    Valkey 7.2.14 started over it: #251's first CI run failed
-    ``test_a_full_cap_refuses_a_publish_as_out_of_memory`` with zero ballast
-    written. ``MIN_HEADROOM_BYTES`` is the bar, so the fill stays a real fill.
+    A fresh server's ``used_memory`` grows by ~64 B for each ``maxclients`` slot
+    (measured at 992 and 4064 slots, on both engines), and ``maxclients`` follows
+    the open-file limit unless it is set. That limit is 4096 here. A runner's is
+    65536 (GitHub's default, not read in the run), so 10000 slots, which projects
+    Redis 7.0.15 to about 8 KB under the 1 MiB cap and Valkey 7.2.14 to over it.
+    #251's first CI run failed ``test_a_full_cap_refuses_a_publish_as_out_of_memory``
+    with zero ballast written, and pinning ``maxclients`` turned it green.
+    ``MIN_HEADROOM_BYTES`` is the bar, so the fill stays a real fill.
     """
     used = (await broker.client.info("memory"))["used_memory"]
 

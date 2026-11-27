@@ -281,12 +281,11 @@ Skips when `redis-server` is not on PATH. Four details are load-bearing:
   `pkill -f "redis-server 127.0.0.1:"` clears one — the fixture binds loopback
   only, so that pattern cannot match a broker bound to any other address.
 - **`maxclients` is pinned, so the headroom is the same on every host.** Left
-  unset, the server derives it from the open-file limit, and a fresh server's
-  `used_memory` grows ~64 B a slot: ~660 KB here (limit 4096), and over the 1 MiB
-  cap for Valkey on a CI runner (limit 65536). #251's first CI run failed that way
-  with zero ballast written. Redis 7.0.15 had been passing there by about 8 KB.
-  `test_a_fresh_scratch_broker_starts_well_under_the_cap` keeps 256 KiB of
-  headroom asserted.
+  unset, it follows the open-file limit and the fresh baseline with it: ~660 KB
+  here, and projected over the 1 MiB cap for Valkey on a CI runner, where #251's
+  first run failed with zero ballast written.
+  `test_a_fresh_scratch_broker_starts_well_under_the_cap` asserts the headroom
+  and carries the numbers.
 - **The cap is *reached*, not merely configured.** `CappedBroker.cap()` sets
   `maxmemory` and then fills the instance until a write is refused, because "the
   cap is set" and "the cap bites" are different states and only the second is what
