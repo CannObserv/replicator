@@ -36,18 +36,20 @@ def _stub_redis_cli(
     tls: bool = True,
     stderr: str = "",
     exit_code: int = 0,
+    info: tuple[str, ...] = (),
 ) -> Path:
     """Write a fake `redis-cli` to a bin dir; return the dir for PATH.
 
     `--help` output includes `--tls` iff `tls`. `INFO server` prints a
-    `redis_version:` line iff `version` is given. `stderr` and `exit_code` model
-    the failures that produce no stdout at all - before archiver#195 they were
-    indistinguishable from each other.
+    `redis_version:` line iff `version` is given, then the `info` lines. `stderr`
+    and `exit_code` model the failures that produce no stdout at all - before
+    archiver#195 they were indistinguishable from each other.
     """
     binder = tmp_path / "bin"
     binder.mkdir()
     help_tls = "  --tls    Use TLS.\n" if tls else ""
     version_line = f'  echo "redis_version:{version}"' if version is not None else "  true"
+    version_line += "".join(f'\n  echo "{line}"' for line in info)
     # %b, not %s: a multi-line `stderr` arrives here as a repr with an escaped
     # newline, and only %b expands it back into two lines.
     fail_lines = (
@@ -114,6 +116,22 @@ def test_version_at_floor_passes(tmp_path: Path) -> None:
     result = _run(bindir, {"REPLICATOR_REDIS_URL": "redis://default:pw@broker:6379/0"})
     assert result.returncode == 0
     assert "meets the >=7.0 floor" in result.stdout
+
+
+def test_valkey_is_judged_by_its_redis_version(tmp_path: Path) -> None:
+    """#251: since broker#85 the broker is Ubuntu's Valkey 7.2.14, whose `INFO server`
+    carries two versions. The floor reads `redis_version`, the Redis compatibility
+    level Valkey reports (7.2.4, measured), never `valkey_version` (7.2.14), and the
+    line says `Redis 7.2.4`: the level the floor is defined against, not the engine.
+    The #243 deploy's `ExecStartPre` printed exactly this line, so the wording stays.
+    """
+    bindir = _stub_redis_cli(
+        tmp_path, version="7.2.4", info=("server_name:valkey", "valkey_version:7.2.14")
+    )
+    result = _run(bindir, {"REPLICATOR_REDIS_URL": "redis://default:pw@broker:6379/0"})
+
+    assert result.returncode == 0
+    assert result.stdout == "check_redis_floor: Redis 7.2.4 meets the >=7.0 floor\n"
 
 
 def test_version_below_floor_blocks(tmp_path: Path) -> None:

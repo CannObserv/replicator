@@ -2,10 +2,11 @@
 
 The fake is sound for consumer-group *mechanics*, and the default suite leans on
 it for every outcome ``process_message`` can produce. What it diverges on is
-*lifecycle* and *timing*: it registers a consumer on an empty ``XREADGROUP``
-(GH #3, covered in ``test_main_integration.py``) and it ignores ``block``
-entirely. So the properties here are the ones whose truth is a claim about *when*
-Redis acts, or about a reply shape the fake never produces:
+*timing*: it ignores ``block`` entirely. On Redis 7.0 it diverged on *lifecycle*
+too, registering a consumer on an empty ``XREADGROUP``, which the broker's
+Valkey 7.2 also does (GH #3, #251, covered in ``test_main_integration.py``). So
+the properties here are the ones whose truth is a claim about *when* Redis acts,
+or about a reply shape the fake never produces:
 
 1. ``claim_stale_page`` against a real PEL — the reason for the Redis >= 7.0 floor.
    ``XAUTOCLAIM``'s three-element reply, with the deleted-ids element added in

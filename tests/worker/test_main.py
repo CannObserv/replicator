@@ -131,10 +131,10 @@ async def test_the_command_stream_is_overridable(fake_redis):
 async def test_consumer_registers_under_the_configured_group(fake_redis, monkeypatch):
     """The configured name is the identity Redis records — asserted on delivery.
 
-    A *delivered* message is what registers a consumer; an empty poll does not
-    (GH #3). fakeredis registers on either, so triggering it with real bytes is
-    what keeps this assertion true of the broker Replicator actually runs
-    against. The negative half lives in ``tests/worker/test_main_integration.py``.
+    A *delivered* message registers a consumer on every engine. An empty poll
+    did not on Redis 7.0 (GH #3) and does on the broker's Valkey 7.2 (#251), so
+    triggering it with real bytes keeps this assertion true of either. The
+    empty-poll half lives in ``tests/worker/test_main_integration.py``.
     """
     monkeypatch.setenv("REPLICATOR_CONSUMER_GROUP", "replicator.fetch")
     monkeypatch.setenv("REPLICATOR_CONSUMER_NAME", "replicator@test")
@@ -247,10 +247,10 @@ async def test_each_group_registers_under_its_own_derived_name(fake_redis, monke
     ``REPLICATOR_CONSUMER_NAME``, so the derivation has to be per-group or the
     two registrations collapse back onto one string.
 
-    fakeredis registers a consumer on an empty poll where the live broker needs a
-    delivery (GH #3) — relied on here deliberately, so the assertion is about the
-    name ``build_consumer`` passed and not about decoding a payload for each of
-    two different command schemas.
+    fakeredis registers a consumer on an empty poll, as the broker's Valkey 7.2
+    does and Redis 7.0 did not (GH #3, #251). That is relied on here
+    deliberately, so the assertion is about the name ``build_consumer`` passed
+    and not about decoding a payload for each of two different command schemas.
     """
     monkeypatch.delenv("REPLICATOR_CONSUMER_NAME", raising=False)
     get_settings.cache_clear()
