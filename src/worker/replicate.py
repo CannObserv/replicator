@@ -249,8 +249,8 @@ def fingerprint_in(blob_uri: str) -> str | None:
     if parts.scheme not in _BLOB_URI_SCHEMES or not parts.path:
         return None
     stem = parts.path.rsplit("/", 1)[-1].removesuffix(".bin")
-    # ``fullmatch``, the store's own call: the pattern ends in ``$``, which with
-    # ``.match`` admits a final ``\n``. urlsplit stripping newlines isn't the guard (#243).
+    # ``fullmatch``, the store's own call. The pattern ended in ``$`` before co-core
+    # 0.53.3, and ``.match`` then admitted a final ``\n``; this holds on either (#243).
     return stem if FINGERPRINT_RE.fullmatch(stem) else None
 
 

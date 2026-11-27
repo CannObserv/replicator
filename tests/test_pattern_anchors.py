@@ -38,6 +38,8 @@ VALID = {
     "HEADER_NAME": "accept",
     "HEADER_VALUE": "text/html",
     "_ALIAS_NAME": "gcs-reader",
+    # co-core's, imported by replicate: end of input since 0.53.3 (cannobserv#782).
+    "FINGERPRINT_RE": "0" * 64,
 }
 
 # Patterns that are deliberately not end-anchored, each with its reason.
@@ -45,11 +47,6 @@ EXEMPT = {
     "_NET_ERROR": (
         "an extractor, not a validator: browser.py calls .search to pull the "
         "net::ERR_* code out of a Playwright error message"
-    ),
-    "FINGERPRINT_RE": (
-        "co-core's ^…$ pattern (cannobserv#763 changed only the alias patterns). "
-        "Its one call site, replicate.fingerprint_in, uses fullmatch, pinned by "
-        "test_the_fingerprint_check_needs_no_help_from_urlsplit"
     ),
 }
 
@@ -112,9 +109,9 @@ def test_every_enrolment_names_a_discovered_pattern():
 def test_every_exemption_is_still_needed(name):
     """An exempt pattern that gains an absolute anchor should be probed instead.
 
-    ``FINGERPRINT_RE`` is the expected case: if co-core moves it off ``$``, as
-    cannobserv#763 did for the alias patterns, this fails. Then move it into
-    ``VALID`` with ``"0" * 64``.
+    ``FINGERPRINT_RE`` was the case this was written for: exempt on co-core
+    0.53.1's ``$``, it failed here at 0.53.3 (cannobserv#782) and moved into
+    ``VALID`` (#243).
     """
     assert name in SUBJECTS
     assert not SUBJECTS[name].pattern.endswith(END_ANCHORS), f"{name} is anchored: probe it"
@@ -124,7 +121,7 @@ def test_the_anchoring_check_has_subjects():
     """A reflection-driven parametrize that finds nothing passes silently.
 
     A rename or a move that empties the walk would take the coverage with it
-    while every test above stays green. Five at #243: three probed, two exempt.
+    while every test above stays green. Five at #243: four probed, one exempt.
     """
     assert len(SUBJECTS) >= 5
 
