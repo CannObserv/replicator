@@ -136,6 +136,28 @@ def test_a_missing_scratch_broker_fails_ci_rather_than_skipping():
     assert guard, "nothing in CI fails the job when redis-server did not resolve"
 
 
+def test_the_oom_suite_runs_on_the_brokers_engine():
+    """#251: the scratch broker is the package the broker runs, not apt's Redis 7.0.15.
+
+    Since broker#85 (2026-11-27) co-broker is Ubuntu's own ``valkey-server`` from
+    noble-updates, so CI installs that package by name: both take the same pocket,
+    and a version pin would break each time noble-updates moved. The package ships
+    no ``redis-server`` (that's ``valkey-redis-compat``, which conflicts with Redis
+    and which the broker refuses), so the step puts that name on PATH for the
+    fixture. The guard then checks the name resolves to Valkey 7.2, so a stray Redis
+    on the image can't quietly stand in for the broker's engine.
+    """
+    text = CI.read_text(encoding="utf-8")
+
+    assert "apt-get install -y --no-install-recommends valkey-server" in text
+    assert "apt-get install -y --no-install-recommends redis-server" not in text
+    assert 'ln -s /usr/bin/valkey-server "$RUNNER_TEMP/scratch-broker/redis-server"' in text
+    assert '"$RUNNER_TEMP/scratch-broker" >> "$GITHUB_PATH"' in text
+    assert re.search(r'case "\$v" in\s+"Server v=7\.2\."\*\)', text), (
+        "the guard must assert the resolved redis-server is Valkey 7.2"
+    )
+
+
 def test_the_browser_suite_runs_in_ci_inside_a_delegated_scope():
     """#138: `-m browser` is deselected by default, so this job is its only run.
 

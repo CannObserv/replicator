@@ -98,7 +98,7 @@ def test_the_step_rule_finds_the_network_installs():
     """A renamed command would leave the bound check below reading nothing, green."""
     found = {(name, step["name"]) for name, _, step in _network_install_steps(CI)}
     assert found == {
-        ("test", "Install redis-server (the OOM suite spawns its own broker)"),
+        ("test", "Install valkey-server (the broker's engine; the OOM suite spawns its own)"),
         ("browser", "Install the pinned headless shell and its libraries"),
     }
 
