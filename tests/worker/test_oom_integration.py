@@ -97,12 +97,23 @@ pytestmark = pytest.mark.integration
 GROUP = "replicator.oomtest"
 CONSUMER = "replicator@oomtest"
 
-# The cap the experiment runs at, and the issue's own number. A fresh server
-# reports 645-667 KiB of ``used_memory`` before a single key exists (Redis 7.0.15,
-# and Ubuntu's Valkey 7.2.14, the broker's and CI's engine since #251), so 1 MiB
-# leaves a few hundred KiB of headroom — enough that filling it is a real fill
-# and quick enough that it is not a wall-clock tax.
+# The cap the experiment runs at, and the issue's own number. With
+# ``SCRATCH_MAXCLIENTS`` pinned, a fresh server with this module's client
+# connected reports 493,344 B of ``used_memory`` on Redis 7.0.15 and
+# 540,120 B on Ubuntu's Valkey 7.2.14, the broker's and CI's engine since
+# #251. The headroom left is big enough that filling it is a real fill, and
+# small enough that it is no wall-clock tax.
 CAP_BYTES = 1024 * 1024
+
+# The least headroom a fresh server must leave under ``CAP_BYTES``, asserted by
+# ``test_a_fresh_scratch_broker_starts_well_under_the_cap``.
+MIN_HEADROOM_BYTES = 256 * 1024
+
+# Pinned because otherwise the server derives it from the open-file limit, and a
+# fresh server's ``used_memory`` grows ~64 B a slot. Unpinned, the baseline was
+# whatever the host's ``ulimit -n`` made it: ~660 KB here, and over the cap for
+# Valkey on a CI runner (#251). The suite needs a handful of connections.
+SCRATCH_MAXCLIENTS = 256
 
 # One ballast entry, and the size is the load-bearing part of it. Redis compares
 # ``used_memory`` against ``maxmemory`` at the moment a ``denyoom`` command runs
@@ -115,8 +126,8 @@ CAP_BYTES = 1024 * 1024
 BALLAST_BYTES = 512
 
 # A bound, not an expectation: the fill loop must not become an infinite one if a
-# future Redis stops refusing writes at its own cap. ~1,200 entries reach a 1 MiB
-# cap from a fresh instance at this size.
+# future Redis stops refusing writes at its own cap. 890 entries reach a 1 MiB cap
+# from a fresh Redis 7.0.15 at this size, and 813 from Valkey 7.2.14 (#251).
 MAX_BALLAST_ENTRIES = 20_000
 
 # The stream the fill writes to, and the one ``cap()`` checks the refusal is
@@ -314,6 +325,8 @@ async def capped_server(tmp_path_factory) -> AsyncGenerator[Redis]:
         "0",
         "--maxmemory-policy",
         "noeviction",
+        "--maxclients",
+        str(SCRATCH_MAXCLIENTS),
         "--appendonly",
         "no",
         "--save",
@@ -533,6 +546,25 @@ def delivered_at_least(client, topic: str, message_id: str, attempts: int):
 async def times_delivered(client, topic: str, message_id: str) -> int:
     entries = await client.xpending_range(topic, GROUP, min=message_id, max=message_id, count=1)
     return int(entries[0]["times_delivered"])
+
+
+async def test_a_fresh_scratch_broker_starts_well_under_the_cap(broker):
+    """The headroom ``cap()`` fills has to exist on every host, not only this one.
+
+    A fresh server's ``used_memory`` grows by ~64 B for each ``maxclients`` slot,
+    and ``maxclients`` follows the open-file limit unless it is set. The limit is
+    4096 here and 65536 on a CI runner, so maxclients is 4064 here and 10000
+    there. On the runner Redis 7.0.15 started about 8 KB under the 1 MiB cap, and
+    Valkey 7.2.14 started over it: #251's first CI run failed
+    ``test_a_full_cap_refuses_a_publish_as_out_of_memory`` with zero ballast
+    written. ``MIN_HEADROOM_BYTES`` is the bar, so the fill stays a real fill.
+    """
+    used = (await broker.client.info("memory"))["used_memory"]
+
+    assert CAP_BYTES - used >= MIN_HEADROOM_BYTES, (
+        f"a fresh scratch broker already uses {used} B of a {CAP_BYTES} B cap; "
+        "is its maxclients pinned (capped_server)?"
+    )
 
 
 async def test_a_full_cap_refuses_a_publish_as_out_of_memory(broker, blobs_topic):

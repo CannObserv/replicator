@@ -241,8 +241,8 @@ the one thing it must never do is produce that state on the shared broker:
 `maxmemory` is instance-wide, so lowering `co-broker`'s cap to force an
 `OOM command not allowed` would refuse `XADD` for archiver, watcher and notifier
 at the same time. The module therefore **spawns its own `redis-server`** — a free
-loopback port, `maxmemory-policy noeviction`, `--appendonly no --save ''`, started
-uncapped, killed in teardown — and never reads `REPLICATOR_TEST_REDIS_URL`, which
+loopback port, `maxmemory-policy noeviction`, `--appendonly no --save ''`,
+`maxclients` pinned, started uncapped, killed in teardown — and never reads `REPLICATOR_TEST_REDIS_URL`, which
 names the server it is avoiding.
 
 It runs under the existing `integration` marker rather than a third one: it does
@@ -265,7 +265,7 @@ that still passes.
 uv run pytest --no-cov -m integration tests/worker/test_oom_integration.py
 ```
 
-Skips when `redis-server` is not on PATH. Three details are load-bearing:
+Skips when `redis-server` is not on PATH. Four details are load-bearing:
 
 - **The fixture refuses a broker it did not start.** Binding a free port and then
   starting a server on it is a race, and losing that race does not look like a
@@ -280,6 +280,13 @@ Skips when `redis-server` is not on PATH. Three details are load-bearing:
   run, which binds its own port and checks the pid;
   `pkill -f "redis-server 127.0.0.1:"` clears one — the fixture binds loopback
   only, so that pattern cannot match a broker bound to any other address.
+- **`maxclients` is pinned, so the headroom is the same on every host.** Left
+  unset, the server derives it from the open-file limit, and a fresh server's
+  `used_memory` grows ~64 B a slot: ~660 KB here (limit 4096), and over the 1 MiB
+  cap for Valkey on a CI runner (limit 65536). #251's first CI run failed that way
+  with zero ballast written. Redis 7.0.15 had been passing there by about 8 KB.
+  `test_a_fresh_scratch_broker_starts_well_under_the_cap` keeps 256 KiB of
+  headroom asserted.
 - **The cap is *reached*, not merely configured.** `CappedBroker.cap()` sets
   `maxmemory` and then fills the instance until a write is refused, because "the
   cap is set" and "the cap bites" are different states and only the second is what
