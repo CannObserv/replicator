@@ -60,7 +60,7 @@ def test_every_file_from_the_index_is_hashed_and_there_is_a_wheel():
 
 
 def test_the_locked_versions_sit_inside_the_pin():
-    """The index lists nothing past 0.53.1 [measured 2026-11-24, #238]; the pin's
+    """The index lists nothing past 0.53.3 [measured 2026-11-27, #243]; the pin's
     upper bound keeps the next minor out until the change that moves it."""
     pins = {
         (r := Requirement(spec)).name: r.specifier

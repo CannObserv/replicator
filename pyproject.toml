@@ -7,7 +7,62 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
-    # Floor is 0.53.1 (#238), straight from 0.51.1: one move, not two (operator,
+    # Floor is 0.53.3 (#243), for cannobserv#782: co-core's `FINGERPRINT_RE` ends in
+    # `(?![\s\S])` instead of `$`. `tests/test_pattern_anchors.py` probes it through
+    # `replicate`'s import, so an older wheel fails there. `replicate.fingerprint_in`
+    # already called `fullmatch` (#248), so the pattern is a second guard, not the
+    # only one. 0.53.2 brings nothing the code uses; 0.53.0's cannobserv#629 (below)
+    # is still what the policy reader depends on. The lock takes 0.53.3, the
+    # index's newest with the bound opened to `<1` [measured 2026-11-27].
+    # `co-core-aio` and `co-core-sync` 0.53.3 require `co-core>=0.53.3,<0.54`, so the
+    # three move together.
+    #
+    # **`scripts/co_core_closure_diff.py 0.53.1 0.53.3`** (#145), verbatim, from
+    # the wheels this lock pins (their sha256 matched against `uv.lock`):
+    #
+    # ## Import closure, 0.53.1 → 0.53.3
+    #
+    # Roots `src`, `scripts`; packages `co_core`, `co_core_aio`, `co_core_sync`.
+    #
+    # 58 files at 0.53.1, 58 at 0.53.3. 5 not identical:
+    #
+    # - `version-only` co_core/__init__.py
+    # - `changed` co_core/pure/models/changes.py
+    # - `changed` co_core/pure/util/blobstore.py
+    # - `version-only` co_core_aio/__init__.py
+    # - `version-only` co_core_sync/__init__.py
+    #
+    # **Requires-Dist:**
+    #
+    # - co_core: unchanged
+    # - co_core_aio: removed `co-core<0.54,>=0.53.1`; added `co-core<0.54,>=0.53.3`
+    # - co_core_sync: removed `co-core<0.54,>=0.53.1`; added `co-core<0.54,>=0.53.3`
+    #
+    # **Third-party imports** (at 0.53.3): `google`, `google_auth_oauthlib`, `googleapiclient`, `httpx`, `pydantic`, `redis`, `requests`, `urllib3`.
+    #
+    # **Dynamic imports, not followed:**
+    #
+    # - co_core_sync/drivers/__init__.py:89 `import_module(f"{__name__}.{module}")`
+    # - co_core_sync/drivers/blobstore/__init__.py:32 `import_module(f"{__name__}.{module}")`
+    #
+    # Read by hand (`--diff`; per-step diffs place each change):
+    #
+    # - `pure/models/changes.py` (0.53.2, cannobserv#780): `RegistryAnnouncementState`
+    #   gains `fetch_headers` and `fetch_credential_headers`, both `dict | None`;
+    #   `RegistryAnnouncementEmit` narrows them to `dict[str, str]` and adds
+    #   `hide_input_in_errors=True` and a validator. Those two classes are the only
+    #   definitions that differ [AST]; `FetchPolicyState`, the reason the module is
+    #   in the closure, is identical. Nothing in `src/`, `scripts/` or `tests/` names
+    #   either class [grep].
+    # - `pure/util/blobstore.py` (0.53.3, cannobserv#782): `FINGERPRINT_RE` only. The
+    #   store's own `fullmatch` call is unchanged.
+    #
+    # Outside the closure, by whole-wheel diff [measured]: nothing. These five are
+    # every file that differs between the 0.53.1 and 0.53.3 wheels, `dist-info` aside.
+    #
+    # Previously:
+    #
+    # Floor was 0.53.1 (#238), straight from 0.51.1: one move, not two (operator,
     # 2026-11-24). The lock takes 0.53.1, the index's newest with the bound opened
     # to `<1` [measured 2026-11-24]. `co-core-aio` and `co-core-sync` 0.53.1 require
     # `co-core>=0.53.1,<0.54`, so the three move together. The code depends on
