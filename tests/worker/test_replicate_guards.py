@@ -17,6 +17,7 @@ the shapes nobody thought of are refused for free.
 
 import hashlib
 import io
+import re
 from urllib.parse import SplitResult
 
 import pytest
@@ -32,6 +33,8 @@ from tests.storage.conftest import FakeBucket, FakeClient
 FINGERPRINT = hashlib.sha256(b"artifact bytes").hexdigest()
 # Shaped like a fingerprint and no more; for checks that never reach a store.
 ZERO_FINGERPRINT = "0" * 64
+# co-core 0.53.1's FINGERPRINT_RE, ``$``-anchored: the shape fullmatch must not depend on.
+DOLLAR_ANCHORED_FINGERPRINT = re.compile(r"^[0-9a-f]{64}$")
 GCS_ROOT = AliasBinding(provider="gcs", bucket="co-artifacts", prefix="reps")
 
 
@@ -144,15 +147,22 @@ def _split_keeping(path):
     ],
 )
 def test_the_fingerprint_check_needs_no_help_from_urlsplit(monkeypatch, path, expected):
-    """#243: co-core's ``FINGERPRINT_RE`` ends in ``$``, which also matches before a final ``\\n``.
+    """#243: the check calls ``fullmatch``, so it doesn't depend on the pattern's anchor.
 
-    Through a real URI this can't be reached: ``urlsplit`` strips ASCII newlines
-    before the stem is cut. So the check was only safe because of a stdlib
-    detail. The stub keeps the newline, and that leaves the check to stand on
-    its own (``fullmatch``). The control case shows the stubbed path does reach
-    the check and is not filtered out earlier.
+    ``$`` also matches before a final ``\\n``. Through a real URI that case can't
+    be reached, because ``urlsplit`` strips ASCII newlines before the stem is
+    cut, so on its own the check was only safe because of a stdlib detail. The
+    ``urlsplit`` stub keeps the newline.
+
+    The pattern is stubbed too, with co-core 0.53.1's ``$`` spelling. co-core
+    0.53.3 ends ``FINGERPRINT_RE`` in ``(?![\\s\\S])`` (cannobserv#782), which
+    refuses the newline under ``.match`` as well. Against the real pattern, a
+    revert to ``.match`` would pass here. The stand-in keeps this test on the
+    method. The control case shows the stubbed path does reach the check and
+    isn't filtered out earlier.
     """
     monkeypatch.setattr(replicate_module, "urlsplit", _split_keeping(path))
+    monkeypatch.setattr(replicate_module, "FINGERPRINT_RE", DOLLAR_ANCHORED_FINGERPRINT)
 
     assert fingerprint_in("ignored") == expected
 
