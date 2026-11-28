@@ -46,8 +46,9 @@ hold tailscale tailscale
 # revoked 2026-10-06 (#131, gregoryfoster/skills#352). Owner's call (#198).
 exception setup-script:redelivered 2027-02-14 key revoked 2026-10-06 (#131); the platform redelivers the script every boot
 
-# valkey-server is masked by design: the local integration tier's engine,
-# started by hand through a PATH shim, never as a unit (#253, docs/TESTING.md).
+# valkey-server is masked by design: the local integration tier's engine, run
+# by name as a scratch server or by the tests that spawn one, never as a unit
+# (#253, #256, docs/TESTING.md).
 exception keep:valkey 2027-02-27 masked test engine, the broker's own (#253); idle as a unit is its normal state
 
 records CannObserv/replicator
