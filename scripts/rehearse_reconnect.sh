@@ -62,6 +62,11 @@ command -v valkey-cli >/dev/null || die "valkey-cli is not on PATH (apt: valkey-
 # exists rather than trusting the bind.
 PORT="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
 WORKDIR="$(mktemp -d)"
+# The worker's own blob dir, which the scratch unit's user must own: the default,
+# /var/lib/replicator/blobs, is the service user's since #202, so a worker there
+# died at boot on EACCES before it reached the broker (#256).
+BLOBDIR="$(mktemp -d)"
+chown exedev: "${BLOBDIR}"
 URL="redis://127.0.0.1:${PORT}/0"
 BROKER_PID=""
 
@@ -74,8 +79,13 @@ cleanup() {
   systemctl reset-failed "${UNIT}.service" 2>/dev/null
   rm -f "${RUNDIR}/${UNIT}.service"
   systemctl daemon-reload 2>/dev/null
-  [ -n "${BROKER_PID}" ] && kill "${BROKER_PID}" 2>/dev/null
-  rm -rf "${WORKDIR}"
+  # Waited for before its dir goes: a shutdown whose final AOF write fails is
+  # aborted, so a SIGTERM racing the rm -rf orphaned a live broker (#256).
+  if [ -n "${BROKER_PID}" ]; then
+    kill "${BROKER_PID}" 2>/dev/null
+    wait "${BROKER_PID}" 2>/dev/null
+  fi
+  rm -rf "${WORKDIR}" "${BLOBDIR}"
 }
 trap cleanup EXIT
 
@@ -145,6 +155,7 @@ Type=simple
 User=exedev
 WorkingDirectory=${REPO}
 Environment=REPLICATOR_REDIS_URL=${URL}
+Environment=REPLICATOR_BLOB_DIR=${BLOBDIR}
 Environment=REPLICATOR_CONSUMER_NAME=rehearsal-fetch-1
 Environment=REPLICATOR_REPLICATE_CONSUMER_NAME=rehearsal-replicate-1
 Environment=REPLICATOR_MAX_CONSECUTIVE_CYCLE_FAILURES=4
@@ -165,11 +176,14 @@ SINCE="$(date '+%Y-%m-%d %H:%M:%S')"
 systemctl start "${UNIT}.service" || die "the scratch unit would not start"
 
 # 1. Healthy first — otherwise a later success proves only that it ever worked.
+#    `worker ready`, not `active`: Type=simple is active the moment it forks, so a
+#    worker dying at boot passed this step and step 2 counted its crash (#256).
 for _ in $(seq 1 100); do
-  [ "$(active)" = "active" ] && break
+  [ "$(active)" = "active" ] && journal_has "${SINCE}" '"message": "worker ready"' && break
   sleep 0.2
 done
-[ "$(active)" = "active" ] || fail "the worker never reached active against a healthy broker"
+journal_has "${SINCE}" '"message": "worker ready"' \
+  || fail "the worker never reported ready against a healthy broker (unit $(active))"
 say "PASS 1/5 — worker active against a healthy broker"
 
 BEFORE="$(nrestarts)"
@@ -208,6 +222,7 @@ say "PASS 3/5 — a start that booted into the outage rode it out to the ceiling
 say "PASS 4/5 — start budget survived the outage (unit is $(active))"
 
 # 5. The broker returns, and consumption resumes with nobody typing anything.
+BACK="$(date '+%Y-%m-%d %H:%M:%S')"
 start_broker
 say "broker back; waiting for the worker to reconnect"
 RECOVERED=0
@@ -215,7 +230,8 @@ for _ in $(seq 1 300); do
   if [ "$(active)" = "active" ] && valkey-cli -u "${URL}" PING 2>/dev/null | grep -q PONG; then
     # `worker ready` after the broker returned is the reconnection: the unit's
     # whole ExecStartPre chain passed on the way back in.
-    if journal_has "-2min" '"message": "worker ready"'; then
+    # Since the broker returned, not `-2min`, which step 1's own line can satisfy.
+    if journal_has "${BACK}" '"message": "worker ready"'; then
       RECOVERED=1
       break
     fi
