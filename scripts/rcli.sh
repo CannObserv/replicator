@@ -4,9 +4,9 @@
 #   rcli XLEN content.fetch.dlq
 #
 # The client is valkey-cli, the broker's engine's (broker#85), else redis-cli:
-# resolved here, once, for rcli and check_redis_floor.sh alike (#256). With
-# neither installed the command stays valkey-cli, so the shell's not-found
-# names the package to install.
+# resolved in one place, at each call, for rcli and check_redis_floor.sh alike
+# (#256). With neither installed the command stays valkey-cli, so the shell's
+# not-found names the package to install.
 #
 # `valkey-cli -u redis://user:pw@host` puts the password in argv, and
 # /proc/<pid>/cmdline is readable by every local user while the call runs.
