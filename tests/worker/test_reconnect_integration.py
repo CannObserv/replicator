@@ -8,7 +8,7 @@ Timeout connecting to server` out of the real connection stack, several frames
 lower, and the difference between those two is the whole reason a rehearsal was
 asked for rather than another unit test.
 
-Every test here drives a `redis-server` this module **spawns**, on a loopback
+Every test here drives a `valkey-server` this module **spawns**, on a loopback
 port of its own, and stops and restarts it mid-test. Never the shared broker:
 stopping `co-broker` would take down three services, and the fixture checks the
 server's own reported pid before it touches anything, the way
@@ -94,7 +94,7 @@ def _free_port() -> int:
 
 
 class RestartableBroker:
-    """A `redis-server` on a fixed port that a test can stop and start again.
+    """A `valkey-server` on a fixed port that a test can stop and start again.
 
     The port is chosen once and reused across restarts — that is the point. A
     client built against it keeps its URL, so what the test exercises is
@@ -112,7 +112,7 @@ class RestartableBroker:
         """Spawn the server and block until it answers as itself."""
         assert self._process is None, "already running"
         self._process = await asyncio.create_subprocess_exec(
-            "redis-server",
+            "valkey-server",
             "--port",
             str(self.port),
             "--bind",
@@ -178,8 +178,8 @@ class RestartableBroker:
 @pytest.fixture
 async def outage_broker(tmp_path_factory) -> AsyncGenerator[RestartableBroker]:
     """A spawned broker this test owns, running, cleaned up however it ends."""
-    if shutil.which("redis-server") is None:
-        pytest.skip("redis-server is not on PATH — nothing to take down and bring back")
+    if shutil.which("valkey-server") is None:
+        pytest.skip("valkey-server is not on PATH — nothing to take down and bring back")
 
     broker = RestartableBroker(_free_port(), tmp_path_factory.mktemp("reconnect-broker"))
     await broker.start()

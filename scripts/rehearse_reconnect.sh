@@ -21,9 +21,9 @@
 #
 # WHAT IT REFUSES TO TOUCH. It never stops `co-broker` — that would take down
 # three services — and it never touches `replicator.service`. It spawns its own
-# `redis-server` on a loopback port it owns, and drives a scratch unit under
-# /run/systemd/system (tmpfs; gone on reboot) with its own consumer names, so it
-# cannot steal the live worker's pending entries.
+# `valkey-server`, the broker's engine (#256), on a loopback port it owns, and
+# drives a scratch unit under /run/systemd/system (tmpfs; gone on reboot) with
+# its own consumer names, so it cannot steal the live worker's pending entries.
 #
 # THE TIMINGS ARE COMPRESSED, DELIBERATELY. The scratch unit overrides the cycle
 # ceiling and the backoff so an exit takes seconds rather than the production ten
@@ -52,8 +52,10 @@ die() { say "ABORT — $*"; exit 2; }
 fail() { say "FAIL — $*"; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || die "must run as root (systemd units and daemon-reload)"
-command -v redis-server >/dev/null || die "redis-server is not on PATH"
-command -v redis-cli >/dev/null || die "redis-cli is not on PATH"
+# By the package's own names (#256): /usr/bin is on sudo's secure_path, so no
+# PATH shim is needed or dropped, and apt's redis-server can never stand in.
+command -v valkey-server >/dev/null || die "valkey-server is not on PATH (apt: valkey-server)"
+command -v valkey-cli >/dev/null || die "valkey-cli is not on PATH (apt: valkey-tools)"
 [ -f "${REPO}/src/worker/main.py" ] || die "cannot find the worker at ${REPO}"
 
 # A port nothing holds. Racy by nature, which is why the identity check below
@@ -81,13 +83,13 @@ start_broker() {
   # --appendonly yes: the stream and the consumer group must survive the restart,
   # which is what the real broker's AOF gave us on 2026-09-16. Without it the
   # worker would come back to NOGROUP, a different incident entirely.
-  redis-server --port "${PORT}" --bind 127.0.0.1 --appendonly yes \
+  valkey-server --port "${PORT}" --bind 127.0.0.1 --appendonly yes \
     --dir "${WORKDIR}" --daemonize no >/dev/null 2>&1 &
   BROKER_PID=$!
   for _ in $(seq 1 100); do
-    if redis-cli -u "${URL}" PING 2>/dev/null | grep -q PONG; then
+    if valkey-cli -u "${URL}" PING 2>/dev/null | grep -q PONG; then
       local reported
-      reported="$(redis-cli -u "${URL}" INFO server 2>/dev/null | sed -n 's/^process_id:\([0-9]*\).*/\1/p')"
+      reported="$(valkey-cli -u "${URL}" INFO server 2>/dev/null | sed -n 's/^process_id:\([0-9]*\).*/\1/p')"
       [ "${reported}" = "${BROKER_PID}" ] || die "port ${PORT} is answered by pid ${reported}, not the ${BROKER_PID} we started — refusing to drive a broker we do not own"
       return 0
     fi
@@ -102,7 +104,7 @@ stop_broker() {
   wait "${BROKER_PID}" 2>/dev/null
   BROKER_PID=""
   for _ in $(seq 1 50); do
-    redis-cli -u "${URL}" PING 2>/dev/null | grep -q PONG || return 0
+    valkey-cli -u "${URL}" PING 2>/dev/null | grep -q PONG || return 0
     sleep 0.1
   done
   die "the scratch broker on ${PORT} would not stop"
@@ -210,7 +212,7 @@ start_broker
 say "broker back; waiting for the worker to reconnect"
 RECOVERED=0
 for _ in $(seq 1 300); do
-  if [ "$(active)" = "active" ] && redis-cli -u "${URL}" PING 2>/dev/null | grep -q PONG; then
+  if [ "$(active)" = "active" ] && valkey-cli -u "${URL}" PING 2>/dev/null | grep -q PONG; then
     # `worker ready` after the broker returned is the reconnection: the unit's
     # whole ExecStartPre chain passed on the way back in.
     if journal_has "-2min" '"message": "worker ready"'; then

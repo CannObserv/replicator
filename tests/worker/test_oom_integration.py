@@ -20,7 +20,7 @@ observes it, through ``MONITOR``, on the broker's own wire.
 
 **Never the shared broker.** ``maxmemory`` is instance-wide and ``co-broker``
 carries production traffic for three services, so lowering the cap to force the
-error there is an outage. Every test here drives a ``redis-server`` this module
+error there is an outage. Every test here drives a ``valkey-server`` this module
 *spawns*, on a loopback port of its own — and ``capped_server`` refuses to hand
 over a client to a server it did not start (see its ``process_id`` check, which is
 not defensive decoration: writing this issue up found port 6399 already occupied
@@ -293,7 +293,7 @@ def _free_port() -> int:
 
 @pytest.fixture(scope="session")
 async def capped_server(tmp_path_factory) -> AsyncGenerator[Redis]:
-    """A ``redis-server`` this session spawns, owns, and kills.
+    """A ``valkey-server`` this session spawns, owns, and kills.
 
     Session-scoped because a spawn is per-run work; the per-test fixture below
     resets the state. Started **uncapped** — a test asks for the cap when it wants
@@ -311,13 +311,13 @@ async def capped_server(tmp_path_factory) -> AsyncGenerator[Redis]:
     written. Redis reports its own pid in ``INFO server``, so the identity is
     checkable, and a mismatch fails the run rather than skipping it.
     """
-    if shutil.which("redis-server") is None:
-        pytest.skip("redis-server is not on PATH — no scratch broker to cap")
+    if shutil.which("valkey-server") is None:
+        pytest.skip("valkey-server is not on PATH — no scratch broker to cap")
 
     port = _free_port()
     workdir = tmp_path_factory.mktemp("oom-broker")
     process = await asyncio.create_subprocess_exec(
-        "redis-server",
+        "valkey-server",
         "--port",
         str(port),
         "--bind",

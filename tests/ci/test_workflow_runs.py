@@ -98,7 +98,7 @@ def test_the_broker_oom_suite_runs_in_ci():
     """#83: the one `integration` file that needs no external broker must actually run.
 
     Every other marked test needs a scratch broker started beside it, which no runner
-    has — but ``test_oom_integration.py`` spawns its own ``redis-server``, so
+    has — but ``test_oom_integration.py`` spawns its own ``valkey-server``, so
     nothing but the binary stands between CI and the suite that is the evidence
     behind the capped-broker record in ``docs/CONVENTIONS.md`` and behind
     CannObserv/broker#6 and CannObserv/broker#2.
@@ -118,14 +118,14 @@ def test_the_broker_oom_suite_runs_in_ci():
 def test_a_missing_scratch_broker_fails_ci_rather_than_skipping():
     """A skip here is silent by construction, so the precondition is asserted.
 
-    ``capped_server`` skips when ``redis-server`` is absent — correct on a
+    ``capped_server`` skips when ``valkey-server`` is absent — correct on a
     developer's machine, and in CI it would mean an apt failure produced a green
     job with the whole suite unrun. That is the failure ``docs/TESTING.md``
     already names for the ``gcs`` job, whose answer is this same shape: assert the
     precondition rather than discover it.
     """
     guard = re.search(
-        r"if ! command -v redis-server.*?exit 1",
+        r"if ! command -v valkey-server.*?exit 1",
         CI.read_text(encoding="utf-8"),
         flags=re.DOTALL,
     )
@@ -133,7 +133,7 @@ def test_a_missing_scratch_broker_fails_ci_rather_than_skipping():
     # The `exit 1` has to be *this* guard's. The workflow holds two other
     # `exit 1`s — the WIF-provider assertions — so a bare "does the file contain
     # exit 1" would pass a guard that only warned.
-    assert guard, "nothing in CI fails the job when redis-server did not resolve"
+    assert guard, "nothing in CI fails the job when valkey-server did not resolve"
 
 
 def test_the_oom_suite_runs_on_the_brokers_engine():
@@ -141,20 +141,19 @@ def test_the_oom_suite_runs_on_the_brokers_engine():
 
     Since broker#85 (2026-11-27) co-broker is Ubuntu's own ``valkey-server`` from
     noble-updates, so CI installs that package by name: both take the same pocket,
-    and a version pin would break each time noble-updates moved. The package ships
-    no ``redis-server`` (that's ``valkey-redis-compat``, which conflicts with Redis
-    and which the broker refuses), so the step puts that name on PATH for the
-    fixture. The guard then checks the name resolves to Valkey 7.2, so a stray Redis
-    on the image can't quietly stand in for the broker's engine.
+    and a version pin would break each time noble-updates moved. Since #256 the
+    fixture spawns ``valkey-server`` by that name, so #251's PATH shim (the package
+    ships no ``redis-server``) is gone. The guard checks the name resolves to Valkey
+    7.2, so nothing else on the image can stand in for the broker's engine.
     """
     text = CI.read_text(encoding="utf-8")
 
     assert "apt-get install -y --no-install-recommends valkey-server" in text
     assert "apt-get install -y --no-install-recommends redis-server" not in text
-    assert 'ln -s /usr/bin/valkey-server "$RUNNER_TEMP/scratch-broker/redis-server"' in text
-    assert '"$RUNNER_TEMP/scratch-broker" >> "$GITHUB_PATH"' in text
+    assert "scratch-broker" not in text, "the #251 shim outlived #256"
+    assert "v=$(valkey-server --version)" in text
     assert re.search(r'case "\$v" in\s+"Server v=7\.2\."\*\)', text), (
-        "the guard must assert the resolved redis-server is Valkey 7.2"
+        "the guard must assert the resolved valkey-server is Valkey 7.2"
     )
 
 
