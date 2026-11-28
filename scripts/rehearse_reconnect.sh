@@ -196,7 +196,7 @@ for _ in $(seq 1 100); do
 done
 journal_has "${SINCE}" '"message": "worker ready"' \
   || fail "the worker never reported ready against a healthy broker (unit $(active))"
-say "PASS 1/5 — worker active against a healthy broker"
+say "PASS 1/5 — worker ready against a healthy broker"
 
 BEFORE="$(nrestarts)"
 
