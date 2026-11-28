@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Assert the Redis change-bus broker meets the >=7.0 server floor.
+# Assert the Redis change-bus broker meets the >=7.2 server floor.
 #
 # Run as an `ExecStartPre` on replicator.service. Mirrored from archiver's
 # scripts/check_redis_floor.sh (archiver#109), where the floor is asserted as a
@@ -7,6 +7,12 @@
 # the cluster's first user of `AsyncBusConsumer.claim_stale_page` (crash recovery),
 # which reads `XAUTOCLAIM`'s three-element reply — the deleted-ids element added
 # in Redis *server* 7.0. Against a < 7.0 server the recovery path raises.
+#
+# The floor is 7.2, not 7.0, since #256: one engine, the broker's (Valkey 7.2
+# since broker#85, `redis_version:7.2.4`). Every test, CI leg and rehearsal runs
+# it alone, and 7.0 differs where this repo reads the bus (a consumer registers
+# at its first read on 7.2, its first delivery on 7.0: #251). A 7.0 or 7.1 broker
+# would run a worker nobody measured against it. Valkey 8 still reports 7.2.4.
 #
 # Redis runs on its own node, operated from CannObserv/broker (archiver#193 D6
 # ended the arrangement where Archiver operated it); Replicator is a client and
@@ -18,8 +24,9 @@
 #                            (unreachable only after REPLICATOR_REDIS_FLOOR_WAIT
 #                            seconds of retrying - the boot wait below, #88)
 #                            (the two are reported distinctly - archiver#195)
-#   - version read, < 7.0 -> a real downgrade, block the worker  -> exit 1
-#   - version read, >=7.0 -> ok                                  -> exit 0
+#   - version read, < 7.2 -> a real downgrade, block the worker  -> exit 1
+#                            (so is one it cannot compare: a version was read)
+#   - version read, >=7.2 -> ok                                  -> exit 0
 #
 # UNVERIFIED now outlives the start it was reported in (#133 CR 5). Boot waits a
 # down broker out (`retry_at_boot`) instead of exiting at its first call, so a
@@ -53,18 +60,18 @@ HERE="${BASH_SOURCE[0]%/*}"
 # shellcheck source=scripts/rcli.sh
 if ! . "${HERE}/rcli.sh"; then
   echo "check_redis_floor: ${HERE}/rcli.sh could not be loaded — cannot probe the broker" >&2
-  echo "check_redis_floor: — >=7.0 floor UNVERIFIED, not blocking start" >&2
+  echo "check_redis_floor: — >=7.2 floor UNVERIFIED, not blocking start" >&2
   exit 0
 fi
 if ! rcli_command "${URL}"; then
-  echo "check_redis_floor: — >=7.0 floor UNVERIFIED, not blocking start" >&2
+  echo "check_redis_floor: — >=7.2 floor UNVERIFIED, not blocking start" >&2
   exit 0
 fi
 
 CLIENT="${RCLI_CMD[0]}"
 if ! command -v "${CLIENT}" >/dev/null 2>&1; then
   echo "check_redis_floor: neither valkey-cli nor redis-cli is on PATH — cannot probe the broker" >&2
-  echo "check_redis_floor: — >=7.0 floor UNVERIFIED, not blocking start" >&2
+  echo "check_redis_floor: — >=7.2 floor UNVERIFIED, not blocking start" >&2
   exit 0
 fi
 
@@ -164,12 +171,12 @@ if [ -n "${version}" ] && [ "${waited}" -gt 0 ]; then
 fi
 
 if [ -z "${version}" ]; then
-  # Whatever the cause, the >=7.0 floor was NOT checked. Say "unverified",
+  # Whatever the cause, the >=7.2 floor was NOT checked. Say "unverified",
   # never nothing: a guard known to be off is a different situation from one
   # assumed to be on, and only the first gets looked at.
   case "$(probe_failure_kind)" in
     auth)
-      echo "check_redis_floor: reached the broker but could not authenticate — >=7.0 floor UNVERIFIED" >&2
+      echo "check_redis_floor: reached the broker but could not authenticate — >=7.2 floor UNVERIFIED" >&2
       echo "check_redis_floor: broker said: ${PROBE_ERR}" >&2
       echo "check_redis_floor: this probe authenticates as the worker does (#127), so expect the" >&2
       echo "check_redis_floor: worker to be refused too — check REPLICATOR_REDIS_URL's user and" >&2
@@ -177,23 +184,29 @@ if [ -z "${version}" ]; then
       echo "check_redis_floor: reports its own refusal, and this guard asserts the version only" >&2
       ;;
     unreachable)
-      echo "check_redis_floor: broker unreachable after ${waited}s of retrying — >=7.0 floor UNVERIFIED, not blocking start" >&2
+      echo "check_redis_floor: broker unreachable after ${waited}s of retrying — >=7.2 floor UNVERIFIED, not blocking start" >&2
       echo "check_redis_floor: broker said: ${PROBE_ERR}" >&2
       ;;
     *)
       echo "check_redis_floor: could not reach or authenticate against the broker (probe timed out?)" >&2
-      echo "check_redis_floor: — >=7.0 floor UNVERIFIED, not blocking start" >&2
+      echo "check_redis_floor: — >=7.2 floor UNVERIFIED, not blocking start" >&2
       ;;
   esac
   exit 0
 fi
 
-major="${version%%.*}"
-if ! [ "${major}" -ge 7 ] 2>/dev/null; then
-  echo "check_redis_floor: Redis ${version} is below the >=7.0 change-bus floor" >&2
-  echo "check_redis_floor: claim_stale_page (XAUTOCLAIM three-element reply) requires server >= 7.0" >&2
+# MAJOR.MINOR[.PATCH], both numeric, or it fails: a floor that waved through
+# what it could not parse would be no floor.
+major="" minor=""
+if [[ "${version}" =~ ^([0-9]+)\.([0-9]+)(\.|$) ]]; then
+  major="${BASH_REMATCH[1]}" minor="${BASH_REMATCH[2]}"
+fi
+if [ -z "${major}" ] || (( 10#${major} < 7 || (10#${major} == 7 && 10#${minor} < 2) )); then
+  echo "check_redis_floor: Redis ${version} is below the >=7.2 floor" >&2
+  echo "check_redis_floor: the broker's engine is Valkey 7.2 (redis_version 7.2.4), the only one tested (#256);" >&2
+  echo "check_redis_floor: claim_stale_page (XAUTOCLAIM three-element reply) needs server >= 7.0 regardless" >&2
   exit 1
 fi
 
-echo "check_redis_floor: Redis ${version} meets the >=7.0 floor (via ${CLIENT})"
+echo "check_redis_floor: Redis ${version} meets the >=7.2 floor (via ${CLIENT})"
 exit 0
