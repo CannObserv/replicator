@@ -11,7 +11,9 @@ session, or savepoint machinery here.
 import ipaddress
 import logging
 import os
+import shutil
 from collections.abc import AsyncGenerator, Mapping
+from pathlib import Path
 
 import pytest
 from co_core_aio.gcs import AsyncGcsDriver
@@ -24,7 +26,7 @@ from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from src.core.config import get_settings
 
-# A scratch redis-server on this host, never the broker: that has had one
+# A scratch valkey-server on this host, never the broker: that has had one
 # database since broker#5, so db 15 does not exist there and db 0 is the one
 # real_redis refuses (#90).
 DEFAULT_TEST_REDIS_URL = "redis://localhost:6379/15"
@@ -127,6 +129,27 @@ def resolve_test_blob_bucket(env: Mapping[str, str]) -> str | None:
 def resolve_test_permanent_bucket(env: Mapping[str, str]) -> str | None:
     """The configured permanent-store test bucket, or ``None``. Same rule (#114)."""
     return env.get(TEST_PERMANENT_BUCKET_ENV)
+
+
+# What scripts/rcli.sh, check_redis_floor.sh and their stub clients run, and no
+# more. `timeout` is one: a test of its absence deletes it.
+CLIENT_FREE_TOOLS = ("bash", "env", "cat", "grep", "mktemp", "rm", "sed", "sleep", "timeout", "tr")
+
+
+def client_free_bin(directory: Path) -> Path:
+    """A PATH directory holding the shell tools above and no Redis or Valkey client.
+
+    The tests that stub ``valkey-cli`` put their stub here, never in front of
+    ``/usr/bin``. That is where this host's real clients live. A stub named one way and a
+    script calling the other would then reach the real one, which dials ``broker:6379``
+    with a fake credential: a WRONGPASS in co-broker's ``ACL LOG`` (#256).
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    for tool in CLIENT_FREE_TOOLS:
+        source = shutil.which(tool)
+        assert source, f"{tool} is not on PATH; the stubbed-client tests need it"
+        (directory / tool).symlink_to(source)
+    return directory
 
 
 def guarded_init(
@@ -456,7 +479,7 @@ def redis_target_refusal(url: str) -> str | None:
     if host is not None and not _is_loopback(host):
         return (
             f"REPLICATOR_TEST_REDIS_URL host {host!r} is not loopback (#132) — "
-            f"run a scratch redis-server on localhost (docs/TESTING.md)"
+            f"run a scratch valkey-server on localhost (docs/TESTING.md)"
         )
     db = kwargs.get("db", 0)
     if db == 0:
@@ -487,7 +510,7 @@ async def real_redis() -> AsyncGenerator:
 
     Some properties are about *when* Redis acts, not what state results, and
     fakeredis diverges on exactly those (GH #3). Those assertions need the real
-    server — a scratch ``redis-server``, since the production broker's ACL refuses
+    server — a scratch ``valkey-server``, since the production broker's ACL refuses
     these tests (CannObserv/broker#2) and its only database is the one refused
     below (CannObserv/broker#5).
 

@@ -21,9 +21,9 @@
 #
 # WHAT IT REFUSES TO TOUCH. It never stops `co-broker` — that would take down
 # three services — and it never touches `replicator.service`. It spawns its own
-# `redis-server` on a loopback port it owns, and drives a scratch unit under
-# /run/systemd/system (tmpfs; gone on reboot) with its own consumer names, so it
-# cannot steal the live worker's pending entries.
+# `valkey-server`, the broker's engine (#256), on a loopback port it owns, and
+# drives a scratch unit under /run/systemd/system (tmpfs; gone on reboot) with
+# its own consumer names, so it cannot steal the live worker's pending entries.
 #
 # THE TIMINGS ARE COMPRESSED, DELIBERATELY. The scratch unit overrides the cycle
 # ceiling and the backoff so an exit takes seconds rather than the production ten
@@ -52,16 +52,39 @@ die() { say "ABORT — $*"; exit 2; }
 fail() { say "FAIL — $*"; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || die "must run as root (systemd units and daemon-reload)"
-command -v redis-server >/dev/null || die "redis-server is not on PATH"
-command -v redis-cli >/dev/null || die "redis-cli is not on PATH"
+# By the package's own names (#256): /usr/bin is on sudo's secure_path, so no
+# PATH shim is needed or dropped, and apt's redis-server can never stand in.
+command -v valkey-server >/dev/null || die "valkey-server is not on PATH (apt: valkey-server)"
+command -v valkey-cli >/dev/null || die "valkey-cli is not on PATH (apt: valkey-tools)"
 [ -f "${REPO}/src/worker/main.py" ] || die "cannot find the worker at ${REPO}"
 
 # A port nothing holds. Racy by nature, which is why the identity check below
 # exists rather than trusting the bind.
 PORT="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
 WORKDIR="$(mktemp -d)"
+# The worker's own blob dir, which the scratch unit's user must own: the default,
+# /var/lib/replicator/blobs, is the service user's since #202, so a worker there
+# died at boot on EACCES before it reached the broker (#256).
+BLOBDIR="$(mktemp -d)"
+chown exedev: "${BLOBDIR}"
 URL="redis://127.0.0.1:${PORT}/0"
 BROKER_PID=""
+
+# _reap_broker PID [TENTHS] - TERM, then KILL if PID outlives TENTHS tenths of a
+# second (default 100), then wait. Bounded because Valkey ignores a TERM whose
+# final AOF write fails (#256): an unbounded wait hung the EXIT trap, and the
+# Ctrl-C that ended it orphaned the broker. tests/test_rehearse_reconnect.py.
+_reap_broker() {
+  local pid="$1" tenths="${2:-100}"
+  kill "${pid}" 2>/dev/null
+  for _ in $(seq 1 "${tenths}"); do
+    kill -0 "${pid}" 2>/dev/null || break
+    sleep 0.1
+  done
+  kill -9 "${pid}" 2>/dev/null
+  wait "${pid}" 2>/dev/null
+  return 0
+}
 
 cleanup() {
   if [ "${KEEP}" = "1" ]; then
@@ -72,8 +95,10 @@ cleanup() {
   systemctl reset-failed "${UNIT}.service" 2>/dev/null
   rm -f "${RUNDIR}/${UNIT}.service"
   systemctl daemon-reload 2>/dev/null
-  [ -n "${BROKER_PID}" ] && kill "${BROKER_PID}" 2>/dev/null
-  rm -rf "${WORKDIR}"
+  # Reaped before its dir goes: a shutdown whose final AOF write fails is
+  # aborted, so a SIGTERM racing the rm -rf orphaned a live broker (#256).
+  [ -n "${BROKER_PID}" ] && _reap_broker "${BROKER_PID}"
+  rm -rf "${WORKDIR}" "${BLOBDIR}"
 }
 trap cleanup EXIT
 
@@ -81,13 +106,13 @@ start_broker() {
   # --appendonly yes: the stream and the consumer group must survive the restart,
   # which is what the real broker's AOF gave us on 2026-09-16. Without it the
   # worker would come back to NOGROUP, a different incident entirely.
-  redis-server --port "${PORT}" --bind 127.0.0.1 --appendonly yes \
+  valkey-server --port "${PORT}" --bind 127.0.0.1 --appendonly yes \
     --dir "${WORKDIR}" --daemonize no >/dev/null 2>&1 &
   BROKER_PID=$!
   for _ in $(seq 1 100); do
-    if redis-cli -u "${URL}" PING 2>/dev/null | grep -q PONG; then
+    if valkey-cli -u "${URL}" PING 2>/dev/null | grep -q PONG; then
       local reported
-      reported="$(redis-cli -u "${URL}" INFO server 2>/dev/null | sed -n 's/^process_id:\([0-9]*\).*/\1/p')"
+      reported="$(valkey-cli -u "${URL}" INFO server 2>/dev/null | sed -n 's/^process_id:\([0-9]*\).*/\1/p')"
       [ "${reported}" = "${BROKER_PID}" ] || die "port ${PORT} is answered by pid ${reported}, not the ${BROKER_PID} we started — refusing to drive a broker we do not own"
       return 0
     fi
@@ -98,11 +123,10 @@ start_broker() {
 
 stop_broker() {
   [ -n "${BROKER_PID}" ] || return 0
-  kill "${BROKER_PID}" 2>/dev/null
-  wait "${BROKER_PID}" 2>/dev/null
+  _reap_broker "${BROKER_PID}"
   BROKER_PID=""
   for _ in $(seq 1 50); do
-    redis-cli -u "${URL}" PING 2>/dev/null | grep -q PONG || return 0
+    valkey-cli -u "${URL}" PING 2>/dev/null | grep -q PONG || return 0
     sleep 0.1
   done
   die "the scratch broker on ${PORT} would not stop"
@@ -143,6 +167,7 @@ Type=simple
 User=exedev
 WorkingDirectory=${REPO}
 Environment=REPLICATOR_REDIS_URL=${URL}
+Environment=REPLICATOR_BLOB_DIR=${BLOBDIR}
 Environment=REPLICATOR_CONSUMER_NAME=rehearsal-fetch-1
 Environment=REPLICATOR_REPLICATE_CONSUMER_NAME=rehearsal-replicate-1
 Environment=REPLICATOR_MAX_CONSECUTIVE_CYCLE_FAILURES=4
@@ -163,12 +188,15 @@ SINCE="$(date '+%Y-%m-%d %H:%M:%S')"
 systemctl start "${UNIT}.service" || die "the scratch unit would not start"
 
 # 1. Healthy first — otherwise a later success proves only that it ever worked.
+#    `worker ready`, not `active`: Type=simple is active the moment it forks, so a
+#    worker dying at boot passed this step and step 2 counted its crash (#256).
 for _ in $(seq 1 100); do
-  [ "$(active)" = "active" ] && break
+  [ "$(active)" = "active" ] && journal_has "${SINCE}" '"message": "worker ready"' && break
   sleep 0.2
 done
-[ "$(active)" = "active" ] || fail "the worker never reached active against a healthy broker"
-say "PASS 1/5 — worker active against a healthy broker"
+journal_has "${SINCE}" '"message": "worker ready"' \
+  || fail "the worker never reported ready against a healthy broker (unit $(active))"
+say "PASS 1/5 — worker ready against a healthy broker"
 
 BEFORE="$(nrestarts)"
 
@@ -206,14 +234,16 @@ say "PASS 3/5 — a start that booted into the outage rode it out to the ceiling
 say "PASS 4/5 — start budget survived the outage (unit is $(active))"
 
 # 5. The broker returns, and consumption resumes with nobody typing anything.
+BACK="$(date '+%Y-%m-%d %H:%M:%S')"
 start_broker
 say "broker back; waiting for the worker to reconnect"
 RECOVERED=0
 for _ in $(seq 1 300); do
-  if [ "$(active)" = "active" ] && redis-cli -u "${URL}" PING 2>/dev/null | grep -q PONG; then
+  if [ "$(active)" = "active" ] && valkey-cli -u "${URL}" PING 2>/dev/null | grep -q PONG; then
     # `worker ready` after the broker returned is the reconnection: the unit's
     # whole ExecStartPre chain passed on the way back in.
-    if journal_has "-2min" '"message": "worker ready"'; then
+    # Since the broker returned, not `-2min`, which step 1's own line can satisfy.
+    if journal_has "${BACK}" '"message": "worker ready"'; then
       RECOVERED=1
       break
     fi

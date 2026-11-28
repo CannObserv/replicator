@@ -57,7 +57,7 @@ def target_refusal(url: str, topic: str) -> str | None:
         except ValueError:
             loopback = False
         if not loopback:
-            return f"redis host {host!r} is not loopback: run a scratch redis-server"
+            return f"redis host {host!r} is not loopback: run a scratch valkey-server"
     if kwargs.get("db", 0) == 0:
         return "database 0 is the broker's live one: use a scratch database"
     return None

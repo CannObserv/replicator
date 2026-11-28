@@ -1,21 +1,26 @@
-"""Behaviour of scripts/rcli.sh - redis-cli with the credential kept off argv (#127).
+"""Behaviour of scripts/rcli.sh - the broker's CLI with the credential kept off argv (#127).
 
-`redis-cli -u redis://user:pw@host` puts the password in the process's argv,
+`valkey-cli -u redis://user:pw@host` puts the password in the process's argv,
 and `/proc/<pid>/cmdline` is readable by every local user while the call runs.
 broker#47 set the rule: `REDISCLI_AUTH` plus `--user`, never the password on a
 command line. The helper strips the URL's userinfo and hands the rest to `-u`,
-so TLS, host, port and db stay redis-cli's own parsing.
+so TLS, host, port and db stay the client's own parsing.
 
-Verified against redis-cli 7.0.15 (#127): `-u redis://svc@host` sends `svc` as
-the *password*, and `-u redis://svc:@host` sends an empty one that overrides
-`REDISCLI_AUTH` - so only the userinfo-free URL plus `--user` works.
+The client is `valkey-cli`, the broker's engine's, else `redis-cli` (#256).
+Verified against redis-cli 7.0.15 (#127) and valkey-cli 7.2.4 (#256):
+`-u redis://svc@host` sends `svc` as the *password*, and `-u redis://svc:@host`
+sends an empty one that overrides `REDISCLI_AUTH` - so only the userinfo-free URL
+plus `--user` works.
 """
 
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+
+from tests.conftest import client_free_bin
 
 REPO = Path(__file__).resolve().parents[1]
 HELPER = REPO / "scripts" / "rcli.sh"
@@ -23,29 +28,33 @@ HELPER = REPO / "scripts" / "rcli.sh"
 _SECRET = "s3cr3t"
 
 
-def _recording_redis_cli(tmp_path: Path) -> Path:
-    """A `redis-cli` that records its argv, one per line, and its `REDISCLI_AUTH`.
+def _recording_client(tmp_path: Path, *names: str) -> Path:
+    """A client-free PATH plus a stub per name, each recording its argv, one per
+    line, its `REDISCLI_AUTH` and its own name.
 
     The auth file holds `unset` when the variable is absent, so "not passed" and
-    "passed empty" stay distinct - redis-cli sends `AUTH ""` for the second.
+    "passed empty" stay distinct - the client sends `AUTH ""` for the second.
     """
-    binder = tmp_path / "bin"
-    binder.mkdir()
-    (binder / "redis-cli").write_text(
-        "#!/usr/bin/env bash\n"
-        f'printf "%s\\n" "$@" > "{tmp_path}/argv"\n'
-        f'printf "%s" "${{REDISCLI_AUTH-unset}}" > "{tmp_path}/auth"\n'
-        "echo PONG\n"
-    )
-    (binder / "redis-cli").chmod(0o755)
+    binder = client_free_bin(tmp_path / "bin")
+    for name in names:
+        (binder / name).write_text(
+            "#!/usr/bin/env bash\n"
+            f'printf "%s\\n" "$@" > "{tmp_path}/argv"\n'
+            f'printf "%s" "${{REDISCLI_AUTH-unset}}" > "{tmp_path}/auth"\n'
+            f'printf "%s" "${{0##*/}}" > "{tmp_path}/client"\n'
+            "echo PONG\n"
+        )
+        (binder / name).chmod(0o755)
     return binder
 
 
-def _rcli(tmp_path: Path, env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
-    bindir = _recording_redis_cli(tmp_path)
+def _rcli(
+    tmp_path: Path, env: dict[str, str], *args: str, clients: tuple[str, ...] = ("valkey-cli",)
+) -> subprocess.CompletedProcess[str]:
+    bindir = _recording_client(tmp_path, *clients)
     return subprocess.run(
-        ["bash", "-c", f'. "{HELPER}"; rcli "$@"', "rcli", *args],
-        env={"PATH": f"{bindir}:/usr/bin:/bin", **env},
+        [shutil.which("bash"), "-c", f'. "{HELPER}"; rcli "$@"', "rcli", *args],
+        env={"PATH": str(bindir), **env},
         text=True,
         capture_output=True,
     )
@@ -57,6 +66,46 @@ def _argv(tmp_path: Path) -> list[str]:
 
 def _auth(tmp_path: Path) -> str:
     return (tmp_path / "auth").read_text()
+
+
+def _client(tmp_path: Path) -> str:
+    return (tmp_path / "client").read_text()
+
+
+def test_the_stub_path_holds_no_real_client(tmp_path: Path) -> None:
+    """The precondition of every stub here: a client the stub does not name is absent,
+    never this host's real one, which would dial the broker (#256)."""
+    bindir = client_free_bin(tmp_path / "bin")
+
+    for name in ("valkey-cli", "redis-cli"):
+        assert shutil.which(name, path=str(bindir)) is None
+
+
+_BROKER_URL = {"REPLICATOR_REDIS_URL": "redis://localhost:6379/0"}
+
+
+def test_valkey_cli_is_the_client_when_both_are_installed(tmp_path: Path) -> None:
+    """The broker's engine's own client, while apt's redis-tools is still here (#256)."""
+    result = _rcli(tmp_path, _BROKER_URL, "PING", clients=("valkey-cli", "redis-cli"))
+
+    assert result.returncode == 0, result.stderr
+    assert _client(tmp_path) == "valkey-cli"
+
+
+def test_redis_cli_is_the_fallback(tmp_path: Path) -> None:
+    """Resolved, not hard-coded: the helper runs on a host with either package."""
+    result = _rcli(tmp_path, _BROKER_URL, "PING", clients=("redis-cli",))
+
+    assert result.returncode == 0, result.stderr
+    assert _client(tmp_path) == "redis-cli"
+
+
+def test_with_neither_the_declared_client_is_the_one_missing(tmp_path: Path) -> None:
+    """The shell's not-found names valkey-cli, the package to install."""
+    result = _rcli(tmp_path, _BROKER_URL, "PING", clients=())
+
+    assert result.returncode == 127
+    assert "valkey-cli" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -152,7 +201,7 @@ def _auth(tmp_path: Path) -> str:
         ),
     ],
 )
-def test_the_credential_reaches_redis_cli_through_the_environment(
+def test_the_credential_reaches_the_client_through_the_environment(
     tmp_path: Path, url: str, argv: list[str], auth: str
 ) -> None:
     result = _rcli(tmp_path, {"REPLICATOR_REDIS_URL": url}, "PING")
@@ -196,7 +245,7 @@ def test_an_unset_url_is_refused_rather_than_defaulted(tmp_path: Path) -> None:
     assert not (tmp_path / "argv").exists()
 
 
-def test_a_url_with_no_scheme_is_refused_without_running_redis_cli(tmp_path: Path) -> None:
+def test_a_url_with_no_scheme_is_refused_without_running_the_client(tmp_path: Path) -> None:
     """redis-cli refuses it too, but only after starting with it in argv (#127 CR 7).
     The refusal does not quote the URL, which may carry the password."""
     result = _rcli(
@@ -209,34 +258,36 @@ def test_a_url_with_no_scheme_is_refused_without_running_redis_cli(tmp_path: Pat
     assert not (tmp_path / "argv").exists()
 
 
-def test_redis_cli_s_own_output_and_status_pass_through(tmp_path: Path) -> None:
+def test_the_client_s_own_output_and_status_pass_through(tmp_path: Path) -> None:
     result = _rcli(tmp_path, {"REPLICATOR_REDIS_URL": "redis://localhost:6379/0"}, "PING")
 
     assert result.stdout == "PONG\n"
 
 
-# --- No credential on a redis-cli command line, anywhere (#127) ---------------
+# --- No credential on a client's command line, anywhere (#127) ----------------
 #
 # The two sites #127 found both spelled it `redis-cli -u "<variable>"`, and
 # neither variable was named after the URL it held, so the guard does not try
 # to tell credentialed URLs from clean ones: a `-u` given a quoted, variable or
 # URL argument, and any `-a` or `--pass`, is a finding unless its file is
 # allowed below, with the reason. Prose naming the flag (`-u <URL>`) is not.
+# Either client's name counts: a guard keyed on redis-cli alone went blind the
+# moment the runbooks moved to valkey-cli (#256).
 
 _CREDENTIAL_FLAG = re.compile(
-    r"\bredis-cli\b.*?(?:\s-u\s+[\"'$]|\s-u\s+rediss?://|\s-a\s|\s--pass\b)"
+    r"\b(?:redis|valkey)-cli\b.*?(?:\s-u\s+[\"'$]|\s-u\s+rediss?://|\s-a\s|\s--pass\b)"
 )
 
 _ALLOWED = {
     # The one place a URL is handed to -u, after its userinfo is stripped.
     "scripts/rcli.sh": "the helper itself",
-    # Its own loopback redis-server, started with no password at all.
+    # Its own loopback valkey-server, started with no password at all.
     "scripts/rehearse_reconnect.sh": "credential-free loopback broker",
 }
 
 
 def credential_flag_sites(*roots: Path) -> list[tuple[str, int, str]]:
-    """Every line under ``roots`` handing redis-cli a URL or password flag."""
+    """Every line under ``roots`` handing a client a URL or password flag."""
     sites: list[tuple[str, int, str]] = []
     for root in roots:
         paths = [root] if root.is_file() else sorted(p for p in root.rglob("*") if p.is_file())
@@ -282,7 +333,7 @@ def guarded_roots(repo: Path) -> list[Path]:
     return roots + sorted(repo.glob("*.md"))
 
 
-def test_no_runbook_or_script_puts_a_credential_on_redis_cli_s_command_line() -> None:
+def test_no_runbook_or_script_puts_a_credential_on_a_client_s_command_line() -> None:
     assert credential_flag_sites(*guarded_roots(REPO)) == []
 
 
@@ -305,6 +356,9 @@ def test_a_checkout_under_a_plans_directory_still_guards_its_docs(tmp_path: Path
         'redis-cli -a "$PW" PING',
         "redis-cli --pass hunter2 PING",
         "redis-cli -u redis://replicator:pw@broker:6379/0 PING",
+        'valkey-cli -u "${URL}" INFO server',
+        'valkey-cli -a "$PW" PING',
+        "valkey-cli -u rediss://replicator:pw@broker:6379/0 PING",
     ],
 )
 def test_the_guard_sees_each_spelling(tmp_path: Path, line: str) -> None:

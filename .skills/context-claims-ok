@@ -54,3 +54,29 @@ docs/CONVENTIONS.md :: disproven :: (+xdel ~content.fetch.dlq ~content.replicate
 retarget :: #main-takes-pull-requests-208
 retarget :: DEPENDENCIES.md#the-build-backends-bound-and-cis-uv
 # @run end
+
+# ---- #256: one engine, the broker's ----
+# @run base=35157e38367b file=docs/TESTING.md
+# The 7.0.15 leg and #253's shim are retired with the engine; the runbook's
+# scratch server and pkill pattern are valkey-server's now.
+disproven :: #testing-against-a-broker-at-its-cap-79
+disproven :: /usr/bin/valkey-server
+disproven :: COMMANDS.md#tests
+disproven :: redis-cli INFO server
+disproven :: redis-cli shutdown nosave
+disproven :: server_name:valkey
+disproven :: sudo env "PATH=$PATH" bash …
+disproven :: pkill -f "redis-server 127.0.0.1:"
+disproven :: redis-server --bind 127.0.0.1 --save '' --appendonly no
+# The denied-command list: COMMANDS.md's table names each (SCAN, XINFO GROUPS,
+# XINFO CONSUMERS, CLIENT LIST, ACL LOG), and CONVENTIONS.md:21 xpending's grant.
+duplicate :: scan
+duplicate :: acl|log
+duplicate :: client|list
+duplicate :: xinfo|groups
+duplicate :: xinfo|consumers
+duplicate :: xpending
+# @run end
+# @run base=35157e38367b file=docs/COMMANDS.md
+disproven :: redis-cli -u
+# @run end

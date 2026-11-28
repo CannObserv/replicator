@@ -181,8 +181,12 @@ build that followed moved every key and env file over stdin for this reason.
 
 ## What this host does not run
 
-- **A broker.** `redis-server` is installed for the integration tests that spawn
-  their own, with its service **masked**; the bus is `co-broker`.
+- **A broker.** `valkey-server` is installed for the integration tests that spawn
+  their own, with its service **masked**; the bus is `co-broker`. `valkey-tools`
+  stays manually installed (`apt-mark manual`): it carries `valkey-cli`, the floor
+  check's client, and a check with no client skips (#256). `valkey-redis-compat`
+  stays uninstalled: it replaces `redis-server` and `redis-tools`, and the broker
+  refuses it.
 - **A SocratiCode store.** No Qdrant, Ollama or Docker here — `docker.service`
   is disabled; the index is `co-index`'s shared Qdrant (notifier#57). What runs
   here is the client: the plugin's MCP server under a user-installed Node, and

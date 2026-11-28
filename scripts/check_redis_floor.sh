@@ -31,11 +31,18 @@
 # REPLICATOR_REDIS_URL means the worker falls back to the same localhost default
 # used below (see src/core/config.py), so skipping would leave the real
 # connection unchecked.
+#
+# Unlike archiver's copy, the client is resolved, not named (#256): valkey-cli,
+# the broker's engine's since broker#85, else redis-cli. rcli.sh resolves it,
+# and this script reads the result from RCLI_CMD[0]. A missing client stays a
+# soft skip, as in archiver's copy: the worker needs no CLI, so blocking would stop
+# a healthy worker over a lost package. `apt-mark manual valkey-tools` is the
+# guard against losing it.
 set -uo pipefail
 
 URL="${REPLICATOR_REDIS_URL:-redis://localhost:6379/0}"
 
-# The credential goes to redis-cli through REDISCLI_AUTH, never argv (#127):
+# The credential goes to the client through REDISCLI_AUTH, never argv (#127):
 # this runs on every service start, and /proc/<pid>/cmdline is world-readable.
 # Located by expansion, not `dirname`: this runs with whatever PATH the unit has.
 HERE="${BASH_SOURCE[0]%/*}"
@@ -54,28 +61,30 @@ if ! rcli_command "${URL}"; then
   exit 0
 fi
 
-if ! command -v redis-cli >/dev/null 2>&1; then
-  echo "check_redis_floor: redis-cli not found — cannot verify floor, not blocking start" >&2
+CLIENT="${RCLI_CMD[0]}"
+if ! command -v "${CLIENT}" >/dev/null 2>&1; then
+  echo "check_redis_floor: neither valkey-cli nor redis-cli is on PATH — cannot probe the broker" >&2
+  echo "check_redis_floor: — >=7.0 floor UNVERIFIED, not blocking start" >&2
   exit 0
 fi
 
-# A rediss:// URL needs a TLS-capable redis-cli; a build without `--tls` cannot
+# A rediss:// URL needs a TLS-capable client; a build without `--tls` cannot
 # connect, so INFO returns nothing and the check silently no-ops (soft-skips
 # below). Warn so that gap is visible — relevant at a managed-provider migration,
 # where the URL becomes rediss:// but the floor still matters.
 case "${URL}" in
   rediss://*)
-    if ! redis-cli --help 2>&1 | grep -q -- '--tls'; then
-      echo "check_redis_floor: redis-cli lacks TLS support (no --tls) for a rediss:// URL —" >&2
-      echo "check_redis_floor: the floor check will no-op; install a TLS-capable redis-cli" >&2
+    if ! "${CLIENT}" --help 2>&1 | grep -q -- '--tls'; then
+      echo "check_redis_floor: ${CLIENT} lacks TLS support (no --tls) for a rediss:// URL —" >&2
+      echo "check_redis_floor: the floor check will no-op; install a TLS-capable ${CLIENT}" >&2
     fi
     ;;
 esac
 
-# RCLI_CMD is `redis-cli [--user U] -u <URL without userinfo>`; `-u` still
+# RCLI_CMD is `<client> [--user U] -u <URL without userinfo>`; `-u` still
 # carries the scheme, so rediss:// keeps TLS. INFO server carries the
 # `redis_version:MAJOR.MINOR.PATCH` line. Wrap in `timeout` so this ExecStartPre
-# can never hang worker startup: redis-cli has no connect-timeout flag, and a
+# can never hang worker startup: the client has no connect-timeout flag, and a
 # rediss:// URL against a plaintext/unreachable endpoint blocks on the TLS
 # handshake indefinitely. A timeout kill yields an empty version -> soft-skip.
 # REPLICATOR_REDIS_FLOOR_TIMEOUT (seconds, default 5) bounds the call.
@@ -186,5 +195,5 @@ if ! [ "${major}" -ge 7 ] 2>/dev/null; then
   exit 1
 fi
 
-echo "check_redis_floor: Redis ${version} meets the >=7.0 floor"
+echo "check_redis_floor: Redis ${version} meets the >=7.0 floor (via ${CLIENT})"
 exit 0

@@ -5,8 +5,9 @@ server must be >= 7.0, because Replicator is the cluster's first user of
 `AsyncBusConsumer.claim_stale_page`, which reads `XAUTOCLAIM`'s three-element reply.
 
 Otherwise soft by design - exit 0 (letting the worker start) when the broker is
-unreachable. These tests drive it with a stub `redis-cli` on PATH so no live
-Redis is required and each branch is exercised deterministically.
+unreachable. These tests drive it with a stub `valkey-cli` on a PATH that holds
+no real client (`tests.conftest.client_free_bin`, #256), so no live broker is
+required, none is ever dialled, and each branch is exercised deterministically.
 
 Added with CannObserv/archiver#195, which is also why the auth cases exist: the
 script sent stderr to /dev/null and judged only stdout, so a broker that
@@ -22,31 +23,33 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import client_free_bin
+
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_redis_floor.sh"
 
 _WRONGPASS = "AUTH failed: WRONGPASS invalid username-password pair or user is disabled."
 _NOAUTH = "NOAUTH Authentication required."
-_REFUSED = "Could not connect to Redis at broker:6379: Connection refused"
+_REFUSED = "Could not connect to Valkey at broker:6379: Connection refused"
 
 
-def _stub_redis_cli(
+def _stub_client(
     tmp_path: Path,
     *,
     version: str | None,
+    name: str = "valkey-cli",
     tls: bool = True,
     stderr: str = "",
     exit_code: int = 0,
     info: tuple[str, ...] = (),
 ) -> Path:
-    """Write a fake `redis-cli` to a bin dir; return the dir for PATH.
+    """Write a fake client called `name` to a client-free bin dir; return it for PATH.
 
     `--help` output includes `--tls` iff `tls`. `INFO server` prints a
     `redis_version:` line iff `version` is given, then the `info` lines. `stderr`
     and `exit_code` model the failures that produce no stdout at all - before
     archiver#195 they were indistinguishable from each other.
     """
-    binder = tmp_path / "bin"
-    binder.mkdir()
+    binder = client_free_bin(tmp_path / "bin")
     help_tls = "  --tls    Use TLS.\n" if tls else ""
     version_line = f'  echo "redis_version:{version}"' if version is not None else "  true"
     version_line += "".join(f'\n  echo "{line}"' for line in info)
@@ -55,10 +58,10 @@ def _stub_redis_cli(
     fail_lines = (
         f'  printf "%b\\n" {stderr!r} >&2\n  exit {exit_code}\n' if stderr or exit_code else ""
     )
-    (binder / "redis-cli").write_text(
+    (binder / name).write_text(
         "#!/usr/bin/env bash\n"
         'if [[ "$1" == "--help" ]]; then\n'
-        f'  printf "usage: redis-cli\\n{help_tls}"\n'
+        f'  printf "usage: {name}\\n{help_tls}"\n'
         "  exit 0\n"
         "fi\n"
         f"{fail_lines}"
@@ -68,51 +71,49 @@ def _stub_redis_cli(
         "    ;;\n"
         "esac\n"
     )
-    (binder / "redis-cli").chmod(0o755)
+    (binder / name).chmod(0o755)
     return binder
 
 
-def _run(bindir: Path | None, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def _run(bindir: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     """Run the script with no boot wait unless a test opts in.
 
     ``REPLICATOR_REDIS_FLOOR_WAIT=0`` by default keeps every single-probe case
     at a single probe; the retry cases below set their own window.
     """
-    path = f"{bindir}:/usr/bin:/bin" if bindir else "/usr/bin:/bin"
     return subprocess.run(
-        ["bash", str(SCRIPT)],
-        env={"PATH": path, "REPLICATOR_REDIS_FLOOR_WAIT": "0", **env},
+        [shutil.which("bash"), str(SCRIPT)],
+        env={"PATH": str(bindir), "REPLICATOR_REDIS_FLOOR_WAIT": "0", **env},
         text=True,
         capture_output=True,
     )
 
 
-def _flaky_redis_cli(
+def _flaky_client(
     tmp_path: Path, *, fail_first: int, stderr: str, version: str = "7.0.15"
 ) -> tuple[Path, Path]:
-    """A `redis-cli` whose first `fail_first` calls fail with `stderr`, then answer.
+    """A `valkey-cli` whose first `fail_first` calls fail with `stderr`, then answer.
 
     Returns the bin dir for PATH and the file counting the calls, so a test can
     assert how many probes the script made - the retry's whole contract.
     """
-    binder = tmp_path / "bin"
-    binder.mkdir()
+    binder = client_free_bin(tmp_path / "bin")
     calls = tmp_path / "calls"
-    (binder / "redis-cli").write_text(
+    (binder / "valkey-cli").write_text(
         "#!/usr/bin/env bash\n"
         'if [[ "$1" == "--help" ]]; then\n'
-        '  printf "usage: redis-cli\\n  --tls    Use TLS.\\n"; exit 0\n'
+        '  printf "usage: valkey-cli\\n  --tls    Use TLS.\\n"; exit 0\n'
         "fi\n"
         f'n=$(( $(cat "{calls}" 2>/dev/null || echo 0) + 1 )); echo "$n" > "{calls}"\n'
         f'if [ "$n" -le {fail_first} ]; then printf "%b\\n" {stderr!r} >&2; exit 1; fi\n'
         f'case "$*" in *"INFO server"*) echo "redis_version:{version}" ;; esac\n'
     )
-    (binder / "redis-cli").chmod(0o755)
+    (binder / "valkey-cli").chmod(0o755)
     return binder, calls
 
 
 def test_version_at_floor_passes(tmp_path: Path) -> None:
-    bindir = _stub_redis_cli(tmp_path, version="7.0.15")
+    bindir = _stub_client(tmp_path, version="7.0.15")
     result = _run(bindir, {"REPLICATOR_REDIS_URL": "redis://default:pw@broker:6379/0"})
     assert result.returncode == 0
     assert "meets the >=7.0 floor" in result.stdout
@@ -123,20 +124,22 @@ def test_valkey_is_judged_by_its_redis_version(tmp_path: Path) -> None:
     carries two versions. The floor reads `redis_version`, the Redis compatibility
     level Valkey reports (7.2.4, measured), never `valkey_version` (7.2.14), and the
     line says `Redis 7.2.4`: the level the floor is defined against, not the engine.
-    The #243 deploy's `ExecStartPre` printed exactly this line, so the wording stays.
+    The #243 deploy's `ExecStartPre` printed this line; #256 appended the client.
     """
-    bindir = _stub_redis_cli(
+    bindir = _stub_client(
         tmp_path, version="7.2.4", info=("server_name:valkey", "valkey_version:7.2.14")
     )
     result = _run(bindir, {"REPLICATOR_REDIS_URL": "redis://default:pw@broker:6379/0"})
 
     assert result.returncode == 0
-    assert result.stdout == "check_redis_floor: Redis 7.2.4 meets the >=7.0 floor\n"
+    assert result.stdout == (
+        "check_redis_floor: Redis 7.2.4 meets the >=7.0 floor (via valkey-cli)\n"
+    )
 
 
 def test_version_below_floor_blocks(tmp_path: Path) -> None:
     """The one case where blocking is right: a version was actually read."""
-    bindir = _stub_redis_cli(tmp_path, version="6.2.14")
+    bindir = _stub_client(tmp_path, version="6.2.14")
     result = _run(bindir, {"REPLICATOR_REDIS_URL": "redis://default:pw@broker:6379/0"})
     assert result.returncode == 1
     assert "below the >=7.0 change-bus floor" in result.stderr
@@ -145,7 +148,7 @@ def test_version_below_floor_blocks(tmp_path: Path) -> None:
 @pytest.mark.parametrize("message", [_WRONGPASS, _NOAUTH], ids=["wrongpass", "noauth"])
 def test_auth_failure_is_reported_as_authentication(tmp_path: Path, message: str) -> None:
     """The operator must be sent to the credential, not to the network."""
-    bindir = _stub_redis_cli(tmp_path, version=None, stderr=message, exit_code=1)
+    bindir = _stub_client(tmp_path, version=None, stderr=message, exit_code=1)
     result = _run(bindir, {"REPLICATOR_REDIS_URL": "redis://:pw@broker:6379/0"})
 
     assert result.returncode == 0
@@ -157,7 +160,7 @@ def test_auth_failure_sends_the_operator_to_the_credential(tmp_path: Path) -> No
     """Since #127 this probe authenticates exactly as the worker does, so a
     refusal here is the worker's refusal too - not the old empty-username trap,
     which the helper's `AUTH` construction removed."""
-    bindir = _stub_redis_cli(tmp_path, version=None, stderr=_WRONGPASS, exit_code=1)
+    bindir = _stub_client(tmp_path, version=None, stderr=_WRONGPASS, exit_code=1)
     result = _run(bindir, {"REPLICATOR_REDIS_URL": "redis://replicator:pw@broker:6379/0"})
 
     assert "REPLICATOR_REDIS_URL" in result.stderr
@@ -168,7 +171,7 @@ def test_auth_failure_says_the_floor_is_unverified(tmp_path: Path) -> None:
     """A probe that cannot read the version has not *passed* the floor check,
     it has skipped it. Saying so is the difference between a guard known to be
     off and one assumed to be on."""
-    bindir = _stub_redis_cli(tmp_path, version=None, stderr=_WRONGPASS, exit_code=1)
+    bindir = _stub_client(tmp_path, version=None, stderr=_WRONGPASS, exit_code=1)
     result = _run(bindir, {"REPLICATOR_REDIS_URL": "redis://:pw@broker:6379/0"})
 
     assert "unverified" in result.stderr.lower()
@@ -182,7 +185,7 @@ def test_auth_failure_does_not_block_the_start(tmp_path: Path) -> None:
     budget on a credential problem - the shape of 2026-09-16, when three
     ExecStartPre refusals burned StartLimitBurst in sixteen seconds.
     """
-    bindir = _stub_redis_cli(tmp_path, version=None, stderr=_WRONGPASS, exit_code=1)
+    bindir = _stub_client(tmp_path, version=None, stderr=_WRONGPASS, exit_code=1)
     result = _run(bindir, {"REPLICATOR_REDIS_URL": "redis://:pw@broker:6379/0"})
 
     assert result.returncode == 0
@@ -190,7 +193,7 @@ def test_auth_failure_does_not_block_the_start(tmp_path: Path) -> None:
 
 def test_unreachable_broker_is_still_reported_as_unreachable(tmp_path: Path) -> None:
     """The other half: a real connection failure must not blame the credential."""
-    bindir = _stub_redis_cli(tmp_path, version=None, stderr=_REFUSED, exit_code=1)
+    bindir = _stub_client(tmp_path, version=None, stderr=_REFUSED, exit_code=1)
     result = _run(bindir, {"REPLICATOR_REDIS_URL": "redis://default:pw@broker:6379/0"})
 
     assert result.returncode == 0
@@ -206,7 +209,7 @@ def test_unreachable_broker_is_still_reported_as_unreachable(tmp_path: Path) -> 
 # - the address was local while the name still did not resolve - so the check
 # retries the dependency it actually has: resolve and connect.
 
-_NODATA = "Could not connect to Redis at broker:6379: No address associated with hostname"
+_NODATA = "Could not connect to Valkey at broker:6379: No address associated with hostname"
 _URL = {"REPLICATOR_REDIS_URL": "redis://default:pw@broker:6379/0"}
 
 
@@ -215,7 +218,7 @@ def _calls(counter: Path) -> int:
 
 
 def test_a_broker_that_resolves_during_the_wait_is_verified(tmp_path: Path) -> None:
-    bindir, calls = _flaky_redis_cli(tmp_path, fail_first=2, stderr=_NODATA)
+    bindir, calls = _flaky_client(tmp_path, fail_first=2, stderr=_NODATA)
     result = _run(bindir, {**_URL, "REPLICATOR_REDIS_FLOOR_WAIT": "10"})
 
     assert result.returncode == 0
@@ -226,7 +229,7 @@ def test_a_broker_that_resolves_during_the_wait_is_verified(tmp_path: Path) -> N
 
 def test_an_unreachable_broker_is_retried_until_the_wait_runs_out(tmp_path: Path) -> None:
     """Bounded, and still soft: the floor is reported UNVERIFIED, the start goes ahead."""
-    bindir, calls = _flaky_redis_cli(tmp_path, fail_first=99, stderr=_NODATA)
+    bindir, calls = _flaky_client(tmp_path, fail_first=99, stderr=_NODATA)
     started = time.monotonic()
     result = _run(bindir, {**_URL, "REPLICATOR_REDIS_FLOOR_WAIT": "2"})
 
@@ -238,7 +241,7 @@ def test_an_unreachable_broker_is_retried_until_the_wait_runs_out(tmp_path: Path
 
 def test_an_authentication_refusal_is_not_retried(tmp_path: Path) -> None:
     """The broker answered; waiting cannot change a wrong credential."""
-    bindir, calls = _flaky_redis_cli(tmp_path, fail_first=99, stderr=_WRONGPASS)
+    bindir, calls = _flaky_client(tmp_path, fail_first=99, stderr=_WRONGPASS)
     result = _run(bindir, {**_URL, "REPLICATOR_REDIS_FLOOR_WAIT": "10"})
 
     assert result.returncode == 0
@@ -247,7 +250,7 @@ def test_an_authentication_refusal_is_not_retried(tmp_path: Path) -> None:
 
 def test_a_silent_failure_is_not_retried(tmp_path: Path) -> None:
     """No stderr is what a timeout kill leaves - the probe already spent its timeout."""
-    bindir, calls = _flaky_redis_cli(tmp_path, fail_first=99, stderr="")
+    bindir, calls = _flaky_client(tmp_path, fail_first=99, stderr="")
     result = _run(bindir, {**_URL, "REPLICATOR_REDIS_FLOOR_WAIT": "10"})
 
     assert result.returncode == 0
@@ -255,7 +258,7 @@ def test_a_silent_failure_is_not_retried(tmp_path: Path) -> None:
 
 
 def test_a_zero_wait_probes_once(tmp_path: Path) -> None:
-    bindir, calls = _flaky_redis_cli(tmp_path, fail_first=99, stderr=_NODATA)
+    bindir, calls = _flaky_client(tmp_path, fail_first=99, stderr=_NODATA)
     result = _run(bindir, {**_URL, "REPLICATOR_REDIS_FLOOR_WAIT": "0"})
 
     assert result.returncode == 0
@@ -264,7 +267,7 @@ def test_a_zero_wait_probes_once(tmp_path: Path) -> None:
 
 def test_a_malformed_wait_is_named_and_the_default_used(tmp_path: Path) -> None:
     """An override that quietly did nothing would be worse than none."""
-    bindir, calls = _flaky_redis_cli(tmp_path, fail_first=1, stderr=_NODATA)
+    bindir, calls = _flaky_client(tmp_path, fail_first=1, stderr=_NODATA)
     result = _run(bindir, {**_URL, "REPLICATOR_REDIS_FLOOR_WAIT": "soon"})
 
     assert "REPLICATOR_REDIS_FLOOR_WAIT" in result.stderr
@@ -275,7 +278,7 @@ def test_a_malformed_wait_is_named_and_the_default_used(tmp_path: Path) -> None:
 def test_silent_failure_claims_neither_cause(tmp_path: Path) -> None:
     """A timeout kill leaves no stderr. With nothing to classify, the message
     must not guess - guessing is how the original line misled for days."""
-    bindir = _stub_redis_cli(tmp_path, version=None, stderr="", exit_code=1)
+    bindir = _stub_client(tmp_path, version=None, stderr="", exit_code=1)
     result = _run(bindir, {"REPLICATOR_REDIS_URL": "redis://default:pw@broker:6379/0"})
 
     assert result.returncode == 0
@@ -292,21 +295,18 @@ _SECRET = "s3cr3t"
 
 
 def _recording_bindir(tmp_path: Path, *, with_timeout: bool) -> Path:
-    """Only the tools the script needs, plus a `redis-cli` that records argv and auth."""
-    binder = tmp_path / "bin"
-    binder.mkdir()
-    for tool in ("bash", "sed", "tr", "grep", "mktemp", "cat", "rm", "sleep"):
-        (binder / tool).symlink_to(shutil.which(tool))
-    if with_timeout:
-        (binder / "timeout").symlink_to(shutil.which("timeout"))
-    (binder / "redis-cli").write_text(
+    """Only the tools the script needs, plus a `valkey-cli` that records argv and auth."""
+    binder = client_free_bin(tmp_path / "bin")
+    if not with_timeout:
+        (binder / "timeout").unlink()
+    (binder / "valkey-cli").write_text(
         "#!/usr/bin/env bash\n"
-        'if [[ "$1" == "--help" ]]; then printf "usage: redis-cli\\n  --tls\\n"; exit 0; fi\n'
+        'if [[ "$1" == "--help" ]]; then printf "usage: valkey-cli\\n  --tls\\n"; exit 0; fi\n'
         f'printf "%s\\n" "$@" >> "{tmp_path}/argv"\n'
         f'printf "%s" "${{REDISCLI_AUTH-unset}}" > "{tmp_path}/auth"\n'
         'echo "redis_version:7.0.15"\n'
     )
-    (binder / "redis-cli").chmod(0o755)
+    (binder / "valkey-cli").chmod(0o755)
     return binder
 
 
@@ -314,7 +314,7 @@ def _recording_bindir(tmp_path: Path, *, with_timeout: bool) -> Path:
 def test_the_probe_keeps_the_password_off_argv(tmp_path: Path, with_timeout: bool) -> None:
     bindir = _recording_bindir(tmp_path, with_timeout=with_timeout)
     result = subprocess.run(
-        ["bash", str(SCRIPT)],
+        [shutil.which("bash"), str(SCRIPT)],
         env={
             "PATH": str(bindir),
             "REPLICATOR_REDIS_FLOOR_WAIT": "0",
@@ -333,7 +333,7 @@ def test_the_probe_keeps_the_password_off_argv(tmp_path: Path, with_timeout: boo
 def test_a_url_with_no_scheme_is_named_and_never_probed(tmp_path: Path) -> None:
     bindir = _recording_bindir(tmp_path, with_timeout=True)
     result = subprocess.run(
-        ["bash", str(SCRIPT)],
+        [shutil.which("bash"), str(SCRIPT)],
         env={
             "PATH": str(bindir),
             "REPLICATOR_REDIS_FLOOR_WAIT": "0",
@@ -356,10 +356,10 @@ def test_a_missing_helper_is_named_not_guessed_at(tmp_path: Path) -> None:
     lone = tmp_path / "lone"
     lone.mkdir()
     shutil.copy(SCRIPT, lone / SCRIPT.name)
-    bindir = _stub_redis_cli(tmp_path, version="7.0.15")
+    bindir = _stub_client(tmp_path, version="7.0.15")
     result = subprocess.run(
-        ["bash", str(lone / SCRIPT.name)],
-        env={"PATH": f"{bindir}:/usr/bin:/bin", "REPLICATOR_REDIS_FLOOR_WAIT": "0", **_URL},
+        [shutil.which("bash"), str(lone / SCRIPT.name)],
+        env={"PATH": str(bindir), "REPLICATOR_REDIS_FLOOR_WAIT": "0", **_URL},
         text=True,
         capture_output=True,
     )
@@ -376,10 +376,10 @@ def test_a_helper_that_will_not_load_is_not_called_missing(tmp_path: Path) -> No
     lone.mkdir()
     shutil.copy(SCRIPT, lone / SCRIPT.name)
     (lone / "rcli.sh").write_text("rcli_command() {\n")
-    bindir = _stub_redis_cli(tmp_path, version="7.0.15")
+    bindir = _stub_client(tmp_path, version="7.0.15")
     result = subprocess.run(
-        ["bash", str(lone / SCRIPT.name)],
-        env={"PATH": f"{bindir}:/usr/bin:/bin", "REPLICATOR_REDIS_FLOOR_WAIT": "0", **_URL},
+        [shutil.which("bash"), str(lone / SCRIPT.name)],
+        env={"PATH": str(bindir), "REPLICATOR_REDIS_FLOOR_WAIT": "0", **_URL},
         text=True,
         capture_output=True,
     )
@@ -390,27 +390,38 @@ def test_a_helper_that_will_not_load_is_not_called_missing(tmp_path: Path) -> No
     assert "UNVERIFIED" in result.stderr
 
 
-def test_redis_cli_absent_is_soft(tmp_path: Path) -> None:
-    """No redis-cli on PATH at all -> cannot verify, do not block.
+def test_no_client_at_all_is_soft_and_unverified(tmp_path: Path) -> None:
+    """Neither valkey-cli nor redis-cli -> cannot verify, do not block (#256 kept it soft).
 
-    An empty dir is not enough: `_run` appends /usr/bin:/bin, which is where
-    redis-cli lives. Build a dir holding only the tools the script needs, so
-    absence is simulated rather than assumed.
+    The worker needs no CLI, so a client lost to an autoremove would otherwise stop a
+    healthy worker at its next start. `apt-mark manual valkey-tools` is the protection;
+    this line is how the gap shows.
     """
-    bindir = tmp_path / "nocli"
-    bindir.mkdir()
-    for tool in ("bash", "sed", "tr", "grep", "env", "mktemp", "timeout"):
-        src = shutil.which(tool)
-        if src:
-            (bindir / tool).symlink_to(src)
-    result = subprocess.run(
-        ["bash", str(SCRIPT)],
-        env={"PATH": str(bindir), "REPLICATOR_REDIS_URL": "redis://default:pw@broker:6379/0"},
-        text=True,
-        capture_output=True,
-    )
+    bindir = client_free_bin(tmp_path / "bin")
+    result = _run(bindir, {"REPLICATOR_REDIS_URL": "redis://default:pw@broker:6379/0"})
+
     assert result.returncode == 0
-    assert "redis-cli not found" in result.stderr
+    assert "neither valkey-cli nor redis-cli" in result.stderr
+    assert "UNVERIFIED" in result.stderr
+
+
+def test_the_success_line_names_the_client_it_read_with(tmp_path: Path) -> None:
+    """The journal is where a deploy proves which client the release used (#256)."""
+    bindir = _stub_client(tmp_path, version="7.2.4", name="redis-cli")
+    result = _run(bindir, {"REPLICATOR_REDIS_URL": "redis://default:pw@broker:6379/0"})
+
+    assert result.returncode == 0
+    assert result.stdout == (
+        "check_redis_floor: Redis 7.2.4 meets the >=7.0 floor (via redis-cli)\n"
+    )
+
+
+def test_a_tls_url_probes_the_resolved_client_for_tls(tmp_path: Path) -> None:
+    """The --tls probe asks the client that will connect, not a fixed name."""
+    bindir = _stub_client(tmp_path, version="7.2.4", tls=False)
+    result = _run(bindir, {"REPLICATOR_REDIS_URL": "rediss://default:pw@broker:6379/0"})
+
+    assert "valkey-cli lacks TLS support" in result.stderr
 
 
 @pytest.mark.parametrize("tool", ["bash", "sed", "tr", "mktemp"])

@@ -10,7 +10,7 @@ deliberately not JSON.
 
 **Not everything in the journal is JSON.** The claim above is about the *app's own records*. **Every `ExecStartPre` writes plain text**, and that is structural rather than an oversight: each runs before — or entirely outside — the environment `build_json_formatter()` lives in, so making them emit JSON would mean a hand-maintained second copy of the schema in exactly the files that cannot single-source it. One of them speaks today:
 
-- **`check_redis_floor.sh`** — `check_redis_floor: Redis X meets the >=7.0 floor`, or the refusal below it. A bash preflight; there is no interpreter to import from.
+- **`check_redis_floor.sh`** — `check_redis_floor: Redis X meets the >=7.0 floor (via valkey-cli)`, or the refusal below it. A bash preflight; there is no interpreter to import from.
 
 (`check_main_checkout.sh` spoke here too until #151 retired it with the checkout start.) The deploy itself logs plain text under `-t replicator-deploy`, and is not the unit's.
 
