@@ -323,7 +323,7 @@ jobs:
       # --no-cov: this file does not exercise all of src/, and the gate measures
       # it. The engine floats with noble-updates, as the broker's does, so a
       # Valkey update that changed what a capped server refuses fails the next
-      # run here, not only on co-broker. The >= 7.0 floor
+      # run here, not only on co-broker. The >= 7.2 floor
       # `scripts/check_redis_floor.sh` guards in production holds here by the
       # guard above.
       - name: pytest (broker OOM, ACL denial, and dead-letter command forms)

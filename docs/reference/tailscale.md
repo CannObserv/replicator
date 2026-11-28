@@ -186,7 +186,7 @@ build that followed moved every key and env file over stdin for this reason.
   stays manually installed (`apt-mark manual`): it carries `valkey-cli`, the floor
   check's client, and a check with no client skips (#256). `valkey-redis-compat`
   stays uninstalled: it replaces `redis-server` and `redis-tools`, and the broker
-  refuses it.
+  refuses it. Those two were purged 2026-11-28 (#256): one engine on the host.
 - **A SocratiCode store.** No Qdrant, Ollama or Docker here — `docker.service`
   is disabled; the index is `co-index`'s shared Qdrant (notifier#57). What runs
   here is the client: the plugin's MCP server under a user-installed Node, and

@@ -67,8 +67,9 @@ temp blob's seven days run out. The loop is off on every host until the broker g
 it is not part of the MVP loop and is dev-only until a status surface is wanted.
 
 The Redis broker is **cluster infrastructure on its own node** (`co-broker`, operated from
-CannObserv/broker) — Replicator is a client over the tailnet and does not ship or manage a broker. The `>=7.0` server floor is Replicator-critical: `AsyncBusConsumer.claim_stale_page`
-reads `XAUTOCLAIM`'s three-element reply, added in Redis server 7.0.
+CannObserv/broker) — Replicator is a client over the tailnet and does not ship or manage a broker. The `>=7.2` server floor is Replicator-critical: `AsyncBusConsumer.claim_stale_page`
+reads `XAUTOCLAIM`'s three-element reply, added in Redis server 7.0, and 7.2 is the broker's
+engine, the only one tested (#256).
 
 ## Setup
 
@@ -229,7 +230,7 @@ rollback is `scripts/deploy.sh <sha12>`. What the handler reported is read with
 
 Production secrets live in `/etc/replicator/.env` (managed manually on the VM, not in the repo).
 The unit's `ExecStartPre` writes the release's `REVISION` to `/run/replicator/build-id.env` and exposes it
-as `BUILD_ID` and asserts the Redis `>=7.0` floor via `scripts/check_redis_floor.sh` — whose
+as `BUILD_ID` and asserts the Redis `>=7.2` floor via `scripts/check_redis_floor.sh` — whose
 journald output is **plain text, not JSON**, by design (see [docs/STYLE.md](docs/STYLE.md), "Not
 everything in the journal is JSON"). A start syncs nothing: the release's venv was built by the
 deploy. Every situation, the release check that keeps a checkout from writing, and the disk

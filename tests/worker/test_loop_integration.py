@@ -8,7 +8,7 @@ Valkey 7.2 also does (GH #3, #251, covered in ``test_main_integration.py``). So
 the properties here are the ones whose truth is a claim about *when* Redis acts,
 or about a reply shape the fake never produces:
 
-1. ``claim_stale_page`` against a real PEL — the reason for the Redis >= 7.0 floor.
+1. ``claim_stale_page`` against a real PEL — the reason there is a Redis floor.
    ``XAUTOCLAIM``'s three-element reply, with the deleted-ids element added in
    7.0, is unpacked inside co-core; below that floor this raises. No test had
    ever run it against a server that implements it.
@@ -265,7 +265,7 @@ async def test_a_message_left_pending_is_reclaimed(
 ):
     """Crash recovery, against a PEL the broker actually keeps.
 
-    This is the path the Redis >= 7.0 floor exists for: co-core unpacks
+    This is the path the Redis floor exists for (>= 7.0; 7.2 since #256): co-core unpacks
     ``XAUTOCLAIM``'s three-element reply, and the third element does not exist
     below 7.0. ``scripts/check_redis_floor.sh`` guards it as an ExecStartPre;
     this is the test that would have caught a floor violation regardless.

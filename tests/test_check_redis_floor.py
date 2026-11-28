@@ -1,8 +1,9 @@
 """Behaviour of scripts/check_redis_floor.sh - the broker precondition guard.
 
 Run as an `ExecStartPre` on replicator.service. One blocking assertion: the
-server must be >= 7.0, because Replicator is the cluster's first user of
-`AsyncBusConsumer.claim_stale_page`, which reads `XAUTOCLAIM`'s three-element reply.
+server must be >= 7.2. 7.0 is where `XAUTOCLAIM`'s three-element reply arrived, which
+`AsyncBusConsumer.claim_stale_page` reads; 7.2 is the broker's engine, and since #256
+the only one anything here runs against.
 
 Otherwise soft by design - exit 0 (letting the worker start) when the broker is
 unreachable. These tests drive it with a stub `valkey-cli` on a PATH that holds
@@ -90,7 +91,7 @@ def _run(bindir: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
 
 
 def _flaky_client(
-    tmp_path: Path, *, fail_first: int, stderr: str, version: str = "7.0.15"
+    tmp_path: Path, *, fail_first: int, stderr: str, version: str = "7.2.4"
 ) -> tuple[Path, Path]:
     """A `valkey-cli` whose first `fail_first` calls fail with `stderr`, then answer.
 
@@ -112,11 +113,12 @@ def _flaky_client(
     return binder, calls
 
 
-def test_version_at_floor_passes(tmp_path: Path) -> None:
-    bindir = _stub_client(tmp_path, version="7.0.15")
+@pytest.mark.parametrize("version", ["7.2.0", "7.2.4", "7.10.1", "8.0.1"])
+def test_version_at_or_above_the_floor_passes(tmp_path: Path, version: str) -> None:
+    bindir = _stub_client(tmp_path, version=version)
     result = _run(bindir, {"REPLICATOR_REDIS_URL": "redis://default:pw@broker:6379/0"})
     assert result.returncode == 0
-    assert "meets the >=7.0 floor" in result.stdout
+    assert f"Redis {version} meets the >=7.2 floor" in result.stdout
 
 
 def test_valkey_is_judged_by_its_redis_version(tmp_path: Path) -> None:
@@ -133,16 +135,32 @@ def test_valkey_is_judged_by_its_redis_version(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert result.stdout == (
-        "check_redis_floor: Redis 7.2.4 meets the >=7.0 floor (via valkey-cli)\n"
+        "check_redis_floor: Redis 7.2.4 meets the >=7.2 floor (via valkey-cli)\n"
     )
 
 
-def test_version_below_floor_blocks(tmp_path: Path) -> None:
-    """The one case where blocking is right: a version was actually read."""
-    bindir = _stub_client(tmp_path, version="6.2.14")
+@pytest.mark.parametrize("version", ["6.2.14", "7.0.15", "7.1.0"])
+def test_version_below_floor_blocks(tmp_path: Path, version: str) -> None:
+    """The one case where blocking is right: a version was actually read.
+
+    7.0 and 7.1 now block too (#256): they serve `XAUTOCLAIM`, but no engine below
+    7.2 is tested here any more, so a broker downgraded to one is running a worker
+    nobody has measured against it.
+    """
+    bindir = _stub_client(tmp_path, version=version)
     result = _run(bindir, {"REPLICATOR_REDIS_URL": "redis://default:pw@broker:6379/0"})
     assert result.returncode == 1
-    assert "below the >=7.0 change-bus floor" in result.stderr
+    assert f"Redis {version} is below the >=7.2 floor" in result.stderr
+
+
+@pytest.mark.parametrize("version", ["7", "seven", "7.x"])
+def test_a_version_it_cannot_compare_blocks(tmp_path: Path, version: str) -> None:
+    """A version was read, so this is not the soft "unverified" case; and a floor
+    that waved through what it could not parse would be no floor."""
+    bindir = _stub_client(tmp_path, version=version)
+    result = _run(bindir, {"REPLICATOR_REDIS_URL": "redis://default:pw@broker:6379/0"})
+    assert result.returncode == 1
+    assert "below the >=7.2 floor" in result.stderr
 
 
 @pytest.mark.parametrize("message", [_WRONGPASS, _NOAUTH], ids=["wrongpass", "noauth"])
@@ -222,7 +240,7 @@ def test_a_broker_that_resolves_during_the_wait_is_verified(tmp_path: Path) -> N
     result = _run(bindir, {**_URL, "REPLICATOR_REDIS_FLOOR_WAIT": "10"})
 
     assert result.returncode == 0
-    assert "meets the >=7.0 floor" in result.stdout
+    assert "meets the >=7.2 floor" in result.stdout
     assert "reachable after" in result.stdout
     assert _calls(calls) == 3
 
@@ -271,7 +289,7 @@ def test_a_malformed_wait_is_named_and_the_default_used(tmp_path: Path) -> None:
     result = _run(bindir, {**_URL, "REPLICATOR_REDIS_FLOOR_WAIT": "soon"})
 
     assert "REPLICATOR_REDIS_FLOOR_WAIT" in result.stderr
-    assert "meets the >=7.0 floor" in result.stdout
+    assert "meets the >=7.2 floor" in result.stdout
     assert _calls(calls) == 2
 
 
@@ -304,7 +322,7 @@ def _recording_bindir(tmp_path: Path, *, with_timeout: bool) -> Path:
         'if [[ "$1" == "--help" ]]; then printf "usage: valkey-cli\\n  --tls\\n"; exit 0; fi\n'
         f'printf "%s\\n" "$@" >> "{tmp_path}/argv"\n'
         f'printf "%s" "${{REDISCLI_AUTH-unset}}" > "{tmp_path}/auth"\n'
-        'echo "redis_version:7.0.15"\n'
+        'echo "redis_version:7.2.4"\n'
     )
     (binder / "valkey-cli").chmod(0o755)
     return binder
@@ -324,7 +342,7 @@ def test_the_probe_keeps_the_password_off_argv(tmp_path: Path, with_timeout: boo
         capture_output=True,
     )
 
-    assert "meets the >=7.0 floor" in result.stdout, result.stderr
+    assert "meets the >=7.2 floor" in result.stdout, result.stderr
     argv = (tmp_path / "argv").read_text().splitlines()
     assert argv == ["--user", "replicator", "-u", "redis://broker:6379/0", "INFO", "server"]
     assert (tmp_path / "auth").read_text() == _SECRET
@@ -356,7 +374,7 @@ def test_a_missing_helper_is_named_not_guessed_at(tmp_path: Path) -> None:
     lone = tmp_path / "lone"
     lone.mkdir()
     shutil.copy(SCRIPT, lone / SCRIPT.name)
-    bindir = _stub_client(tmp_path, version="7.0.15")
+    bindir = _stub_client(tmp_path, version="7.2.4")
     result = subprocess.run(
         [shutil.which("bash"), str(lone / SCRIPT.name)],
         env={"PATH": str(bindir), "REPLICATOR_REDIS_FLOOR_WAIT": "0", **_URL},
@@ -376,7 +394,7 @@ def test_a_helper_that_will_not_load_is_not_called_missing(tmp_path: Path) -> No
     lone.mkdir()
     shutil.copy(SCRIPT, lone / SCRIPT.name)
     (lone / "rcli.sh").write_text("rcli_command() {\n")
-    bindir = _stub_client(tmp_path, version="7.0.15")
+    bindir = _stub_client(tmp_path, version="7.2.4")
     result = subprocess.run(
         [shutil.which("bash"), str(lone / SCRIPT.name)],
         env={"PATH": str(bindir), "REPLICATOR_REDIS_FLOOR_WAIT": "0", **_URL},
@@ -412,7 +430,7 @@ def test_the_success_line_names_the_client_it_read_with(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert result.stdout == (
-        "check_redis_floor: Redis 7.2.4 meets the >=7.0 floor (via redis-cli)\n"
+        "check_redis_floor: Redis 7.2.4 meets the >=7.2 floor (via redis-cli)\n"
     )
 
 
