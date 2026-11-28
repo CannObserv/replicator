@@ -191,7 +191,8 @@ EnvironmentFile=-/run/replicator/build-id.env
 EnvironmentFile=/etc/replicator/.env
 
 # Hard guard: Replicator is the cluster's first user of claim_stale, which needs
-# XAUTOCLAIM's three-element reply (Redis server >= 7.0). Soft on an unreachable
+# XAUTOCLAIM's three-element reply (Redis server >= 7.0); the floor is 7.2, the
+# broker's engine and the only one tested (#256). Soft on an unreachable
 # broker — after retrying it for REPLICATOR_REDIS_FLOOR_WAIT (default 30 s), which
 # is what lets it see the broker on a cold boot (#88) — and fatal on a genuine
 # downgrade. Not '-' prefixed — that exit 1 must stop the start.

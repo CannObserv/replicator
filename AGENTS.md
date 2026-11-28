@@ -70,7 +70,7 @@ the file map: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 Main is the deployed code.
 
 Worker binds no port; 8001 is dev, 8000 reserved. **The broker is `co-broker`**
-(CannObserv/broker); Replicator is a client, never ships one. Server **≥ 7.0** is
+(CannObserv/broker); Replicator is a client, never ships one. Server **≥ 7.2** is
 critical, guarded by `scripts/check_redis_floor.sh`. Why, ports, redis-py pin:
 [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md).
 

@@ -266,7 +266,7 @@ The broker is `co-broker`, operated from CannObserv/broker — inspect, don't ad
 `rcli` is the function sourced under [Inspecting the consume path](#inspecting-the-consume-path).
 
 ```bash
-bash scripts/check_redis_floor.sh                       # assert the >=7.0 server floor
+bash scripts/check_redis_floor.sh                       # assert the >=7.2 server floor
 rcli INFO server | grep redis_version
 
 # Bus inspection
