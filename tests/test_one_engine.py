@@ -6,7 +6,7 @@ The broker has run Ubuntu's Valkey 7.2 since CannObserv/broker#85. Once this hos
 skips when its binary is absent does not fail: it goes quiet. So this scans what
 runs:
 
-- shell, units and workflows, comments aside;
+- shell (scripts and hooks), units and workflows, comments aside;
 - the fenced code blocks of the runbooks;
 - Python string literals that are exactly a binary's name, the shape a spawn or a
   ``shutil.which`` takes.
@@ -60,6 +60,8 @@ def engine_name_sites(repo: Path) -> list[tuple[str, int, str]]:
     """Every place under ``repo`` that would run a Redis binary by name."""
     candidates = [
         *(repo / "scripts").rglob("*.sh"),
+        # Operator surface too, as tests/test_broker_keyspace.py scans it.
+        *(repo / ".claude" / "hooks").glob("*.sh"),
         *(repo / "deploy").rglob("*"),
         *(repo / ".github" / "workflows").glob("*.yml"),
         *(repo / "tests").rglob("*.py"),
@@ -96,12 +98,15 @@ def test_the_scan_sees_each_shape(tmp_path: Path) -> None:
     (tmp_path / "scripts" / "a.sh").write_text("# redis-cli in a comment\nredis-cli PING\n")
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "t.py").write_text('which("redis-server")\n"""prose redis-server"""\n')
+    (tmp_path / ".claude" / "hooks").mkdir(parents=True)
+    (tmp_path / ".claude" / "hooks" / "h.sh").write_text("redis-cli INFO server\n")
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "R.md").write_text(
         "prose `redis-cli`\n```bash\n# redis-cli comment\nredis-server --port 1\n```\n"
     )
 
     assert [(f, n) for f, n, _ in engine_name_sites(tmp_path)] == [
+        (".claude/hooks/h.sh", 1),
         ("docs/R.md", 4),
         ("scripts/a.sh", 2),
         ("tests/t.py", 1),
