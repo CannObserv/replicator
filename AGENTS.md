@@ -178,7 +178,7 @@ uv run pytest
 # Run a subset of tests (--no-cov: the coverage gate measures all of src/)
 uv run pytest --no-cov tests/path/to/test.py
 
-# Integration tests (a scratch redis-server or one the test spawns; --no-cov)
+# Integration tests (a scratch valkey-server or one the test spawns; --no-cov)
 uv run pytest --no-cov -m integration
 
 # Run linter

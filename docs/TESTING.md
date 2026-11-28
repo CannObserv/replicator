@@ -15,7 +15,7 @@ procedures that run a broker of their own — one stopped and restarted, one cap
 Read by neither env file, and indexed in [ENVIRONMENT.md](ENVIRONMENT.md): the
 test-only variables, defined in `tests/conftest.py`.
 
-- `REPLICATOR_TEST_REDIS_URL` — the scratch `redis-server` `@pytest.mark.integration` runs against; default `redis://localhost:6379/15`, and the tests skip until one answers there. Must not resolve to db 0 or a non-loopback host — the fixture fails before connecting on either (#132). **Never the broker**, whose only database since broker#5 is db 0 (#90) — see **Testing the bus**
+- `REPLICATOR_TEST_REDIS_URL` — the scratch `valkey-server` `@pytest.mark.integration` runs against; default `redis://localhost:6379/15`, and the tests skip until one answers there. Must not resolve to db 0 or a non-loopback host — the fixture fails before connecting on either (#132). **Never the broker**, whose only database since broker#5 is db 0 (#90) — see **Testing the bus**
   [below](#testing-the-bus)
 - `REPLICATOR_TEST_GCS_BUCKET` — the bucket `@pytest.mark.gcs` may write to; `co-gcs-test-replication`. **No default** — absent means those tests skip, never "use whatever the code would have picked", which on a host configured for production is the production bucket
 - `REPLICATOR_TEST_BLOB_BUCKET` — the temp-blob bucket `@pytest.mark.gcs` may write to (#7); `co-gcs-test-blobs`, provisioned 2026-08-20. **No default**, same rule as above, and deliberately a *second* variable: the two destinations carry opposite grants — the replicate SA holds no `delete` at all, which is what puts T4 at IAM rather than only in our code, while the temp-store tests create objects and clean up after themselves. One bucket serving both would mean either the temp tests cannot tidy or the permanent store can be erased
@@ -33,11 +33,11 @@ test-only variables, defined in `tests/conftest.py`.
 
 Live-broker tests use the `real_redis` fixture (`tests/conftest.py`), which connects to `REPLICATOR_TEST_REDIS_URL` (default `redis://localhost:6379/15` — a scratch server on this host, never the broker), skips when nothing answers (an *auth* failure re-raises — a misconfigured broker must not pass as a skip), expires stray `replicator.itest.*` keys from crashed runs once per session, and refuses two targets outright, from the URL and before dialling (`redis_target_refusal`): any host that is not loopback (#132), and db 0 — db 0 carries the live `content.fetch` stream that the running `replicator.service` consumes, so a test frame written there would be fetched for real. A unix socket counts as this host. Confine such tests to scratch stream keys via the `scratch_topic` fixture (`tests/worker/conftest.py`), whose teardown also removes `<topic>.dlq`; the guards are the backstop, not the plan.
 
-**The shared broker is not a `real_redis` target, three times over.** First, the fixture never dials it: `broker` is not loopback, so `REPLICATOR_TEST_REDIS_URL=redis://broker:6379/15` fails every live-broker test before a connection exists (#132). Before that guard the URL connected and authenticated and only `SELECT 15` failed — late enough to leave a client in co-broker's `CLIENT LIST` and, for `replicator`, a `NOPERM` entry in the `ACL LOG` its operator reads as evidence (CannObserv/broker#48). A non-loopback scratch server, if one is ever wanted, is a separate opt-in under its own name that cannot be co-broker, not a widening of this one. Second, broker#2's ACL cutover: `select` is not among the `replicator` user's granted commands, so past the guard every live-broker test would fail with `NoPermissionError: this user has no permissions to run the 'select' command`, on connect and before any test body runs. (`scan`, `xinfo|groups`, `xinfo|consumers`, `client|list` and `acl|log` are denied too, and `xpending` was until broker#39 granted it for the delivery ceiling (#103). The operator half of that split is tabulated in [COMMANDS.md](COMMANDS.md#inspecting-the-consume-path). It is why a connection-shape question like #85's has to be answered from the broker side rather than from here.) That is the grant working: db 15 on a broker whose db 0 carries the live `content.fetch` stream is one typo away from the stream `replicator.service` is consuming.
+**The shared broker is not a `real_redis` target, three times over.** First, the fixture never dials it: `broker` is not loopback, so `REPLICATOR_TEST_REDIS_URL=redis://broker:6379/15` fails every live-broker test before a connection exists (#132). Before that guard the URL connected and authenticated and only `SELECT 15` failed — late enough to leave a client in co-broker's `CLIENT LIST` and, for `replicator`, a `NOPERM` entry in the `ACL LOG` its operator reads as evidence (CannObserv/broker#48). A non-loopback scratch server, if one is ever wanted, is a separate opt-in under its own name that cannot be co-broker, not a widening of this one. Second, broker#2's ACL cutover: `select` is not among the `replicator` user's granted commands, so past the guard every live-broker test would fail with `NoPermissionError: this user has no permissions to run the 'select' command`, on connect and before any test body runs. (The rest of the split: [COMMANDS.md](COMMANDS.md#inspecting-the-consume-path). It is why a connection-shape question like #85's is answered from the broker side.) That is the grant working: db 15 on a broker whose db 0 carries the live `content.fetch` stream is one typo away from the stream `replicator.service` is consuming.
 
-Third, and for any credential: **the broker has one database** since 2026-09-10 (`databases 1`, broker#5). `SELECT 15` fails outright there, and db 0 — the only one — is the database this fixture refuses, so a repointed URL has nowhere to land (#90). That is deliberate on the broker's side, the database-index half of its R4 guard — the topic-name half is closed by co-broker declaring no test credential at all (CannObserv/broker#53, which deleted broker#2's `citest` on 2026-10-06), and neither substitutes for the other, since Redis ACLs cannot partition by database index — and the db-0 refusal here stays: on a one-database broker it is what keeps a test run off the database the live stream is on. Nor does the default point at the broker: `localhost` on `co-replicator` is not `co-broker` (#88). Run a scratch server on the default's port — `redis-server --bind 127.0.0.1 --save '' --appendonly no`, which the default finds with no variable set, since nothing else here listens on 6379 and both packaged services are masked. `test_oom_integration.py` and `test_reconnect_integration.py` spawn their own and need neither.
+Third, and for any credential: **the broker has one database** since 2026-09-10 (`databases 1`, broker#5). `SELECT 15` fails outright there, and db 0 — the only one — is the database this fixture refuses, so a repointed URL has nowhere to land (#90). That is the database-index half of the broker's R4 guard. Its topic-name half is co-broker declaring no test credential at all (CannObserv/broker#53 deleted `citest` on 2026-10-06), and since ACLs cannot partition by database index neither half substitutes for the other. The db-0 refusal here stays: on a one-database broker it keeps a test run off the live stream's database. Nor does the default point at the broker: `localhost` on `co-replicator` is not `co-broker` (#88). Run a scratch server on the default's port — `valkey-server --bind 127.0.0.1 --save '' --appendonly no`, which the default finds with no variable set, since nothing else here listens on 6379 and the packaged service is masked. `test_oom_integration.py` and `test_reconnect_integration.py` spawn their own and need neither.
 
-**The local tier runs on the broker's engine, Valkey 7.2.14, by default (#253).** Its package has no `redis-server` (that is `valkey-redis-compat`, which conflicts with Redis), so here the name is apt's 7.0.15 until a shim like CI's [below](#testing-against-a-broker-at-its-cap-79) puts `redis-server` → `/usr/bin/valkey-server` first on `PATH` ([recipe](COMMANDS.md#tests)). **For 7.0.15:** `redis-cli shutdown nosave`, then restart the scratch server from a shell without the shim. The 6379 server takes its engine at start and the spawning suites at each run, so check `redis-cli INFO server` (Valkey prints `server_name:valkey`) before reading a result as either engine's. `test_main_integration.py` asserts their one known difference per engine, so a change there runs both legs. `sudo`'s `secure_path` drops the shim: `scripts/rehearse_reconnect.sh` runs 7.0.15 unless called as `sudo env "PATH=$PATH" bash …`.
+**One engine, the broker's: Valkey 7.2 (#256).** The scratch server, both spawning suites and `scripts/rehearse_reconnect.sh` run `valkey-server` by name, so no `PATH` shim is needed (#253's is retired) and none is lost to `sudo`'s `secure_path`. Redis 7.0.15 registered a consumer only on its first delivery. `test_main_integration.py` asserts Valkey's registration on an empty poll, so a 7.0 server on 6379 fails it: the wrong engine. `tests/test_one_engine.py` fails on any script, workflow, fixture or runbook block that still runs `redis-server` or `redis-cli` by name.
 
 **One namespace the sweeper cannot reach.** `process_message` writes `replicator:cmd:<stream>:<command_id>` (`replicator:cmd:fetch:…` for an end-to-end fetch run — segmented since #29, and the only non-stream key this service writes anywhere: [CONVENTIONS.md](CONVENTIONS.md#the-replicatorcmd-keys)), a constant prefix outside `replicator.itest.*`, so an end-to-end test deletes its own keys via the `dedupe_keys` fixture and shortens their TTL. `test_an_end_to_end_run_only_creates_predictable_keys` asserts the whole promise: every key a run creates is either an itest stream or a dedupe key.
 
@@ -98,13 +98,9 @@ makes production untestable (#38).
   unscrubbed switches failed 5 tests after `load_env` (#182);
   `test_every_switch_on_settings_is_scrubbed` now derives them from `Settings`, and
   `test_every_credential_setting_is_scrubbed` each credential, `REPLICATOR_REDIS_URL`
-  among them (#187), and `test_every_bucket_setting_is_scrubbed` each `*_bucket` (#189). The blob pair was
-  added in #77 CR round 2, when loading that file and then running this document's
-  own `-m integration` command failed the policy-replay test on `constructed a real
-  GcsBlobStore('co-gcs-blobs')` — the construction guard working, but only after
-  two documented procedures had contradicted each other. `PRODUCTION_ENV` in
-  `tests/conftest.py` is the list; `test_the_scrub_covers_the_whole_snippet_agents_are_told_to_load`
-  pins the blob pair's membership. Alongside the scrub, `AsyncGcsDriver.__init__` **and
+  among them (#187), and `test_every_bucket_setting_is_scrubbed` each `*_bucket` (#189). `PRODUCTION_ENV` in `tests/conftest.py` is the list, with why the blob pair
+  joined it (#77 CR 2); `test_the_scrub_covers_the_whole_snippet_agents_are_told_to_load`
+  pins that pair's membership. Alongside the scrub, `AsyncGcsDriver.__init__` **and
   `GcsBlobStore.__init__`** are patched to refuse any bucket (co-core's class since #114;
   the patch is on the class object, so it holds wherever it is imported from). The refusal
   precedes the call through, because both constructors resolve ADC in their own
@@ -137,7 +133,7 @@ negative lookahead. Pinned by `test_the_test_bucket_is_not_a_superstring_of_prod
 
 A test that genuinely writes is marked `@pytest.mark.gcs` and requests the
 `gcs_bucket` fixture. The marker is **separate from `integration`**: that one
-means a scratch `redis-server`, which is local, free and routinely run, and a marker
+means a scratch `valkey-server`, which is local, free and routinely run, and a marker
 that also writes to a bucket changes what `-m integration` costs.
 
 ```bash
@@ -187,16 +183,6 @@ ordinary unit test's blast radius does not widen to buy three tests' coverage. A
 skip there would be a green run with no verification, so the job asserts the
 credentials file resolved before it runs pytest.
 
-Four variables, **none with a default** — absent means skip, never "use
-whatever the code would have picked":
-
-| Variable | What it names |
-|---|---|
-| `REPLICATOR_TEST_GCS_BUCKET` | the provisioned replicate test bucket |
-| `REPLICATOR_TEST_BLOB_BUCKET` | the temp-blob test bucket (#7); `co-gcs-test-blobs` since 2026-08-20 |
-| `REPLICATOR_TEST_PERMANENT_BUCKET` | the permanent-store test twin (#114); `co-gcs-test-replicator` |
-| `REPLICATOR_TEST_GCS_CREDENTIALS` | the test SA key; the fixture maps it onto `GOOGLE_APPLICATION_CREDENTIALS` for marked tests only |
-
 **The marked suite is the only thing that has ever caught an SDK-fidelity bug
 here, and it caught one the hour it was first able to run.**
 `tests/storage/test_gcs_bucket.py` shipped asserting that a missing object raises
@@ -205,21 +191,14 @@ the SDK's `NotFound`; CR #3 had since made the store translate that to
 had `REPLICATOR_TEST_BLOB_BUCKET` set to run it against. Provision the test
 destination *before* the production one, for exactly this reason.
 
-**Two buckets, because the grants are opposites.** The replicate destination's SA
-holds no `delete` — the property that puts T4 at IAM rather than only in our code
-— while the temp-store tests create objects and clean up after themselves. One
-bucket serving both would mean either those tests cannot tidy or the permanent
-store can be erased, and only one of those failures is recoverable. The missing
-*bucket* therefore skips in the fixture that hands it over rather than in the
-autouse one: the two destinations are provisioned independently, and a host with
-one should still run the tests it can. A missing *identity* still skips
-everything, since nothing marked can run without it.
-
-All four are dev-only and belong in the repo `.env` or the invoking shell —
-never in `/etc/replicator/.env`, which is the file the service reads. Contrast
-`REPLICATOR_TEST_REDIS_URL`, which *does* default: localhost is never the broker,
-the broker has no db 15, and `real_redis` refuses db 0 and any non-loopback host
-outright. No bucket name has that property.
+**A missing bucket skips in the fixture that hands it over**, not the autouse one:
+the two destinations carry opposite grants ([Variables](#variables)) — of the two
+failures one shared bucket risks, only one is recoverable — are provisioned
+independently, and a host with one should still run the tests it can. A missing
+*identity* skips everything, since nothing marked can run without it. None of the
+four defaults; `REPLICATOR_TEST_REDIS_URL` may, because localhost is never the
+broker, the broker has no db 15, and `real_redis` refuses db 0 and any non-loopback
+host outright. No bucket name has that property.
 
 ## Rehearsing reconnection
 
@@ -230,7 +209,7 @@ uv run pytest --no-cov -m integration tests/worker/test_reconnect_integration.py
 sudo bash scripts/rehearse_reconnect.sh
 ```
 
-The pytest half stops and restarts a real `redis-server` it spawns and asserts the in-process property: the loop rides out a survivable outage, gives up on a sustained one, and a worker started fresh against a recovered broker picks up what was stranded. It runs with the AOF on, because the incident being modelled had the group survive; `--appendonly no` would model `NOGROUP` instead.
+The pytest half stops and restarts a real `valkey-server` it spawns and asserts the in-process property: the loop rides out a survivable outage, gives up on a sustained one, and a worker started fresh against a recovered broker picks up what was stranded. It runs with the AOF on, because the incident being modelled had the group survive; `--appendonly no` would model `NOGROUP` instead.
 
 The script half drives what a pytest cannot — systemd's restart semantics — against a scratch unit under `/run/systemd/system` and a broker it owns. It asserts the worker exits, that systemd restarts it, that the restarted worker — booting into the broker still down — rides the outage out to the boot retry's ceiling rather than exiting on its first call (#133), **that the start budget survives the outage**, and that consumption resumes with no human step. The budget assertion is the one #94 turns on: on 2026-09-16 the unit was `failed` sixteen minutes before the broker came back. Set `StartLimitBurst=1` in `deploy/` and the script reproduces that failure by name.
 
@@ -242,7 +221,7 @@ Neither touches `co-broker` or `replicator.service`: the script checks the spawn
 the one thing it must never do is produce that state on the shared broker:
 `maxmemory` is instance-wide, so lowering `co-broker`'s cap to force an
 `OOM command not allowed` would refuse `XADD` for archiver, watcher and notifier
-at the same time. The module therefore **spawns its own `redis-server`** — a free
+at the same time. The module therefore **spawns its own `valkey-server`** — a free
 loopback port, `maxmemory-policy noeviction`, `--appendonly no --save ''`,
 `maxclients` pinned, started uncapped, killed in teardown — and never reads
 `REPLICATOR_TEST_REDIS_URL`, which names the server it is avoiding.
@@ -253,10 +232,9 @@ process" would split the suite along a line nobody selects on.
 
 **CI runs this file and no other marked one (#83).** The `test` job installs
 the broker's own engine, Ubuntu's `valkey-server` (#251; `redis-server` 7.0.15
-before), shims it onto PATH as `redis-server`, asserts the name resolved to
-Valkey 7.2 — a skip is silent by construction, the hazard the `gcs` job asserts
-its way out of — and runs the file explicitly. Every other
-`@pytest.mark.integration` test still needs a scratch `redis-server` (the
+before), asserts it resolved to Valkey 7.2 — a skip is silent by construction,
+the hazard the `gcs` job asserts its way out of — and runs the file explicitly.
+Every other `@pytest.mark.integration` test still needs a scratch server (the
 production broker refuses them, above) and never runs in CI, so the marker's
 meaning is unchanged: what CI selects is a path, not a marker. `tests/ci/test_workflow_runs.py` pins the
 step, the engine and the guard, because deleting any of them leaves a workflow
@@ -266,7 +244,7 @@ that still passes.
 uv run pytest --no-cov -m integration tests/worker/test_oom_integration.py
 ```
 
-Skips when `redis-server` is not on PATH. Four details are load-bearing:
+Skips when `valkey-server` is not on PATH. Four details are load-bearing:
 
 - **The fixture refuses a broker it did not start.** Binding a free port and then
   starting a server on it is a race, and losing that race does not look like a
@@ -276,10 +254,10 @@ Skips when `redis-server` is not on PATH. Four details are load-bearing:
   run reconfigured *its* cap before anyone noticed. `capped_server` compares
   `INFO server`'s `process_id` against the pid it spawned and fails the run on a
   mismatch. The corollary is that a `pytest` killed with `SIGKILL` orphans its
-  broker — teardown cannot run — so a stray `redis-server` on an ephemeral port
+  broker — teardown cannot run — so a stray `valkey-server` on an ephemeral port
   is litter from an abnormal exit rather than a fault. It cannot affect a later
   run, which binds its own port and checks the pid;
-  `pkill -f "redis-server 127.0.0.1:"` clears one — the fixture binds loopback
+  `pkill -f "valkey-server 127.0.0.1:"` clears one — the fixture binds loopback
   only, so that pattern cannot match a broker bound to any other address.
 - **`maxclients` is pinned, so the headroom is the same on every host.** Left
   unset, it follows the open-file limit and the fresh baseline with it: ~660 KB

@@ -23,7 +23,7 @@ The root is shared by the worker's temp blobs, the journal, and the dev sessions
 
 ## The broker is `co-broker` — Replicator connects, it does not run one
 
-The change bus runs on `co-broker` (tailnet `broker`), operated from CannObserv/broker (broker#1). Replicator is a **client** — the `replicator` ACL user (broker#2) — and never ships a broker. The `redis-server` here is a binary for tests that spawn their own; its service is masked.
+The change bus runs on `co-broker` (tailnet `broker`), operated from CannObserv/broker (broker#1). Replicator is a **client** — the `replicator` ACL user (broker#2) — and never ships a broker. The `valkey-server` here is a binary for tests that spawn their own; its service is masked.
 
 **Redis ≥ 7.0 is Replicator-critical.** Replicator is the cluster's first user of `AsyncBusConsumer.claim_stale_page` (`claim_stale` before #109), which reads `XAUTOCLAIM`'s three-element reply — the deleted-ids element added in Redis **server** 7.0. Below that, the crash-recovery path raises. The recovery walk also resumes with an exclusive `(<id>` start (#109), which the server resolves; verified on 7.0.15 and on Valkey 7.2.14 (#251), and pinned by `tests/worker/test_fake_xautoclaim_integration.py`. `scripts/check_redis_floor.sh` guards this as an `ExecStartPre`. On a cold boot `After=tailscaled.service` is not enough — MagicDNS answers `broker` with no address for a moment after tailscaled starts — so the check retries an unreachable broker for `REPLICATOR_REDIS_FLOOR_WAIT` (#88). The broker is Ubuntu's Valkey 7.2.14 since broker#85; the check's `Redis 7.2.4` line is its compatibility `redis_version` (#251).
 

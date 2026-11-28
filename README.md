@@ -148,7 +148,7 @@ traffic, not by a seeded command: each `stored a blob and published blob_availab
 contacting a broker at all:
 
 ```bash
-# The scratch redis-server the integration tests use (docs/TESTING.md) — reaches no worker.
+# The scratch valkey-server the integration tests use (docs/TESTING.md) — reaches no worker.
 uv run python -m scripts.seed_fetch \
   --redis-url redis://localhost:6379/15 --topic replicator.itest.seed \
   https://example.test/a
@@ -164,7 +164,7 @@ closes. Every flag, and what `--watch` can see: [`docs/COMMANDS.md`](docs/COMMAN
 
 ```bash
 uv run pytest                          # default suite; integration and gcs deselected
-uv run pytest --no-cov -m integration  # a scratch redis-server, never the broker, plus the
+uv run pytest --no-cov -m integration  # a scratch valkey-server, never the broker, plus the
                                        # OOM rows against a broker they spawn (#79)
 uv run pytest --no-cov -m gcs          # T4 rows against the GCS test bucket (#38)
 uv run ruff check .

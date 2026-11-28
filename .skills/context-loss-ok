@@ -867,3 +867,68 @@ tighten :: [COMMANDS.md](COMMANDS.md#inspecting-the-consume-path), beside the co
 tighten :: those rows arrived after broker#2's ACL cutover, and this is how:
 tighten :: **`XPENDING` moved columns on 2026-09-22 (broker#39, #103, #107)**, not as a courtesy: the
 # @run end
+# @run base=35157e38367b file=docs/TESTING.md
+# #256. disproven: the line named redis-server, the 7.0.15 leg or #253's shim, which this
+# change retires; tests/test_one_engine.py and the CI pins refute the old claim.
+# tighten: the denied-command list duplicated COMMANDS.md's table, the R4 sentence
+# was reworded, the #77 CR 2 story is PRODUCTION_ENV's comment in tests/conftest.py,
+# and the GCS table and two paragraphs restated ## Variables; their unique atoms kept.
+disproven :: - `REPLICATOR_TEST_REDIS_URL` — the scratch `redis-server` `@pytest.ma
+tighten :: **The shared broker is not a `real_redis` target, three times over.**
+disproven :: Third, and for any credential: **the broker has one database** since 2
+disproven :: **The local tier runs on the broker's engine, Valkey 7.2.14, by defaul
+tighten :: among them (#187), and `test_every_bucket_setting_is_scrubbed` each `*
+tighten :: added in #77 CR round 2, when loading that file and then running this
+tighten :: own `-m integration` command failed the policy-replay test on `constru
+tighten :: GcsBlobStore('co-gcs-blobs')` — the construction guard working, but on
+tighten :: two documented procedures had contradicted each other. `PRODUCTION_ENV
+tighten :: `tests/conftest.py` is the list; `test_the_scrub_covers_the_whole_snip
+tighten :: pins the blob pair's membership. Alongside the scrub, `AsyncGcsDriver.
+disproven :: means a scratch `redis-server`, which is local, free and routinely run
+tighten :: Four variables, **none with a default** — absent means skip, never "us
+tighten :: whatever the code would have picked":
+tighten :: | Variable | What it names |
+tighten :: | `REPLICATOR_TEST_GCS_BUCKET` | the provisioned replicate test bucket
+tighten :: | `REPLICATOR_TEST_BLOB_BUCKET` | the temp-blob test bucket (#7); `co-
+tighten :: | `REPLICATOR_TEST_PERMANENT_BUCKET` | the permanent-store test twin (
+tighten :: | `REPLICATOR_TEST_GCS_CREDENTIALS` | the test SA key; the fixture map
+tighten :: **Two buckets, because the grants are opposites.** The replicate desti
+tighten :: holds no `delete` — the property that puts T4 at IAM rather than only
+tighten :: — while the temp-store tests create objects and clean up after themsel
+tighten :: bucket serving both would mean either those tests cannot tidy or the p
+tighten :: store can be erased, and only one of those failures is recoverable. Th
+tighten :: *bucket* therefore skips in the fixture that hands it over rather than
+tighten :: autouse one: the two destinations are provisioned independently, and a
+tighten :: one should still run the tests it can. A missing *identity* still skip
+tighten :: everything, since nothing marked can run without it.
+tighten :: All four are dev-only and belong in the repo `.env` or the invoking sh
+tighten :: never in `/etc/replicator/.env`, which is the file the service reads.
+tighten :: `REPLICATOR_TEST_REDIS_URL`, which *does* default: localhost is never
+tighten :: the broker has no db 15, and `real_redis` refuses db 0 and any non-loo
+tighten :: outright. No bucket name has that property.
+disproven :: The pytest half stops and restarts a real `redis-server` it spawns and
+disproven :: at the same time. The module therefore **spawns its own `redis-server`
+disproven :: before), shims it onto PATH as `redis-server`, asserts the name resolv
+disproven :: Valkey 7.2 — a skip is silent by construction, the hazard the `gcs` jo
+disproven :: its way out of — and runs the file explicitly. Every other
+disproven :: `@pytest.mark.integration` test still needs a scratch `redis-server` (
+disproven :: Skips when `redis-server` is not on PATH. Four details are load-bearin
+disproven :: broker — teardown cannot run — so a stray `redis-server` on an ephemer
+disproven :: `pkill -f "redis-server 127.0.0.1:"` clears one — the fixture binds lo
+# @run end
+# @run base=35157e38367b file=docs/COMMANDS.md
+# #256: redis-cli -> valkey-cli in the rcli prose, and #253's shim recipe retired:
+# the scratch server is valkey-server by name. Refuted by tests/test_one_engine.py.
+disproven :: # The scratch redis-server from TESTING.md — reaches no worker.
+disproven :: **Every `redis-cli` in this file needs the credential** since broker#2
+disproven :: `redis-cli` answers `NOAUTH Authentication required`. Load the env fir
+disproven :: . scripts/rcli.sh   # defines rcli: redis-cli against $REPLICATOR_REDI
+disproven :: **Never hand `$REPLICATOR_REDIS_URL` to `redis-cli -u` (#127).** It pu
+disproven :: `tests/test_rcli.py` fails on any `redis-cli` in a script or runbook h
+disproven :: **And the credential cannot run everything `redis-cli` can (#85).** Th
+disproven :: # Default engine: the broker's Valkey 7.2, shimmed as in CI (#253); un
+disproven :: shim=~/.cache/replicator/scratch-broker; mkdir -p "$shim"
+disproven :: ln -sfn /usr/bin/valkey-server "$shim/redis-server"; export PATH="$shi
+disproven :: redis-server --bind 127.0.0.1 --save '' --appendonly no   # scratch, 6
+disproven :: redis-cli INFO server | grep -E '^(server_name|valkey_version|redis_ve
+# @run end

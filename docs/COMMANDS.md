@@ -49,7 +49,7 @@ uv run python -m scripts.seed_fetch \
   --redis-url redis://localhost:6379/15 --topic replicator.itest.seed \
   --dry-run https://example.test/a
 
-# The scratch redis-server from TESTING.md — reaches no worker.
+# The scratch valkey-server from TESTING.md — reaches no worker.
 uv run python -m scripts.seed_fetch \
   --redis-url redis://localhost:6379/15 --topic replicator.itest.seed \
   https://example.test/a https://example.test/b
@@ -133,23 +133,23 @@ and on any failure prints nothing and exits 1 — the gate never reads a failed 
 
 ### Inspecting the consume path
 
-**Every `redis-cli` in this file needs the credential** since broker#2's ACL cutover — a bare
-`redis-cli` answers `NOAUTH Authentication required`. Load the env first (Common Commands in
+**Every broker call in this file needs the credential** since broker#2's ACL cutover — a bare
+`valkey-cli` answers `NOAUTH Authentication required`. Load the env first (Common Commands in
 AGENTS.md), then source this once per shell from the repo root; the examples below assume it:
 
 ```bash
-. scripts/rcli.sh   # defines rcli: redis-cli against $REPLICATOR_REDIS_URL
+. scripts/rcli.sh   # defines rcli: valkey-cli against $REPLICATOR_REDIS_URL (#256)
 ```
 
-**Never hand `$REPLICATOR_REDIS_URL` to `redis-cli -u` (#127).** It puts the password in argv, readable
+**Never hand `$REPLICATOR_REDIS_URL` to `valkey-cli -u` (#127).** It puts the password in argv, readable
 from `/proc` by every local user while the call runs; this file's old `rcli` alias did. `rcli` strips the URL's userinfo and query, passes `--user`, and hands the
 password over in `REDISCLI_AUTH` (broker#47's rule), wherever in the URL redis-py would have
 found it — the floor check uses the same helper.
-`tests/test_rcli.py` fails on any `redis-cli` in a script or runbook here that is given `-a`
+`tests/test_rcli.py` fails on any `valkey-cli` or `redis-cli` in a script or runbook here that is given `-a`
 or `--pass`, or a `-u` whose argument is quoted, a variable, or a URL — prose naming the flag
 is fine.
 
-**And the credential cannot run everything `redis-cli` can (#85).** The `replicator` user is
+**And the credential cannot run everything the client can (#85).** The `replicator` user is
 scoped to its own topics, permanently and by design, so the operator surface splits in two:
 
 | Runnable here | Denied — ask the broker operator |
@@ -233,11 +233,7 @@ curl -s localhost:8001/health | jq
 uv run pytest                              # full suite, coverage gate active
 uv run pytest --no-cov tests/worker/       # subset; skip the gate (it measures all of src/)
 
-# Default engine: the broker's Valkey 7.2, shimmed as in CI (#253); unshimmed, apt's 7.0.15.
-shim=~/.cache/replicator/scratch-broker; mkdir -p "$shim"
-ln -sfn /usr/bin/valkey-server "$shim/redis-server"; export PATH="$shim:$PATH"
-redis-server --bind 127.0.0.1 --save '' --appendonly no   # scratch, 6379
-redis-cli INFO server | grep -E '^(server_name|valkey_version|redis_version):'
+valkey-server --bind 127.0.0.1 --save '' --appendonly no   # scratch, 6379: the broker's engine (#256)
 uv run pytest --no-cov -m integration      # + OOM (#79), reconnect (#94) self-spawners; no gate
 
 sudo bash scripts/rehearse_reconnect.sh    # the half a pytest cannot reach: systemd's own restart
