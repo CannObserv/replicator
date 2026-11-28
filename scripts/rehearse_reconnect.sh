@@ -70,6 +70,22 @@ chown exedev: "${BLOBDIR}"
 URL="redis://127.0.0.1:${PORT}/0"
 BROKER_PID=""
 
+# _reap_broker PID [TENTHS] - TERM, then KILL if PID outlives TENTHS tenths of a
+# second (default 100), then wait. Bounded because Valkey ignores a TERM whose
+# final AOF write fails (#256): an unbounded wait hung the EXIT trap, and the
+# Ctrl-C that ended it orphaned the broker. tests/test_rehearse_reconnect.py.
+_reap_broker() {
+  local pid="$1" tenths="${2:-100}"
+  kill "${pid}" 2>/dev/null
+  for _ in $(seq 1 "${tenths}"); do
+    kill -0 "${pid}" 2>/dev/null || break
+    sleep 0.1
+  done
+  kill -9 "${pid}" 2>/dev/null
+  wait "${pid}" 2>/dev/null
+  return 0
+}
+
 cleanup() {
   if [ "${KEEP}" = "1" ]; then
     say "--keep: leaving ${UNIT}.service and the broker on ${PORT} up"
@@ -79,12 +95,9 @@ cleanup() {
   systemctl reset-failed "${UNIT}.service" 2>/dev/null
   rm -f "${RUNDIR}/${UNIT}.service"
   systemctl daemon-reload 2>/dev/null
-  # Waited for before its dir goes: a shutdown whose final AOF write fails is
+  # Reaped before its dir goes: a shutdown whose final AOF write fails is
   # aborted, so a SIGTERM racing the rm -rf orphaned a live broker (#256).
-  if [ -n "${BROKER_PID}" ]; then
-    kill "${BROKER_PID}" 2>/dev/null
-    wait "${BROKER_PID}" 2>/dev/null
-  fi
+  [ -n "${BROKER_PID}" ] && _reap_broker "${BROKER_PID}"
   rm -rf "${WORKDIR}" "${BLOBDIR}"
 }
 trap cleanup EXIT
@@ -110,8 +123,7 @@ start_broker() {
 
 stop_broker() {
   [ -n "${BROKER_PID}" ] || return 0
-  kill "${BROKER_PID}" 2>/dev/null
-  wait "${BROKER_PID}" 2>/dev/null
+  _reap_broker "${BROKER_PID}"
   BROKER_PID=""
   for _ in $(seq 1 50); do
     valkey-cli -u "${URL}" PING 2>/dev/null | grep -q PONG || return 0
